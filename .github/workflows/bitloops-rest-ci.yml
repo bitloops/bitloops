@@ -1,0 +1,18 @@
+name: CI
+on:
+  pull_request:
+    branches:
+    - 'main'
+jobs: 
+  build_image:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+      
+      - name: Login to DockerHub Registry
+        run: echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USER }} --password-stdin
+
+      - name: Build image
+        run: docker build -t bitloops/rest:v1 ./bitloops-rest
