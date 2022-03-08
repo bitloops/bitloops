@@ -19,7 +19,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/bitloops/bitloops-engine.git"
+		"url": "git+https://github.com/bitloops/bitloops.git"
 	},
 	"keywords": [
 		"Bitloops",
@@ -31,9 +31,9 @@
 	"author": "Bitloops S.A.",
 	"license": "SEE LICENSE IN LICENSE.md",
 	"bugs": {
-		"url": "https://github.com/bitloops/bitloops-engine/issues"
+		"url": "https://github.com/bitloops/bitloops/issues"
 	},
-	"homepage": "https://github.com/bitloops/bitloops-engine#readme",
+	"homepage": "https://github.com/bitloops/bitloops/tree/main/bitloops-engine#readme",
 	"dependencies": {
 		"@grpc/grpc-js": "^1.3.7",
 		"@grpc/proto-loader": "^0.6.5",
