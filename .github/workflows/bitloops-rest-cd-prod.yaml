@@ -57,29 +57,4 @@ jobs:
         git add kustomization.yaml
         git commit -am "[${{ github.repository }}] $GITHUB_ACTOR - ${{github.event.head_commit.message }}"
         git push -u origin main
-  deploy_beat:
-    name: Deploy Beat
-    runs-on: ubuntu-latest
-    needs: push_to_registry
-    steps:
-    - name: Check out code
-      uses: actions/checkout@v2
-      with:
-        repository: bitloops/k8s-manifest-beat
-        token: ${{ secrets.GH_ACCESS_TOKEN }}
-        ref: main
-    - name: Setup Kustomize
-      uses: imranismail/setup-kustomize@v1
-      with:
-        kustomize-version: "3.8.8"
-    - name: Update Kubernetes resources
-      run: |
-        git pull
-        git config --global user.email "git-admin@bitloops.com"
-        git config --global user.name "bitloops-bot"
-        echo "Update new image with kustomize"
-        cd bitloops-rest/overlays/prod
-        kustomize edit set image bitloops-rest-image=bitloops/rest:${{ needs.push_to_registry.outputs.tag }}
-        git add kustomization.yaml
-        git commit -am "[${{ github.repository }}] $GITHUB_ACTOR - ${{github.event.head_commit.message }}"
-        git push -u origin main
+
