@@ -1,0 +1,29 @@
+syntax = "proto3";
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/Empty.proto";
+
+extend google.protobuf.FileOptions {
+  string MessageId_PublicMessageSent = 50001;
+  string Subscription_DemoChat_NewPublicMessage = 50002;
+}
+
+option (MessageId_PublicMessageSent) = "chat-demo.publicMessageSent";
+option (Subscription_DemoChat_NewPublicMessage) = "workflow-events.chat-demo:newMessage";
+
+message Publish_PublicMessage {
+  string message = 1;
+  string nickname = 2;
+  string senderUid = 3;
+}
+
+message Subscription_NewPublicMessage {
+  string message = 1;
+  int64 sendAt = 2;
+  string senderNickname = 3;
+  string senderUid = 4;
+}
+
+service DemoChat {
+  rpc PublicMessageSent(Publish_PublicMessage) returns (google.protobuf.Empty);
+  rpc DemoChat_NewPublicMessage(google.protobuf.Empty) returns (Subscription_NewPublicMessage);
+}
