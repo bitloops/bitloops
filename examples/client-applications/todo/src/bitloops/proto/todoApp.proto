@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+service TodoApp {
+	rpc GetAll(GetAllRequest) returns (GetAllResponse);
+	rpc Create(CreateRequest) returns (CreateResponse);
+	rpc Update(UpdateRequest) returns (UpdateResponse);
+	rpc Delete(DeleteRequest) returns (DeleteResponse);
+	rpc GetMine(GetMineRequest) returns (GetMineResponse);
+	rpc CreateMine(CreateMineRequest) returns (CreateMineResponse);
+	rpc UpdateMine(UpdateMineRequest) returns (UpdateMineResponse);
+	rpc DeleteMine(DeleteMineRequest) returns (DeleteMineResponse);
+}
+
+message GetAllRequest {
+
+}
+
+message CreateRequest {
+	optional string id = 1;
+	string text = 2;
+	optional string status = 3;
+}
+
+message UpdateRequest {
+	string id = 1;
+	string text = 2;
+	string status = 3;
+}
+
+message DeleteRequest {
+	string id = 1;
+}
+
+message GetMineRequest {
+
+}
+
+message CreateMineRequest {
+	string id = 1;
+	string text = 2;
+	string status = 3;
+}
+
+message UpdateMineRequest {
+	string id = 1;
+	string text = 2;
+	string status = 3;
+}
+
+message DeleteMineRequest {
+	string id = 1;
+}
+
+message GetAllResponse {
+	string data = 1;
+}
+
+message CreateResponse {
+	string wasCreated = 1;
+}
+
+message UpdateResponse {
+	string data = 1;
+}
+
+message DeleteResponse {
+	string wasDeleted = 1;
+}
+
+message GetMineResponse {
+	string data = 1;
+}
+
+message CreateMineResponse {
+	string wasCreated = 1;
+}
+
+message UpdateMineResponse {
+	string wasUpdated = 1;
+}
+
+message DeleteMineResponse {
+	string wasDeleted = 1;
+}
+
+message Todo {
+  string id = 1;
+  string text = 2;
+  string status = 3;
+}
