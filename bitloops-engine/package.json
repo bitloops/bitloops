@@ -1,0 +1,74 @@
+{
+	"name": "bitloops-engine",
+	"version": "0.7.2",
+	"description": "Workflow Orchestration Engine for Bitloops",
+	"scripts": {
+		"build-push-image": "sh ./deploy/build-push-image.sh -t 0.0.25",
+		"aws-deploy-dev": "sh ./deploy/aws-deploy.sh -r eu-central-1 -c bitloops-dev -v values.dev.yaml -f bitloops-engine-0.7.4.tgz",
+		"aws-deploy-prod": "sh ./deploy/aws-deploy.sh -r eu-central-1 -c bitloops -v values.prod.yaml -f bitloops-engine-0.7.4.tgz",
+		"aws-build-deploy-prod": "sh ./deploy/aws-build-deploy.sh -t 0.0.25 -r eu-central-1 -c bitloops -v values.prod.yaml",
+		"start:dev": "./node_modules/.bin/env-cmd -f .env.dev nodemon --config nodemon.json src/server.ts",
+		"debug": "./node_modules/.bin/env-cmd -f .env.dev nodemon --inspect src/server.ts",
+		"testTrigger": "nodemon --config nodemon.json testTrigger.ts",
+		"start": "node dist/server.js",
+		"start:inspect": "node --inspect --trace_gc --expose-gc dist/server.js",
+		"build": "rimraf ./dist && mkdir ./dist && tsc",
+		"test": "./node_modules/.bin/env-cmd -f config/.env.test jest --detectOpenHandles --testTimeout=10000 --coverage",
+		"test:unit": "ENV_FILE=./config/.env.test ./node_modules/.bin/env-cmd -f config/.env.test jest --detectOpenHandles --testTimeout=10000 --coverage ./src/services/__tests__/Redis",
+		"lint": "eslint '*/**/*.{js,ts,tsx}' --quiet --fix"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bitloops/bitloops-engine.git"
+	},
+	"keywords": [
+		"Bitloops",
+		"Engine",
+		"gRPC",
+		"NATS",
+		"Bitloops Engine"
+	],
+	"author": "Bitloops S.A.",
+	"license": "SEE LICENSE IN LICENSE.md",
+	"bugs": {
+		"url": "https://github.com/bitloops/bitloops-engine/issues"
+	},
+	"homepage": "https://github.com/bitloops/bitloops-engine#readme",
+	"dependencies": {
+		"@grpc/grpc-js": "^1.3.7",
+		"@grpc/proto-loader": "^0.6.5",
+		"base64url": "^3.0.1",
+		"express": "^4.17.1",
+		"ioredis": "^4.28.5",
+		"mongodb": "^4.3.1",
+		"msgpackr": "^1.4.7",
+		"nats": "^2.2.0",
+		"node-fetch": "2.6.1",
+		"uuid": "^8.3.2"
+	},
+	"devDependencies": {
+		"@types/download": "^8.0.1",
+		"@types/express": "^4.17.13",
+		"@types/ioredis": "^4.28.8",
+		"@types/jest": "^27.0.2",
+		"@types/node": "^17.0.18",
+		"@types/node-fetch": "2.6.1",
+		"@types/uuid": "^8.3.3",
+		"@typescript-eslint/eslint-plugin": "^5.12.0",
+		"@typescript-eslint/parser": "^5.12.0",
+		"env-cmd": "^10.1.0",
+		"escodegen": "^2.0.0",
+		"eslint": "^8.9.0",
+		"eslint-config-prettier": "^8.3.0",
+		"eslint-plugin-prettier": "^4.0.0",
+		"jest": "^27.2.4",
+		"nodemon": "^2.0.13",
+		"prettier": "^2.4.1",
+		"protobufjs": "^6.11.2",
+		"rimraf": "^3.0.2",
+		"ts-jest": "^27.0.5",
+		"ts-node": "^10.2.1",
+		"typescript": "^4.5.2",
+		"uglify-js": "^3.14.2"
+	}
+}

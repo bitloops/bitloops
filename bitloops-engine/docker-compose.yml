@@ -1,0 +1,43 @@
+version: '3'
+
+services:
+  nats: 
+    container_name: nats
+    image: nats:latest
+    ports:
+      - 4222:4222
+    networks:
+      - bitloops
+
+  nats-ui:
+    container_name: nats-ui
+    image: sphqxe/nats-webui:latest
+    ports: 
+      - 8082:80
+    networks:
+      - bitloops
+
+  mongodb:
+    container_name: mongodb
+    image: mongo:latest
+    ports:
+      - 27017:27017
+    networks:
+      - bitloops
+
+  bitloops-engine:
+    build: .
+    container_name: bitloops-engine
+    image: bitloops/bitloops-engine:latest
+    env_file: docker.env
+    ports:
+      - 8080:8080
+    depends_on:
+      - nats
+      - mongodb
+    networks:
+      - bitloops
+
+networks:
+  bitloops:
+    driver: bridge

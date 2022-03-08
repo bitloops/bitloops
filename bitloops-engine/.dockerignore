@@ -1,0 +1,14 @@
+Dockerfile
+.dockerignore
+node_modules
+npm-debug.log
+
+# dotenv environment variables file
+.env
+.env.test
+.env.*
+
+charts/bitloops-engine/values.*
+config/bitloops-dev-7cc10b49d139.json
+charts/bitloops-engine/values.dev.yaml
+credentials

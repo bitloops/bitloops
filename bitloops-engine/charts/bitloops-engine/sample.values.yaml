@@ -1,0 +1,37 @@
+versions:
+ - name: v001
+   image:
+     tag: 0.0.15
+
+env:
+  ENGINE_TOPIC: bitloops-engine
+  ENGINE_ADMIN_TOPIC: bitloops-engine-admin
+  ENGINE_EVENTS_TOPIC: bitloops-engine-events
+  ENGINE_GRPC_TOPIC: bitloops-grpc
+  ENGINE_REST_TOPIC: bitloops-rest
+  ENGINE_LOGGER_TOPIC: bitloops-logger
+  ENGINE_KPI_TOPIC: bitloops-kpi
+  BITLOOPS_ENGINE_QUEUE: bitloops-engine
+  ENGINE_LOGGING_DATASET: bitloops_engine_tests
+  ENGINE_LOGGING_TABLE: bitloops-engine-logger-test
+  NATS_IP: localhost
+  NATS_PORT: 4222
+  REDIS_HOST: localhost
+  REDIS_PORT: 6379
+  MONGO_URL_PREFIX: mongodb://
+  MONGO_URL_SUFFIX: localhost:27017
+  WORKFLOW_EVENTS_PREFIX: workflow-events
+  SSE_REGISTER_CONTROL: ssevent
+  VERSION: v0.0.1
+  CLOUD_PROVIDER: AWS
+  NODE1_ENDPOINT: localhost
+  NODE2_ENDPOINT: localhost
+
+nats_user: xxx
+nats_password: xxx
+redis_username: xxx
+redis_password: xxx
+encryption_key: xxx
+mongo_user: xxx
+mongo_password: xxx
+admin_workspace_id: xxx

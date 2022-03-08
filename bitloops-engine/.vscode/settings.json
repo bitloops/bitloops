@@ -1,0 +1,7 @@
+{
+	// Insert spaces when pressing Tab.
+	"editor.insertSpaces": false,
+	"cSpell.words": [
+		"IIMDB"
+	]
+}
