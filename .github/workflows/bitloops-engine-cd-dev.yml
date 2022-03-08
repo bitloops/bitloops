@@ -22,7 +22,7 @@ jobs:
 
       - name: Get version name
         id: version
-        run: echo ::set-output name=version::$(echo "${{ steps.tag.outputs.tag }}" | cut -d "-" -f3-)
+        run: echo ::set-output name=version::$(echo "${{ steps.tag.outputs.tag }}" | cut -d "-" -f4-)
       
       - name: Login to DockerHub Registry
         run: echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USER }} --password-stdin
