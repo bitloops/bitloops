@@ -112,3 +112,5 @@ in `charts/bitloops-engine/values.prod.yaml` upgrade the `image.tag` to the new 
 ## License
 
 The Bitloops Engine is [fair-code](http://faircode.io) distributed under [**Apache 2.0 with Commons Clause**](https://github.com/bitloops/bitloops-engine/LICENSE.md) license.
+
+![Google Analytics](https://www.google-analytics.com/collect?v=1&t=pageview&ec=repo&ea=open&dp=bitloops%2Fbitloops%2Fbitloops-engine%2FREADME.md&dt=Bitloops%20Engine%20README.md&tid=UA-160003534-1&cid=0)
