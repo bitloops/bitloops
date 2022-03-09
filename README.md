@@ -11,3 +11,5 @@ It contains the following projects:
 # Licenses
 
 Each project in this repo contains licensing information specific to that project. 
+
+![Google Analytics](https://www.google-analytics.com/collect?v=1&t=pageview&ec=repo&ea=open&dp=bitloops%2Fbitloops&dt=bitloops%2Fbitloops&tid=G-FZ9SN4KZGV)
