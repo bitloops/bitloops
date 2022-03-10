@@ -13,7 +13,7 @@
 		"start": "node dist/server.js",
 		"start:inspect": "node --inspect --trace_gc --expose-gc dist/server.js",
 		"build": "rimraf ./dist && mkdir ./dist && tsc",
-		"test": "./node_modules/.bin/env-cmd -f ./.env.test jest --detectOpenHandles --testTimeout=10000 --coverage",
+		"test": "sh ./scripts/test.sh; ./node_modules/.bin/env-cmd -f ./.env.test jest --detectOpenHandles --testTimeout=10000 --coverage ",
 		"lint": "eslint '*/**/*.{js,ts,tsx}' --quiet --fix"
 	},
 	"repository": {

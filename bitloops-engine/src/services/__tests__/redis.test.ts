@@ -1,23 +1,28 @@
 import Redis from '../Redis';
 let redis = new Redis();
-beforeEach(async () => {
-	redis = new Redis();
-	await redis.initializeConnection();
-});
 describe('connection settings', () => {
-	jest.setTimeout(10000);
+	beforeAll(async () => {
+		redis = new Redis();
+		await redis.initializeConnection();
+	});
+	afterAll(async () => {
+		await redis.closeConnection();
+	});
+	// jest.setTimeout(10000);
 	it('should resolve redis connection', async () => {
 		let connection = expect(redis.getConnection());
 		let resolved_connection = connection.resolves;
 		return resolved_connection.not.toThrowError();
 	});
-	it('should sucessfully close redis connection', async () => {
-		let closed_connection = expect(redis.closeConnection());
-		let resolved_connection = closed_connection.resolves;
-		return resolved_connection.not.toThrowError();
-	});
 });
 describe('addition and return of id info', () => {
+	beforeAll(async () => {
+		redis = new Redis();
+		await redis.initializeConnection();
+	});
+	afterAll(async () => {
+		await redis.closeConnection();
+	});
 	let topicIdInfo = {
 		workspaceId: 'hey',
 		topic: 'cars',
@@ -40,6 +45,13 @@ describe('addition and return of id info', () => {
 });
 
 describe('addition and removal of topic value info', () => {
+	beforeAll(async () => {
+		redis = new Redis();
+		await redis.initializeConnection();
+	});
+	afterAll(async () => {
+		await redis.closeConnection();
+	});
 	let topicValueInfo = {
 		workspaceId: 'hey',
 		topics: ['cars', 'motobikes', 'bikes', 'strollers'],
@@ -63,6 +75,13 @@ describe('addition and removal of topic value info', () => {
 });
 
 describe('storage and removal of record', () => {
+	beforeAll(async () => {
+		redis = new Redis();
+		await redis.initializeConnection();
+	});
+	afterAll(async () => {
+		await redis.closeConnection();
+	});
 	let record = {
 		hello: 'panos',
 		goodbye: 'panos',
@@ -74,12 +93,18 @@ describe('storage and removal of record', () => {
 	});
 	it('should remove connection of record', async () => {
 		let removal = expect(redis.removeConnectionId(connection_id));
-		// await redis.closeConnection();
 		return removal.resolves.not.toThrowError();
 	});
 });
 
 describe('addition and cleaning of podid connection', () => {
+	beforeAll(async () => {
+		redis = new Redis();
+		await redis.initializeConnection();
+	});
+	afterAll(async () => {
+		await redis.closeConnection();
+	});
 	let podid = '4';
 	let connection_id = '34';
 	it('should add podid connection ', async () => {
