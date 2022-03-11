@@ -36,7 +36,7 @@ Visit http://localhost:8080
 
 - Administration Console
 - Login (admin, Pa55w0rd)
-- From top left corner hoven on Master
+- From top left corner hover on Master
 - Create a realm, give a name (this will be your providerId)
 
 ## Configure your client inside Keycloak
@@ -52,8 +52,8 @@ Visit http://localhost:8080
 - Authorization Enabled -->
 
 - Under Valid Redirect URIs add
-  - http://localhost/bitloops/auth/google/final-callback
-  - http://localhost/bitloops/auth/github/final-callback
+  - http://localhost/{providerId}/auth/google/final-callback
+  - http://localhost/{providerId}/auth/github/final-callback
 - Save
   <!-- We will use client ID and client Secret(From Credentials Tab of client) -->
 

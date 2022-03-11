@@ -24,8 +24,8 @@ services:
       - mongodb
 
   redis:
-    container_name: redis
     image: redis:latest
+    container_name: redis
     ports:
       - 6379:6379
 
@@ -75,9 +75,10 @@ services:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
       POSTGRES_PASSWORD: password
+
   keycloak:
     image: jboss/keycloak
-
+    container_name: keycloak
     environment:
       DB_VENDOR: POSTGRES
       DB_ADDR: postgres
