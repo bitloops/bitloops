@@ -1,0 +1,11 @@
+Dockerfile
+.dockerignore
+node_modules
+npm-debug.log
+
+charts/bitloops-rest/values.dev.yaml
+charts/bitloops-rest/values.prod.yaml
+
+.env
+.env.*
+!.env.dev.docker

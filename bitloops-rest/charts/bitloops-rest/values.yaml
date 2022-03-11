@@ -1,0 +1,8 @@
+image:
+  tag: 0.0.13
+
+env:
+  PORT: 8080
+  ENV: prod
+  BITLOOPS_ENGINE_EVENTS_TOPIC: bitloops-engine-events
+  WORKFLOW_EVENTS_TOPIC: workflow-events

@@ -1,0 +1,18 @@
+image:
+  project: bitloops-dev
+  tag: v0.0.1
+
+env:
+  PORT: 8080
+  ENV: dev
+  BITLOOPS_ENGINE_EVENTS_TOPIC: test-bitloops-engine-events
+  MONGO_URL_PREFIX: mongodb://
+  MONGO_URL_SUFFIX: mongodb:27017
+  NATS_IP: nats
+  NATS_PORT: 4222
+
+nats_user: xxx
+nats_password: xxx
+encryption_key: xxx
+mongo_user: xxx
+mongo_password: xxx

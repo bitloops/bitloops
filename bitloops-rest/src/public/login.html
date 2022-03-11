@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Document</title>
+		<!-- <link rel="stylesheet" href="/styles.css" /> -->
+		<style>
+			body {
+				background-color: #f7f9fc;
+			}
+			.login-root {
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, Arial,
+					sans-serif;
+				font-size: 13px;
+				line-height: normal;
+				height: 100%;
+				padding-top: 80px;
+			}
+			.logo {
+				margin-bottom: 48px;
+			}
+			.login-card-layout {
+				align-items: center;
+				display: flex;
+				flex-direction: column;
+				/* border-width: 5;
+				border-color: burlywood;
+				border-style: solid; */
+			}
+			.paper {
+				background-color: #ffffff;
+				width: 384px;
+				box-shadow: 40px;
+				/* border-width: 5;
+				border-color: red;
+				border-style: solid; */
+			}
+			.login-card {
+				align-items: center;
+				display: flex;
+				flex-direction: column;
+				justify-content: center;
+				max-width: 440px;
+				padding: 64px 48px 48px;
+			}
+			.login-form {
+				display: flex;
+				flex-direction: column;
+				width: 100%;
+			}
+			.google-button {
+				position: relative;
+				background: #fff;
+				border-color: #cbd4db;
+				color: #273240;
+				fill: #6f7782;
+				font-size: 16px;
+				height: 48px;
+				line-height: 48px;
+				padding: 0 16px;
+				cursor: pointer;
+				align-self: stretch;
+				margin-bottom: 32px;
+				align-items: center;
+				border: 1px solid;
+				border-radius: 2px;
+				box-sizing: border-box;
+				display: inline-flex;
+				flex-shrink: 0;
+				justify-content: center;
+				overflow: hidden;
+				transition-duration: 0.2s;
+				transition-property: background, border, box-shadow, color, fill;
+				user-select: none;
+			}
+			.google-button:hover {
+				background-color: #f2f3f5;
+			}
+			.google-logo {
+				left: 32px;
+				position: absolute;
+				display: block;
+				overflow: hidden;
+				flex: 0 0 auto;
+				height: 18px;
+				width: 18px;
+				margin-right: 4px;
+			}
+			.separator-row {
+				align-items: center;
+				display: flex;
+				text-align: center;
+			}
+			.separator-row-line {
+				border-top: 1px solid #e8ecee;
+				flex: 1 1 auto;
+				margin-top: 8px;
+				min-width: 1px;
+				padding-top: 8px;
+			}
+			.separator-row-label {
+				color: #cbd4db !important;
+				font-size: 16px;
+				margin: 0 8px;
+			}
+			.email-login-form {
+				display: flex;
+				flex-direction: column;
+				margin-top: 32px;
+				margin-block-end: 1em;
+				justify-content: center;
+			}
+			.email-login-form-label {
+				font-size: 12px;
+				line-height: 16px;
+				color: #6f7782;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, Arial,
+					sans-serif;
+			}
+			.email-login-form-input {
+				height: 36px;
+				padding-bottom: 4px;
+				padding-top: 4px;
+				margin-bottom: 16px;
+				margin-top: 8px;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, Arial,
+					sans-serif;
+				font-size: 13px;
+				line-height: 20px;
+				border-width: 1px;
+				border-style: solid;
+				border-color: #cbd4db;
+				border-radius: 2px;
+				padding: 0 12px;
+				box-sizing: border-box;
+			}
+			.forgot-password {
+				align-self: flex-start;
+				cursor: pointer;
+				color: #6f7782;
+				fill: #6f7782;
+				text-decoration: underline;
+				text-decoration-style: solid;
+				background-color: transparent;
+				font-size: 11px;
+				line-height: normal;
+				margin-top: -10px;
+			}
+			.login-button {
+				background: linear-gradient(65deg, #7404e4 0, #7d0eec, 100%);
+				color: #fff !important;
+				display: flex;
+				position: relative;
+				transition: background 0.15s ease;
+				font-family: 'Fira Sans', sans-serif;
+				font-size: 15px;
+				letter-spacing: 0px;
+				font-weight: bold;
+				line-height: 16px;
+				text-decoration: none;
+				border: none;
+				border-radius: 2px;
+				cursor: pointer;
+				justify-content: center;
+				padding: 16px 32px;
+				text-align: center;
+				white-space: nowrap;
+				box-shadow: 0 8px 16px rgb(116 4 228 / 5%);
+				content: '';
+				top: 0;
+				right: 0;
+				bottom: 0;
+				left: 0;
+				mix-blend-mode: multiply;
+				align-self: stretch;
+				margin-top: 32px;
+			}
+			.login-button:hover {
+				box-shadow: 0 8px 16px rgb(116 4 228 / 25%);
+			}
+			.signup {
+				margin-top: 24px;
+				text-align: center;
+				font-size: 13px;
+				line-height: 20px;
+				color: #6f7782;
+			}
+			.signup-link {
+				cursor: pointer;
+				color: #14aaf5;
+				fill: #14aaf5;
+				text-decoration: none;
+				margin-left: 8px;
+			}
+		</style>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+	</head>
+	<body>
+		<div class="login-root">
+			<div class="login-card-layout">
+				<!-- <Paper elevation="{3}" style="width: 384px"> -->
+				<div class="paper">
+					<div class="login-card">
+						<img
+							class="logo"
+							src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAK8AAAAoCAYAAACIJ6oVAAAACXBIWXMAABcSAAAXEgFnn9JSAAAF92lUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgNi4wLWMwMDIgNzkuMTY0NDYwLCAyMDIwLzA1LzEyLTE2OjA0OjE3ICAgICAgICAiPiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtbG5zOmRjPSJodHRwOi8vcHVybC5vcmcvZGMvZWxlbWVudHMvMS4xLyIgeG1sbnM6cGhvdG9zaG9wPSJodHRwOi8vbnMuYWRvYmUuY29tL3Bob3Rvc2hvcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RFdnQ9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZUV2ZW50IyIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgMjEuMiAoTWFjaW50b3NoKSIgeG1wOkNyZWF0ZURhdGU9IjIwMjEtMDEtMDVUMDA6MDg6MzcrMDI6MDAiIHhtcDpNb2RpZnlEYXRlPSIyMDIxLTAyLTE0VDAxOjIyOjU2KzAyOjAwIiB4bXA6TWV0YWRhdGFEYXRlPSIyMDIxLTAyLTE0VDAxOjIyOjU2KzAyOjAwIiBkYzpmb3JtYXQ9ImltYWdlL3BuZyIgcGhvdG9zaG9wOkNvbG9yTW9kZT0iMyIgcGhvdG9zaG9wOklDQ1Byb2ZpbGU9InNSR0IgSUVDNjE5NjYtMi4xIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOjcwYzJmMTNhLWMyY2ItNDQyNi05NTBjLTQ0Njg2MDU0YjdmOSIgeG1wTU06RG9jdW1lbnRJRD0iYWRvYmU6ZG9jaWQ6cGhvdG9zaG9wOjljM2Y4NDFmLTgwNzQtZWQ0MC1hMTY3LWUxNDFhN2U3NmU1MiIgeG1wTU06T3JpZ2luYWxEb2N1bWVudElEPSJ4bXAuZGlkOmY4M2FlZjRiLWE2ZGQtNDY0Zi1hMjg5LWFmMzgyNWUyZjI2NSI+IDx4bXBNTTpIaXN0b3J5PiA8cmRmOlNlcT4gPHJkZjpsaSBzdEV2dDphY3Rpb249ImNyZWF0ZWQiIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6ZjgzYWVmNGItYTZkZC00NjRmLWEyODktYWYzODI1ZTJmMjY1IiBzdEV2dDp3aGVuPSIyMDIxLTAxLTA1VDAwOjA4OjM3KzAyOjAwIiBzdEV2dDpzb2Z0d2FyZUFnZW50PSJBZG9iZSBQaG90b3Nob3AgMjEuMiAoTWFjaW50b3NoKSIvPiA8cmRmOmxpIHN0RXZ0OmFjdGlvbj0ic2F2ZWQiIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6NzBjMmYxM2EtYzJjYi00NDI2LTk1MGMtNDQ2ODYwNTRiN2Y5IiBzdEV2dDp3aGVuPSIyMDIxLTAyLTE0VDAxOjIyOjU2KzAyOjAwIiBzdEV2dDpzb2Z0d2FyZUFnZW50PSJBZG9iZSBQaG90b3Nob3AgMjEuMiAoTWFjaW50b3NoKSIgc3RFdnQ6Y2hhbmdlZD0iLyIvPiA8L3JkZjpTZXE+IDwveG1wTU06SGlzdG9yeT4gPC9yZGY6RGVzY3JpcHRpb24+IDwvcmRmOlJERj4gPC94OnhtcG1ldGE+IDw/eHBhY2tldCBlbmQ9InIiPz6NZ1acAAAJNklEQVR42u1cd3AXRRQOIpIYmhDq0AQS6UiGKtUgEqREmlSxgsMYRBCIggoiigoRBRUHEJUmigIGqVZmaA6MFEGkiCAIOBqqlIAQ3858v5l1593u3q8ZYP/4+M2xu+/e3X339rVLTG5uboyDw9UIdxMcHHkdHBx5HRwceR2uefIOrXzwWkd5QjdCV0J3QidC4TDI7Uj4lPAeoQYzfhOhOKEIfsU58ylzGhD6EDrj9/br4HmEDdfDRfYgnCGcIvxNOEqoGaLMepCTC2wg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"
+							alt="Bitloops logo"
+							width="175"
+							height="40"
+						/>
+						<div class="login-form">
+							<button type="button" class="google-button">
+								<svg class="google-logo" viewBox="0 0 18 18">
+									<path
+										d="M17.64 9.20454545 C17.64 8.56636364 17.5827273 7.95272727 17.4763636 7.36363636 L9 7.36363636 L9 10.845 L13.8436364 10.845 C13.635 11.97 13.0009091 12.9231818 12.0477273 13.5613636 L12.0477273 15.8195455 L14.9563636 15.8195455 C16.6581818 14.2527273 17.64 11.9454545 17.64 9.20454545 L17.64 9.20454545 Z"
+										fill="#4285F4"
+									/>
+									<path
+										d="M9 18 C11.43 18 13.4672727 17.1940909 14.9563636 15.8195455 L12.0477273 13.5613636 C11.2418182 14.1013636 10.2109091 14.4204545 9 14.4204545 C6.65590909 14.4204545 4.67181818 12.8372727 3.96409091 10.71 L0.957272727 10.71 L0.957272727 13.0418182 C2.43818182 15.9831818 5.48181818 18 9 18 L9 18 Z"
+										fill="#34A853"
+									/>
+									<path
+										d="M3.96409091 10.71 C3.78409091 10.17 3.68181818 9.59318182 3.68181818 9 C3.68181818 8.40681818 3.78409091 7.83 3.96409091 7.29 L3.96409091 4.95818182 L0.957272727 4.95818182 C0.347727273 6.17318182 0 7.54772727 0 9 C0 10.4522727 0.347727273 11.8268182 0.957272727 13.0418182 L3.96409091 10.71 L3.96409091 10.71 Z"
+										fill="#FBBC05"
+									/>
+									<path
+										d="M9 3.57954545 C10.3213636 3.57954545 11.5077273 4.03363636 12.4404545 4.92545455 L15.0218182 2.34409091 C13.4631818 0.891818182 11.4259091 0 9 0 C5.48181818 0 2.43818182 2.01681818 0.957272727 4.95818182 L3.96409091 7.29 C4.67181818 5.16272727 6.65590909 3.57954545 9 3.57954545 L9 3.57954545 Z"
+										fill="#EA4335"
+									/>
+								</svg>
+								Login with Google
+							</button>
+						</div>
+					</div>
+				</div>
+				<!-- </Paper> -->
+			</div>
+		</div>
+		<script>
+			$(document).ready(function () {
+				/*
+				 * equivalent keycloak ui would need following params
+				 * client_id,
+				 * response_type: 'code', // optional?
+				 * redirect_uri, // needs to be valid for client_id
+				 */
+				// e.g. http://localhost:3005/bitloops/auth?redirect_uri=http://localhost:4200/callback&client_id=test_client
+				console.log('window locattiion', window.location);
+				const paths = window.location.pathname.split('/');
+				const providerId = paths[4];
+				console.log('providerId', providerId);
+				const searchParams = new URLSearchParams(window.location.search);
+				searchParams.append('provider_id', providerId);
+				if (!searchParams.has('redirect_uri')) console.error('No redirect_uri');
+				$('.google-button').click(function () {
+					console.log('google clicked');
+					// const baseUrl = 'https://envoy.bitloops.net/bitloops/auth/google'
+					const baseUrl = `${window.location.origin}/bitloops/auth/google`;
+					const urlObject = new URL(baseUrl);
+					urlObject.search = searchParams.toString();
+					// window.open(urlObject.toString(), 'google', 'width=600,height=400');
+					window.location.href = urlObject.toString();
+				});
+			});
+		</script>
+	</body>
+</html>

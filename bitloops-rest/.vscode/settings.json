@@ -1,0 +1,9 @@
+{
+	"editor.bracketPairColorization.enabled": true,
+	"editor.guides.bracketPairs": "active",
+	"editor.defaultFormatter": "esbenp.prettier-vscode",
+	"[typescript]": {
+		"editor.formatOnSave": true
+	},
+	"cSpell.words": ["fastify", "IIMDB", "imdb", "keycloak", "nats"]
+}

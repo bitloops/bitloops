@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: {{ $.Release.Name }}
+  template:
+    metadata:
+      name: {{ $.Release.Name }}
+      labels:
+        app: {{ $.Release.Name }}
+    spec:
+      containers:
+       - image: bitloops/rest:{{ $.Values.image.tag }}
+         name: {{ $.Release.Name }}
+         env:
+         {{- range $key, $value := $.Values.env }}
+         - name: {{ $key }}
+           value: "{{ $value }}"
+         {{- end }}
+         - name: "NATS_USER"
+           valueFrom:
+             secretKeyRef:
+               key:  nats_user
+               name: {{ $.Release.Name }}-secret
+         - name: "NATS_PASSWORD"
+           valueFrom:
+             secretKeyRef:
+               key:  nats_password
+               name: {{ $.Release.Name }}-secret
+         - name: "SHA256_SALT"
+           valueFrom:
+             secretKeyRef:
+               key:  encryption_key
+               name: {{ $.Release.Name }}-secret
+         - name: "MONGO_USER"
+           valueFrom:
+             secretKeyRef:
+               key: mongo_user
+               name: {{ $.Release.Name }}-secret
+         - name: "MONGO_PASSWORD"
+           valueFrom:
+             secretKeyRef:
+               key: mongo_password
+               name: {{ $.Release.Name }}-secret
+         ports:
+          - name: btls-rest-port
+            protocol: TCP
+            containerPort: 8080
+         resources:
+            requests:
+              memory: 128Mi
+              cpu: 200m
+            limits:
+              memory: 256Mi
+              cpu: 250m
+         livenessProbe:
+            httpGet:
+              path: /healthy
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+         readinessProbe: 
+            httpGet:
+                path: /ready
+                port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20 
+      imagePullSecrets:
+      - name: regcred
