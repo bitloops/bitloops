@@ -1,0 +1,19 @@
+[
+  {
+    "_id": "serviceId2",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "name": "Mongo",
+    "description": "gRPC Mongo Service",
+    "tags": ["db", "mongo", "gRPC"],
+    "type": "gRPC",
+    "meta": {
+      "proto": "syntax = \"proto3\"; service Mongo { rpc Find(FindRequest) returns (FindResponse); rpc InsertOne(InsertOneRequest) returns (InsertOneResponse); rpc InsertMany(InsertManyRequest) returns (InsertManyResponse); rpc UpdateOne(UpdateOneRequest) returns (UpdateOneResponse); rpc UpdateOneRaw(UpdateOneRawRequest) returns (UpdateOneResponse); rpc UpdateMany(UpdateManyRequest) returns (UpdateManyResponse); rpc DeleteMany(DeleteManyRequest) returns (DeleteManyResponse); rpc DeleteOne(DeleteOneRequest) returns (DeleteOneResponse); rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse); } message InsertOneRequest { required string dbName = 1; required string collectionName = 2; string key = 3; required string data = 4; } message InsertOneResponse { string data = 1; } message InsertManyRequest { required string dbName = 1; required string collectionName = 2; required string data = 3; } message InsertManyResponse { string data = 1; } message FindRequest { required string dbName = 1 ; required string collectionName = 2; required string query = 3; string projection = 4; } message FindResponse { required string data = 1; } message UpdateOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateOneRawRequest { required string dbName = 1; required string collectionName = 2; required string filter = 3; required string update = 4; required string options = 5; } message UpdateOneResponse { string data = 1; } message UpdateManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateManyResponse { string data = 1; } message DeleteOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteOneResponse { string data = 1; } message DeleteManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteManyResponse { string data = 1; } message CreateIndexRequest { required string dbName = 1; required string collectionName = 2; required string index = 3; } message CreateIndexResponse { string data = 1; }"
+    },
+    "environments": {
+      "development": {
+        "target": "csrv-mongo:4000",
+        "ssl": false
+      }
+    }
+  }
+]
