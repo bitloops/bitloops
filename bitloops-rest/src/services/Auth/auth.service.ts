@@ -54,6 +54,7 @@ export default class AuthService implements IAuthenticationService {
 	) {
 		const redirectUri =
 			redirect_uri ?? `${this.REST_URI}/${provider_id}/auth/${this.mapper[oAuthProvider]}/final-callback`;
+		console.log('redirectUri', redirectUri);
 		const url = this.getAuthSessionBaseURL(provider_id);
 		const authSessionURL = buildUrlWithParams(url, {
 			client_id,
