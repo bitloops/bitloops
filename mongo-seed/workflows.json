@@ -1,0 +1,5352 @@
+[
+  {
+    "_id": "817c0b6b-65a6-452c-88db-bf2b5a6d4030",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Create new workflow",
+      "description": "Creates a new workflow in draft mode given the workflow object, workflowId and workspaceId",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "workflowId",
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "6bc4ec4f-5a79-4515-963f-00e98c5f9bb8",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "alias": "workflows.insert",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "evalValue": "payload.workflow",
+                  "name": "workflowDefinition",
+                  "type": "workflowObject",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.workflowId",
+                  "name": "workflowId",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.workspaceId",
+                  "name": "workspaceId",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.eventTriggers",
+                  "name": "eventTriggers",
+                  "type": "array",
+                  "required": false
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "137e01e2-45d6-4ea8-be39-5da551deef36",
+            "name": "Check workflow has eventTriggers",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.eventTriggers !== undefined && variables.eventTriggers.length > 0",
+                "cases": [
+                  {
+                    "index": 1,
+                    "evalValue": "false",
+                    "valueType": "boolean",
+                    "output": [
+                      {
+                        "name": "eventTrigger",
+                        "evalValue": "'Workflow has no eventTriggers'",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ],
+                "default": {
+                  "output": [
+                    {
+                      "name": "eventTrigger",
+                      "evalValue": "'Workflow has eventTriggers'",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            },
+            "visual": {
+              "x": 250,
+              "y": 150,
+              "colour": "#fcde49"
+            }
+          },
+          {
+            "id": "b5018a35-ab82-4bba-a534-5e78594dd02b",
+            "name": "Add workflow to message in eventTriggers",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "3570e507-e9e5-479d-99d2-29aac7e2d434",
+                "nodeId": "98bd8b83-e984-448b-a976-a26ceb7a9871",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${constants.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`workflow_event_triggers`"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "`${systemVariables.workspaceId}:${variables.eventTriggers[0]}`"
+                  },
+                  {
+                    "name": "field",
+                    "type": "object",
+                    "evalValue": "'workflows'"
+                  },
+                  {
+                    "name": "value",
+                    "type": "object",
+                    "evalValue": " {workflowId: variables.workflowId, workflowVersion: 1} "
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "triggerResponse",
+                  "type": "boolean",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "3835cb9b-b85d-41a1-9e22-50d6622ba5e3",
+            "name": "Insert workflow to DB",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "d0ffa9bd-6bcf-4c12-8fa4-f07c04ff83a0",
+                "nodeId": "7aaf259a-6d2d-4efe-9944-fa9b22502e5c",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${constants.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${constants.entity}`"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "`${variables.workflowId}`"
+                  },
+                  {
+                    "name": "value",
+                    "type": "object",
+                    "evalValue": "variables.workflowDefinition"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "f405d328-571c-46f7-9c75-685b39ad013b",
+            "name": "Read from Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "eventTrigger",
+                  "type": "string",
+                  "evalValue": "variables.eventTrigger"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "6bc4ec4f-5a79-4515-963f-00e98c5f9bb8",
+            "to": [
+              {
+                "nodeId": "137e01e2-45d6-4ea8-be39-5da551deef36"
+              }
+            ]
+          },
+          {
+            "from": "137e01e2-45d6-4ea8-be39-5da551deef36",
+            "to": [
+              {
+                "label": "True",
+                "nodeId": "b5018a35-ab82-4bba-a534-5e78594dd02b"
+              },
+              {
+                "label": "False",
+                "nodeId": "3835cb9b-b85d-41a1-9e22-50d6622ba5e3"
+              }
+            ]
+          },
+          {
+            "from": "b5018a35-ab82-4bba-a534-5e78594dd02b",
+            "to": [
+              {
+                "nodeId": "3835cb9b-b85d-41a1-9e22-50d6622ba5e3"
+              }
+            ]
+          },
+          {
+            "from": "3835cb9b-b85d-41a1-9e22-50d6622ba5e3",
+            "to": [
+              {
+                "nodeId": "f405d328-571c-46f7-9c75-685b39ad013b"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "d0ffa9bd-6bcf-4c12-8fa4-f07c04ff83a0",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Insert entity to DB",
+      "description": "Inserts new entity to DB",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "name": "Insert entity to DB",
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "7aaf259a-6d2d-4efe-9944-fa9b22502e5c",
+            "name": "Insert to DB",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "database",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "entity",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.id",
+                  "name": "id",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.value",
+                  "name": "value",
+                  "type": "object",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "fe63b8ba-e15f-4795-a1ae-00223a17bbf6",
+            "name": "Insert new entity to mongo collection",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "d618619e-275a-4703-b41d-0d793ccaa511",
+                "nodeId": "b9bd05a2-1ab6-4ef5-9a24-e93cd9a147bf",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${variables.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${variables.entity}`"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "variables.id"
+                  },
+                  {
+                    "name": "value",
+                    "type": "object",
+                    "evalValue": "variables.value"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "6bb19b0a-7033-49de-a84b-7c8b18ef0ee6",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "7aaf259a-6d2d-4efe-9944-fa9b22502e5c",
+            "to": [
+              {
+                "nodeId": "fe63b8ba-e15f-4795-a1ae-00223a17bbf6"
+              }
+            ]
+          },
+          {
+            "from": "fe63b8ba-e15f-4795-a1ae-00223a17bbf6",
+            "to": [
+              {
+                "nodeId": "6bb19b0a-7033-49de-a84b-7c8b18ef0ee6"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "d618619e-275a-4703-b41d-0d793ccaa511",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Insert entity to Mongo",
+      "description": "Inserts entity to Mongo",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "",
+        "constants": {
+          "development": [
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ],
+          "production": [
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "b9bd05a2-1ab6-4ef5-9a24-e93cd9a147bf",
+            "name": "Direct Start",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "dbName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "collectionName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.id",
+                  "name": "key",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.value",
+                  "name": "data",
+                  "type": "object",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "5bb23212-5cc6-408d-b712-586bd66e707d",
+            "name": "Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "input": [
+                    {
+                      "evalValue": "`${variables.dbName}`",
+                      "name": "dbName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`${variables.collectionName}`",
+                      "name": "collectionName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "variables.key",
+                      "name": "key",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "JSON.stringify(variables.data)",
+                      "name": "data",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "type": "gRPC",
+                  "grpcService": "Mongo",
+                  "rpc": "InsertOne"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "`${output.data}`"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "a626c255-4f42-42ac-a7fb-74bb4a66f412",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "b9bd05a2-1ab6-4ef5-9a24-e93cd9a147bf",
+            "to": [
+              {
+                "nodeId": "5bb23212-5cc6-408d-b712-586bd66e707d"
+              }
+            ]
+          },
+          {
+            "from": "5bb23212-5cc6-408d-b712-586bd66e707d",
+            "to": [
+              {
+                "nodeId": "a626c255-4f42-42ac-a7fb-74bb4a66f412"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "7dcd2115-4536-48a4-97c0-26cea7f21768",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Get all workflows by workspaceId",
+      "description": "Get all workflows that belong to a specific workspaceId",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "workspaceId",
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            },
+            {
+              "name": "field",
+              "type": "string",
+              "value": "workspaceId"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            },
+            {
+              "name": "field",
+              "type": "string",
+              "value": "workspaceId"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "c2115d23-f4da-46bb-aa86-0af8397cc4c7",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "alias": "workflows.findByWorkspace",
+              "input": [
+                {
+                  "evalValue": "payload.workspaceId",
+                  "name": "workspaceId",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36",
+            "name": "Real by field from db entity-workspaces",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "0a12a140-be04-4ae1-9d99-519fd92fd499",
+                "nodeId": "1df2d9b7-853b-47fe-a310-81f59476e827",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${constants.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${constants.entity}`"
+                  },
+                  {
+                    "name": "field",
+                    "type": "string",
+                    "evalValue": "`${constants.field}`"
+                  },
+                  {
+                    "name": "fieldValue",
+                    "type": "string",
+                    "evalValue": "`${variables.workspaceId}`"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "5be99038-c789-4b48-a607-988a31399f1d",
+            "name": "Read from Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200"
+                },
+                {
+                  "name": "headers",
+                  "type": "object",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "c2115d23-f4da-46bb-aa86-0af8397cc4c7",
+            "to": [
+              {
+                "nodeId": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36"
+              }
+            ]
+          },
+          {
+            "from": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36",
+            "to": [
+              {
+                "nodeId": "5be99038-c789-4b48-a607-988a31399f1d"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "0a12a140-be04-4ae1-9d99-519fd92fd499",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Read by field from DB",
+      "description": "Read Workflows by Workspace Id",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "${database} ${entity} ${field}",
+        "constants": [],
+        "nodes": [
+          {
+            "id": "1df2d9b7-853b-47fe-a310-81f59476e827",
+            "name": "Read from DB",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "database",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "entity",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.field",
+                  "name": "field",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.fieldValue",
+                  "name": "fieldValue",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "9ed60397-ca1c-4217-a423-3321a176159b",
+            "name": "Read by field from mongo collection",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "2b4e339a-c82d-4107-bb29-81b8570a334d",
+                "nodeId": "85ee5841-62bf-4cf4-93a8-21bb3165eb0d",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${variables.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${variables.entity}`"
+                  },
+                  {
+                    "name": "field",
+                    "type": "string",
+                    "evalValue": "`${variables.field}`"
+                  },
+                  {
+                    "name": "fieldValue",
+                    "type": "string",
+                    "evalValue": "`${variables.fieldValue}`"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "413482cb-e156-4695-8d55-477c535a090c",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1df2d9b7-853b-47fe-a310-81f59476e827",
+            "to": [
+              {
+                "nodeId": "9ed60397-ca1c-4217-a423-3321a176159b"
+              }
+            ]
+          },
+          {
+            "from": "9ed60397-ca1c-4217-a423-3321a176159b",
+            "to": [
+              {
+                "nodeId": "413482cb-e156-4695-8d55-477c535a090c"
+              }
+            ]
+          }
+        ],
+        "id": "0a12a140-be04-4ae1-9d99-519fd92fd499",
+        "version": 1,
+        "meta": {
+          "name": "Read by field from DB",
+          "description": "Read Workflows by Workspace Id",
+          "created_at": 1635078813227,
+          "updated_at": 1635078813227,
+          "status": "deployed"
+        }
+      }
+    }
+  },
+  {
+    "_id": "2b4e339a-c82d-4107-bb29-81b8570a334d",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Get by field from Mongo",
+      "description": "Get by field from Mongo",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "name": "Read from Mongo",
+        "versionName": "beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "field",
+        "constants": {
+          "development": [
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ],
+          "production": [
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "85ee5841-62bf-4cf4-93a8-21bb3165eb0d",
+            "name": "Read workspaces",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "dbName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "collectionName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.field",
+                  "name": "field",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.fieldValue",
+                  "name": "fieldValue",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "f36a7557-33a9-49f6-a2b5-8db255d7cb31",
+            "name": "Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "input": [
+                    {
+                      "evalValue": "`${variables.dbName}`",
+                      "name": "dbName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`${variables.collectionName}`",
+                      "name": "collectionName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`{ \"${variables.field}\": \"${variables.fieldValue}\" }`",
+                      "name": "query",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "type": "gRPC",
+                  "grpcService": "Mongo",
+                  "rpc": "Find"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "(() => { const entArr=JSON.parse(output.data); return entArr.map((entity) => {entity.id = entity._id; delete entity._id; return entity; }) })()"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "1b252c4d-d247-48bd-8a69-d6e32ade8d6a",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "85ee5841-62bf-4cf4-93a8-21bb3165eb0d",
+            "to": [
+              {
+                "nodeId": "f36a7557-33a9-49f6-a2b5-8db255d7cb31"
+              }
+            ]
+          },
+          {
+            "from": "f36a7557-33a9-49f6-a2b5-8db255d7cb31",
+            "to": [
+              {
+                "nodeId": "1b252c4d-d247-48bd-8a69-d6e32ade8d6a"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "989dc5c2-ae96-489a-810d-5301ee71a283",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Read workflow",
+      "description": "Gets a specific workflow based on its id",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "uid",
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "c2115d23-f4da-46bb-aa86-0af8397cc4c7",
+            "name": "Read workflow",
+            "type": {
+              "name": "request-start-event",
+              "entry": "REST-NATS Bridge",
+              "messageId": "workflows.findById",
+              "input": [
+                {
+                  "evalValue": "payload.workflowId",
+                  "name": "workflowId",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36",
+            "name": "Read by id from db entity-workspaces",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${constants.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${constants.entity}`"
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "`${variables.workflowId}`"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "5be99038-c789-4b48-a607-988a31399f1d",
+            "name": "Read from Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "c2115d23-f4da-46bb-aa86-0af8397cc4c7",
+            "to": [
+              {
+                "nodeId": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36"
+              }
+            ]
+          },
+          {
+            "from": "06ec6d9b-9e2a-49fe-9e26-b4f7df364e36",
+            "to": [
+              {
+                "nodeId": "5be99038-c789-4b48-a607-988a31399f1d"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "cf9e97e3-f099-403d-a463-8384637981be",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Get by Id from DB entity",
+      "description": "Get by Id from DB entity",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "entityId",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+            "name": "Read from DB",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "database",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "entity",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entityId",
+                  "name": "entityId",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "bc1822ce-02e0-439a-bc21-7569ea7a036e",
+            "name": "Read by id from mongo collection",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "2f11c337-daa7-4f33-afad-9742984f5db6",
+                "nodeId": "016ec5d2-5f16-4d10-ab95-8c1e166b178a",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${variables.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${variables.entity}`"
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "`${variables.entityId}`"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "2820c4ba-1039-4d0d-a624-8993d9a03bab",
+            "name": "Got entity from DB",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+            "to": [
+              {
+                "nodeId": "bc1822ce-02e0-439a-bc21-7569ea7a036e"
+              }
+            ]
+          },
+          {
+            "from": "bc1822ce-02e0-439a-bc21-7569ea7a036e",
+            "to": [
+              {
+                "nodeId": "2820c4ba-1039-4d0d-a624-8993d9a03bab"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "2f11c337-daa7-4f33-afad-9742984f5db6",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Get by Id from Mongo entity",
+      "description": "Get by Id from Mongo entity",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "name": "Read from Mongo",
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "entityId",
+        "constants": {
+          "development": [
+            {
+              "name": "protoFile",
+              "type": ".proto",
+              "value": "syntax = \"proto3\"; service Mongo { rpc Find(FindRequest) returns (FindResponse); rpc InsertOne(InsertOneRequest) returns (InsertOneResponse); rpc InsertMany(InsertManyRequest) returns (InsertManyResponse); rpc UpdateOne(UpdateOneRequest) returns (UpdateOneResponse); rpc UpdateMany(UpdateManyRequest) returns (UpdateManyResponse); rpc DeleteMany(DeleteManyRequest) returns (DeleteManyResponse); rpc DeleteOne(DeleteOneRequest) returns (DeleteOneResponse); rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse); } message InsertOneRequest { required string dbName = 1; required string collectionName = 2; string key = 3; required string data = 4; } message InsertOneResponse { string data = 1; } message InsertManyRequest { required string dbName = 1; required string collectionName = 2; required string data = 3; } message InsertManyResponse { string data = 1; } message FindRequest { required string dbName = 1 ; required string collectionName = 2; required string query = 3; string projection = 4; } message FindResponse { required string data = 1; } message UpdateOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateOneResponse { string data = 1; } message UpdateManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateManyResponse { string data = 1; } message DeleteOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteOneResponse { string data = 1; } message DeleteManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteManyResponse { string data = 1; } message CreateIndexRequest { required string dbName = 1; required string collectionName = 2; required string index = 3; } message CreateIndexResponse { string data = 1; }"
+            },
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ],
+          "production": [
+            {
+              "name": "protoFile",
+              "type": ".proto",
+              "value": "syntax = \"proto3\"; service Mongo { rpc Find(FindRequest) returns (FindResponse); rpc InsertOne(InsertOneRequest) returns (InsertOneResponse); rpc InsertMany(InsertManyRequest) returns (InsertManyResponse); rpc UpdateOne(UpdateOneRequest) returns (UpdateOneResponse); rpc UpdateMany(UpdateManyRequest) returns (UpdateManyResponse); rpc DeleteMany(DeleteManyRequest) returns (DeleteManyResponse); rpc DeleteOne(DeleteOneRequest) returns (DeleteOneResponse); rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse); } message InsertOneRequest { required string dbName = 1; required string collectionName = 2; string key = 3; required string data = 4; } message InsertOneResponse { string data = 1; } message InsertManyRequest { required string dbName = 1; required string collectionName = 2; required string data = 3; } message InsertManyResponse { string data = 1; } message FindRequest { required string dbName = 1 ; required string collectionName = 2; required string query = 3; string projection = 4; } message FindResponse { required string data = 1; } message UpdateOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateOneResponse { string data = 1; } message UpdateManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; required string data = 4; } message UpdateManyResponse { string data = 1; } message DeleteOneRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteOneResponse { string data = 1; } message DeleteManyRequest { required string dbName = 1; required string collectionName = 2; required string query = 3; } message DeleteManyResponse { string data = 1; } message CreateIndexRequest { required string dbName = 1; required string collectionName = 2; required string index = 3; } message CreateIndexResponse { string data = 1; }"
+            },
+            {
+              "name": "transformObject",
+              "type": "function",
+              "value": "(entity) => {entity.id = entity._id; delete entity._id; return entity; }"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "016ec5d2-5f16-4d10-ab95-8c1e166b178a",
+            "name": "Read workspaces",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "dbName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "collectionName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entityId",
+                  "name": "entityId",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "b03d51c7-194a-42cd-a613-a4b022b2663b",
+            "name": "Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "input": [
+                    {
+                      "evalValue": "`${variables.dbName}`",
+                      "name": "dbName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`${variables.collectionName}`",
+                      "name": "collectionName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`{ \"_id\": \"${variables.entityId}\" }`",
+                      "name": "query",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "type": "gRPC",
+                  "grpcService": "Mongo",
+                  "rpc": "Find"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "(() => { const entArr=JSON.parse(output.data); if(entArr.length === 0) return null; const entity=entArr[0]; entity.id = entity._id; delete entity._id; return entity; })()"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "1334b202-9520-44dd-9821-7389ea5df868",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "016ec5d2-5f16-4d10-ab95-8c1e166b178a",
+            "to": [
+              {
+                "nodeId": "b03d51c7-194a-42cd-a613-a4b022b2663b"
+              }
+            ]
+          },
+          {
+            "from": "b03d51c7-194a-42cd-a613-a4b022b2663b",
+            "to": [
+              {
+                "nodeId": "1334b202-9520-44dd-9821-7389ea5df868"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "6f833ff4-f15b-4758-828e-45aec8843eaa",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Update whole workflow",
+      "description": "Updates a workflow to a specific version given the version number and workflowId",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "workflowId",
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "9b8b80fc-bfb6-4b79-8157-8e0be10e1859",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "alias": "workflows.updateById",
+              "input": [
+                {
+                  "evalValue": "payload.updatedWorkflow",
+                  "name": "updatedWorkflow",
+                  "type": "object",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.workflowId",
+                  "name": "workflowId",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.updatedVersion",
+                  "name": "updatedVersion",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "2541dc27-c5cf-4b1f-b126-b2770c8bb583",
+            "name": "Update workflow to DB",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "e27c0cf9-9e98-4980-8d7f-8e8ada5b2ebd",
+                "nodeId": "6752c110-4d56-4ec9-bdda-e8d884b0026e",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.database"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.entity"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "variables.workflowId"
+                  },
+                  {
+                    "name": "data",
+                    "type": "object",
+                    "evalValue": "{ latestVersion: variables.updatedVersion, [`versions.${variables.updatedVersion}`]: variables.updatedWorkflow }"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 206,
+              "y": 142,
+              "colour": "#17494d"
+            },
+            "messages": {
+              "admin": [
+                {
+                  "evalTopic": "\"0.test-bitloops-engine-admin\"",
+                  "command": "updateWorkflowCache",
+                  "payload": [
+                    {
+                      "name": "workflowId",
+                      "type": "string",
+                      "evalValue": "variables.workflowId",
+                      "required": true
+                    },
+                    {
+                      "name": "workflowVersion",
+                      "type": "int32",
+                      "evalValue": "1",
+                      "required": true
+                    },
+                    {
+                      "name": "environmentId",
+                      "type": "string",
+                      "evalValue": "\"development\"",
+                      "required": true
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "5a4a5319-2972-4bc5-a718-1de2a79710bb",
+            "name": "Read from Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 391,
+              "y": 150,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "9b8b80fc-bfb6-4b79-8157-8e0be10e1859",
+            "to": [
+              {
+                "nodeId": "2541dc27-c5cf-4b1f-b126-b2770c8bb583"
+              }
+            ]
+          },
+          {
+            "from": "2541dc27-c5cf-4b1f-b126-b2770c8bb583",
+            "to": [
+              {
+                "nodeId": "5a4a5319-2972-4bc5-a718-1de2a79710bb"
+              }
+            ]
+          }
+        ],
+        "id": "6f833ff4-f15b-4758-828e-45aec8843eaa",
+        "version": 1,
+        "meta": {
+          "name": "Update whole workflow",
+          "description": "Updates a workflow to a specific version given the version number and workflowId",
+          "created_at": 1635078813227,
+          "updated_at": 1635078813227,
+          "status": "deployed"
+        }
+      }
+    }
+  },
+  {
+    "_id": "e27c0cf9-9e98-4980-8d7f-8e8ada5b2ebd",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Update entity in DB",
+      "description": "Updates entity in DB with new value",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "workspaceId",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "6752c110-4d56-4ec9-bdda-e8d884b0026e",
+            "name": "Read from DB",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "database",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "entity",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.id",
+                  "name": "id",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.data",
+                  "name": "data",
+                  "type": "object",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "330e825d-c491-4213-b789-f35cf1cfcaa9",
+            "name": "Write to mongo collection",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "970f2e15-e103-4573-9f7d-739cb2527d7a",
+                "nodeId": "bb7c4bca-31df-4de4-8416-bf4f09bdfb33",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "variables.database"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "variables.entity"
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "variables.id"
+                  },
+                  {
+                    "name": "data",
+                    "type": "object",
+                    "evalValue": "variables.data"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "045e61ce-c664-48c6-acda-2e91f6827a82",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "6752c110-4d56-4ec9-bdda-e8d884b0026e",
+            "to": [
+              {
+                "nodeId": "330e825d-c491-4213-b789-f35cf1cfcaa9"
+              }
+            ]
+          },
+          {
+            "from": "330e825d-c491-4213-b789-f35cf1cfcaa9",
+            "to": [
+              {
+                "nodeId": "045e61ce-c664-48c6-acda-2e91f6827a82"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "970f2e15-e103-4573-9f7d-739cb2527d7a",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Update entity in Mongo",
+      "description": "Updates an entity in Mongo",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "bb7c4bca-31df-4de4-8416-bf4f09bdfb33",
+            "name": "Read workspaces",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "dbName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "collectionName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.id",
+                  "name": "id",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.data",
+                  "name": "data",
+                  "type": "object",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "6ba94d69-855c-4326-b0ec-2a3268fd10a7",
+            "name": "Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "input": [
+                    {
+                      "evalValue": "variables.dbName",
+                      "name": "dbName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "variables.collectionName",
+                      "name": "collectionName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`{ \"_id\": \"${variables.id}\" }`",
+                      "name": "query",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "JSON.stringify(variables.data)",
+                      "name": "data",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "type": "gRPC",
+                  "grpcService": "Mongo",
+                  "rpc": "UpdateOne"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output.data"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "76bab72d-d135-4bed-b06a-a3e7182b15ad",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "boolean",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "bb7c4bca-31df-4de4-8416-bf4f09bdfb33",
+            "to": [
+              {
+                "nodeId": "6ba94d69-855c-4326-b0ec-2a3268fd10a7"
+              }
+            ]
+          },
+          {
+            "from": "6ba94d69-855c-4326-b0ec-2a3268fd10a7",
+            "to": [
+              {
+                "nodeId": "76bab72d-d135-4bed-b06a-a3e7182b15ad"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "a77f36b9-e1f0-4dba-8ae8-a56a75388400",
+    "id": "a77f36b9-e1f0-4dba-8ae8-a56a75388400",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Get all services by workspaceId",
+      "description": "Get all services that belong to a specific workspaceId"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "a77f36b9-e1f0-4dba-8ae8-a56a75388400",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Get all services by workspaceId",
+          "description": "Get all services that belong to a specific workspaceId"
+        },
+        "nodes": [
+          {
+            "id": "a568125f-ad16-48cf-bbd7-74a6b57f0c57",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                }
+              ],
+              "alias": "services.getByWorkspaceId"
+            },
+            "visual": {
+              "x": 111,
+              "y": 164
+            },
+            "debugId": "debugInfo"
+          },
+          {
+            "id": "5b49f62b-22fb-4229-9f5a-9c3df7448c61",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 617,
+              "y": 185
+            }
+          },
+          {
+            "id": "b691dc61-f8af-4c47-8333-65b3f877397e",
+            "name": "Get services",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.dbName",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "Select type",
+                      "evalValue": "JSON.stringify({ workspaceId: variables.workspaceId})",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "(() => { const entArr=JSON.parse(output.data); if(entArr.length === 0) return null; const obj = {};entArr.forEach(el => {    el.id = el._id;    delete el._id;    obj[el.id] = el;});return obj; })()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 311,
+              "y": 160
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "b691dc61-f8af-4c47-8333-65b3f877397e",
+            "to": [
+              {
+                "nodeId": "5b49f62b-22fb-4229-9f5a-9c3df7448c61"
+              }
+            ]
+          },
+          {
+            "from": "a568125f-ad16-48cf-bbd7-74a6b57f0c57",
+            "to": [
+              {
+                "nodeId": "b691dc61-f8af-4c47-8333-65b3f877397e"
+              }
+            ]
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ],
+          "production": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ]
+        },
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "e90038f1-2c5f-4d6c-8b98-dd77e6f33b74",
+    "id": "e90038f1-2c5f-4d6c-8b98-dd77e6f33b74",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Create new service",
+      "description": "Creates a new service"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "e90038f1-2c5f-4d6c-8b98-dd77e6f33b74",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Create new service",
+          "description": "Creates a new service"
+        },
+        "nodes": [
+          {
+            "id": "11b82ed0-2109-48c0-8466-33b5abeabdab",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "alias": "services.create",
+              "input": [
+                {
+                  "name": "key",
+                  "type": "string",
+                  "evalValue": "payload.data.id",
+                  "required": true
+                },
+                {
+                  "name": "data",
+                  "type": "Struct",
+                  "evalValue": "payload.data",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 571,
+              "y": 312
+            }
+          },
+          {
+            "id": "dd204750-f606-46d0-a1b6-7c29920b152a",
+            "name": "Add new service Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "rpc": "InsertOne",
+                  "grpcService": "Mongo",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.dbName",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "key",
+                      "type": "string",
+                      "evalValue": "variables.key",
+                      "required": true
+                    },
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify(variables.data)",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output.data",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 799,
+              "y": 331
+            }
+          },
+          {
+            "id": "6b9a87e5-4a01-4655-8e6e-1f10f3e8f4f2",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 1094,
+              "y": 313
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "11b82ed0-2109-48c0-8466-33b5abeabdab",
+            "to": [
+              {
+                "nodeId": "dd204750-f606-46d0-a1b6-7c29920b152a"
+              }
+            ]
+          },
+          {
+            "from": "dd204750-f606-46d0-a1b6-7c29920b152a",
+            "to": [
+              {
+                "nodeId": "6b9a87e5-4a01-4655-8e6e-1f10f3e8f4f2"
+              }
+            ]
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ],
+          "production": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ]
+        },
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "29c28659-a067-4371-8347-6150340e05b3",
+    "id": "29c28659-a067-4371-8347-6150340e05b3",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Delete a service",
+      "description": "Deletes a service given its id"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "29c28659-a067-4371-8347-6150340e05b3",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Delete a service",
+          "description": "Deletes a service given its id"
+        },
+        "nodes": [
+          {
+            "id": "0915c6dc-f673-474f-89f0-36ad396f4109",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              }
+            },
+            "visual": {
+              "x": 10,
+              "y": 10
+            }
+          },
+          {
+            "id": "e7b6899a-24be-420c-8839-121cec65a82d",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "alias": "services.deleteOne",
+              "input": [
+                {
+                  "name": "id",
+                  "type": "string",
+                  "evalValue": "payload.id",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 10,
+              "y": 10
+            }
+          },
+          {
+            "id": "9dd8faf5-58f0-41eb-8e18-a094deae31fd",
+            "name": "Remove service",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.dbName",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({ _id: variables.id})",
+                      "required": true
+                    }
+                  ],
+                  "grpcService": "Mongo",
+                  "rpc": "DeleteOne"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output.data",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 152.00000000000003,
+              "y": 7
+            }
+          },
+          {
+            "id": "2f9aaa87-4ff4-44b4-a600-b4d4fbfe43c9",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 440,
+              "y": 30
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "e7b6899a-24be-420c-8839-121cec65a82d",
+            "to": [
+              {
+                "nodeId": "9dd8faf5-58f0-41eb-8e18-a094deae31fd"
+              }
+            ]
+          },
+          {
+            "from": "9dd8faf5-58f0-41eb-8e18-a094deae31fd",
+            "to": [
+              {
+                "nodeId": "2f9aaa87-4ff4-44b4-a600-b4d4fbfe43c9"
+              }
+            ]
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ],
+          "production": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "services"
+            }
+          ]
+        },
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "b626e48e-455e-43c5-8b60-6d5d9eaf6c59",
+    "id": "b626e48e-455e-43c5-8b60-6d5d9eaf6c59",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Secrets",
+      "description": "responsible for secrets CRUD"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "b626e48e-455e-43c5-8b60-6d5d9eaf6c59",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Secrets",
+          "description": "responsible for secrets CRUD"
+        },
+        "nodes": [
+          {
+            "id": "03d55da6-eb61-433f-9a74-defd69e0ec7a",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "secretName",
+                  "type": "string",
+                  "evalValue": "payload.secretName",
+                  "required": true
+                },
+                {
+                  "name": "cmd",
+                  "type": "string",
+                  "evalValue": "payload.command",
+                  "required": true
+                },
+                {
+                  "name": "secretValue",
+                  "type": "string",
+                  "evalValue": "payload.secretValue",
+                  "required": true
+                },
+                {
+                  "name": "environmentId",
+                  "type": "string",
+                  "evalValue": "payload.environmentId",
+                  "required": true
+                },
+                {
+                  "name": "environments",
+                  "type": "string",
+                  "evalValue": "payload.environments",
+                  "required": true
+                },
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 468,
+              "y": 193
+            }
+          },
+          {
+            "id": "5d7a5cfc-d8f8-44b2-85ad-ddc325d5ab7e",
+            "name": "command",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.cmd",
+                "cases": [
+                  {
+                    "evalValue": "\"find\"",
+                    "valueType": "",
+                    "index": 1
+                  },
+                  {
+                    "index": 2,
+                    "evalValue": "\"create\"",
+                    "valueType": ""
+                  },
+                  {
+                    "index": 3,
+                    "evalValue": "\"update\""
+                  },
+                  {
+                    "index": 4,
+                    "evalValue": "\"delete\"",
+                    "output": []
+                  },
+                  {
+                    "index": 5,
+                    "evalValue": "\"all\""
+                  },
+                  {
+                    "index": 6,
+                    "evalValue": "\"createMany\""
+                  }
+                ],
+                "default": {
+                  "output": [],
+                  "index": 0
+                }
+              }
+            },
+            "visual": {
+              "x": 801,
+              "y": 224
+            }
+          },
+          {
+            "id": "47e8e62f-abf1-45d8-b8a3-fbb3e102103f",
+            "name": "create",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "InsertOne",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({environments:{[`${variables.environmentId}`]: {secretValue: encryptByWorkspaceId(variables.secretValue,variables.workspaceId)},},name: variables.secretName,workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "key",
+                      "type": "string",
+                      "evalValue": "uuid()",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "\"Secret successfully created\"",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 1187,
+              "y": 88
+            }
+          },
+          {
+            "id": "ff60876c-65fa-4847-881b-d784a57d4d27",
+            "name": "update",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "UpdateOne",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({[`environments.${variables.environmentId}`]: {secretValue: encryptByWorkspaceId(variables.secretValue, systemVariables.workspaceId)}})",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "`{\"name\" :\"${variables.secretName}\"}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "\"Secret successfully updated\"",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 1162,
+              "y": 367
+            }
+          },
+          {
+            "id": "0a7aa0de-6a77-4c96-8504-8c19fa1033cf",
+            "name": "error end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "`error command: ${variables.cmd}` "
+                }
+              ]
+            },
+            "visual": {
+              "x": 1160,
+              "y": 922
+            }
+          },
+          {
+            "id": "c9e073e2-987a-4d0c-9c80-4f6624414901",
+            "name": "Create end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "201",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1364,
+              "y": 94.99999999999999
+            }
+          },
+          {
+            "id": "61b6f493-bf2e-4c00-ad5e-f0a30ab68a48",
+            "name": "Update end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1364,
+              "y": 375
+            }
+          },
+          {
+            "id": "7b7e2a99-03b4-4bbc-8f01-1b13348dcb8d",
+            "name": "find",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({name : variables.secretName, workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "secretFound",
+                  "type": "Struct",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id; entity.secretValue = decryptByWorkspaceId(entity.environments[variables.environmentId].secretValue, variables.workspaceId);delete entity.environments;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 914,
+              "y": -24
+            }
+          },
+          {
+            "id": "a22e3a63-16ab-4fae-b485-d405b3990b2f",
+            "name": "Find end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "variables.secretFound"
+                },
+                {
+                  "name": "responseCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1380,
+              "y": -25
+            }
+          },
+          {
+            "id": "d86f1df1-d53e-4f00-8bf9-a54b9adea2ae",
+            "name": "find before creating",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({name : variables.secretName , workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "secretFound",
+                  "type": "string",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id; entity.secretValue = decryptByWorkspaceId(entity.environments[variables.environmentId].secretValue, systemVariables.workspaceId);delete entity.environments;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 890,
+              "y": 101
+            }
+          },
+          {
+            "id": "696e5f02-5306-409b-9fa0-f3b387bd1e05",
+            "name": "Secret Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.secretFound?.length === 0",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 1
+                  }
+                ],
+                "default": {
+                  "index": 0
+                }
+              }
+            },
+            "visual": {
+              "x": 1041,
+              "y": 95
+            }
+          },
+          {
+            "id": "eca3271d-b5fd-41f1-9304-77b621a3875e",
+            "name": "Create end - secret exists",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "\"Cannot create secret, as it already exists!\""
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "400",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1262,
+              "y": 220.99999999999997
+            }
+          },
+          {
+            "id": "8469be59-c8fc-4cd5-b621-7e1f4be4687e",
+            "name": "find before updating",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({name : variables.secretName , workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "secretFound",
+                  "type": "string",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id; entity.secretValue = entity.environments[variables.environmentId]?.secretValue; delete entity.environments;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 881,
+              "y": 394
+            }
+          },
+          {
+            "id": "11329331-4dd5-45ff-9db1-671089dc12e1",
+            "name": "Secret Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.secretFound[0]?.id !== undefined",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "",
+                    "index": 0,
+                    "output": []
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 1034,
+              "y": 354.00000000000006
+            }
+          },
+          {
+            "id": "4948632d-2502-49dc-99df-ded544f709d6",
+            "name": "Update end - Secret not found",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "\"Could not update! Secret not found!\""
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "404",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1228,
+              "y": 466
+            }
+          },
+          {
+            "id": "a1658431-1da3-4d48-a0c6-2b783558f92b",
+            "name": "find before deleting",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({name : variables.secretName , workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "secretFound",
+                  "type": "string",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id; entity.secretValue = entity.environments[variables.environmentId]?.secretValue; delete entity.environments;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 913,
+              "y": 595
+            }
+          },
+          {
+            "id": "4bc5d223-451b-4722-adf0-fcbee776bf9a",
+            "name": "Secret Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.secretFound[0]?.id !== undefined",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "",
+                    "index": 0,
+                    "output": []
+                  }
+                ],
+                "default": {
+                  "index": 1,
+                  "output": [
+                    {
+                      "name": "response",
+                      "type": "string",
+                      "evalValue": "\"Secret not found\"",
+                      "required": true
+                    }
+                  ]
+                }
+              }
+            },
+            "visual": {
+              "x": 1089,
+              "y": 580
+            }
+          },
+          {
+            "id": "d932212f-b950-476c-b470-e0af6c104065",
+            "name": "Delete",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "DeleteOne",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "`{\"name\" :\"${variables.secretName}\"}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "\"Secret successfully deleted!\"",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 1307,
+              "y": 596
+            }
+          },
+          {
+            "id": "0a0a380c-57ef-4735-aec2-604789662dc8",
+            "name": "Delete end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1534,
+              "y": 604
+            }
+          },
+          {
+            "id": "bb5a8098-44f4-43f8-ba1c-b453bc048b7c",
+            "name": "Delete end - Secret not found",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "404",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1238,
+              "y": 669
+            }
+          },
+          {
+            "id": "74d4056a-a70d-4b6a-9434-05d2273d13ec",
+            "name": "Get All ",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({workspaceId : variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1, \"name\":1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 823,
+              "y": 810
+            }
+          },
+          {
+            "id": "31c72b0b-0188-491a-89d6-e6b146218edd",
+            "name": "Get All - end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 1155,
+              "y": 817
+            }
+          },
+          {
+            "id": "90f4e4df-b3b7-4926-b1dd-6059a83066c2",
+            "name": "Secret Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.secretFound[0]?.secretValue !== undefined",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 1087,
+              "y": -48
+            }
+          },
+          {
+            "id": "69aa6c2f-6429-4b4e-89c7-cc8d5ce1f24c",
+            "name": "Not found",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "\"Secret not Found\""
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "404",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1266,
+              "y": 22
+            }
+          },
+          {
+            "id": "e89296c8-3f48-4fe2-9137-40f29f5c555f",
+            "name": "find before creating many",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({name : variables.secretName, workspaceId: variables.workspaceId })",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "`{\"environments\": 1}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "secretFound",
+                  "type": "string",
+                  "evalValue": "(() => {  const entArr=JSON.parse(output.data);  return entArr.map((entity) => { entity.id = entity._id; entity.secretValue = decryptByWorkspaceId(entity.environments[variables.environmentId].secretValue, systemVariables.workspaceId);delete entity.environments;delete entity._id; return entity; })})()",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 782,
+              "y": -134
+            }
+          },
+          {
+            "id": "2350029d-1337-428a-9fe8-777efa4a6e4b",
+            "name": "secret found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.secretFound?.length === 0",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 1
+                  }
+                ],
+                "default": {}
+              }
+            },
+            "visual": {
+              "x": 1026,
+              "y": -194
+            }
+          },
+          {
+            "id": "08beb051-cb96-4105-ad80-96720ac1b04f",
+            "name": "CreateAll end - secret exists",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "\"Cannot create secret, as it already exists!\""
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "400",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1160,
+              "y": -347
+            }
+          },
+          {
+            "id": "a847e136-ec31-412c-9b8d-52146bcef884",
+            "name": "create with many envs",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "InsertOne",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify((() => {\t\tconst environments = variables.environments.reduce((previousValue, currentValue) => {\t\treturn {\t\t\t...previousValue, \t\t\t[currentValue.environmentId]: { \t\t\t\tsecretValue: encryptByWorkspaceId(currentValue.secretValue, variables.workspaceId)\t\t\t\t}}\t}, {});\treturn { \t\tname: variables.secretName,  \t\tworkspaceId: variables.workspaceId,\t\tenvironments\t}})())",
+                      "required": true
+                    },
+                    {
+                      "name": "key",
+                      "type": "string",
+                      "evalValue": "variables.key ?? uuid()",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "\"Secret successfully created\"",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 1202,
+              "y": -187
+            }
+          },
+          {
+            "id": "a8c7443a-9f50-4bfc-b35c-61d4584badeb",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "201",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1429,
+              "y": -212
+            }
+          },
+          {
+            "id": "5734d99e-f838-46c3-b3e5-9f99044e8b93",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              }
+            },
+            "visual": {
+              "x": 614,
+              "y": 1053
+            }
+          },
+          {
+            "id": "b4343456-b910-45c1-95b2-93c1bf3a6c30",
+            "name": "Delete per Env",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "UpdateOne",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "constants.database",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "constants.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({[`environments.${variables.environmentId}`]: {secretValue: encryptByWorkspaceId(variables.secretValue, systemVariables.workspaceId)}})",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "`{\"name\" :\"${variables.secretName}\"}`",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              }
+            },
+            "executed": false,
+            "visual": {
+              "x": 765,
+              "y": 1045
+            }
+          },
+          {
+            "id": "c91107d0-3ca9-48b3-a584-4fb7fc1c3d33",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "",
+                  "type": "string",
+                  "evalValue": ""
+                }
+              ]
+            },
+            "visual": {
+              "x": 1007,
+              "y": 1052
+            }
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "secrets"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "secrets"
+            }
+          ]
+        },
+        "edges": [
+          {
+            "from": "03d55da6-eb61-433f-9a74-defd69e0ec7a",
+            "to": [
+              {
+                "nodeId": "5d7a5cfc-d8f8-44b2-85ad-ddc325d5ab7e"
+              }
+            ]
+          },
+          {
+            "from": "5d7a5cfc-d8f8-44b2-85ad-ddc325d5ab7e",
+            "to": [
+              {
+                "nodeId": "0a7aa0de-6a77-4c96-8504-8c19fa1033cf",
+                "label": "Command Not Found"
+              },
+              {
+                "nodeId": "7b7e2a99-03b4-4bbc-8f01-1b13348dcb8d",
+                "label": "Find Secret"
+              },
+              {
+                "nodeId": "d86f1df1-d53e-4f00-8bf9-a54b9adea2ae"
+              },
+              {
+                "nodeId": "8469be59-c8fc-4cd5-b621-7e1f4be4687e",
+                "label": "Update Secret"
+              },
+              {
+                "nodeId": "a1658431-1da3-4d48-a0c6-2b783558f92b",
+                "label": "Delete Secret"
+              },
+              {
+                "nodeId": "74d4056a-a70d-4b6a-9434-05d2273d13ec",
+                "label": "Get All Secrets"
+              },
+              {
+                "nodeId": "e89296c8-3f48-4fe2-9137-40f29f5c555f"
+              }
+            ]
+          },
+          {
+            "from": "47e8e62f-abf1-45d8-b8a3-fbb3e102103f",
+            "to": [
+              {
+                "nodeId": "c9e073e2-987a-4d0c-9c80-4f6624414901"
+              }
+            ]
+          },
+          {
+            "from": "ff60876c-65fa-4847-881b-d784a57d4d27",
+            "to": [
+              {
+                "nodeId": "61b6f493-bf2e-4c00-ad5e-f0a30ab68a48"
+              }
+            ]
+          },
+          {
+            "from": "d86f1df1-d53e-4f00-8bf9-a54b9adea2ae",
+            "to": [
+              {
+                "nodeId": "696e5f02-5306-409b-9fa0-f3b387bd1e05"
+              }
+            ]
+          },
+          {
+            "from": "696e5f02-5306-409b-9fa0-f3b387bd1e05",
+            "to": [
+              {
+                "nodeId": "eca3271d-b5fd-41f1-9304-77b621a3875e",
+                "label": "Secret Found"
+              },
+              {
+                "nodeId": "47e8e62f-abf1-45d8-b8a3-fbb3e102103f",
+                "label": "Not found"
+              }
+            ]
+          },
+          {
+            "from": "8469be59-c8fc-4cd5-b621-7e1f4be4687e",
+            "to": [
+              {
+                "nodeId": "11329331-4dd5-45ff-9db1-671089dc12e1"
+              }
+            ]
+          },
+          {
+            "from": "11329331-4dd5-45ff-9db1-671089dc12e1",
+            "to": [
+              {
+                "nodeId": "ff60876c-65fa-4847-881b-d784a57d4d27"
+              },
+              {
+                "nodeId": "4948632d-2502-49dc-99df-ded544f709d6",
+                "label": "Not found"
+              }
+            ]
+          },
+          {
+            "from": "a1658431-1da3-4d48-a0c6-2b783558f92b",
+            "to": [
+              {
+                "nodeId": "4bc5d223-451b-4722-adf0-fcbee776bf9a"
+              }
+            ]
+          },
+          {
+            "from": "4bc5d223-451b-4722-adf0-fcbee776bf9a",
+            "to": [
+              {
+                "nodeId": "d932212f-b950-476c-b470-e0af6c104065",
+                "label": "Delete Secret"
+              },
+              {
+                "nodeId": "bb5a8098-44f4-43f8-ba1c-b453bc048b7c",
+                "label": "Not found"
+              }
+            ]
+          },
+          {
+            "from": "d932212f-b950-476c-b470-e0af6c104065",
+            "to": [
+              {
+                "nodeId": "0a0a380c-57ef-4735-aec2-604789662dc8"
+              }
+            ]
+          },
+          {
+            "from": "74d4056a-a70d-4b6a-9434-05d2273d13ec",
+            "to": [
+              {
+                "nodeId": "31c72b0b-0188-491a-89d6-e6b146218edd"
+              }
+            ]
+          },
+          {
+            "from": "7b7e2a99-03b4-4bbc-8f01-1b13348dcb8d",
+            "to": [
+              {
+                "nodeId": "90f4e4df-b3b7-4926-b1dd-6059a83066c2"
+              }
+            ]
+          },
+          {
+            "from": "90f4e4df-b3b7-4926-b1dd-6059a83066c2",
+            "to": [
+              {
+                "nodeId": "a22e3a63-16ab-4fae-b485-d405b3990b2f",
+                "label": "Secret Found"
+              },
+              {
+                "nodeId": "69aa6c2f-6429-4b4e-89c7-cc8d5ce1f24c"
+              }
+            ]
+          },
+          {
+            "from": "e89296c8-3f48-4fe2-9137-40f29f5c555f",
+            "to": [
+              {
+                "nodeId": "2350029d-1337-428a-9fe8-777efa4a6e4b"
+              }
+            ]
+          },
+          {
+            "from": "a847e136-ec31-412c-9b8d-52146bcef884",
+            "to": [
+              {
+                "nodeId": "a8c7443a-9f50-4bfc-b35c-61d4584badeb"
+              }
+            ]
+          },
+          {
+            "from": "2350029d-1337-428a-9fe8-777efa4a6e4b",
+            "to": [
+              {
+                "nodeId": "08beb051-cb96-4105-ad80-96720ac1b04f",
+                "label": "Secret found"
+              },
+              {
+                "nodeId": "a847e136-ec31-412c-9b8d-52146bcef884",
+                "label": ""
+              }
+            ]
+          },
+          {
+            "from": "b4343456-b910-45c1-95b2-93c1bf3a6c30",
+            "to": [
+              {
+                "nodeId": "c91107d0-3ca9-48b3-a584-4fb7fc1c3d33"
+              }
+            ]
+          },
+          {
+            "from": "5734d99e-f838-46c3-b3e5-9f99044e8b93",
+            "to": [
+              {
+                "nodeId": "b4343456-b910-45c1-95b2-93c1bf3a6c30"
+              }
+            ]
+          }
+        ],
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "068c6176-8d64-4269-ac96-f3c5733afc4e",
+    "id": "068c6176-8d64-4269-ac96-f3c5733afc4e",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "X-API-Keys",
+      "description": "CRUD x-api-keys "
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "068c6176-8d64-4269-ac96-f3c5733afc4e",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "X-API-Keys",
+          "description": "CRUD x-api-keys "
+        },
+        "nodes": [
+          {
+            "id": "89aa041e-8464-4c46-bf6e-bb475fbe42ed",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "name",
+                  "type": "string",
+                  "evalValue": "payload.name",
+                  "required": true
+                },
+                {
+                  "name": "value",
+                  "type": "string",
+                  "evalValue": "payload.value",
+                  "required": true
+                },
+                {
+                  "name": "description",
+                  "type": "string",
+                  "evalValue": "payload.description",
+                  "required": true
+                },
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                }
+              ],
+              "alias": "Create X-API-Key"
+            },
+            "visual": {
+              "x": 289,
+              "y": -57
+            }
+          },
+          {
+            "id": "d12749bf-f1a9-4afd-9ddd-deb17319c02f",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "\"XApiKey saved successfully!\""
+                }
+              ]
+            },
+            "visual": {
+              "x": 1035,
+              "y": 13
+            }
+          },
+          {
+            "id": "9977087f-4a3e-4cde-980b-0c36d8097ca3",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "id",
+                  "type": "string",
+                  "evalValue": "payload.id",
+                  "required": true
+                }
+              ],
+              "alias": "Find By Id"
+            },
+            "visual": {
+              "x": 299,
+              "y": 59
+            }
+          },
+          {
+            "id": "1c0aa978-012e-4a6b-b109-4c6db366975f",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.keyFound"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1126,
+              "y": 85
+            }
+          },
+          {
+            "id": "1677b20f-3d69-44de-8f81-49c425170d48",
+            "name": "Create X-Api-Key",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "d0ffa9bd-6bcf-4c12-8fa4-f07c04ff83a0",
+                "nodeId": "7aaf259a-6d2d-4efe-9944-fa9b22502e5c",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.collectionName",
+                    "required": true
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "hashToken(variables.value)",
+                    "required": true
+                  },
+                  {
+                    "name": "value",
+                    "type": "string",
+                    "evalValue": "{name: variables.name, description: variables.description, workspaceId: variables.workspaceId, created_at: Date.now(),prefix: `${variables.value.substring(0,6)}`}",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 795,
+              "y": 4.9999999999999964
+            }
+          },
+          {
+            "id": "2fb20310-1476-4c85-8012-1249762982f0",
+            "name": "Find X-Api-Key By Id",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "input": [
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "variables.id",
+                    "required": true
+                  },
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.database",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.entity",
+                    "required": true
+                  }
+                ],
+                "workflowVersion": "v1"
+              },
+              "output": [
+                {
+                  "evalValue": " output.response",
+                  "name": "keyFound",
+                  "type": "Struct"
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 439,
+              "y": 58
+            }
+          },
+          {
+            "id": "6d389392-2a2c-401b-b50f-66cd57a051bf",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "{response: \"XApiKey successfully deleted!\"}"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1003,
+              "y": 207
+            }
+          },
+          {
+            "id": "49e6eb7e-d58d-4c44-bc97-68e91923632b",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "id",
+                  "type": "string",
+                  "evalValue": "payload.id",
+                  "required": true
+                }
+              ],
+              "alias": "Delete X-API-Key"
+            },
+            "visual": {
+              "x": 287,
+              "y": 209
+            }
+          },
+          {
+            "id": "830ae637-702a-4568-a3e9-b760f7ae2c33",
+            "name": "Delete X-Api-Key",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "input": [
+                  {
+                    "name": "dbName",
+                    "type": "string",
+                    "evalValue": "constants.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "collectionName",
+                    "evalValue": "constants.collectionName",
+                    "type": "string"
+                  },
+                  {
+                    "name": "value",
+                    "type": "string",
+                    "evalValue": "variables.id",
+                    "required": true
+                  }
+                ],
+                "workflowId": "e94c9df7-3ec8-400a-bab6-3eebfe3d32ad",
+                "workflowVersion": "v1",
+                "nodeId": "4ec5948d-19e5-42b4-957c-589d3dbfb72c"
+              },
+              "output": [
+                {
+                  "name": "output",
+                  "evalValue": "variables.response",
+                  "type": "Struct"
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 748,
+              "y": 199
+            }
+          },
+          {
+            "id": "12dfe1a7-5c41-4efe-a096-17472d4ff980",
+            "name": "Find X-Api-Key to Delete",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.collectionName",
+                    "required": true
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "variables.id",
+                    "required": true
+                  }
+                ],
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "workflowVersion": "v1"
+              },
+              "output": [
+                {
+                  "name": "keyFound",
+                  "type": "Struct",
+                  "evalValue": " output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 392,
+              "y": 203
+            }
+          },
+          {
+            "id": "babd6d05-fb9f-4b15-86f4-405cd079bf2e",
+            "name": "XAPIKey Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.keyFound !== undefined && variables.keyFound !== null",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 607,
+              "y": 268.00000000000006
+            }
+          },
+          {
+            "id": "85cb7c97-b83b-42a3-8c87-0df699ec0fe3",
+            "name": "end- Not found",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "{response: \"XApiKey not Found!\"}"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "404",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 924,
+              "y": 343
+            }
+          },
+          {
+            "id": "3bc5cb5c-d032-4591-ac36-76b15888cf15",
+            "name": "XAPIKey Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.xApiKeyInfo !== null && variables.xApiKeyInfo !== undefined",
+                "cases": [
+                  {
+                    "evalValue": "false",
+                    "valueType": "boolean",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 612,
+              "y": -77
+            }
+          },
+          {
+            "id": "28dd6eb6-08a0-4b07-ac2e-4b20d58caced",
+            "name": "Find X-Api-Key By Value",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "workflowVersion": "",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.collectionName",
+                    "required": true
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "hashToken(variables.value)",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "xApiKeyInfo",
+                  "evalValue": "output.response",
+                  "type": "Struct"
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 410,
+              "y": -64
+            }
+          },
+          {
+            "id": "6576c888-2010-475e-a9e6-0028f07c522b",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "{response: \"XApiKey already exists!\"}"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1027,
+              "y": -141
+            }
+          },
+          {
+            "id": "d41d7576-fcc9-4361-a005-fd6a0c3f93a2",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "id",
+                  "type": "string",
+                  "evalValue": "payload.id",
+                  "required": true
+                },
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "payload.data",
+                  "required": true
+                }
+              ],
+              "alias": "Update X-API-Key"
+            },
+            "visual": {
+              "x": 292,
+              "y": 513
+            }
+          },
+          {
+            "id": "4741bf60-1843-4733-af51-7ce553431781",
+            "name": "XAPIKey Found",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.keyFound !== undefined && variables.keyFound !== null",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 652,
+              "y": 64.99999999999999
+            }
+          },
+          {
+            "id": "4ed3d2de-97b7-46c1-a4b0-bb232cdc159f",
+            "name": "Not found End",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "{response: \"XApiKey not Found!\"}"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "404",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 1123,
+              "y": 160
+            }
+          },
+          {
+            "id": "9a2ccec2-96d9-478a-8845-7acf13c9c780",
+            "name": "Update X-Api-Key",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "e27c0cf9-9e98-4980-8d7f-8e8ada5b2ebd",
+                "nodeId": "6752c110-4d56-4ec9-bdda-e8d884b0026e",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.database",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.entity",
+                    "required": true
+                  },
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "evalValue": "variables.id",
+                    "required": true
+                  },
+                  {
+                    "name": "data",
+                    "type": "string",
+                    "evalValue": "(() => {   const data = {};   if (variables.data.name !== undefined && variables.data.name !== null)     data.name = variables.data.name;   if (     variables.data.description !== undefined &&     variables.data.description !== null   )     data.description = variables.data.description;   return data; })()",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 560,
+              "y": 416
+            }
+          },
+          {
+            "id": "db5ea120-8495-46d7-9eac-f00f45f6308d",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 939,
+              "y": 463
+            }
+          },
+          {
+            "id": "8d5d20bd-ecac-4a4f-9eb8-d44643d65dda",
+            "name": "Required input is set",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.data !== null && variables.data !== undefined && variables.id !== null && variables !== undefined",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 411.99999999999994,
+              "y": 493.00000000000006
+            }
+          },
+          {
+            "id": "07eadefc-7e08-4380-9c01-d29cb32634be",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "data",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 969,
+              "y": 597
+            }
+          },
+          {
+            "id": "352ef07e-5d57-4212-94f2-e79e007ce75e",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "alias": "Get All X-API-Keys",
+              "input": [
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                },
+                {
+                  "name": "projection",
+                  "type": "string",
+                  "evalValue": "payload.projection",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 280,
+              "y": 724
+            }
+          },
+          {
+            "id": "3badbab3-076d-45cb-ab2e-376729806e68",
+            "name": "Find All X-API-Keys",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "0f6a4714-5607-402c-a54e-3eaef167c1bd",
+                "nodeId": "ed052ffd-cf27-457b-9338-b0ebcfd3e800",
+                "workflowVersion": "",
+                "input": [
+                  {
+                    "name": "dbName",
+                    "type": "string",
+                    "evalValue": "constants.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "collectionName",
+                    "type": "string",
+                    "evalValue": "constants.collectionName",
+                    "required": true
+                  },
+                  {
+                    "name": "workspaceId",
+                    "type": "string",
+                    "evalValue": "variables.workspaceId",
+                    "required": true
+                  },
+                  {
+                    "name": "projection",
+                    "type": "string",
+                    "evalValue": "JSON.stringify(variables.projection)",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "XAPIKeysFound",
+                  "type": "string",
+                  "evalValue": "output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 511,
+              "y": 713
+            }
+          },
+          {
+            "id": "ab0a0b62-c883-4539-8c17-b8192ca70a2b",
+            "name": "Find All X-API-Keys end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.XAPIKeysFound"
+                }
+              ]
+            },
+            "visual": {
+              "x": 827,
+              "y": 724
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "1677b20f-3d69-44de-8f81-49c425170d48",
+            "to": [
+              {
+                "nodeId": "d12749bf-f1a9-4afd-9ddd-deb17319c02f"
+              }
+            ]
+          },
+          {
+            "from": "9977087f-4a3e-4cde-980b-0c36d8097ca3",
+            "to": [
+              {
+                "nodeId": "2fb20310-1476-4c85-8012-1249762982f0"
+              }
+            ]
+          },
+          {
+            "from": "49e6eb7e-d58d-4c44-bc97-68e91923632b",
+            "to": [
+              {
+                "nodeId": "12dfe1a7-5c41-4efe-a096-17472d4ff980"
+              }
+            ]
+          },
+          {
+            "from": "babd6d05-fb9f-4b15-86f4-405cd079bf2e",
+            "to": [
+              {
+                "nodeId": "830ae637-702a-4568-a3e9-b760f7ae2c33",
+                "label": "Found"
+              },
+              {
+                "nodeId": "85cb7c97-b83b-42a3-8c87-0df699ec0fe3",
+                "label": "Not found"
+              }
+            ]
+          },
+          {
+            "from": "830ae637-702a-4568-a3e9-b760f7ae2c33",
+            "to": [
+              {
+                "nodeId": "6d389392-2a2c-401b-b50f-66cd57a051bf"
+              }
+            ]
+          },
+          {
+            "from": "12dfe1a7-5c41-4efe-a096-17472d4ff980",
+            "to": [
+              {
+                "nodeId": "babd6d05-fb9f-4b15-86f4-405cd079bf2e"
+              }
+            ]
+          },
+          {
+            "from": "89aa041e-8464-4c46-bf6e-bb475fbe42ed",
+            "to": [
+              {
+                "nodeId": "28dd6eb6-08a0-4b07-ac2e-4b20d58caced"
+              }
+            ]
+          },
+          {
+            "from": "28dd6eb6-08a0-4b07-ac2e-4b20d58caced",
+            "to": [
+              {
+                "nodeId": "3bc5cb5c-d032-4591-ac36-76b15888cf15"
+              }
+            ]
+          },
+          {
+            "from": "3bc5cb5c-d032-4591-ac36-76b15888cf15",
+            "to": [
+              {
+                "nodeId": "1677b20f-3d69-44de-8f81-49c425170d48",
+                "label": "Not found"
+              },
+              {
+                "nodeId": "6576c888-2010-475e-a9e6-0028f07c522b",
+                "label": "Found"
+              }
+            ]
+          },
+          {
+            "from": "2fb20310-1476-4c85-8012-1249762982f0",
+            "to": [
+              {
+                "nodeId": "4741bf60-1843-4733-af51-7ce553431781"
+              }
+            ]
+          },
+          {
+            "from": "4741bf60-1843-4733-af51-7ce553431781",
+            "to": [
+              {
+                "nodeId": "1c0aa978-012e-4a6b-b109-4c6db366975f",
+                "label": "Found"
+              },
+              {
+                "nodeId": "4ed3d2de-97b7-46c1-a4b0-bb232cdc159f",
+                "label": "Not found"
+              }
+            ]
+          },
+          {
+            "from": "9a2ccec2-96d9-478a-8845-7acf13c9c780",
+            "to": [
+              {
+                "nodeId": "db5ea120-8495-46d7-9eac-f00f45f6308d"
+              }
+            ]
+          },
+          {
+            "from": "d41d7576-fcc9-4361-a005-fd6a0c3f93a2",
+            "to": [
+              {
+                "nodeId": "8d5d20bd-ecac-4a4f-9eb8-d44643d65dda"
+              }
+            ]
+          },
+          {
+            "from": "8d5d20bd-ecac-4a4f-9eb8-d44643d65dda",
+            "to": [
+              {
+                "nodeId": "9a2ccec2-96d9-478a-8845-7acf13c9c780",
+                "label": "Valid input"
+              },
+              {
+                "nodeId": "07eadefc-7e08-4380-9c01-d29cb32634be",
+                "label": "Missing input"
+              }
+            ]
+          },
+          {
+            "from": "352ef07e-5d57-4212-94f2-e79e007ce75e",
+            "to": [
+              {
+                "nodeId": "3badbab3-076d-45cb-ab2e-376729806e68"
+              }
+            ]
+          },
+          {
+            "from": "3badbab3-076d-45cb-ab2e-376729806e68",
+            "to": [
+              {
+                "nodeId": "ab0a0b62-c883-4539-8c17-b8192ca70a2b"
+              }
+            ]
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "x_api_keys"
+            }
+          ],
+          "production": [
+            {
+              "name": "dbName",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "collectionName",
+              "type": "string",
+              "value": "x_api_keys"
+            }
+          ]
+        },
+        "bitloopsEngineVersion": "v0.0.1",
+        "version": "v1"
+      }
+    }
+  },
+  {
+    "_id": "e94c9df7-3ec8-400a-bab6-3eebfe3d32ad",
+    "id": "e94c9df7-3ec8-400a-bab6-3eebfe3d32ad",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Delete entity from DB",
+      "description": "Deletes entity from DB given its id"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "e94c9df7-3ec8-400a-bab6-3eebfe3d32ad",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Delete entity from DB",
+          "description": "Deletes entity from DB given its id"
+        },
+        "debugId": "",
+        "nodes": [
+          {
+            "id": "d08b107d-9950-4733-b4cf-5c9c1d138b07",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 933,
+              "y": 253
+            }
+          },
+          {
+            "id": "4378b02d-07d1-4f3f-aeb7-2abd30ca5a97",
+            "name": "Delete from Mongo by ID",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "51d8b4f4-1c53-4fec-ad56-9c301cb96e52",
+                "nodeId": "d5be9603-b199-4a77-82af-ba652d069d83",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "dbName",
+                    "type": "string",
+                    "evalValue": "variables.dbName",
+                    "required": true
+                  },
+                  {
+                    "name": "collectionName",
+                    "type": "string",
+                    "evalValue": "variables.collectionName",
+                    "required": true
+                  },
+                  {
+                    "name": "value",
+                    "type": "string",
+                    "evalValue": "variables.value",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 681,
+              "y": 246
+            }
+          },
+          {
+            "id": "4ec5948d-19e5-42b4-957c-589d3dbfb72c",
+            "name": "direct",
+            "type": {
+              "name": "direct-start-event",
+              "workflowId": "workflow-id",
+              "workspaceId": "workspace-id",
+              "workflowVersion": "1",
+              "input": [
+                {
+                  "name": "dbName",
+                  "type": "string",
+                  "evalValue": "payload.dbName",
+                  "required": true
+                },
+                {
+                  "name": "collectionName",
+                  "type": "string",
+                  "evalValue": "payload.collectionName",
+                  "required": true
+                },
+                {
+                  "name": "value",
+                  "type": "string",
+                  "evalValue": "payload.value",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 483,
+              "y": 250
+            },
+            "": {
+              "name": "Delete from DB by ID"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "4378b02d-07d1-4f3f-aeb7-2abd30ca5a97",
+            "to": [
+              {
+                "nodeId": "d08b107d-9950-4733-b4cf-5c9c1d138b07"
+              }
+            ]
+          },
+          {
+            "from": "4ec5948d-19e5-42b4-957c-589d3dbfb72c",
+            "to": [
+              {
+                "nodeId": "4378b02d-07d1-4f3f-aeb7-2abd30ca5a97"
+              }
+            ]
+          }
+        ],
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "51d8b4f4-1c53-4fec-ad56-9c301cb96e52",
+    "id": "51d8b4f4-1c53-4fec-ad56-9c301cb96e52",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Delete entity from Mongo",
+      "description": "Deletes entity from Mongo given its id"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "51d8b4f4-1c53-4fec-ad56-9c301cb96e52",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Delete entity from Mongo",
+          "description": "Deletes entity from Mongo given its id"
+        },
+        "nodes": [
+          {
+            "id": "e12f848b-4e13-4603-bb5d-72f7419ba7fd",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "output",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 1114,
+              "y": 256
+            }
+          },
+          {
+            "id": "d5be9603-b199-4a77-82af-ba652d069d83",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "dbName",
+                  "type": "string",
+                  "evalValue": "payload.dbName",
+                  "required": true
+                },
+                {
+                  "name": "collectionName",
+                  "type": "string",
+                  "evalValue": "payload.collectionName",
+                  "required": true
+                },
+                {
+                  "name": "value",
+                  "type": "string",
+                  "evalValue": "payload.value",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 687,
+              "y": 256
+            }
+          },
+          {
+            "id": "3ee77eb1-7fc0-434a-96c4-6483978b7dd2",
+            "name": "Delete from Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "variables.dbName",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "variables.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "`{ \"_id\": \"${variables.value}\" }`",
+                      "required": true
+                    }
+                  ],
+                  "grpcService": "Mongo",
+                  "rpc": "DeleteOne"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 845,
+              "y": 250
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "d5be9603-b199-4a77-82af-ba652d069d83",
+            "to": [
+              {
+                "nodeId": "3ee77eb1-7fc0-434a-96c4-6483978b7dd2"
+              }
+            ]
+          },
+          {
+            "from": "3ee77eb1-7fc0-434a-96c4-6483978b7dd2",
+            "to": [
+              {
+                "nodeId": "e12f848b-4e13-4603-bb5d-72f7419ba7fd"
+              }
+            ]
+          }
+        ],
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  },
+  {
+    "_id": "0f6a4714-5607-402c-a54e-3eaef167c1bd",
+    "id": "0f6a4714-5607-402c-a54e-3eaef167c1bd",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "Get all entities from Mongo by workspaceId",
+      "description": "Reads the entities with only filter the workspaceId"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "0f6a4714-5607-402c-a54e-3eaef167c1bd",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "Get all entities from Mongo by workspaceId",
+          "description": "Reads the entities with only filter the workspaceId"
+        },
+        "nodes": [
+          {
+            "id": "ed052ffd-cf27-457b-9338-b0ebcfd3e800",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "alias": "Get all From Mongo by workspace",
+              "input": [
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                },
+                {
+                  "name": "collectionName",
+                  "type": "string",
+                  "evalValue": "payload.collectionName",
+                  "required": true
+                },
+                {
+                  "name": "dbName",
+                  "type": "string",
+                  "evalValue": "payload.dbName",
+                  "required": true
+                },
+                {
+                  "name": "projection",
+                  "type": "string",
+                  "evalValue": "payload.projection",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 275,
+              "y": 184
+            }
+          },
+          {
+            "id": "416e2081-677c-43b7-86f6-d1c42b3ba13f",
+            "name": "Get All From Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "grpcService": "Mongo",
+                  "rpc": "Find",
+                  "input": [
+                    {
+                      "name": "dbName",
+                      "type": "string",
+                      "evalValue": "variables.dbName",
+                      "required": true
+                    },
+                    {
+                      "name": "collectionName",
+                      "type": "string",
+                      "evalValue": "variables.collectionName",
+                      "required": true
+                    },
+                    {
+                      "name": "query",
+                      "type": "string",
+                      "evalValue": "JSON.stringify({workspaceId: variables.workspaceId})",
+                      "required": true
+                    },
+                    {
+                      "name": "projection",
+                      "type": "string",
+                      "evalValue": "variables.projection",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "JSON.parse(output.data)",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 366,
+              "y": 176
+            }
+          },
+          {
+            "id": "7d967eaf-f5e9-4b74-98e1-c96d0fb330ff",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 545,
+              "y": 184
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "ed052ffd-cf27-457b-9338-b0ebcfd3e800",
+            "to": [
+              {
+                "nodeId": "416e2081-677c-43b7-86f6-d1c42b3ba13f"
+              }
+            ]
+          },
+          {
+            "from": "416e2081-677c-43b7-86f6-d1c42b3ba13f",
+            "to": [
+              {
+                "nodeId": "7d967eaf-f5e9-4b74-98e1-c96d0fb330ff"
+              }
+            ]
+          }
+        ],
+        "bitloopsEngineVersion": "v0.0.1"
+      }
+    }
+  }
+]
