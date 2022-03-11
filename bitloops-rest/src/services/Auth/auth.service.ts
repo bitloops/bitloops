@@ -98,7 +98,15 @@ export default class AuthService implements IAuthenticationService {
 
 		console.log('thirdResponse', thirdResponse.status);
 		let oAuthProviderLocation = thirdResponse?.headers?.location;
-		// googleLocation = replaceRedirectUrl(googleLocation);
+
+		// const REDIRECT_URI_VALUE = 'http://localhost:8080/auth/realms/bitloops/broker/google/endpoint';
+		// This env is defined inside localhost containers where keycloak returns
+		// an unreachable url for google(with containerName as domain)
+		const redirectUrl = process.env.KEYCLOAK_FROM_GOOGLE_URI
+			? `${process.env.KEYCLOAK_FROM_GOOGLE_URI}/auth/realms/${provider_id}/broker/${oAuthProvider}/endpoint`
+			: `${process.env.KEYCLOAK_URI}/auth/realms/${provider_id}/broker/${oAuthProvider}/endpoint`;
+
+		oAuthProviderLocation = replaceRedirectUrl(oAuthProviderLocation, redirectUrl);
 
 		return {
 			cookiesArray,
@@ -147,7 +155,7 @@ export default class AuthService implements IAuthenticationService {
 			}
 		}
 		const jwtData = jwt?.jwtData;
-		// console.log('jwtData', jwtData);
+		console.log('jwtData', jwtData);
 		const payload = {
 			displayName: jwtData.name,
 			email: jwtData.email,
