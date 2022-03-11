@@ -98,7 +98,7 @@ class Mongo implements IDatabase {
 			},
 		);
 		console.log('client secret found', findResult);
-		const secret = findResult.clients?.[0].secret;
+		const secret = findResult?.clients?.[0].secret;
 		return secret ?? null;
 	}
 }
