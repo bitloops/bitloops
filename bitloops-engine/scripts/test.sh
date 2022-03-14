@@ -9,6 +9,6 @@ function startDocker(){
   echo "initiazing $1 ..."
   docker ps -a | grep "$1" | grep -o '^\S*' | xargs -I{} docker start {} 
 }
-startDocker redis
-startDocker nats
+startDocker redis:latest
+startDocker nats:latest
 echo starting tests ...
