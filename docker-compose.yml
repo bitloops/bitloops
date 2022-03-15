@@ -67,6 +67,16 @@ services:
     depends_on:
       - mongodb
 
+  csrv-redis:
+    container_name: csrv-redis
+    image: bitloops/csrv-redis:v0.0.4
+    ports:
+      - 8085:8085
+    environment:
+      - SERVICE_PORT=8085
+    depends_on:
+      - redis
+
   postgres:
     image: postgres
     volumes:
