@@ -33,7 +33,7 @@ function App() {
 
   useEffect(() => {
     async function subscribe() {
-      unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
+      unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.Subscription_ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
         setMessages(prevState => [...prevState, msg])});
     }
     if (user) {
