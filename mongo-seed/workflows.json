@@ -650,6 +650,23 @@
               "type": "string",
               "value": "workspaceId"
             }
+          ],
+          "0876c3ea-bbff-474c-8cda-7124af0d0b15": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workflows"
+            },
+            {
+              "name": "field",
+              "type": "string",
+              "value": "workspaceId"
+            }
           ]
         },
         "nodes": [
@@ -6473,23 +6490,6 @@
               "name": "defaultRestUri",
               "type": "string",
               "value": "https://envoy.bitloops.net"
-            }
-          ],
-          "0cf1609d-85c5-4b10-95ec-8990dbc33602": [
-            {
-              "name": "database",
-              "type": "string",
-              "value": "bitloops_managed"
-            },
-            {
-              "name": "entity",
-              "type": "string",
-              "value": "workspaces"
-            },
-            {
-              "name": "defaultRestUri",
-              "type": "string",
-              "value": "http://127.0.0.1:3005"
             }
           ],
           "0876c3ea-bbff-474c-8cda-7124af0d0b15": [
