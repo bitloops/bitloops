@@ -1,8 +1,8 @@
 ```bash
-docker compose up -d
+docker-compose up -d
 
 # or to rebuild all images
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 Use environmentId: `development` which is pointing to your csrv-mongo docker instance
