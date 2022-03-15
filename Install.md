@@ -52,8 +52,8 @@ Visit http://localhost:8080
 - Authorization Enabled -->
 
 - Under Valid Redirect URIs add
-  - http://localhost/{providerId}/auth/google/final-callback
-  - http://localhost/{providerId}/auth/github/final-callback
+  - http://127.0.0.1/{providerId}/auth/google/final-callback
+  - http://127.0.0.1/{providerId}/auth/github/final-callback
 - Save
   <!-- We will use client ID and client Secret(From Credentials Tab of client) -->
 
@@ -74,7 +74,7 @@ Visit http://localhost:8080
 
 ## Getting KeyCloak realm's public key
 
-- Going to http://localhost:8080/auth/realms/bitloops (host is keycloak server)
+- Going to http://localhost:8080/auth/realms/{{providerId}} (host is keycloak server)
 
 - Add -----BEGIN PUBLIC KEY----- and append -----END PUBLIC KEY----- to this copied public key to use it anywhere to verify the JWTtoken. You public key should finally look something like this:
 
@@ -84,7 +84,8 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhAj9OCZd0XjzOIad2VbUPSMoVK1X8hdD2Ad+
 -----END PUBLIC KEY-----
 ```
 
-- [Base64 encode](https://www.base64encode.org/)
+- [Base64 encode](https://www.base64encode.org/) it
+- Save it as KEYCLOAK_PK in docker.env of bitloops-rest and bitloops-engine(rebuild docker compose if needed)
 
 ### How to add image from Google in claims
 
