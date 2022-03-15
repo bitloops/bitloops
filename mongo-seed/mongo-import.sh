@@ -6,5 +6,7 @@ echo "Importing workspaces..." &&
 mongoimport --host mongodb --db bitloops_managed --collection workspaces --drop --file /workspaces.json --jsonArray &&
 echo "Importing environments..." &&
 mongoimport --host mongodb --db bitloops_managed --collection environments --drop --file /environments.json --jsonArray &&
+echo "Importing x_api_keys..." &&
+mongoimport --host mongodb --db bitloops_managed --collection x_api_keys --drop --file /x_api_keys.json --jsonArray &&
 echo "Importing secrets..." &&
 mongoimport --host mongodb --db bitloops_managed --collection secrets --drop --file /secrets.json --jsonArray

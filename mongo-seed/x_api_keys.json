@@ -1,0 +1,9 @@
+[
+  {
+    "_id": "a7456ad0d9a5b71b241adadd7fe0c4d8b48ccafc3c11e7258c452e4db810c4de",
+    "name": "xApiKeyRest",
+    "description": "X-Api-key of our REST",
+    "created_at": 1647338559913,
+    "prefix": "123qwe"
+  }
+]
