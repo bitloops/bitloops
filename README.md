@@ -16,7 +16,7 @@ Using Bitloops, you can easily integrate your application with user authenticati
 
 Bitloops is the only platform you need for all your backend needs. 
 
-# Bitloops monorepo! 
+# Contents
 
 Bitloops' monorepo contains the following projects: 
 
