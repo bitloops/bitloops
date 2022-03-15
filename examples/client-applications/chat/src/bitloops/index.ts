@@ -1,7 +1,7 @@
 import Bitloops from 'bitloops';
 
 import bitloopsConfig from '../bitloops/bitloopsConfig';
-import { DemoChat } from './demoChat'; 
+import { DemoChat } from './DemoChat'; 
 
 const bitloopsApp = Bitloops.initialize(bitloopsConfig);
 const demoChat = new DemoChat.DemoChatClient(bitloopsApp);
