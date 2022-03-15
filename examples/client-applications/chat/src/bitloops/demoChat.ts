@@ -5,17 +5,17 @@ import Bitloops from 'bitloops';
 
 export namespace DemoChat {
 
+  export type ChatDemoPublicMessageSentPayload = {
+    message: string;
+    nickname: string;
+    senderUid: string;
+  }
+
   export type Subscription_ChatDemoNewPublicMessage = {
     message: string;
     senderUid: string;
     senderNickname: string;
     sentAt: number;
-  }
-
-  export type ChatDemoPublicMessageSentPayload = {
-    message: string;
-    nickname: string;
-    senderUid: string;
   }
 
   export interface IDemoChatClient {
@@ -25,13 +25,13 @@ export namespace DemoChat {
   export class DemoChatClient implements IDemoChatClient {
     bitloopsApp: Bitloops;
     Events: {
-      ChatDemoNewPublicMessage: () => string,
+      Subscription_ChatDemoNewPublicMessage: () => string,
     };
 
     constructor(bitloopsApp: Bitloops) {
       this.bitloopsApp = bitloopsApp;
       this.Events = {
-        ChatDemoNewPublicMessage: () => 'workflow-events.chat-demo:newPublicMessage',
+        Subscription_ChatDemoNewPublicMessage: () => 'chat-demo:newPublicMessage',
       }
     }
 
