@@ -1,12 +1,11 @@
-import { BitloopsUser } from 'bitloops';
-import React, { FC } from 'react';
+import React from 'react';
 
 interface HeaderProps {
-  user: BitloopsUser;
+  user: any;
   logout: () => void;
 }
 
-export const Header: FC<HeaderProps> = (props): JSX.Element => {
+export const Header: React.FC<HeaderProps> = (props): JSX.Element => {
   const { user, logout } = props;
   if (user) return (<div style={{display: 'flex'}}>
     <div style={{padding: 20}}>Hello {user.firstName}</div>

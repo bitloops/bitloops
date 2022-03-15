@@ -1,13 +1,13 @@
 import { AuthTypes, BitloopsConfig } from 'bitloops';
 
 const bitloopsConfig: BitloopsConfig = {
-  apiKey: 'kgyst344ktst43kyygk4tkt4s',
+  apiKey: 'XXXxxXXXXxxxXXXxx',
   server: 'xxxxxxxxx',
   environmentId: 'production',
   ssl: true,
   workspaceId: 'xxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx',
   messagingSenderId: 'xxxxxxxx',
-  applications: ['demoChat'],
+  applications: ['xxxxXXXX'],
   auth: {
     authenticationType: AuthTypes.User,
     providerId: 'xxxxxxxx', // You create this in the Bitloops Console
