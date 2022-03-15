@@ -1,38 +1,41 @@
+/**
+ * @generated automatically by Bitloops
+ */
 import Bitloops from 'bitloops';
 
 export namespace DemoChat {
- 
-  export type Publish_PublicMessage = {
+
+  export type Subscription_ChatDemoNewPublicMessage = {
+    message: string;
+    senderUid: string;
+    senderNickname: string;
+    sentAt: number;
+  }
+
+  export type ChatDemoPublicMessageSentPayload = {
     message: string;
     nickname: string;
     senderUid: string;
   }
 
-  export type Subscription_NewPublicMessage = { 
-    message: string;
-    sendAt: number;
-    senderNickname: string;
-    senderUid: string;
-  }
-  
   export interface IDemoChatClient {
-    publicMessageSent(input: Publish_PublicMessage): Promise<[response: void | null, error: any | null]>;
+    chatDemoPublicMessageSent(input: ChatDemoPublicMessageSentPayload): Promise<[response: void | null, error: any | null]>;
   }
 
   export class DemoChatClient implements IDemoChatClient {
     bitloopsApp: Bitloops;
-    Events: { NewPublicMessage: () => string };
+    Events: {
+      ChatDemoNewPublicMessage: () => string,
+    };
+
     constructor(bitloopsApp: Bitloops) {
       this.bitloopsApp = bitloopsApp;
       this.Events = {
-        NewPublicMessage: () => 'workflow-events.chat-demo:newPublicMessage',
+        ChatDemoNewPublicMessage: () => 'workflow-events.chat-demo:newPublicMessage',
       }
     }
 
-    /**
-     * @generated from Bitloops Protobuf: PublicMessageSent(PublishPublicMessage) returns (google.protobuf.Empty);
-     */
-    async publicMessageSent(input: Publish_PublicMessage): Promise<[response: void | null, error: any | null]> {
+    async chatDemoPublicMessageSent(input: ChatDemoPublicMessageSentPayload): Promise<[response: void | null, error: any | null]> {
       try {
         const response: void = await this.bitloopsApp.publish(
           'chat-demo.publicMessageSent',
@@ -44,5 +47,7 @@ export namespace DemoChat {
         return [null, error];
       }
     }
+
   }
+
 }

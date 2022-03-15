@@ -1,48 +1,40 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { BitloopsUser, Unsubscribe } from 'bitloops/dist/definitions';
 
 import './components/chat.scss';
+import bitloops, { DemoChat } from './bitloops';
 import Header from './components/Header';
 import GoogleButton from './components/GoogleButton';
 import Message from './components/Message';
 
-let unsubscribe: any;
-
-const getInitialMessagesValue = (): [] | {sentAt: number, senderUid: string, message: string, senderNickname: string}[] => {
-  return [
-    {sentAt: 1647136543325, message: 'This is a mock message', senderUid: '1', senderNickname: 'Me'},
-    {sentAt: 1647136558332, message: 'This is a mock reply', senderUid: '2', senderNickname: 'Someone else'},
-  ];
-};
+let unsubscribe: Unsubscribe;
 
 function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [nickname, setNickname] = useState('');
   const [message, setMessage] = useState('');
-  const [user, setUser] = useState<{firstName: string, uid: string} | null>({firstName: 'Me', uid: '1'});
-  const [messages, setMessages] = useState(() => getInitialMessagesValue());
+  const [user, setUser] = useState<BitloopsUser | null>(null);
+  const [messages, setMessages] = useState<DemoChat.Subscription_ChatDemoNewPublicMessage[] | []>([]);
   
   const scrollToBottom = () => {
     const currentElement = messagesEndRef?.current;
     currentElement?.scrollIntoView({ behavior: "smooth" });
   }
-
+  /**
+   * Upon initialization set onAuthStateChange in order
+   * to keep track of auth state locally
+   */
   React.useEffect(() => {
-  // TODO add onAuthStateChange listener to set user data
+    bitloops.auth.onAuthStateChange((user: any) => {
+      setUser(user);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { 
-    console.log('Received message', messages);
-    scrollToBottom();
-  }, [messages]);
-
   useEffect(() => {
     async function subscribe() {
-      // TODO add subscription
-      unsubscribe = () => { console.log('Unsubscribed') };
-      // unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
-      //   setMessages(prevState => [...prevState, msg]);
-      // });
+      unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
+        setMessages(prevState => [...prevState, msg])});
     }
     if (user) {
       setNickname(user.firstName);
@@ -53,9 +45,14 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
+  useEffect(() => { 
+    console.log('Received message', messages);
+    scrollToBottom();
+  }, [messages]);
+
   const handleSendMessage = (payload: {message: string, nickname: string, senderUid: string}): void => {
     console.log('Sending', payload);
-    // TODO send public message to backend
+    bitloops.demoChat.chatDemoPublicMessageSent({message, nickname, senderUid: user?.uid || ''});
     setMessage('');
   }
 
@@ -63,8 +60,7 @@ function App() {
     <>
       {user ? 
         <div className="container clearfix">
-          {/* TODO handle logout */}
-          <div><Header user={user} logout={() => console.log('clicked logout')}/></div>
+          <div><Header user={user} logout={() => bitloops.app.auth.clearAuthentication()}/></div>
           <div className="chat">
             <div className="chat-history">
               <ul style={{listStyle: 'none'}}>{messages && messages.map(message => (
@@ -76,9 +72,7 @@ function App() {
                 message={message.message}
               />
              ))}</ul>
-             <div ref={messagesEndRef} />
-             </div>
-             
+             <div ref={messagesEndRef} /></div>
             <div className="chat-message clearfix">
               <input 
                 value={message}
@@ -105,8 +99,7 @@ function App() {
           </div>
         </div> :
         <div>
-          {/* TODO handle login */}
-          {!user && <GoogleButton loginWithGoogle={() => console.log('authenticating with Google')}/>}
+          {!user && <GoogleButton loginWithGoogle={() => bitloops.demoChat.bitloopsApp.auth.authenticateWithGoogle()}/>}
         </div>
       }
     </>

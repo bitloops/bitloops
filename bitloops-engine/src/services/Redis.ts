@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { Options } from '.';
+import Options from './Options';
 import { CLOUD_PROVIDER, RedisSettings } from '../constants';
 import { IIMDB, ITopicIdInfo, ITopicValueInfo } from './interfaces';
 
@@ -27,7 +27,8 @@ const CONN_TO_TOPICS_PREFIX = 'blsConnIdsToTopics';
 export default class RedisDB implements IIMDB {
 	private client: Redis.Redis | Redis.Cluster;
 	// private redisConnecting: Promise<any>;
-	constructor(private redisOptions: any = envRedisOptions) {}
+	constructor(private redisOptions: any = envRedisOptions) {
+        }
 
 	async initializeConnection(): Promise<void> {
 		let redisConnection: Redis.Redis | Redis.Cluster;
@@ -106,7 +107,7 @@ export default class RedisDB implements IIMDB {
 		return this.hGetAll(hashId);
 	}
 
-	async storeConnectionIdValue(connectionId: string, keyValues: Record<string, string>): Promise<void> {
+	async storeConnectionIdValue(connectionId: string, keyValues: Record<string, string>): Promise<void>        {
 		const hashId = `${CONNECTION_ID_PREFIX}:${connectionId}`;
 		await this.hMSet(hashId, keyValues);
 	}
