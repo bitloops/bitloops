@@ -93,9 +93,11 @@ class GRPC {
 			});
 			const loadedFileDuration = Date.now() - startedLoadingProto - wroteFileDuration;
 			let loadedPackageDefinition = grpc.loadPackageDefinition(packageDefinition);
-			const evalString = `new loadedPackageDefinition${grpcPackage ? '.' + grpcPackage : ''
-				}.${grpcService}('${target}', ${ssl ? 'grpc.credentials.createSsl()' : 'grpc.credentials.createInsecure()'
-				})`;
+			const evalString = `new loadedPackageDefinition${
+				grpcPackage ? '.' + grpcPackage : ''
+			}.${grpcService}('${target}', ${
+				ssl ? 'grpc.credentials.createSsl()' : 'grpc.credentials.createInsecure()'
+			})`;
 			client = eval(evalString);
 			this.clients.set(clientId, client);
 			const createdClientDuration = Date.now() - startedLoadingProto - wroteFileDuration - loadedFileDuration;
@@ -104,7 +106,7 @@ class GRPC {
 		}
 		const replaceVarsParams = { variables, workflow, constants, systemVariables };
 		const input = await replaceVars(node.type.parameters.interface.input, replaceVarsParams);
-		// console.log('gRPC INPUT', input);
+		console.log('gRPC INPUT', input);
 		// TODO feature add proper error handling
 		const gRPCResponse = await new Promise((resolve, reject) => {
 			return client[rpc](input, (error: Error, response: any): void => {
