@@ -1586,7 +1586,7 @@
                 {
                   "evalValue": "payload.updatedWorkflow",
                   "name": "updatedWorkflow",
-                  "type": "object",
+                  "type": "string",
                   "required": true
                 },
                 {
@@ -1601,7 +1601,10 @@
                   "type": "string",
                   "required": true
                 }
-              ]
+              ],
+              "authentication": {
+                "type": "User"
+              }
             },
             "visual": {
               "x": 100,
@@ -1636,7 +1639,7 @@
                   },
                   {
                     "name": "data",
-                    "type": "object",
+                    "type": "Struct",
                     "evalValue": "{ latestVersion: variables.updatedVersion, [`versions.${variables.updatedVersion}`]: variables.updatedWorkflow }"
                   }
                 ]
@@ -1644,7 +1647,7 @@
               "output": [
                 {
                   "name": "response",
-                  "type": "boolean",
+                  "type": "string",
                   "evalValue": "output.response"
                 }
               ]
@@ -1680,12 +1683,26 @@
                     }
                   ]
                 }
+              ],
+              "publish-event": [
+                {
+                  "type": "workflow-events",
+                  "topic": "'console.workflow.updated.' + variables.workflowId",
+                  "payload": [
+                    {
+                      "name": "data",
+                      "type": "string",
+                      "evalValue": "JSON.stringify(variables.updatedWorkflow)",
+                      "required": true
+                    }
+                  ]
+                }
               ]
             }
           },
           {
             "id": "5a4a5319-2972-4bc5-a718-1de2a79710bb",
-            "name": "Read from Mongo",
+            "name": "Wrote to Mongo",
             "type": {
               "name": "end-event",
               "output": [
@@ -1722,7 +1739,7 @@
           }
         ],
         "id": "6f833ff4-f15b-4758-828e-45aec8843eaa",
-        "version": 1,
+        "version": "v1",
         "meta": {
           "name": "Update whole workflow",
           "description": "Updates a workflow to a specific version given the version number and workflowId",
@@ -5676,6 +5693,904 @@
           "updated_at": 1635078813227,
           "status": "deployed"
         }
+      }
+    }
+  },
+  {
+    "_id": "214e1656-d403-47bd-8166-ad7e70c6805e",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Read All Workflows by Workspace Id",
+      "description": "Read Workflows by Workspace Id",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "Beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "workspaceId",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "59d8dcaf-1c73-407b-a526-887d8b3c1cdc",
+            "name": "Read from DB",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "database",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "entity",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "2c047ceb-c6ce-4ba7-a319-4490dad8faa5",
+            "name": "Read all from mongo collection",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "e195c824-2dc7-491f-bb0c-b012c729016b",
+                "nodeId": "8214cbd7-4741-46a4-bb28-ae7ad0f33cc4",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "`${variables.database}`"
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "`${variables.entity}`"
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "output.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "88bba51e-c051-489e-ae64-8ff03a5f1fe1",
+            "name": "Read all from DB",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "59d8dcaf-1c73-407b-a526-887d8b3c1cdc",
+            "to": [
+              {
+                "nodeId": "2c047ceb-c6ce-4ba7-a319-4490dad8faa5"
+              }
+            ]
+          },
+          {
+            "from": "2c047ceb-c6ce-4ba7-a319-4490dad8faa5",
+            "to": [
+              {
+                "nodeId": "88bba51e-c051-489e-ae64-8ff03a5f1fe1"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "e195c824-2dc7-491f-bb0c-b012c729016b",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "latestVersion": "v1",
+    "meta": {
+      "name": "Reads all entities from Mongo",
+      "description": "Reads all entities from Mongo given a collection",
+      "created_at": 1635078813227,
+      "updated_at": 1635078813227,
+      "status": "deployed"
+    },
+    "versions": {
+      "v1": {
+        "versionName": "beta",
+        "bitloopsEngineVersion": "v0.0.1",
+        "debugId": "collectionName",
+        "constants": {
+          "development": [],
+          "production": []
+        },
+        "nodes": [
+          {
+            "id": "8214cbd7-4741-46a4-bb28-ae7ad0f33cc4",
+            "name": "Read workspaces",
+            "type": {
+              "name": "direct-start-event",
+              "input": [
+                {
+                  "evalValue": "payload.database",
+                  "name": "dbName",
+                  "type": "string",
+                  "required": true
+                },
+                {
+                  "evalValue": "payload.entity",
+                  "name": "collectionName",
+                  "type": "string",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 100,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "7330acab-d1d2-4e24-a923-59b3c146d858",
+            "name": "Mongo",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "input": [
+                    {
+                      "evalValue": "`${variables.dbName}`",
+                      "name": "dbName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`${variables.collectionName}`",
+                      "name": "collectionName",
+                      "type": "string",
+                      "required": true
+                    },
+                    {
+                      "evalValue": "`{}`",
+                      "name": "query",
+                      "type": "string",
+                      "required": true
+                    }
+                  ],
+                  "grpcService": "Mongo",
+                  "rpc": "Find"
+                },
+                "service": "serviceId2",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "(() => { const entArr=JSON.parse(output.data); return entArr.map((entity) => {entity.id = entity._id; delete entity._id; return entity; }) })()"
+                }
+              ]
+            },
+            "visual": {
+              "x": 400,
+              "y": 150,
+              "colour": "#17494d"
+            }
+          },
+          {
+            "id": "819381a8-f645-47df-ad84-042b4591248d",
+            "name": "Wrote to Mongo",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "response",
+                  "type": "object[]",
+                  "evalValue": "variables.response"
+                }
+              ]
+            },
+            "visual": {
+              "x": 250,
+              "y": 300,
+              "colour": "#cc0000"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "from": "8214cbd7-4741-46a4-bb28-ae7ad0f33cc4",
+            "to": [
+              {
+                "nodeId": "7330acab-d1d2-4e24-a923-59b3c146d858"
+              }
+            ]
+          },
+          {
+            "from": "7330acab-d1d2-4e24-a923-59b3c146d858",
+            "to": [
+              {
+                "nodeId": "819381a8-f645-47df-ad84-042b4591248d"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_id": "dae0d6cb-7568-4356-b7c9-6050ae31c5b7",
+    "id": "dae0d6cb-7568-4356-b7c9-6050ae31c5b7",
+    "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+    "meta": {
+      "name": "BYOC",
+      "description": "Find and invoke workspace's bitloops rest"
+    },
+    "latestVersion": "v1",
+    "versions": {
+      "v1": {
+        "id": "dae0d6cb-7568-4356-b7c9-6050ae31c5b7",
+        "workspaceId": "db24bb48-d2e3-4433-8fd0-79eef2bf63df",
+        "meta": {
+          "name": "BYOC",
+          "description": "Find and invoke workspace's Bitloops REST"
+        },
+        "nodes": [
+          {
+            "id": "c7ddd1ff-ea2d-4c2b-8f8d-e3981ccbd62a",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "User",
+                "Anonymous": true
+              },
+              "input": [
+                {
+                  "name": "workspaceId",
+                  "type": "string",
+                  "evalValue": "payload.workspaceId",
+                  "required": true
+                },
+                {
+                  "name": "workflowId",
+                  "type": "string",
+                  "evalValue": "payload.workflowId",
+                  "required": true
+                },
+                {
+                  "name": "nodeId",
+                  "type": "string",
+                  "evalValue": "payload.nodeId",
+                  "required": true
+                },
+                {
+                  "name": "body",
+                  "type": "string",
+                  "evalValue": "payload.body",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 219,
+              "y": 203
+            }
+          },
+          {
+            "id": "9e1faa6d-2e61-4602-b682-0624c823740e",
+            "name": "Get workspace",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.database",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.entity",
+                    "required": true
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "variables.workspaceId",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "workspaceData",
+                  "type": "string",
+                  "evalValue": "output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 340,
+              "y": 195
+            }
+          },
+          {
+            "id": "d8b487d8-2f5c-44df-8083-601da6a7be75",
+            "name": "Invoke Bitloops REST",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "uri": "variables.workspaceData.is_self_managed ? variables.workspaceData.self_managed?.rest_uri : constants.defaultRestUri",
+                  "urlPath": "/bitloops/request",
+                  "method": "POST",
+                  "headers": [
+                    {
+                      "name": "workflow-id",
+                      "type": "string",
+                      "evalValue": "variables.workflowId",
+                      "required": true
+                    },
+                    {
+                      "name": "node-id",
+                      "type": "string",
+                      "evalValue": "variables.nodeId",
+                      "required": true
+                    },
+                    {
+                      "name": "environment-id",
+                      "type": "string",
+                      "evalValue": "systemVariables.environmentId",
+                      "required": true
+                    },
+                    {
+                      "name": "authorization",
+                      "type": "string",
+                      "evalValue": "variables.workspaceData.is_self_managed ? `x-api-key ${decryptByWorkspaceId(variables.workspaceData.self_managed?.x_api_key, variables.workspaceId)}` : `x-api-key ${secrets[\"7f54218c-83d1-481b-9b9d-e0fed16e34da\"]}`",
+                      "required": true
+                    },
+                    {
+                      "name": "Content-Type",
+                      "type": "string",
+                      "evalValue": "\"application/json\"",
+                      "required": true
+                    }
+                  ],
+                  "body": [
+                    {
+                      "name": "payload",
+                      "type": "string",
+                      "evalValue": "variables.body",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "29e2c4cf-364f-4344-adc7-fc662fc8c987",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 562,
+              "y": 195
+            }
+          },
+          {
+            "id": "8948542f-9bae-465f-9c15-7b2995da06b9",
+            "name": "end",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 749,
+              "y": 203
+            }
+          },
+          {
+            "id": "60cfb497-b97d-4fea-831e-87b660ae03e6",
+            "name": "REST",
+            "type": {
+              "name": "request-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              }
+            },
+            "visual": {
+              "x": 228,
+              "y": 396
+            }
+          },
+          {
+            "id": "70ec5bc6-f700-454e-94d7-8e435a9cb4ae",
+            "name": "Get workspace data",
+            "type": {
+              "name": "call-activity",
+              "parameters": {
+                "workflowId": "cf9e97e3-f099-403d-a463-8384637981be",
+                "nodeId": "4d615ddb-c2e6-4d0f-bfc8-ff727dc6fad4",
+                "workflowVersion": "v1",
+                "input": [
+                  {
+                    "name": "database",
+                    "type": "string",
+                    "evalValue": "constants.database",
+                    "required": true
+                  },
+                  {
+                    "name": "entity",
+                    "type": "string",
+                    "evalValue": "constants.entity",
+                    "required": true
+                  },
+                  {
+                    "name": "entityId",
+                    "type": "string",
+                    "evalValue": "variables.workspaceId",
+                    "required": true
+                  }
+                ]
+              },
+              "output": [
+                {
+                  "name": "workspaceData",
+                  "type": "Struct",
+                  "evalValue": "output.response",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 332,
+              "y": 388
+            }
+          },
+          {
+            "id": "7df19d45-8b3a-4c4f-af49-3cb0834ab601",
+            "name": "is tunnel?",
+            "type": {
+              "name": "exclusive-gateway",
+              "parameters": {
+                "expression": "variables.workspaceData.is_tunnel",
+                "cases": [
+                  {
+                    "evalValue": "true",
+                    "valueType": "boolean",
+                    "index": 0
+                  }
+                ],
+                "default": {
+                  "index": 1
+                }
+              }
+            },
+            "visual": {
+              "x": 499,
+              "y": 376
+            }
+          },
+          {
+            "id": "3747c19f-c0be-482b-bc31-b2e05ffcaf95",
+            "name": "Invoke Bitloops REST",
+            "type": {
+              "name": "task-activity",
+              "parameters": {
+                "interface": {
+                  "type": "REST",
+                  "input": [
+                    {
+                      "name": "workflow-id",
+                      "type": "string",
+                      "evalValue": "",
+                      "required": true
+                    },
+                    {
+                      "name": "node-id",
+                      "type": "string",
+                      "evalValue": "",
+                      "required": true
+                    },
+                    {
+                      "name": "environment-id",
+                      "type": "string",
+                      "evalValue": "",
+                      "required": true
+                    },
+                    {
+                      "name": "authorization",
+                      "type": "string",
+                      "evalValue": "",
+                      "required": true
+                    },
+                    {
+                      "name": "Content-Type",
+                      "type": "string",
+                      "evalValue": "",
+                      "required": true
+                    }
+                  ],
+                  "method": "POST",
+                  "uri": "variables.workspaceData.is_self_managed ? variables.workspaceData.self_managed?.rest_uri : constants.defaultRestUri",
+                  "body": [
+                    {
+                      "name": "payload",
+                      "type": "string",
+                      "evalValue": "variables.body",
+                      "required": true
+                    }
+                  ],
+                  "headers": [
+                    {
+                      "name": "workflow-id",
+                      "type": "string",
+                      "evalValue": "variables.workflowId",
+                      "required": true
+                    },
+                    {
+                      "name": "node-id",
+                      "type": "string",
+                      "evalValue": "variables.nodeId",
+                      "required": true
+                    },
+                    {
+                      "name": "environment-id",
+                      "type": "string",
+                      "evalValue": "systemVariables.environmentId",
+                      "required": true
+                    },
+                    {
+                      "name": "authorization",
+                      "type": "string",
+                      "evalValue": "variables.workspaceData.is_self_managed ? `x-api-key ${decryptByWorkspaceId(variables.workspaceData.self_managed?.x_api_key, variables.workspaceId)}` : `x-api-key ${secrets[\"7f54218c-83d1-481b-9b9d-e0fed16e34da\"]}`",
+                      "required": true
+                    },
+                    {
+                      "name": "Content-Type",
+                      "type": "string",
+                      "evalValue": "\"application/json\"",
+                      "required": true
+                    }
+                  ]
+                },
+                "service": "29e2c4cf-364f-4344-adc7-fc662fc8c987",
+                "serviceVersion": "0.0.1"
+              },
+              "output": [
+                {
+                  "name": "response",
+                  "type": "string",
+                  "evalValue": "output",
+                  "required": true
+                }
+              ]
+            },
+            "executed": false,
+            "visual": {
+              "x": 642,
+              "y": 323
+            }
+          },
+          {
+            "id": "dea2ee7c-8709-4d63-94e8-754ef6493c49",
+            "name": "REST response",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "content",
+                  "type": "string",
+                  "evalValue": "variables.response"
+                },
+                {
+                  "name": "statusCode",
+                  "type": "string",
+                  "evalValue": "200",
+                  "required": true
+                },
+                {
+                  "name": "headers",
+                  "type": "string",
+                  "evalValue": "{\"Content-Type\": \"application/json\"}",
+                  "required": true
+                }
+              ]
+            },
+            "visual": {
+              "x": 829,
+              "y": 331
+            }
+          },
+          {
+            "id": "efb9b8b1-727a-4512-a150-7fe647e7c072",
+            "name": "timeout",
+            "type": {
+              "name": "timer-intermediate-event",
+              "parameters": {
+                "timerDuration": "5000"
+              }
+            },
+            "visual": {
+              "x": 610,
+              "y": 489
+            }
+          },
+          {
+            "id": "f8e20880-cf19-4014-b6fb-53d0a691444e",
+            "name": "request timed out",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "",
+                  "type": "string",
+                  "evalValue": ""
+                }
+              ]
+            },
+            "visual": {
+              "x": 702,
+              "y": 489
+            }
+          },
+          {
+            "id": "13bc908f-8dd1-4be7-946e-047fa66fc99d",
+            "name": "Message",
+            "type": {
+              "name": "message-start-event",
+              "authentication": {
+                "type": "Anonymous",
+                "Anonymous": true
+              },
+              "messageId": "message-id"
+            },
+            "visual": {
+              "x": 830,
+              "y": 487
+            }
+          },
+          {
+            "id": "0bec1e13-5913-44c8-b2ac-d4074ac4c308",
+            "name": "local REST response",
+            "type": {
+              "name": "end-event",
+              "output": [
+                {
+                  "name": "",
+                  "type": "string",
+                  "evalValue": ""
+                }
+              ]
+            },
+            "visual": {
+              "x": 934,
+              "y": 487
+            }
+          }
+        ],
+        "constants": {
+          "development": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workspaces"
+            },
+            {
+              "name": "defaultRestUri",
+              "type": "string",
+              "value": "http://127.0.0.1:3005"
+            }
+          ],
+          "production": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workspaces"
+            },
+            {
+              "name": "defaultRestUri",
+              "type": "string",
+              "value": "https://envoy.bitloops.net"
+            }
+          ],
+          "0cf1609d-85c5-4b10-95ec-8990dbc33602": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workspaces"
+            },
+            {
+              "name": "defaultRestUri",
+              "type": "string",
+              "value": "http://127.0.0.1:3005"
+            }
+          ],
+          "0876c3ea-bbff-474c-8cda-7124af0d0b15": [
+            {
+              "name": "database",
+              "type": "string",
+              "value": "bitloops_managed"
+            },
+            {
+              "name": "entity",
+              "type": "string",
+              "value": "workspaces"
+            },
+            {
+              "name": "defaultRestUri",
+              "type": "string",
+              "value": "http://bitloops-rest:3005"
+            }
+          ]
+        },
+        "edges": [
+          {
+            "from": "c7ddd1ff-ea2d-4c2b-8f8d-e3981ccbd62a",
+            "to": [
+              {
+                "nodeId": "9e1faa6d-2e61-4602-b682-0624c823740e"
+              }
+            ]
+          },
+          {
+            "from": "9e1faa6d-2e61-4602-b682-0624c823740e",
+            "to": [
+              {
+                "nodeId": "d8b487d8-2f5c-44df-8083-601da6a7be75"
+              }
+            ]
+          },
+          {
+            "from": "d8b487d8-2f5c-44df-8083-601da6a7be75",
+            "to": [
+              {
+                "nodeId": "8948542f-9bae-465f-9c15-7b2995da06b9"
+              }
+            ]
+          },
+          {
+            "from": "60cfb497-b97d-4fea-831e-87b660ae03e6",
+            "to": [
+              {
+                "nodeId": "70ec5bc6-f700-454e-94d7-8e435a9cb4ae"
+              }
+            ]
+          },
+          {
+            "from": "70ec5bc6-f700-454e-94d7-8e435a9cb4ae",
+            "to": [
+              {
+                "nodeId": "7df19d45-8b3a-4c4f-af49-3cb0834ab601"
+              }
+            ]
+          },
+          {
+            "from": "7df19d45-8b3a-4c4f-af49-3cb0834ab601",
+            "to": [
+              {
+                "nodeId": "efb9b8b1-727a-4512-a150-7fe647e7c072",
+                "label": "tunnel"
+              },
+              {
+                "nodeId": "3747c19f-c0be-482b-bc31-b2e05ffcaf95",
+                "label": "not tunnel"
+              }
+            ]
+          },
+          {
+            "from": "efb9b8b1-727a-4512-a150-7fe647e7c072",
+            "to": [
+              {
+                "nodeId": "f8e20880-cf19-4014-b6fb-53d0a691444e"
+              }
+            ]
+          },
+          {
+            "from": "13bc908f-8dd1-4be7-946e-047fa66fc99d",
+            "to": [
+              {
+                "nodeId": "0bec1e13-5913-44c8-b2ac-d4074ac4c308"
+              }
+            ]
+          },
+          {
+            "from": "3747c19f-c0be-482b-bc31-b2e05ffcaf95",
+            "to": [
+              {
+                "nodeId": "dea2ee7c-8709-4d63-94e8-754ef6493c49"
+              }
+            ]
+          }
+        ],
+        "bitloopsEngineVersion": "v0.0.1",
+        "version": "v1"
       }
     }
   }
