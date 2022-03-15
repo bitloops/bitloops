@@ -7,10 +7,10 @@ import Message from './components/Message';
 
 let unsubscribe: any;
 
-const getInitialMessagesValue = (): [] | {sendAt: number, senderUid: string, message: string, senderNickname: string}[] => {
+const getInitialMessagesValue = (): [] | {sentAt: number, senderUid: string, message: string, senderNickname: string}[] => {
   return [
-    {sendAt: 1647136543325, message: 'This is a mock message', senderUid: '1', senderNickname: 'Me'},
-    {sendAt: 1647136558332, message: 'This is a mock reply', senderUid: '2', senderNickname: 'Someone else'},
+    {sentAt: 1647136543325, message: 'This is a mock message', senderUid: '1', senderNickname: 'Me'},
+    {sentAt: 1647136558332, message: 'This is a mock reply', senderUid: '2', senderNickname: 'Someone else'},
   ];
 };
 
@@ -69,9 +69,9 @@ function App() {
             <div className="chat-history">
               <ul style={{listStyle: 'none'}}>{messages && messages.map(message => (
               <Message 
-                key={message.sendAt+message.senderUid}
+                key={message.senderUid+(Math.random()*100000)}
                 isMine={message.senderUid === user.uid}
-                sendAt={message.sendAt}
+                sentAt={message.sentAt}
                 senderNickname={message.senderNickname}
                 message={message.message}
               />

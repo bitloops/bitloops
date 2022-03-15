@@ -67,7 +67,7 @@ function App() {
               <Message 
                 key={message.senderUid+(Math.random()*100000)}
                 isMine={message.senderUid === user.uid}
-                sendAt={message.sendAt}
+                sentAt={message.sentAt}
                 senderNickname={message.senderNickname}
                 message={message.message}
               />

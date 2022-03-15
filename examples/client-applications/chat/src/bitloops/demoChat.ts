@@ -9,7 +9,7 @@ export namespace DemoChat {
     message: string;
     senderUid: string;
     senderNickname: string;
-    sendAt: number;
+    sentAt: number;
   }
 
   export type ChatDemoPublicMessageSentPayload = {

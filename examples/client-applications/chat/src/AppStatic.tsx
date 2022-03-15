@@ -71,7 +71,7 @@ function App() {
               <Message 
                 key={message.sendAt+message.senderUid}
                 isMine={message.senderUid === user.uid}
-                sendAt={message.sendAt}
+                sentAt={message.sendAt}
                 senderNickname={message.senderNickname}
                 message={message.message}
               />
