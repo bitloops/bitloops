@@ -69,11 +69,13 @@ services:
 
   csrv-redis:
     container_name: csrv-redis
-    image: bitloops/csrv-redis:v0.0.4
+    image: bitloops/csrv-redis:v0.0.8
     ports:
       - 8085:8085
     environment:
-      - SERVICE_PORT=8085
+      - PORT=8085
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       - redis
 
