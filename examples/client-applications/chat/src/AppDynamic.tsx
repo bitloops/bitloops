@@ -15,7 +15,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [user, setUser] = useState<BitloopsUser | null>(null);
   const [messages, setMessages] = useState<DemoChat.Subscription_ChatDemoNewPublicMessage[] | []>([]);
-  
+
   const scrollToBottom = () => {
     const currentElement = messagesEndRef?.current;
     currentElement?.scrollIntoView({ behavior: "smooth" });
@@ -64,7 +64,7 @@ function App() {
           <div className="chat">
             <div className="chat-history">
               <ul style={{listStyle: 'none'}}>{messages && messages.map(message => (
-              <Message 
+              <Message
                 key={message.senderUid+(Math.random()*100000)}
                 isMine={message.senderUid === user.uid}
                 sentAt={message.sentAt}
