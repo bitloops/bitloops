@@ -4,7 +4,7 @@
 
 Bitloops is a scalable open source Firebase substitute that can support any database and Low-Code Workflow Orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
 
-![InstantSync](https://storage.googleapis.com/bitloops-test1/Bitloops-helloWorld.gif)
+![InstantSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
 **InstantSync:** *Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code*
 
 - Backend-as-a-Service: authentication, realtime database, storage, hosting, subscriptions and notifications, cloud infrastructure
