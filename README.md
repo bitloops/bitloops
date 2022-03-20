@@ -4,19 +4,23 @@
 
 Bitloops is a scalable open source Firebase substitute that can support any database and Low-Code Workflow Orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
 
+
+### InstantSync
 ![InstantSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
 
-**InstantSync:** *Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code*
+*Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code*
 
 
+### Subscriptions to Realtime Events
 ![Subscriptions](https://github.com/bitloops/bitloops/blob/722de0c25c0538a5d529bf5c64faf25f9961f701/docs/assets/subscription-react.png)
 
-**Subscriptions to Realtime Events:** *Bitloops allows your client code to subscribe to operations of any database or backend event with just a single line of code*
+*Bitloops allows your client code to subscribe to operations of any database or backend event with just a single line of code*
 
 
+### Authentication
 ![Authentication](https://github.com/bitloops/bitloops/blob/722de0c25c0538a5d529bf5c64faf25f9961f701/docs/assets/auth-react.png)
 
-**Authentication:** *Add powerful authentication to your clients with a single line of code*
+*Add powerful authentication to your clients with a single line of code*
 
 - Backend-as-a-Service: authentication, realtime database, storage, hosting, subscriptions and notifications, cloud infrastructure
 - Low-code (drag & drop) IDE that allows developers to build actual backend services using Picoservices or traditional Microservices or APIs
