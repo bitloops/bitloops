@@ -60,7 +60,7 @@ function App() {
     <>
       {user ? 
         <div className="container clearfix">
-          <div><Header user={user} logout={() => bitloops.app.auth.clearAuthentication()}/></div>
+          <div><Header user={user} logout={() => bitloops.auth.clearAuthentication()}/></div>
           <div className="chat">
             <div className="chat-history">
               <ul style={{listStyle: 'none'}}>{messages && messages.map(message => (
@@ -99,7 +99,7 @@ function App() {
           </div>
         </div> :
         <div>
-          {!user && <GoogleButton loginWithGoogle={() => bitloops.demoChat.bitloopsApp.auth.authenticateWithGoogle()}/>}
+          {!user && <GoogleButton loginWithGoogle={() => bitloops.auth.authenticateWithGoogle()}/>}
         </div>
       }
     </>
