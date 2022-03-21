@@ -90,6 +90,7 @@ services:
 
   keycloak:
     image: jboss/keycloak
+    build: ./keycloak/
     container_name: keycloak
     environment:
       DB_VENDOR: POSTGRES
