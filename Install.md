@@ -32,60 +32,16 @@ ngrok http 3005
 
 # Configuring Keycloak
 
-Visit http://localhost:8080
+```bash
+sh ./scripts/install.sh
+```
 
-- Administration Console
-- Login (admin, Pa55w0rd)
-- From top left corner hover on Master
-- Create a realm, give a name (this will be your providerId)
-
-## Configure your client inside Keycloak
-
-- Navigate to **Clients** from left SidePanel
-- Create, provide a name as Client ID (this will be your clientId)
-- Save
-
-### Go to new client’s **settings**
-
-<!-- - Access Type-> Confidential
-- Service Accounts Enabled
-- Authorization Enabled -->
-
-- Under Valid Redirect URIs add
-  - http://127.0.0.1/{providerId}/auth/google/final-callback
-  - http://127.0.0.1/{providerId}/auth/github/final-callback
-- Save
-  <!-- We will use client ID and client Secret(From Credentials Tab of client) -->
+Enter your provider Id which is your realm name and the clint id which is your client name
 
 ## Add google as identity provider for Keycloak
 
-- Navigate to Identity providers
-- Add provider.. -> google
 - You need to fill in your client id and client secret from GCP(https://console.cloud.google.com/apis/credentials), OAuth 2.0 Clients
 - Copy Redirect URI from keycloak(1st field) into Authorised redirect URIs in gcp(for your oauth2 client)
-
-- Save
-
-## Environment Variables for engine & rest
-
-| name        | desc                                                                                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| KEYCLOAK_PK | Obtain Public key from <KEYCLOAK_URI>/auth/realms/{realm}, <br/>Base64 Encode it <br/>`-----BEGIN PUBLIC KEY-----` <br/>`...`<br/>`-----END PUBLIC KEY----- ` |
-
-## Getting KeyCloak realm's public key
-
-- Going to http://localhost:8080/auth/realms/{{providerId}} (host is keycloak server)
-
-- Add -----BEGIN PUBLIC KEY----- and append -----END PUBLIC KEY----- to this copied public key to use it anywhere to verify the JWTtoken. You public key should finally look something like this:
-
-```nodejs
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhAj9OCZd0XjzOIad2VbUPSMoVK1X8hdD2Ad+jUXCzhZJf0RaN6B+79AW5jSgceAgyAtLXiBayLlaqSjZM6oyti9gc2M2BXzoDKLye+Tgpftd72Zreb4HpwKGpVrJ3H3Ip5DNLSD4a1ovAJ6Sahjb8z34T8c1OCnf5j70Y7i9t3y/j076XIUU4vWpAhI9LRAOkSLqDUE5L/ZdPmwTgK91Dy1fxUQ4d02Ly4MTwV2+4OaEHhIfDSvakLBeg4jLGOSxLY0y38DocYzMXe0exJXkLxqHKMznpgGrbps0TPfSK0c3q2PxQLczCD3n63HxbN8U9FPyGeMrz59PPpkwIDAQAB
------END PUBLIC KEY-----
-```
-
-- [Base64 encode](https://www.base64encode.org/) it
-- Save it as KEYCLOAK_PK in docker.env of bitloops-rest and bitloops-engine(rebuild docker compose if needed)
 
 ### How to add image from Google in claims
 
