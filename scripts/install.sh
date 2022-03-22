@@ -1,6 +1,28 @@
 #!/bin/bash
 STATUS_CODE=000
 docker compose up -d keycloak
+cat << "EOF"
+$$\       $$\  $$\     $$\                                               
+$$ |      \__| $$ |    $$ |                                              
+$$$$$$$\  $$\$$$$$$\   $$ | $$$$$$\   $$$$$$\   $$$$$$\   $$$$$$$\       
+$$  __$$\ $$ \_$$  _|  $$ |$$  __$$\ $$  __$$\ $$  __$$\ $$  _____|      
+$$ |  $$ |$$ | $$ |    $$ |$$ /  $$ |$$ /  $$ |$$ /  $$ |\$$$$$$\        
+$$ |  $$ |$$ | $$ |$$\ $$ |$$ |  $$ |$$ |  $$ |$$ |  $$ | \____$$\       
+$$$$$$$  |$$ | \$$$$  |$$ |\$$$$$$  |\$$$$$$  |$$$$$$$  |$$$$$$$  |      
+\_______/ \__|  \____/ \__| \______/  \______/ $$  ____/ \_______/       
+                                               $$ |                      
+$$\   $$\                             $$\      $$ |           $$\        
+$$ | $$  |                            $$ |     \__|           $$ |       
+$$ |$$  /$$$$$$\  $$\   $$\  $$$$$$$\ $$ | $$$$$$\   $$$$$$\  $$ |  $$\  
+$$$$$  /$$  __$$\ $$ |  $$ |$$  _____|$$ |$$  __$$\  \____$$\ $$ | $$  | 
+$$  $$< $$$$$$$$ |$$ |  $$ |$$ /      $$ |$$ /  $$ | $$$$$$$ |$$$$$$  /  
+$$ |\$$\$$   ____|$$ |  $$ |$$ |      $$ |$$ |  $$ |$$  __$$ |$$  _$$<   
+$$ | \$$\$$$$$$$\ \$$$$$$$ |\$$$$$$$\ $$ |\$$$$$$  |\$$$$$$$ |$$ | \$$\  
+\__|  \__\_______| \____$$ | \_______|\__| \______/  \_______|\__|  \__| 
+                  $$\   $$ |                                             
+                  \$$$$$$  |                                             
+                   \______/                                            
+EOF
 while [ $STATUS_CODE == 000 ] 
 do 
   STATUS_CODE=$( curl --write-out '%{http_code}\n' --silent --output /dev/null http://localhost:8080/auth/)
@@ -16,7 +38,6 @@ RESPONSE=$( curl --location --request POST 'http://localhost:8080/auth/realms/ma
   --data-urlencode 'username=admin' \
   --data-urlencode 'password=Pa55w0rd' ) #| jq -r '.access_token' | ACESS_KEY=$(</dev/stdin)&&
 ACESS_KEY=$( jq -r '.access_token' <<< "$RESPONSE")
-echo $ACESS_KEY
 echo insert your provider id &&
 read PID
 
@@ -62,9 +83,7 @@ curl -X POST "http://localhost:8080/auth/admin/realms"\
         "user"
     ],
     "clients": [
-        {
-            "clientId": "'"$CID"'",
-            "enabled": true,
+        { "clientId": "'"$CID"'", "enabled": true,
             "publicClient": true,
             "redirectUris" : [
             "'"$GOOGLE_URI"'",
@@ -105,5 +124,4 @@ PK=$(cat ./.public_key_base64.txt)
 
 rm .public_key.txt .public_key_base64.txt
 
-echo "Base64 Concat PK:$PK"
-KEYCLOAK_PK=$PK docker compose up -d #--scale keycloak=0
+KEYCLOAK_PK=$PK docker compose up -d 
