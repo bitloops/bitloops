@@ -1,4 +1,4 @@
-name: CI
+name: Bitloops Engine CI
 on:
   pull_request:
     branches:
