@@ -1,6 +1,6 @@
 #!/bin/bash
 STATUS_CODE=000
-docker-compose up -d keycloak
+docker compose up -d keycloak
 while [ $STATUS_CODE == 000 ] 
 do 
   STATUS_CODE=$( curl --write-out '%{http_code}\n' --silent --output /dev/null http://localhost:8080/auth/)
@@ -96,13 +96,30 @@ curl -X POST "http://localhost:8080/auth/admin/realms/$PID/identity-provider/ins
     "syncMode":"IMPORT"
   }
 }'
-echo '-----BEGIN PUBLIC KEY-----' > .public_key.txt;
-curl http://localhost:8080/auth/realms/"$PID" | jq '.public_key' | xargs echo  >> .public_key.txt;
-echo '-----END PUBLIC KEY-----' >> .public_key.txt
-base64 ./.public_key.txt | xargs echo > .public_key_base64.txt
-PK=$(cat ./.public_key_base64.txt)
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PARENT="$(dirname "$SCRIPT_DIR")"
-sed -i.bak "s/^KEYCLOAK_PK.*$/KEYCLOAK_PK='$PK'/g" $PARENT/bitloops-rest/docker.env
-sed -i.bak "s/^KEYCLOAK_PK.*$/KEYCLOAK_PK='$PK'/g" $PARENT/bitloops-engine/docker.env
-docker-compose up -d --scale keycloak=0
+# echo '-----BEGIN PUBLIC KEY-----' > .public_key.txt;
+# curl http://localhost:8080/auth/realms/"$PID" | jq '.public_key' | xargs echo  >> .public_key.txt;
+# echo -n '-----END PUBLIC KEY-----' >> .public_key.txt
+PK="-----BEGIN PUBLIC KEY-----"
+POSTFIX="-----END PUBLIC KEY-----"
+
+PAYLOAD=$(curl http://localhost:8080/auth/realms/$PID)# | jq '.public_key' | xargs echo  >> .public_key.txt;
+echo "Payload: $PAYLOAD"
+PK_BODY=$(jq -r '.public_key' <<<"$PAYLOAD")
+# ACESS_KEY=$( jq -r '.access_token' <<< "$RESPONSE")
+
+PK+=$PK_BODY
+PK+=$POSTFIX
+
+echo "Concat PK:$PK"
+
+# base64 -w 0 ./.public_key.txt | xargs echo > .public_key_base64.txt
+# PK=$(cat ./.public_key_base64.txt)
+PK=$(base64 -w 0 $PK)
+
+echo "Base64 Concat PK:$PK"
+# SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+# PARENT="$(dirname "$SCRIPT_DIR")"
+# sed -i.bak "s/^KEYCLOAK_PK.*$/KEYCLOAK_PK='$PK'/g" $PARENT/bitloops-rest/docker.env
+# sed -i.bak "s/^KEYCLOAK_PK.*$/KEYCLOAK_PK='$PK'/g" $PARENT/bitloops-engine/docker.env
+# echo "New PK:$PK"
+KEYCLOAK_PK=$PK docker compose up -d #--scale keycloak=0

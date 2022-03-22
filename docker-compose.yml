@@ -35,6 +35,8 @@ services:
     image: bitloops/bitloops-rest:latest
     env_file:
       - bitloops-rest/docker.env
+    environment:
+      - 'KEYCLOAK_PK=${KEYCLOAK_PK}'
     ports:
       - 3005:3005
     depends_on:
@@ -48,6 +50,8 @@ services:
     image: bitloops/bitloops-engine:latest
     env_file:
       - bitloops-engine/docker.env
+    environment:
+      - 'KEYCLOAK_PK=${KEYCLOAK_PK}'
     ports:
       - 8081:8080
     depends_on:
