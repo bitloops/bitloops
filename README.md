@@ -4,34 +4,34 @@
 
 Bitloops is a scalable open source Firebase substitute that can support any database and Low-Code Workflow Orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
 
-
 ### InstantSync
+
 ![InstantSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
 
-*Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code*
-
+_Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code_
 
 ### Subscriptions to Realtime Events
+
 ![Subscriptions](https://github.com/bitloops/bitloops/blob/722de0c25c0538a5d529bf5c64faf25f9961f701/docs/assets/subscription-react.png)
 
-*Bitloops allows your client code to subscribe to operations of any database or backend event with just a single line of code*
-
+_Bitloops allows your client code to subscribe to operations of any database or backend event with just a single line of code_
 
 ### Authentication
+
 ![Authentication](https://github.com/bitloops/bitloops/blob/722de0c25c0538a5d529bf5c64faf25f9961f701/docs/assets/auth-react.png)
 
-*Add powerful authentication to your clients with a single line of code*
+_Add powerful authentication to your clients with a single line of code_
 
 - Backend-as-a-Service: authentication, realtime database, storage, hosting, subscriptions and notifications, cloud infrastructure
 - Low-code (drag & drop) IDE that allows developers to build actual backend services using Picoservices or traditional Microservices or APIs
 - Instant code deployment into development, testing or production environments
 - Integration platform-as-a-service that allows integration of any application, microservice or 3rd party service
 
-Bitloops removes the complexity and repetitiveness required to build and deploy a modern backend application, API or database from scratch and allows you to continue scaling and extending your applications faster than any other tool. 
+Bitloops removes the complexity and repetitiveness required to build and deploy a modern backend application, API or database from scratch and allows you to continue scaling and extending your applications faster than any other tool.
 
-Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, any database for storing and querying users and data, storage and file management, image & video manipulation as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools. 
+Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, any database for storing and querying users and data, storage and file management, image & video manipulation as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools.
 
-Bitloops is the only platform you will need for all your backend needs. We are still at our early stages with much to do and a long backlog but with your support we will get there faster. 
+Bitloops is the only platform you will need for all your backend needs. We are still at our early stages with much to do and a long backlog but with your support we will get there faster.
 
 ## Backend-as-a-Service - Why should I care?
 
@@ -41,7 +41,7 @@ Bitloops is the only platform you will need for all your backend needs. We are s
 - [x] **Authentication**: Authentication with a single line of code
 - [x] **Hosting**: Host and deploy your frontend application just by running "bitloops deploy”
 - [ ] **Storage**: Store your files
-- [x] **Scalability**: We are building Bitloops with parallel processing and scalability in mind Everything scales horizontally on Kubernetes 
+- [x] **Scalability**: We are building Bitloops with parallel processing and scalability in mind Everything scales horizontally on Kubernetes
 - [ ] **Security**: We ensure that best practices are followed in every step to ensure security in everything you build
 
 ## Low-Code Workflow Orchestration & Picoservices Architecture - Why should I care?
@@ -64,13 +64,76 @@ Bitloops is the only platform you will need for all your backend needs. We are s
 - [ ] Public Beta: Stable enough for most non-enterprise use-cases
 - [ ] Public: Production-ready
 
+# Installation
+
+## Prequisitions
+
+- node (we suggest to install via nvm)
+  ```bash
+    install nvm node
+  ```
+- docker [install from docker site](https://docs.docker.com/get-docker/)
+- docker-compose
+
+## Step 1
+
+```bash
+# Install bitloops cli
+npm install -g bitloops-cli
+
+# or using yarn
+yarn global add bitloops-cli
+```
+
+## Step 2
+
+```bash
+# For user authentication
+bitloops login
+```
+
+## Step 3
+
+```bash
+# To create a workspace and give it a name
+bitloops install -n "<Workspace Name>"
+```
+
+**After the completion of this step, your Workspace Id will appear, in order to copy it and use it in the next step.**
+
+## Step 4
+
+```bash
+# Establish a connection between bitloops console and your local installation
+bitloops tunnel -w "<Workspace Id>"
+```
+
+## Step 5
+
+**Visit the [Bitloops Console](https://console.bitloops.com/login), and login with Google with the same account you logged in during Step 2.**
+
+<hr/>
+
+## On Linux
+
+Currently this library uses libsecret so you may need to install it before running.  
+**You should follow Step 1 from above, then depending on your distribution, you will need to run the following command:**
+
+- Debian/Ubuntu: `sudo apt-get install libsecret-1-dev`
+- Red Hat-based: `sudo yum install libsecret-devel`
+- Arch Linux-based:
+  - `sudo pacman -S libsecret`
+  - `sudo pacman -S gnome-keyring`
+
+**Continue with Step 2, 3, 4 and 5 from above.**
+
 # Contents
 
-Bitloops' monorepo contains the following projects: 
+Bitloops' monorepo contains the following projects:
 
 - [Bitloops Engine](https://github.com/bitloops/bitloops/tree/main/bitloops-engine)
 - [Bitloops REST](https://github.com/bitloops/bitloops/tree/main/bitloops-rest)
 
 # Licenses
 
-Each project in this repo contains licensing information specific to that project. 
+Each project in this repo contains licensing information specific to that project.
