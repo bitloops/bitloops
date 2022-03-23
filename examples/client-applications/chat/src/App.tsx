@@ -20,6 +20,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [user, setUser] = useState<{firstName: string, uid: string} | null>({firstName: 'Me', uid: '1'});
   const [messages, setMessages] = useState(() => getInitialMessagesValue());
+
   
   const scrollToBottom = () => {
     const currentElement = messagesEndRef?.current;
