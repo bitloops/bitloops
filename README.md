@@ -75,7 +75,7 @@ Bitloops is the only platform you will need for all your backend needs. We are s
 - docker [install from docker site](https://docs.docker.com/get-docker/)
 - docker-compose
 
-## Step 1
+### Step 1
 
 ```bash
 # Install bitloops cli
@@ -85,14 +85,14 @@ npm install -g bitloops-cli
 yarn global add bitloops-cli
 ```
 
-## Step 2
+### Step 2
 
 ```bash
 # For user authentication
 bitloops login
 ```
 
-## Step 3
+### Step 3
 
 ```bash
 # To create a workspace and give it a name
@@ -101,18 +101,16 @@ bitloops install -n "<Workspace Name>"
 
 **After the completion of this step, your Workspace Id will appear, in order to copy it and use it in the next step.**
 
-## Step 4
+### Step 4
 
 ```bash
 # Establish a connection between bitloops console and your local installation
 bitloops tunnel -w "<Workspace Id>"
 ```
 
-## Step 5
+### Step 5
 
 **Visit the [Bitloops Console](https://console.bitloops.com/login), and login with Google with the same account you logged in during Step 2.**
-
-<hr/>
 
 ## On Linux
 
