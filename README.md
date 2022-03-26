@@ -6,7 +6,7 @@ Bitloops is a scalable open source Firebase substitute that can support any data
 
 
 ### InstantSync
-![InstantSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
+![liveSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
 
 *Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code*
 
