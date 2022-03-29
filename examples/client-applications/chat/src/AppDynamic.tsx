@@ -15,7 +15,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [user, setUser] = useState<BitloopsUser | null>(null);
   const [messages, setMessages] = useState<DemoChat.Subscription_ChatDemoNewPublicMessage[] | []>([]);
-  
+
   const scrollToBottom = () => {
     const currentElement = messagesEndRef?.current;
     currentElement?.scrollIntoView({ behavior: "smooth" });
@@ -33,7 +33,7 @@ function App() {
 
   useEffect(() => {
     async function subscribe() {
-      unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
+      unsubscribe = await bitloops.subscribe(bitloops.demoChat.Events.Subscription_ChatDemoNewPublicMessage(), (msg: DemoChat.Subscription_ChatDemoNewPublicMessage) => {
         setMessages(prevState => [...prevState, msg])});
     }
     if (user) {
@@ -60,11 +60,11 @@ function App() {
     <>
       {user ? 
         <div className="container clearfix">
-          <div><Header user={user} logout={() => bitloops.app.auth.clearAuthentication()}/></div>
+          <div><Header user={user} logout={() => bitloops.auth.clearAuthentication()}/></div>
           <div className="chat">
             <div className="chat-history">
               <ul style={{listStyle: 'none'}}>{messages && messages.map(message => (
-              <Message 
+              <Message
                 key={message.senderUid+(Math.random()*100000)}
                 isMine={message.senderUid === user.uid}
                 sentAt={message.sentAt}
@@ -99,7 +99,7 @@ function App() {
           </div>
         </div> :
         <div>
-          {!user && <GoogleButton loginWithGoogle={() => bitloops.demoChat.bitloopsApp.auth.authenticateWithGoogle()}/>}
+          {!user && <GoogleButton loginWithGoogle={() => bitloops.auth.authenticateWithGoogle()}/>}
         </div>
       }
     </>

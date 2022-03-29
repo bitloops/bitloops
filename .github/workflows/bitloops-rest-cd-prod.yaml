@@ -1,4 +1,4 @@
-name: Push image and Deploy to Prod
+name: Push Bitloops Rest image and Deploy to Prod
 on:
   push:
     tags:

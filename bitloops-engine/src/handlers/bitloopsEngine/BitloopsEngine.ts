@@ -30,8 +30,6 @@ export default class BitloopsEngine {
 	}
 
 	async handleEventsTopic(message: PublishEventMessage | RequestEventMessage): Promise<void> {
-		console.log('Received eventsTopic', message);
-
 		const authorizeMessageResponse = authorizeMessageContext(message.context);
 		console.log('authresponnse', authorizeMessageResponse);
 		let requestReply = (message as RequestEventMessage).originalReply;

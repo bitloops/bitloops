@@ -33,7 +33,7 @@ export const bitloopsRequestResponse = async (bitloopsRequestArgs: BitloopsReque
 		{ timeout: 10000 },
 	);
 	const response = JSONCodec().decode(m.data);
-	console.log('got response:', response);
+	// console.log('got response:', response);
 	return response;
 };
 

@@ -41,11 +41,13 @@ export default class Admin {
 			this.services.workflowCache.delete(payload.workflowId, payload.workflowVersion, payload.environmentId);
 			console.log('deleted');
 			// this.services.workflowCache.fetch(payload.workflowId, payload.workflowVersion, payload.environmentId).then((val) => console.log(val));
-			WorkflowDefinition.get({ 
+			WorkflowDefinition.get({
 				workflowId: payload.workflowId,
 				workflowVersion: payload.workflowVersion,
 				environmentId: payload.environmentId,
 			});
+		} else if (command === 'publishToTopic') {
+			this.services.mq.publish(payload.replyTo, payload.message);
 		}
 	}
 }
