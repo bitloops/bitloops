@@ -22,14 +22,14 @@ Bitloops is a scalable open source Firebase substitute that can support any data
 
 *Add powerful authentication to your clients with a single line of code*
 
-- Backend-as-a-Service: authentication, realtime database, storage, hosting, subscriptions and notifications, cloud infrastructure
+- Backend-as-a-Service: authentication, realtime database, storage (soon), hosting, subscriptions and notifications, cloud infrastructure
 - Low-code (drag & drop) IDE that allows developers to build actual backend services using Picoservices or traditional Microservices or APIs
 - Instant code deployment into development, testing or production environments
 - Integration platform-as-a-service that allows integration of any application, microservice or 3rd party service
 
 Bitloops removes the complexity and repetitiveness required to build and deploy a modern backend application, API or database from scratch and allows you to continue scaling and extending your applications faster than any other tool. 
 
-Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, integration of any database, data storage, as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools. 
+Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, integration of any database, data storage  (soon), as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools. 
 
 Bitloops is the only platform you will need for all your backend needs. We are still at our early stages with much to do and a long backlog but with your support we will get there faster. 
 
