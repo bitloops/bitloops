@@ -9,11 +9,11 @@ class EndNode extends BaseNode {
 	async execute(workflowParams: WorkflowParams): Promise<WorkflowParams> {
 		this.startedAt = Date.now();
 		console.log('END NODE ID-->', this.id);
-		const { constants, variables, systemVariables } = workflowParams;
+		const { constants, variables, systemVariables, context } = workflowParams;
 		const { mq, logger } = this.services;
 		const node = this.nodeDefinition as IEndNode;
 		if (systemVariables.originalReply) {
-			const replaceVarsParams = { constants, variables, systemVariables };
+			const replaceVarsParams = { constants, variables, systemVariables, context };
 			const message = await replaceVars(node.type.output, replaceVarsParams);
 			mq.publish(systemVariables.originalReply, message);
 		}
@@ -30,7 +30,7 @@ class EndNode extends BaseNode {
 
 	private async continueParentWorkflow(parentState) {
 		// console.log('current workflow has parentState-->', parentState);
-		const { systemVariables: parentSystemVariables } = parentState.workflowParams;
+		const { systemVariables: parentSystemVariables, context: parentContext } = parentState.workflowParams;
 		const parentId = parentState.id;
 		if (!parentSystemVariables.nodes[parentId]) parentSystemVariables.nodes[parentId] = {};
 		parentSystemVariables.nodes[parentId].executed = true;
@@ -55,6 +55,7 @@ class EndNode extends BaseNode {
 				workflowDefinition: parentWorkflowDefinition,
 				services: this.services,
 				environmentId: parentSystemVariables.environmentId,
+				context: parentContext,
 			});
 			parentWorkflow.setParams(parentState.workflowParams);
 			const startingNode = parentWorkflow.getNode(parentId);
