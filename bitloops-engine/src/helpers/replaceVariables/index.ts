@@ -49,7 +49,7 @@ const hashToken = (token) => {
 };
 
 export const replaceVars = async (vars: ITypedVariable[], params: ReplaceVarsParams): Promise<Record<string, any>> => {
-	const { variables, output, systemVariables, constants, payload } = params;
+	const { variables, output, systemVariables, constants, payload, context } = params;
 	const evaluatedParams = {};
 	const dataToBuffer = dataToBufferImport;
 	const bufferToData = bufferToDataImport;
