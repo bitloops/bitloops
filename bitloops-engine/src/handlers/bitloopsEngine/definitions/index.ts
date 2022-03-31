@@ -1,5 +1,6 @@
 import { INode } from '../../../entities/nodes/definitions';
 import { WorkflowParams, IBitloopsWorkflowDefinition } from '../../../entities/workflow/definitions';
+import { JWTData } from '../../../utils/definitions';
 
 export type JSONDecodedObject = {
 	nodeDefinition: INode;
@@ -24,11 +25,7 @@ export type WorfklowArgs = {
 
 export type WorkflowContext = {
 	request: { ip: string };
-	auth: {
-		uid?: string;
-		// authType: AuthTypes;
-		// authData: AuthContextData;
-	};
+	auth: UserAuthData;
 };
 
 export type WorkflowMainInfo = {
@@ -79,14 +76,14 @@ export type AuthorizeMessageResponse = {
 	auth?: AuthData;
 };
 
-export type AuthData = UserAuthData; //TODO add | xapikeyresponse etc when the form is final
+export type AuthData = {
+	user: UserAuthData; //TODO add | xapikeyresponse etc when the form is final
+};
 
 type AuthContextData = UserContextData; //TODO add  xapikey etc
 
 type UserContextData = string; //JWT
 
 type UserAuthData = {
-	user: {
-		id: string;
-	};
-};
+	id: string;
+} & Partial<JWTData>;

@@ -69,7 +69,6 @@ class GRPC {
 		workflow: IBitloopsWorkflowDefinition,
 		workflowParams: WorkflowParams,
 	): Promise<IGRPCResponse> {
-		// TODO add connection caching and only run below lines if not cached
 		// TODO add caching with x min expiration and later be able to expire through admin-topic
 		// TODO add limit on the caching object so that it doesn't grow huge
 		const { constants, variables, systemVariables, context } = workflowParams;

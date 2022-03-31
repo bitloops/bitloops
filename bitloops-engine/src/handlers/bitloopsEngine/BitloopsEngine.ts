@@ -9,6 +9,7 @@ import {
 	AuthorizeMessageResponse,
 	MessageContext,
 	WorkflowContext,
+	AuthData,
 } from './definitions';
 import { Options } from '../../services';
 import Workflow from '../../entities/workflow/Workflow';
@@ -39,7 +40,7 @@ export default class BitloopsEngine {
 			const { auth: authData } = authorizeMessageResponse;
 			const workflowContext: WorkflowContext = {
 				request: message.context.request,
-				auth: { uid: authData?.user.id },
+				auth: authData?.user,
 			};
 
 			const reply = requestReply;
@@ -100,7 +101,7 @@ export default class BitloopsEngine {
 			authData,
 			context,
 		} = message;
-		// console.log('context:', context, workflowParams?.context);
+		console.log('context:', context, workflowParams?.context);
 
 		const workflowConstructorArgs = {
 			workflowDefinition,
@@ -190,13 +191,15 @@ function authorizeMessageContext(context: MessageContext): AuthorizeMessageRespo
 					isAuthorized: false,
 				};
 			const jwt = parseJWT(token, publicKeyString);
+			// console.log('jwt.JWTData', jwt.jwtData);
 			if (isJWTExpired(jwt) || isJWTInvalid(jwt))
 				return {
 					isAuthorized: false,
 				};
-			const auth = {
+			const auth: AuthData = {
 				user: {
 					id: jwt.jwtData.sub,
+					...jwt.jwtData,
 				},
 			};
 
