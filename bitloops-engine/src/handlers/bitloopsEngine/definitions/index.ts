@@ -10,6 +10,7 @@ export type JSONDecodedObject = {
 	originalReply?: string;
 	environmentId: string;
 	authData: AuthData;
+	context: WorkflowContext;
 };
 
 export type WorfklowArgs = {
@@ -17,7 +18,17 @@ export type WorfklowArgs = {
 	originalReply?: string;
 	environmentId: string;
 	nodeId: string;
-	authData: AuthData
+	authData: AuthData;
+	context: WorkflowContext;
+};
+
+export type WorkflowContext = {
+	request: { ip: string };
+	auth: {
+		uid?: string;
+		// authType: AuthTypes;
+		// authData: AuthContextData;
+	};
 };
 
 export type WorkflowMainInfo = {
@@ -46,9 +57,12 @@ export interface RequestEventMessage {
 }
 //Context of message consumed
 export type MessageContext = {
-	authType: AuthTypes,
-	authData: AuthContextData
-}
+	request: { ip: string };
+	auth: {
+		authType: AuthTypes;
+		authData: AuthContextData;
+	};
+};
 
 export enum AuthTypes {
 	Basic = 'Basic',
@@ -61,9 +75,9 @@ export enum AuthTypes {
 }
 
 export type AuthorizeMessageResponse = {
-	isAuthorized: boolean,
-	auth?: AuthData
-}
+	isAuthorized: boolean;
+	auth?: AuthData;
+};
 
 export type AuthData = UserAuthData; //TODO add | xapikeyresponse etc when the form is final
 
@@ -73,6 +87,6 @@ type UserContextData = string; //JWT
 
 type UserAuthData = {
 	user: {
-		id: string
-	}
-}
+		id: string;
+	};
+};

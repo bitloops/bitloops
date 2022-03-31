@@ -8,6 +8,7 @@ import {
 	AuthTypes,
 	AuthorizeMessageResponse,
 	MessageContext,
+	WorkflowContext,
 } from './definitions';
 import { Options } from '../../services';
 import Workflow from '../../entities/workflow/Workflow';
@@ -22,7 +23,6 @@ import { WorkflowDefinition } from '../../entities/workflow/WorkflowDefinition';
 import { INode } from '../../entities/nodes/definitions';
 import { isJWTExpired, isJWTInvalid, parseJWT } from '../../utils/auth';
 
-
 export default class BitloopsEngine {
 	private services: IServices;
 
@@ -31,12 +31,16 @@ export default class BitloopsEngine {
 	}
 
 	async handleEventsTopic(message: PublishEventMessage | RequestEventMessage): Promise<void> {
-
+		// console.log('Events topic context:', message.context);
 		const authorizeMessageResponse = authorizeMessageContext(message.context);
-		console.log('authresponnse', authorizeMessageResponse)
+		console.log('authresponnse', authorizeMessageResponse);
 		let requestReply = (message as RequestEventMessage).originalReply;
-		if(authorizeMessageResponse.isAuthorized) {
-			const { auth: authData } = authorizeMessageResponse; 
+		if (authorizeMessageResponse.isAuthorized) {
+			const { auth: authData } = authorizeMessageResponse;
+			const workflowContext: WorkflowContext = {
+				request: message.context.request,
+				auth: { uid: authData?.user.id },
+			};
 
 			const reply = requestReply;
 			if (reply) {
@@ -49,7 +53,8 @@ export default class BitloopsEngine {
 					originalReply,
 					environmentId,
 					nodeId,
-					authData
+					authData,
+					context: workflowContext,
 				};
 				return this.getWorkflowAndPublishEvent(workflowMainInfo, workflowArgs);
 			}
@@ -69,22 +74,33 @@ export default class BitloopsEngine {
 							payload,
 							environmentId,
 							nodeId,
-							authData
+							authData,
+							context: workflowContext,
 						};
 						return this.getWorkflowAndPublishEvent(workflowMainInfo, workflowArgs);
 					}),
 				);
 			}
-		}else {
-			console.log("Not valid auth, event rejected");
-			if(requestReply){
-				this.services.mq.publish(requestReply, {error: NOT_VALID_AUTH_MESSAGE});
+		} else {
+			console.log('Not valid auth, event rejected');
+			if (requestReply) {
+				this.services.mq.publish(requestReply, { error: NOT_VALID_AUTH_MESSAGE });
 			}
 		}
 	}
 
 	async handleEngineTopic(message: JSONDecodedObject): Promise<void> {
-		const { nodeDefinition, workflowDefinition, payload, originalReply, workflowParams, environmentId, authData } = message;
+		const {
+			nodeDefinition,
+			workflowDefinition,
+			payload,
+			originalReply,
+			workflowParams,
+			environmentId,
+			authData,
+			context,
+		} = message;
+		// console.log('context:', context, workflowParams?.context);
 
 		const workflowConstructorArgs = {
 			workflowDefinition,
@@ -92,7 +108,8 @@ export default class BitloopsEngine {
 			payload,
 			originalReply,
 			environmentId,
-			authData
+			authData,
+			context,
 		};
 		const workflow = new Workflow(workflowConstructorArgs);
 		if (!this.isWorkflowCreatedFromInitialNode(workflowParams)) {
@@ -159,50 +176,53 @@ export default class BitloopsEngine {
 	}
 }
 function authorizeMessageContext(context: MessageContext): AuthorizeMessageResponse {
-	if(!context) return { isAuthorized: false }
-	
-	const { authType, authData } = context;
-	
-	switch(authType.toLocaleLowerCase()) {
+	if (!context.auth) return { isAuthorized: false };
+
+	const { authType, authData } = context.auth;
+
+	switch (authType.toLocaleLowerCase()) {
 		case AuthTypes.User.toLocaleLowerCase():
 			const base64PK = Options.getOption(KEYCLOAK_PK);
 			const publicKeyString = Buffer.from(base64PK, 'base64').toString();
 			const token = authData;
-			if (!authData) return {
-				isAuthorized: false
-			};
+			if (!authData)
+				return {
+					isAuthorized: false,
+				};
 			const jwt = parseJWT(token, publicKeyString);
-			if(isJWTExpired(jwt) || isJWTInvalid(jwt)) return {
-				isAuthorized: false
+			if (isJWTExpired(jwt) || isJWTInvalid(jwt))
+				return {
+					isAuthorized: false,
+				};
+			const auth = {
+				user: {
+					id: jwt.jwtData.sub,
+				},
 			};
+
 			return {
-				isAuthorized: true, 
-				auth: {
-					user: {
-						id: jwt.jwtData.sub
-					}
-				}
+				isAuthorized: true,
+				auth,
 			};
 		case AuthTypes.Anonymous.toLocaleLowerCase():
 			return {
-				isAuthorized: true, 
-			}
+				isAuthorized: true,
+			};
 		case AuthTypes.X_API_KEY.toLocaleLowerCase():
 			return {
-				isAuthorized: true, 
-			}
+				isAuthorized: true,
+			};
 		case AuthTypes.Unauthorized.toLocaleLowerCase():
 			return {
-				isAuthorized: true, 
-			}
+				isAuthorized: true,
+			};
 		case AuthTypes.FirebaseUser.toLocaleLowerCase():
 			return {
-				isAuthorized: true, 
-			}
+				isAuthorized: true,
+			};
 		default:
 			return {
-				isAuthorized: false, 
-			}
+				isAuthorized: false,
+			};
 	}
 }
-
