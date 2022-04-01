@@ -8,6 +8,7 @@ class WorkflowCache extends Cache<IBitloopsWorkflowDefinition> implements IWorkf
 	}
 
 	cache(workflowId: string, workflowVersion: string, environmentId: string, workflow: IBitloopsWorkflowDefinition) {
+		console.log(`adding worfklow with id: ${workflowId} to cache version ${workflowVersion} and environment ${environmentId}`);
 		this.set(`${workflowId}:${workflowVersion}:${environmentId}`, workflow);
 	}
 
@@ -17,6 +18,7 @@ class WorkflowCache extends Cache<IBitloopsWorkflowDefinition> implements IWorkf
 	}
 
 	delete(workflowId: string, workflowVersion: string, environmentId: string) {
+		console.log(`deleting worfklow with id: ${workflowId} to cache version ${workflowVersion} and environment ${environmentId}`);
 		this.remove(`${workflowId}:${workflowVersion}:${environmentId}`);
 	}
 }
