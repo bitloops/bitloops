@@ -25,6 +25,11 @@ export default class Admin {
 			} catch (error) {
 				console.error('Could not parse payload for setOption', error);
 			}
+			//TODO add 2 commands
+			// 1. upgrade version
+			// - update latest mapping (workflowCacheMapping)
+			// 2. minor change to already created version 
+			// - delete version from cache (workflowCache)
 		} else if (command === 'clearWorkflowCache') {
 			// console.log(
 			// 	'Workflow before delete',
@@ -36,10 +41,12 @@ export default class Admin {
 			// 	'Workflow after delete',
 			// 	this.services.workflowCache.fetch(payload.workflowId, payload.workflowVersion, payload.enviromentId),
 			// );
+			console.log('deleted workflow from clear', payload.workflowId);
+
 		} else if (command === 'updateWorkflowCache') {
 			// this.services.workflowCache.fetch(payload.workflowId, payload.workflowVersion, payload.enviromentId).then((val) => console.log(val));
 			this.services.workflowCache.delete(payload.workflowId, payload.workflowVersion, payload.environmentId);
-			console.log('deleted');
+			console.log('deleted workflow from update', payload.workflowId);
 			// this.services.workflowCache.fetch(payload.workflowId, payload.workflowVersion, payload.environmentId).then((val) => console.log(val));
 			WorkflowDefinition.get({
 				workflowId: payload.workflowId,
