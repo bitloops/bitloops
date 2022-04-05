@@ -9,6 +9,7 @@ import {
 	ILogger,
 	IWorkspaceServicesCache,
 	IWorkspaceSecretsCache,
+	IWorkflowVersionMappingCache,
 } from '../interfaces';
 
 export interface IServices {
@@ -18,6 +19,7 @@ export interface IServices {
 	workflowEventTriggerCache: IWorkflowEventTriggerCache;
 	workspaceServicesCache: IWorkspaceServicesCache;
 	workspaceSecretsCache: IWorkspaceSecretsCache;
+	workflowVersionMappingCache: IWorkflowVersionMappingCache;
 	db: IDatabase;
 	mq: IMQ;
 	imdb: IIMDB;
