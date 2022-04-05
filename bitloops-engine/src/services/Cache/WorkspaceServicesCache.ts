@@ -4,15 +4,17 @@ import { IWorkspaceServicesCache } from '../interfaces';
 
 //TODO remove async from caches
 class WorkspaceServicesCache extends Cache<WorkspaceServicesInfo> implements IWorkspaceServicesCache {
+	private prefixKey = 'workspaceServices';
+
 	cache(workspaceId: string, serviceId: string, data: WorkspaceServicesInfo): Promise<void> {
-		const key = `${workspaceId}:${serviceId}`;
+		const key = this.getCacheKey(workspaceId, serviceId);
 		return Promise.resolve(this.set(key, data));
 	}
 
 	/** This should cache the same way fetchServices fetches them */
 	cacheServices(workspaceId: string, services: Record<string, WorkspaceServicesInfo>): Promise<void> {
 		for (const serviceId in services) {
-			const key = `${workspaceId}:${serviceId}`;
+			const key = this.getCacheKey(workspaceId, serviceId);
 			this.set(key, services[serviceId]);
 		}
 		return Promise.resolve();
@@ -22,7 +24,7 @@ class WorkspaceServicesCache extends Cache<WorkspaceServicesInfo> implements IWo
 	fetchServices(workspaceId: string, services: Set<string>): Promise<Record<string, WorkspaceServicesInfo>> {
 		const res = {};
 		for (const serviceId of services) {
-			const key = `${workspaceId}:${serviceId}`;
+			const key = this.getCacheKey(workspaceId, serviceId);
 			const service = this.get(key);
 			if (!service) continue;
 			// const { environments, name, type, meta } = service;
@@ -30,6 +32,10 @@ class WorkspaceServicesCache extends Cache<WorkspaceServicesInfo> implements IWo
 			res[serviceId] = service;
 		}
 		return Promise.resolve(res);
+	}
+
+	private getCacheKey(workspaceId: string, serviceId: string) {
+		return `${this.prefixKey}:${workspaceId}:${serviceId}`;
 	}
 }
 
