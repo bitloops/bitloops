@@ -8,6 +8,7 @@ import {
 	WorkflowEventTriggerCache,
 	WorkspaceServicesCache,
 	WorkspaceSecretsCache,
+	WorkflowVersionMappingCache,
 } from './Cache';
 import Options from './Options';
 import Mongo from './Mongo';
@@ -23,6 +24,7 @@ import {
 	IWorkspaceServicesCache,
 	IWorkspaceSecretsCache,
 	IIMDB,
+	IWorkflowVersionMappingCache,
 } from './interfaces';
 import { WorkflowSettings } from '../constants';
 import { IServices } from '../services/definitions';
@@ -47,6 +49,9 @@ class Services {
 	);
 	private static workspaceSecretsCache: IWorkspaceSecretsCache = new WorkspaceSecretsCache(
 		Options.getOptionAsNumber(WorkflowSettings.MAX_WORKSPACE_SECRETS_CACHE, 1000),
+	);
+	private static workflowVersionMappingCache: IWorkflowVersionMappingCache = new WorkflowVersionMappingCache(
+		Options.getOptionAsNumber(WorkflowSettings.MAX_WORKFLOWS_CACHE, 1000),
 	);
 	private static mq: IMQ = new NATS(Options.getOption('NATS_IP') ? undefined : {});
 	private static db: IDatabase = new Mongo();
@@ -79,6 +84,7 @@ class Services {
 			workflowEventTriggerCache: Services.workflowEventTriggerCache,
 			workspaceServicesCache: Services.workspaceServicesCache,
 			workspaceSecretsCache: Services.workspaceSecretsCache,
+			workflowVersionMappingCache: Services.workflowVersionMappingCache,
 			Options: Options,
 		};
 		Services.services = services;

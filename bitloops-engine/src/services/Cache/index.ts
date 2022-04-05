@@ -6,6 +6,7 @@ import WorkflowCache from './WorkflowCache';
 import WorkflowEventTriggerCache from './WorkflowEventTriggerCache';
 import WorkspaceServicesCache from './WorkspaceServicesCache';
 import WorkspaceSecretsCache from './WorkspaceSecretsCache';
+import WorkflowVersionMappingCache from './WorkflowVersionMappingCache';
 
 export {
 	Cache,
@@ -16,4 +17,5 @@ export {
 	WorkflowEventTriggerCache,
 	WorkspaceServicesCache,
 	WorkspaceSecretsCache,
+	WorkflowVersionMappingCache,
 };

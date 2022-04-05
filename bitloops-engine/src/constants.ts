@@ -45,3 +45,11 @@ export const ADMIN_WORKSPACE_ID = 'ADMIN_WORKSPACE_ID';
 
 export const NOT_VALID_AUTH_MESSAGE = 'Provided authentication was not valid';
 
+export const ADMIN_COMMANDS = {
+	GC: 'gc',
+	SET_OPTION: 'setOption',
+	CLEAR_WORKFLOW_CACHE: 'clearWorkflowCache',
+	UPDATE_WORFKLOW_CACHE: 'updateWorkflowCache',
+	UPDATE_WORFKLOW_VERSION_MAPPING_CACHE: 'updateWorkflowVersionMappingCache',
+	PUBLISH_TO_TOPIC: 'publishToTopic',
+}

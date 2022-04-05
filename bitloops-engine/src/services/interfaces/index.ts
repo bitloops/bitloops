@@ -59,10 +59,16 @@ export interface ILRUCache<T> {
 	getSnapshot(): void;
 }
 
-export interface IWorkflowCache extends ILRUCache<IBitloopsWorkflowDefinition> {
+export interface IWorkflowCache extends ILRUCache<Record<string, IBitloopsWorkflowDefinition>> {
 	cache(workflowId: string, workflowVersion: string, environmentId: string, workflow: IBitloopsWorkflowDefinition); // imdb.setHashValueObject(`blsw:${workflowId}`, workflowVersion.toString(), workflow as any);
-	fetch(workflowId: string, workflowVersion: string, environmentId: string): Promise<IBitloopsWorkflowDefinition>;
-	delete(workflowId: string, workflowVersion: string, environmentId: string);
+	fetch(workflowId: string, workflowVersion: string, environmentId: string): Promise<IBitloopsWorkflowDefinition | null>;
+	delete(workflowId: string, workflowVersion: string);
+}
+
+export interface IWorkflowVersionMappingCache extends ILRUCache<string> {
+	cache(workflowId: string, workflowVersion: string);
+	fetch(workflowId: string): Promise<string>;
+	delete(workflowId: string);
 }
 
 export interface ISecretCache extends ILRUCache<any> {
