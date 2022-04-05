@@ -19,7 +19,7 @@ class REST {
 
 	async callback(data: any): Promise<void> {
 		const { nodeDefinition, workflowDefinition, workflowParams } = data;
-		const { constants, variables, systemVariables } = workflowParams;
+		const { constants, variables, systemVariables, context } = workflowParams;
 		console.log(`Making ${nodeDefinition.name} REST call for ${variables.instanceId}`);
 		let restResponse = await this.makeCall(nodeDefinition, workflowParams);
 		// // TODO (later) feature add error handling
@@ -39,6 +39,7 @@ class REST {
 				workflowDefinition,
 				constants,
 				systemVariables,
+				context,
 			};
 			const output = await replaceVars(nodeDefinition.type.output, replaceVarsParams);
 
@@ -48,7 +49,7 @@ class REST {
 			const version = Options.getVersion();
 			this.nats.publish(`${version}.${Options.getOption(MQTopics.ENGINE_TOPIC)}`, {
 				nodeDefinition,
-				workflowParams: { constants, variables: { ...variables, ...output }, systemVariables },
+				workflowParams: { constants, variables: { ...variables, ...output }, systemVariables, context },
 				workflowDefinition,
 			});
 		}
@@ -100,10 +101,10 @@ class REST {
 		const uriTyped: ITypedStringVariable[] = [
 			{
 				type: variableTypes.string,
-				name: "value",
+				name: 'value',
 				evalValue: uri,
-			}
-		]
+			},
+		];
 		const replacedUri = await replaceVars(uriTyped, workflowParams);
 		return replacedUri.value;
 	}

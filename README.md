@@ -4,9 +4,11 @@
 
 Bitloops is a scalable open source Firebase substitute that can support any database and Low-Code Workflow Orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
 
-### InstantSync
+### liveSync
 
-![InstantSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
+![liveSync](https://github.com/bitloops/bitloops/blob/f2c77aad338bca10c1338d38e807a0da665fe9f8/docs/assets/Bitloops-helloWorld.gif)
+
+_Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code (only available for TypeScript projects currently)_
 
 _Create and update strongly-typed HTTP/2 REST APIs in seconds and use them instantly as RPCs on your client code with just a single line of code_
 
@@ -22,14 +24,14 @@ _Bitloops allows your client code to subscribe to operations of any database or 
 
 _Add powerful authentication to your clients with a single line of code_
 
-- Backend-as-a-Service: authentication, realtime database, storage, hosting, subscriptions and notifications, cloud infrastructure
+- Backend-as-a-Service: authentication, realtime database, storage (soon), hosting, subscriptions and notifications, cloud infrastructure
 - Low-code (drag & drop) IDE that allows developers to build actual backend services using Picoservices or traditional Microservices or APIs
 - Instant code deployment into development, testing or production environments
 - Integration platform-as-a-service that allows integration of any application, microservice or 3rd party service
 
 Bitloops removes the complexity and repetitiveness required to build and deploy a modern backend application, API or database from scratch and allows you to continue scaling and extending your applications faster than any other tool.
 
-Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, any database for storing and querying users and data, storage and file management, image & video manipulation as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools.
+Using Bitloops, you can easily integrate your application with user authentication & multiple sign-in methods, integration of any database, data storage (soon), as well as hosting for your website. In addition, you can continue building new products and features, or iterate existing features / business logic 10x faster than with traditional tools.
 
 Bitloops is the only platform you will need for all your backend needs. We are still at our early stages with much to do and a long backlog but with your support we will get there faster.
 

@@ -17,13 +17,14 @@ import { AuthData } from '../../handlers/bitloopsEngine/definitions';
 class Workflow implements IWorkflow {
 	private services: IServices;
 	private readonly workflowDefinition: IBitloopsWorkflowDefinition;
-	private params: WorkflowParams = {};
+	private params: WorkflowParams;
 	private startPayload: Record<string, unknown>;
 	private nodes: Record<string, BaseNode>;
 	private readonly ENCRYPTION_ALGORITHM = 'aes-256-ctr';
 
 	constructor(workflowConstructorArgs: WorkflowConstructorArgs) {
-		const { workflowDefinition, services, payload, originalReply, environmentId, authData } = workflowConstructorArgs;
+		const { workflowDefinition, services, payload, originalReply, environmentId, authData, context } =
+			workflowConstructorArgs;
 
 		this.workflowDefinition = workflowDefinition;
 		this.services = services;
@@ -32,7 +33,7 @@ class Workflow implements IWorkflow {
 		//TODO maybe group together
 		const constants = this.parseConstants(environmentId, authData);
 		const systemVariables = this.initializeSystemData(originalReply, environmentId);
-		this.params = { constants, systemVariables };
+		this.params = { constants, systemVariables, context };
 		this.nodes = this.getNodes();
 	}
 
@@ -90,10 +91,11 @@ class Workflow implements IWorkflow {
 
 		if (this.areConstantsSet(constantsObj, environmentId)) {
 			const constantsArray = constantsObj[environmentId];
-			if (constantsArray) for (const constant of constantsArray) {
-				constants[constant.name] = constant.value;
-			}
-			if(authData) {
+			if (constantsArray)
+				for (const constant of constantsArray) {
+					constants[constant.name] = constant.value;
+				}
+			if (authData) {
 				constants.authData = authData;
 			}
 		}

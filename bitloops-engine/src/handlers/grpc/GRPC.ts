@@ -24,7 +24,7 @@ class GRPC {
 
 	async callback(data: JSONGrpcDecodedObject): Promise<void> {
 		const { nodeDefinition, workflowDefinition, workflowParams } = data;
-		const { constants, variables, systemVariables } = workflowParams;
+		const { constants, variables, systemVariables, context } = workflowParams;
 		// console.log(`Making ${data.nodeDefinition.name} gRPC call for ${variables.instanceId}`);
 		let gRPCResponse = await this.makeCall(nodeDefinition, workflowDefinition, workflowParams);
 		// TODO (later) feature add error handling
@@ -45,6 +45,7 @@ class GRPC {
 				workflowDefinition,
 				constants,
 				systemVariables,
+				context,
 			};
 			const output = await replaceVars(nodeDefinition.type.output, replaceVarsParams);
 			// console.log('grpc response', gRPCResponse.value);
@@ -56,7 +57,7 @@ class GRPC {
 			const version = Options.getVersion();
 			this.nats.publish(`${version}.${Options.getOption(MQTopics.ENGINE_TOPIC)}`, {
 				nodeDefinition,
-				workflowParams: { constants, variables: { ...variables, ...output }, systemVariables },
+				workflowParams: { constants, variables: { ...variables, ...output }, systemVariables, context },
 				workflowDefinition,
 			});
 		}
@@ -68,10 +69,9 @@ class GRPC {
 		workflow: IBitloopsWorkflowDefinition,
 		workflowParams: WorkflowParams,
 	): Promise<IGRPCResponse> {
-		// TODO add connection caching and only run below lines if not cached
 		// TODO add caching with x min expiration and later be able to expire through admin-topic
 		// TODO add limit on the caching object so that it doesn't grow huge
-		const { constants, variables, systemVariables } = workflowParams;
+		const { constants, variables, systemVariables, context } = workflowParams;
 		const { target, grpcService, grpcPackage, ssl, proto, rpc } = node.type.parameters.interface;
 		// TODO hash protofile
 		const clientId = `${target}:${proto}`;
@@ -104,7 +104,7 @@ class GRPC {
 			fs.unlinkSync(tempFilePath);
 			loadedPackageDefinition = null;
 		}
-		const replaceVarsParams = { variables, workflow, constants, systemVariables };
+		const replaceVarsParams = { variables, workflow, constants, systemVariables, context };
 		const input = await replaceVars(node.type.parameters.interface.input, replaceVarsParams);
 		// console.log('gRPC INPUT', input);
 		// TODO feature add proper error handling

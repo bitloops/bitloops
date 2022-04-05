@@ -1,4 +1,9 @@
-import { IRequiredTypedVariable, BitloopsVariables, IBitloopsWorkflowDefinition, IBitloopsInputConstant } from './../workflow/definitions/index';
+import {
+	IRequiredTypedVariable,
+	BitloopsVariables,
+	IBitloopsWorkflowDefinition,
+	IBitloopsInputConstant,
+} from './../workflow/definitions/index';
 import { replaceVars } from './../../helpers/replaceVariables/index';
 import { BaseNode } from './BaseNode';
 import { ICallNode, INode, IStartNodeType } from './definitions';
@@ -58,6 +63,7 @@ class CallNode extends BaseNode {
 			workflowDefinition: subWorkflowDefinition,
 			services: this.services,
 			environmentId,
+			context: workflowParams.context,
 		});
 		const { workspaceId } = subWorkflow.getWorkflow();
 		const {
@@ -73,7 +79,7 @@ class CallNode extends BaseNode {
 		);
 		/** Trigger would write variables and secrets */
 		// TODO improve overwriting of constants/system from setParams
-		subWorkflow.setParams({ variables, systemVariables, constants });
+		subWorkflow.setParams({ variables, systemVariables, constants, context: workflowParams.context });
 		// TODO get node shown by trigger to be safe
 		const startingNode = await subWorkflow.getNode(subworkflowStartNodeDefinition.id).getNext();
 		subWorkflow.handleNode(startingNode);
@@ -112,13 +118,17 @@ class CallNode extends BaseNode {
 		return systemVariables;
 	}
 
-	private initializeConstants(constantsObj: Record<string, IBitloopsInputConstant[]>, environmentId: string): BitloopsVariables {
+	private initializeConstants(
+		constantsObj: Record<string, IBitloopsInputConstant[]>,
+		environmentId: string,
+	): BitloopsVariables {
 		const constants: BitloopsVariables = {};
 		if (this.areConstantsSet(constantsObj, environmentId)) {
 			const constantsArray = constantsObj[environmentId];
-			if (constantsArray) for (const constant of constantsArray) {
-				constants[constant.name] = constant.value;
-			}
+			if (constantsArray)
+				for (const constant of constantsArray) {
+					constants[constant.name] = constant.value;
+				}
 		}
 		// constants.startedAt = Date.now();
 		// constants.instanceId = uuid();

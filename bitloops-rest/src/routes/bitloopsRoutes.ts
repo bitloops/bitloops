@@ -16,6 +16,7 @@ async function bitloopsRoutes(fastify: FastifyInstance, _opts) {
 }
 
 const publishHandler = async (request: publishEventRequest, reply: FastifyReply) => {
+	console.log('HANDLER request ip', request.ip);
 	const { mq } = Services.getServices();
 	const {
 		[PublishHeaders.MESSAGE_ID]: messageId,
@@ -31,7 +32,10 @@ const publishHandler = async (request: publishEventRequest, reply: FastifyReply)
 		workspaceId,
 		messageId,
 		payload,
-		context: { authType: verification.authType, authData: verification.authData?.token },
+		context: {
+			request: { ip: request.ip },
+			auth: { authType: verification.authType, authData: verification.authData?.token },
+		},
 	};
 	await bitloopsMessage(eventArgs, mq);
 	reply
@@ -41,7 +45,7 @@ const publishHandler = async (request: publishEventRequest, reply: FastifyReply)
 };
 
 const requestResponseHandler = async (request: requestEventRequest, reply: FastifyReply) => {
-	// console.log('HANDLER FV', request.verification);
+	console.log('HANDLER request ip', request.ip);
 	const { mq } = Services.getServices();
 	const {
 		[RequestHeaders.WORKFLOW_ID]: workflowId,
@@ -63,7 +67,10 @@ const requestResponseHandler = async (request: requestEventRequest, reply: Fasti
 		workflowVersion,
 		environmentId,
 		payload,
-		context: { authType: verification.authType, authData: verification.authData?.token },
+		context: {
+			request: { ip: request.ip },
+			auth: { authType: verification.authType, authData: verification.authData?.token },
+		},
 	};
 	const result = await bitloopsRequestResponse(requestArgs, mq);
 	if (result?.headers && result?.content) {

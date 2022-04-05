@@ -29,14 +29,20 @@ export abstract class WorkflowDefinition {
 	}
 
 	public static async get(workflowMainInfo: WorkflowMainInfo): Promise<IBitloopsWorkflowDefinition> {
-		const { workflowId, workflowVersion, environmentId } = workflowMainInfo;
-		const { db, workflowCache } = await WorkflowDefinition.getServices();
+		let { workflowVersion } = workflowMainInfo;
+		const { workflowId, environmentId } = workflowMainInfo;
+		const { db, workflowCache, workflowVersionMappingCache } = await WorkflowDefinition.getServices();
+		if (!workflowVersion) {
+			workflowVersion = await workflowVersionMappingCache.fetch(workflowId);
+		}
 		let workflowDefinition: IBitloopsWorkflowDefinition = await workflowCache.fetch(
 			workflowId,
 			workflowVersion,
 			environmentId,
 		);
+		console.log('Got workflow from cache')
 		if (!workflowDefinition) {
+			console.log('Got workflow from db')
 			workflowDefinition = await db.getWorkflow(workflowId, workflowVersion);
 			if (workflowDefinition === null) {
 				// TODO Error handling in this function
@@ -50,7 +56,7 @@ export abstract class WorkflowDefinition {
 			);
 			WorkflowDefinition.stitchWorkflowWithServices(workflowDefinition, services, environmentId);
 
-			// TODO cache workflowId:environmentId
+			workflowVersionMappingCache.cache(workflowId, workflowDefinition.version);
 			workflowCache.cache(workflowId, workflowDefinition.version, environmentId, workflowDefinition);
 		}
 		// workflowCache.getSnapshot();

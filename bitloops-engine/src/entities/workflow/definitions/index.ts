@@ -1,3 +1,4 @@
+import { WorkflowContext } from './../../../handlers/bitloopsEngine/definitions/index';
 import { INode, ServicesEnum } from '../../nodes/definitions';
 import { IServices } from '../../../services/definitions';
 import { AuthData } from '../../../handlers/bitloopsEngine/definitions';
@@ -19,7 +20,7 @@ export enum variableTypes {
 	fixed64 = 'fixed64',
 	sfixed32 = 'sfixed32',
 	sfixed64 = 'sfixed64',
-};
+}
 
 export interface ITypedVariable {
 	name: string;
@@ -28,7 +29,7 @@ export interface ITypedVariable {
 }
 
 export interface ITypedStringVariable extends ITypedVariable {
-	type: variableTypes.string
+	type: variableTypes.string;
 }
 
 export interface IBitloopsInputConstant {
@@ -49,6 +50,7 @@ export type WorkflowParams = {
 	constants?: BitloopsVariables;
 	variables?: BitloopsVariables;
 	systemVariables?: BitloopsVariables;
+	context: WorkflowContext;
 };
 
 export interface IEdge {
@@ -80,6 +82,7 @@ export type WorkflowConstructorArgs = {
 	originalReply?: string;
 	environmentId: string;
 	authData?: AuthData;
+	context: WorkflowContext;
 };
 
 export type EventTriggerWorkflowInfo = {
@@ -109,7 +112,11 @@ export type WorkspaceServicesInfo = {
 	environments: Record<string, serviceEnvironment>;
 } & WorkspaceServiceTypeInfo;
 
-type WorkspaceServiceTypeInfo = WorkspaceGrpcServiceInfo | WorkspaceRestServiceInfo | WorkspaceMessageServiceInfo | WorkspaceDynamicRestServiceInfo;
+type WorkspaceServiceTypeInfo =
+	| WorkspaceGrpcServiceInfo
+	| WorkspaceRestServiceInfo
+	| WorkspaceMessageServiceInfo
+	| WorkspaceDynamicRestServiceInfo;
 export type WorkspaceGrpcServiceInfo = {
 	type: ServicesEnum.GRPC;
 	meta: { proto: string };
@@ -123,11 +130,11 @@ export type WorkspaceRestServiceInfo = {
 export type WorkspaceMessageServiceInfo = {
 	type: ServicesEnum.MESSAGE;
 	meta: { proto?: string };
-}
+};
 
 export type WorkspaceDynamicRestServiceInfo = {
 	type: ServicesEnum.DYNAMIC_REST;
-}
+};
 
 type serviceEnvironment = {
 	target: string;

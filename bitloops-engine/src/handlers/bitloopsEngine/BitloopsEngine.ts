@@ -8,6 +8,8 @@ import {
 	AuthTypes,
 	AuthorizeMessageResponse,
 	MessageContext,
+	WorkflowContext,
+	AuthData,
 } from './definitions';
 import { Options } from '../../services';
 import Workflow from '../../entities/workflow/Workflow';
@@ -30,11 +32,16 @@ export default class BitloopsEngine {
 	}
 
 	async handleEventsTopic(message: PublishEventMessage | RequestEventMessage): Promise<void> {
+		// console.log('Events topic context:', message.context);
 		const authorizeMessageResponse = authorizeMessageContext(message.context);
 		console.log('authresponnse', authorizeMessageResponse);
 		let requestReply = (message as RequestEventMessage).originalReply;
 		if (authorizeMessageResponse.isAuthorized) {
 			const { auth: authData } = authorizeMessageResponse;
+			const workflowContext: WorkflowContext = {
+				request: message.context.request,
+				auth: authData?.user,
+			};
 
 			const reply = requestReply;
 			if (reply) {
@@ -48,6 +55,7 @@ export default class BitloopsEngine {
 					environmentId,
 					nodeId,
 					authData,
+					context: workflowContext,
 				};
 				return this.getWorkflowAndPublishEvent(workflowMainInfo, workflowArgs);
 			}
@@ -68,6 +76,7 @@ export default class BitloopsEngine {
 							environmentId,
 							nodeId,
 							authData,
+							context: workflowContext,
 						};
 						return this.getWorkflowAndPublishEvent(workflowMainInfo, workflowArgs);
 					}),
@@ -82,8 +91,17 @@ export default class BitloopsEngine {
 	}
 
 	async handleEngineTopic(message: JSONDecodedObject): Promise<void> {
-		const { nodeDefinition, workflowDefinition, payload, originalReply, workflowParams, environmentId, authData } =
-			message;
+		const {
+			nodeDefinition,
+			workflowDefinition,
+			payload,
+			originalReply,
+			workflowParams,
+			environmentId,
+			authData,
+			context,
+		} = message;
+		console.log('context:', context, workflowParams?.context);
 
 		const workflowConstructorArgs = {
 			workflowDefinition,
@@ -92,6 +110,7 @@ export default class BitloopsEngine {
 			originalReply,
 			environmentId,
 			authData,
+			context,
 		};
 		const workflow = new Workflow(workflowConstructorArgs);
 		if (!this.isWorkflowCreatedFromInitialNode(workflowParams)) {
@@ -158,9 +177,9 @@ export default class BitloopsEngine {
 	}
 }
 function authorizeMessageContext(context: MessageContext): AuthorizeMessageResponse {
-	if (!context) return { isAuthorized: false };
+	if (!context.auth) return { isAuthorized: false };
 
-	const { authType, authData } = context;
+	const { authType, authData } = context.auth;
 
 	switch (authType.toLocaleLowerCase()) {
 		case AuthTypes.User.toLocaleLowerCase():
@@ -172,17 +191,21 @@ function authorizeMessageContext(context: MessageContext): AuthorizeMessageRespo
 					isAuthorized: false,
 				};
 			const jwt = parseJWT(token, publicKeyString);
+			// console.log('jwt.JWTData', jwt.jwtData);
 			if (isJWTExpired(jwt) || isJWTInvalid(jwt))
 				return {
 					isAuthorized: false,
 				};
+			const auth: AuthData = {
+				user: {
+					id: jwt.jwtData.sub,
+					...jwt.jwtData,
+				},
+			};
+
 			return {
 				isAuthorized: true,
-				auth: {
-					user: {
-						id: jwt.jwtData.sub,
-					},
-				},
+				auth,
 			};
 		case AuthTypes.Anonymous.toLocaleLowerCase():
 			return {

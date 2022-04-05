@@ -1,5 +1,6 @@
 import { INode } from '../../../entities/nodes/definitions';
 import { WorkflowParams, IBitloopsWorkflowDefinition } from '../../../entities/workflow/definitions';
+import { JWTData } from '../../../utils/definitions';
 
 export type JSONDecodedObject = {
 	nodeDefinition: INode;
@@ -10,6 +11,7 @@ export type JSONDecodedObject = {
 	originalReply?: string;
 	environmentId: string;
 	authData: AuthData;
+	context: WorkflowContext;
 };
 
 export type WorfklowArgs = {
@@ -17,7 +19,13 @@ export type WorfklowArgs = {
 	originalReply?: string;
 	environmentId: string;
 	nodeId: string;
-	authData: AuthData
+	authData: AuthData;
+	context: WorkflowContext;
+};
+
+export type WorkflowContext = {
+	request: { ip: string };
+	auth: UserAuthData;
 };
 
 export type WorkflowMainInfo = {
@@ -46,9 +54,12 @@ export interface RequestEventMessage {
 }
 //Context of message consumed
 export type MessageContext = {
-	authType: AuthTypes,
-	authData: AuthContextData
-}
+	request: { ip: string };
+	auth: {
+		authType: AuthTypes;
+		authData: AuthContextData;
+	};
+};
 
 export enum AuthTypes {
 	Basic = 'Basic',
@@ -61,18 +72,18 @@ export enum AuthTypes {
 }
 
 export type AuthorizeMessageResponse = {
-	isAuthorized: boolean,
-	auth?: AuthData
-}
+	isAuthorized: boolean;
+	auth?: AuthData;
+};
 
-export type AuthData = UserAuthData; //TODO add | xapikeyresponse etc when the form is final
+export type AuthData = {
+	user: UserAuthData; //TODO add | xapikeyresponse etc when the form is final
+};
 
 type AuthContextData = UserContextData; //TODO add  xapikey etc
 
 type UserContextData = string; //JWT
 
 type UserAuthData = {
-	user: {
-		id: string
-	}
-}
+	id: string;
+} & Partial<JWTData>;

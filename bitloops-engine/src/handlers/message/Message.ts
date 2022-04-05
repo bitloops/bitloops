@@ -15,7 +15,7 @@ class Message {
 
 	async callback(data: JSONMessageDecodedObject): Promise<void> {
 		const { nodeDefinition, workflowDefinition, workflowParams } = data;
-		const { constants, variables, systemVariables } = workflowParams;
+		const { constants, variables, systemVariables, context } = workflowParams;
 		console.log(`Making ${nodeDefinition.name} Message request for ${variables.instanceId}`);
 		let messageResponse = await this.requestMessage(nodeDefinition, workflowParams);
 
@@ -34,6 +34,7 @@ class Message {
 				workflowDefinition,
 				constants,
 				systemVariables,
+				context,
 			};
 			const output = await replaceVars(nodeDefinition.type.output, replaceVarsParams);
 

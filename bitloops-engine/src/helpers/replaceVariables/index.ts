@@ -25,36 +25,31 @@ const decrypt = (hash: string, key: string): string => {
 
 // DO NOT DELETE. This function is used by eval.
 const decryptByWorkspaceId = (hash: string, workspaceId: string): string => {
-	const encryptionKey = crypto
-		.createHmac('sha256', secretKey)
-		.update(workspaceId)
-		.digest('hex')
-		.substr(0, 32);
+	const encryptionKey = crypto.createHmac('sha256', secretKey).update(workspaceId).digest('hex').substr(0, 32);
 	return decrypt(hash, encryptionKey);
-}
+};
 
 // DO NOT DELETE. This function is used by eval.
 const encryptByWorkspaceId = (plainText: string, workspaceId: string): string => {
-	const encryptionKey = crypto
-		.createHmac('sha256', secretKey)
-		.update(workspaceId)
-		.digest('hex')
-		.substr(0, 32);
+	const encryptionKey = crypto.createHmac('sha256', secretKey).update(workspaceId).digest('hex').substr(0, 32);
 	const iv = crypto.randomBytes(16);
 	const cipher = crypto.createCipheriv('aes-256-ctr', encryptionKey, iv);
 	const encrypted = Buffer.concat([cipher.update(plainText), cipher.final()]);
 	const hexIv = iv.toString('hex');
 	const content = encrypted.toString('hex');
 	return hexIv + ':' + content;
-}
+};
 
 // DO NOT DELETE. This function is used by eval.
 const hashToken = (token) => {
-	return crypto.createHash('sha256').update(token + secretKey).digest('hex');
-}
+	return crypto
+		.createHash('sha256')
+		.update(token + secretKey)
+		.digest('hex');
+};
 
 export const replaceVars = async (vars: ITypedVariable[], params: ReplaceVarsParams): Promise<Record<string, any>> => {
-	const { variables, output, systemVariables, constants, payload } = params;
+	const { variables, output, systemVariables, constants, payload, context } = params;
 	const evaluatedParams = {};
 	const dataToBuffer = dataToBufferImport;
 	const bufferToData = bufferToDataImport;
@@ -100,7 +95,7 @@ const forceValueToBeEvaluatedAsString = (evalParams: any, varName: string, evalV
 	} catch (error) {
 		console.error('forced eval to string failed', error);
 	}
-}
+};
 
 const getSecretIds = (vars: ITypedVariable[]) => {
 	const secretIds = [];
