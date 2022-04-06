@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import base64url from 'base64url';
+import jwt_decode from 'jwt-decode';
 import { JWT, JWTStatuses, JWTData } from './definitions';
 
 /**
@@ -11,7 +12,7 @@ import { JWT, JWTStatuses, JWTData } from './definitions';
  * @param publicKey string
  * @returns JWT token information
  */
- export const parseJWT = (token: string, publicKey: string): JWT | null => {
+export const parseJWT = (token: string, publicKey: string): JWT | null => {
 	const verifyFunction = crypto.createVerify('RSA-SHA256');
 	const jwtHeaders = token.split('.')[0];
 	const jwtPayload = token.split('.')[1];
@@ -36,19 +37,7 @@ import { JWT, JWTStatuses, JWTData } from './definitions';
 		};
 	}
 
-	// const jwtData = JSON.parse(Buffer.from(jwtPayload, 'base64').toString());
-	const base64Payload = jwtPayload.replace(/-/g, '+').replace(/_/g, '/');
-	const jsonPayload = decodeURIComponent(
-		Buffer.from(base64Payload, 'base64')
-			.toString()
-			.split('')
-			.map((c) => {
-				return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-			})
-			.join(''),
-	);
-
-	const jwtData = JSON.parse(jsonPayload) as JWTData;
+	const jwtData = jwt_decode<JWTData>(token);
 	const { exp } = jwtData;
 	const expired = Date.now() >= exp * 1000;
 	if (expired) {
@@ -65,12 +54,12 @@ import { JWT, JWTStatuses, JWTData } from './definitions';
 
 export const isJWTExpired = (jwt: JWT): boolean => {
 	const { status } = jwt;
-	if(status === JWTStatuses.EXPIRED) return true;
+	if (status === JWTStatuses.EXPIRED) return true;
 	return false;
-}
+};
 
 export const isJWTInvalid = (jwt: JWT): boolean => {
 	const { status } = jwt;
-	if(status === JWTStatuses.OK) return false;
+	if (status === JWTStatuses.OK) return false;
 	return true;
-}
+};
