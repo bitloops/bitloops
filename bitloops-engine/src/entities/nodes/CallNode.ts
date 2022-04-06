@@ -54,8 +54,8 @@ class CallNode extends BaseNode {
 		const subworkflowStartNodeDefinition = this.getStartNodeDefinition(subWorkflowDefinition, nodeId);
 		const { input: subWorkflowInput } = subworkflowStartNodeDefinition.type as IStartNodeType;
 
-		const variables = this.initializeSubWorkflowVariables(subWorkflowInput, payload);
 		const constants = this.initializeConstants(subWorkflowDefinition.constants, environmentId); // fix/constants are init twice
+		const variables = this.initializeSubWorkflowVariables(subWorkflowInput, payload, constants);
 
 		/** Constructor writes constants and (its) systemVariables */
 		// TODO create SubWorkflow class that will extend Workflow and override some of its functions
@@ -86,7 +86,10 @@ class CallNode extends BaseNode {
 	}
 
 	/** payload is used in eval */
-	private initializeSubWorkflowVariables(input: IRequiredTypedVariable[], payload): BitloopsVariables {
+	private initializeSubWorkflowVariables(
+		input: IRequiredTypedVariable[],
+		payload: Record<string, any>,
+		constants: BitloopsVariables): BitloopsVariables {
 		const variables: any = {};
 		for (const element of input) {
 			variables[element.name] = eval(element.evalValue);
