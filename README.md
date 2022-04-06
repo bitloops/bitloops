@@ -2,7 +2,7 @@
 
 # Bitloops
 
-Bitloops is a scalable open source Firebase substitute that can support any database and Low-Code Workflow Orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
+Bitloops is a scalable open source Firebase substitute that can support **any** database and workflow orchestration. We’re building Bitloops using enterprise-grade open source tools so that you can build any type of enterprise-grade application 10x faster that will connect and serve your web, mobile, desktop, or server applications seamlessly.
 
 
 ### liveSync
@@ -33,9 +33,9 @@ Using Bitloops, you can easily integrate your application with user authenticati
 
 Bitloops is the only platform you will need for all your backend needs. We are still at our early stages with much to do and a long backlog but with your support we will get there faster. 
 
-## Backend-as-a-Service - Why should I care?
+## Why should I care?
 
-- [x] **InstantSync**: Your frontend is connected and synced with your backend even during development allowing for seamless integration (think of GraphQL Apollo on steroids)
+- [x] **liveSync**: Your frontend is connected and synced with your backend even during development allowing for seamless integration (think of GraphQL Apollo on steroids)
 - [x] **Realtime Everything**: Receive events on your frontend with a single line of code and turn all your databases into “realtime” ones
 - [x] **10x Productivity**: Creating APIs and backends just became 10 times faster as we take care of all the boilerplate and infrastructure
 - [x] **Authentication**: Authentication with a single line of code
