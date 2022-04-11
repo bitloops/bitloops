@@ -102,7 +102,9 @@ class SubscriptionRouter {
 		const tokens = subject.split('.');
 		if (tokens.length < 2) throw new Error('Undefined workspaceId');
 		const [, workspaceId] = tokens;
+		// console.log('extractTopicAndWorkspaceFromWildcards', tokens);
 		const eventName = `${tokens[0]}.${tokens.splice(2).join('.')}`;
+		// console.log('extractTopicAndWorkspaceFromWildcards-eventName', eventName);
 
 		return { workspaceId, eventName };
 	}

@@ -20,7 +20,7 @@ Any frontend application that wants to access data
 <!-- Finally provide a Redirect URI (uri of frontend app) and Save   -->
 
 - Provide rest endpoint as Redirect URI  
-  format: <REST_URI>/{realm}/auth/google/final-callback
+  format: <REST_URI>/bitloops/auth/{oAuthProvider}/final-callback
   (e.g. http://127.0.0.1:3005/bitloops/auth/google/final-callback), rest server will have to match equivalent env-var of bitloops-rest
 - Save
   <!-- We will use client ID and client Secret(From Credentials Tab of client) -->
@@ -30,7 +30,7 @@ Any frontend application that wants to access data
 - Navigate to Identity providers
 - Add provider.. -> google
 - You need to fill in client id and client secret from GCP(https://console.cloud.google.com/apis/credentials), OAuth 2.0 Clients
-- Add `<Keycloak-server>/auth/realms/bitloops/broker/google/endpoint` endpoint to Authorised redirect URIs
+- Add `<Keycloak-server>/auth/realms/bitloops/broker/google/endpoint` endpoint to Authorised redirect URIs in gcp
 
 - Save
 

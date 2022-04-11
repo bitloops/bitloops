@@ -27,7 +27,8 @@ export default class SubscriptionEvents {
 		const tokens = subject.split('.');
 		// Remove workspaceId and workflow-events prefix
 		const eventName = tokens.slice(2).join('.');
-		console.log('tokens', tokens);
+		// console.log('tokens', tokens);
+		// console.log('eventName', eventName)
 		return { eventName };
 	}
 }

@@ -66,10 +66,10 @@ export const subscribeHandler: RouteHandlerMethod = async function (request: Sub
 	 */
 	const workflowEventsPrefix = `${Options.getOption(MQTopics.WORKFLOW_EVENTS_TOPIC)}.`;
 	const prefixedTopics = topics.map((topic) => workflowEventsPrefix + topic);
-	console.log('topics-subscribeHandler', prefixedTopics);
+	// console.log('topics-subscribeHandler', prefixedTopics);
 	let { connectionId } = request.params;
 	let newConnection: boolean;
-	console.log('connectionId', connectionId);
+	// console.log('connectionId', connectionId);
 	if (!connectionId) {
 		connectionId = uuid();
 		newConnection = true;
@@ -92,7 +92,7 @@ export const subscribeHandler: RouteHandlerMethod = async function (request: Sub
 			topics: prefixedTopics,
 		},
 	};
-	if (newConnection) payload.type['creds'] = request.verification ? request.verification : 'Unauthorized';
+	if (newConnection) payload.type['creds'] = request.verification ?? 'Unauthorized';
 
 	// console.log('writeRes', `${SR_SSE_SERVER_TOPIC}.${connectionId}`, payload);
 	const writeRes = await this.mq.request<SrResponse>(`${SR_SSE_SERVER_TOPIC}.${connectionId}`, payload);
