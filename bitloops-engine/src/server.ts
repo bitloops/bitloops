@@ -46,7 +46,8 @@ app.get('/ready', readyHandler);
 
 app.listen(Options.getOption(ServerSettings.SERVICE_PORT) || ServerSettings.DEFAULT_SERVER_PORT, () => {
 	console.info(
-		`The application is listening on port ${Options.getOption('SERVICE_PORT') || ServerSettings.DEFAULT_SERVER_PORT
+		`The application is listening on port ${
+			Options.getOption('SERVICE_PORT') || ServerSettings.DEFAULT_SERVER_PORT
 		}!`,
 	);
 });
@@ -90,11 +91,17 @@ app.listen(Options.getOption(ServerSettings.SERVICE_PORT) || ServerSettings.DEFA
 	const engineAdminTopic = `*.${Options.getOption(MQTopics.ENGINE_ADMIN_TOPIC)}`;
 	mq.subscribe(engineAdminTopic, (msg) => admin.callback(msg));
 
+	/**
+	 * Messages received from Bitloops-Engine
+	 */
 	const srPublishedEventsTopic = `${Options.getOption(MQTopics.WORKFLOW_EVENTS_PREFIX)}.>`;
-	mq.subscribe(srPublishedEventsTopic, (msg, subject) => sr.handleNodeIntermediateMessage(msg, subject));
+	mq.subscribe(srPublishedEventsTopic, (msg, subject) => sr.handleNodeIntermediateMessage(msg, subject), engineQueue);
 
+	/**
+	 * Commands received from Bitloops-Rest
+	 */
 	const sseventsTopic = `${Options.getOption(MQTopics.SSE_REGISTER_CONTROL)}.*`;
-	mq.subscribe(sseventsTopic, (msg, subject) => sr.registerSubscription(msg, subject));
+	mq.subscribe(sseventsTopic, (msg, subject) => sr.registerSubscription(msg, subject), engineQueue);
 	// const kpi = nc.subscribe(process.env.ENGINE_KPI_NATS_TOPIC, { queue: process.env.BITLOOPS_ENGINE_QUEUE });
 	// const statusBroker = nc.subscribe(process.env.ENGINE_STATUS_LOGGER);
 	// @TODO error handling here to the handlers as well as to all the handlers
