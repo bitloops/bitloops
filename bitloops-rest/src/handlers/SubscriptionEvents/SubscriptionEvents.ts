@@ -25,10 +25,9 @@ export default class SubscriptionEvents {
 
 	private extractInfoFromSubject(subject: string) {
 		const tokens = subject.split('.');
-		// if (tokens.length < 2) throw new Error('Undefined workspaceId');
-		// const [, workspaceId] = tokens;
-		const eventName = `${tokens.splice(1).join('.')}`;
-		// console.log('eventName', eventName);
+		// Remove workspaceId and workflow-events prefix
+		const eventName = tokens.slice(2).join('.');
+		console.log('tokens', tokens);
 		return { eventName };
 	}
 }

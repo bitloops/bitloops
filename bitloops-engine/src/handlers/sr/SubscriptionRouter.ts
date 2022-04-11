@@ -11,7 +11,7 @@ class SubscriptionRouter {
 	 * Listens to published workflow events from the engine
 	 */
 	async handleNodeIntermediateMessage(data: SubscriptionRouterArgs, subject: string): Promise<void> {
-		// console.log('RECEIVED EVENT FROM ENGINE');
+		// console.log('RECEIVED EVENT FROM ENGINE', subject);
 		const { payload } = data;
 		// console.log('received payload', payload);
 		try {

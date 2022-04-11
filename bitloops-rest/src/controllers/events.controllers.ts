@@ -61,6 +61,12 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 
 export const subscribeHandler: RouteHandlerMethod = async function (request: SubscribeRequest, reply) {
 	const { topics, workspaceId } = request.body;
+	/**
+	 * Prepend workflow-events to topics
+	 */
+	const workflowEventsPrefix = `${Options.getOption(MQTopics.WORKFLOW_EVENTS_TOPIC)}.`;
+	const prefixedTopics = topics.map((topic) => workflowEventsPrefix + topic);
+	console.log('topics-subscribeHandler', prefixedTopics);
 	let { connectionId } = request.params;
 	let newConnection: boolean;
 	console.log('connectionId', connectionId);
@@ -83,7 +89,7 @@ export const subscribeHandler: RouteHandlerMethod = async function (request: Sub
 			name: SSE_MESSAGE_TYPE.TOPICS_ADD_CONNECTION,
 			newConnection,
 			workspaceId,
-			topics,
+			topics: prefixedTopics,
 		},
 	};
 	if (newConnection) payload.type['creds'] = request.verification ? request.verification : 'Unauthorized';
