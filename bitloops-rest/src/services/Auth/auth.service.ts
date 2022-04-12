@@ -52,8 +52,7 @@ export default class AuthService implements IAuthenticationService {
 		oAuthProvider: OAuthProvider,
 		{ provider_id, client_id, session_uuid, workspace_id, redirect_uri },
 	) {
-		const redirectUri =
-			redirect_uri ?? `${this.REST_URI}/${provider_id}/auth/${this.mapper[oAuthProvider]}/final-callback`;
+		const redirectUri = redirect_uri ?? `${this.REST_URI}/bitloops/auth/${this.mapper[oAuthProvider]}/final-callback`;
 		const url = this.getAuthSessionBaseURL(provider_id);
 		const authSessionURL = buildUrlWithParams(url, {
 			client_id,
