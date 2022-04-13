@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "typeRoots": [
+            "node_modules/@types",
+            "@types"
+        ],
+        "allowSyntheticDefaultImports": true,
+        "target": "es6",
+        "module": "commonjs",
+        "outDir": "dist/",
+        "skipLibCheck": true,
+        "sourceMap": true
+    },
+    "include": [
+        "src/**/*.ts"
+    ],
+    "exclude": [
+        "typings/*",
+        "node_modules"
+    ]
+}
