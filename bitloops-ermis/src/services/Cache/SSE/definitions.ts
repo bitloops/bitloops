@@ -1,12 +1,10 @@
-import { ServerResponse } from 'http';
-
-export type SSEConnectionReply = ServerResponse;
-
-export type SSEUserConnectionInfo = {
-    reply: SSEConnectionReply;
-    id: string;
+export type SSETopicsType = {
+    topics: string[];
+    creds: any;
 };
 
-type workspaceId = string;
+export type SSEConnectionToTopicsCacheType = Record<string, SSETopicsType>;
 
-export type SSEWorkspaceConnections = Record<workspaceId, SSEUserConnectionInfo[]>;
+export type SSEConnectionsType = Array<string>;
+
+export type SSETopicToConnectionsCacheType = Record<string, SSEConnectionsType>;

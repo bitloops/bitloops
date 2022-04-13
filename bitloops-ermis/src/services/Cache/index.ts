@@ -1,5 +1,7 @@
-import SSEConnectionsCache from './SSE/SSEConnectionsCache';
+import SSEConnectionToTopicsCache from './SSE/SSEConnectionToTopicsCache';
+import SSETopicToConnectionsCache from './SSE/SSETopicToConnectionsCache';
 
 export {
-    SSEConnectionsCache,
+    SSEConnectionToTopicsCache,
+    SSETopicToConnectionsCache,
 }

@@ -1,6 +1,12 @@
-import { SSEUserConnectionInfo } from './definitions';
+import { SSETopicsType, SSEConnectionsType } from './definitions';
 
-export interface ISSEConnectionsCache {
-    cache(workspaceId: string, connection: SSEUserConnectionInfo);
-    fetchWorkspaceConnections(workspaceId: string): SSEUserConnectionInfo[];
+export interface ISSEConnectionToTopicsCache {
+    cacheTopic(connectionId: string, topic: string);
+    cacheCreds(connectionId: string, creds: any);
+    fetch(connectionId: string): SSETopicsType;
+}
+
+export interface ISSETopicToConnectionsCache {
+    cache(topic: string, connectionId: string);
+    fetch(topic: string): SSEConnectionsType;
 }

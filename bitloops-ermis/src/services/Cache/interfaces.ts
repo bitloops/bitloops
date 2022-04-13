@@ -1,5 +1,9 @@
-import { ISSEConnectionsCache } from './SSE/interfaces';
+import {
+    ISSEConnectionToTopicsCache,
+    ISSETopicToConnectionsCache
+} from './SSE/interfaces';
 
 export {
-    ISSEConnectionsCache,
+    ISSEConnectionToTopicsCache,
+    ISSETopicToConnectionsCache,
 }

@@ -14,11 +14,9 @@ import {
     eventsRoutes,
 } from './routes';
 import { CORS } from './constants';
-// import SubscriptionEvents from './handlers/SubscriptionEvents/SubscriptionEvents';
 import SubscriptionEvents from './handlers/SubscriptionEvents';
 
 import { requestEventRequest } from './routes/definitions';
-// import { sseConnectionIds } from './controllers/events.controllers';
 
 const optionsHandler = async (request: requestEventRequest, reply: FastifyReply) => {
     reply
@@ -50,13 +48,6 @@ const build = async (opts: FastifyServerOptions = {}) => {
             reply.status(404).send('Route not found');
         });
 
-    /** NATS subscriptions */
-    // const subscriptionEvents = new SubscriptionEvents(sseConnectionIds);
-
-    // const serverId = Options.getServerUUID();
-    // const workflowEventsTopic = `${serverId}.${Options.getOption(MQTopics.WORKFLOW_EVENTS_TOPIC)}.>`;
-    // mq.subscribe(workflowEventsTopic, (data, subject) => subscriptionEvents.handle(data, subject));
-    // console.log(`REST listening to ${workflowEventsTopic}`);
     return server;
 };
 

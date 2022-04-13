@@ -2,17 +2,23 @@ import { v4 as uuid } from 'uuid';
 
 import NATS from './MQ';
 import Options from './Options';
-import { SSEConnectionsCache } from './Cache';
+import {
+    SSETopicToConnectionsCache,
+    SSEConnectionToTopicsCache,
+} from './Cache';
 
 import { IMQ } from './MQ/interfaces';
 import {
-    ISSEConnectionsCache,
+    ISSETopicToConnectionsCache,
+    ISSEConnectionToTopicsCache,
 } from './Cache/interfaces';
 
 import { Services as TServices } from './definitions';
 
 class Services {
-    private static sseConnectionsCache: ISSEConnectionsCache = new SSEConnectionsCache();
+    private static sseTopicToConnectionsCache: ISSETopicToConnectionsCache = new SSETopicToConnectionsCache();
+    private static sseConnectionToTopicsCache: ISSEConnectionToTopicsCache = new SSEConnectionToTopicsCache();
+
     private static mq: IMQ = new NATS();
     private static services: TServices;
 
@@ -25,7 +31,8 @@ class Services {
         Options.setServerUUID(uuid());
         const services = {
             mq: Services.mq,
-            sseConnectionsCache: Services.sseConnectionsCache,
+            sseTopicToConnectionsCache: Services.sseTopicToConnectionsCache,
+            sseConnectionToTopicsCache: Services.sseConnectionToTopicsCache,
             Options: Options,
         };
         Services.services = services;
