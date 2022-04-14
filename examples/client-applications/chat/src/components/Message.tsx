@@ -13,7 +13,6 @@ export const Message: React.FC<MessageProps> = (props: MessageProps) => {
 
    return !isMine ?
     (<li>
-      <div>{test}</div>
       <div className="message-data">
         <span className="message-data-name"><i className="fa fa-circle online"></i>{senderNickname}</span>
         {sentAt && <span className="message-data-time">{Intl.DateTimeFormat(navigator.language, { hour: "numeric", minute: "numeric", second: 'numeric' }).format(sentAt)}</span> }
