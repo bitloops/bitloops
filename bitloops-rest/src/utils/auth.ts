@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import jwt_decode from 'jwt-decode';
 import base64url from 'base64url'; // TODO consider if we should replace it with internal code to reduce deps
 import { JWT, JWTStatuses } from '../routes/definitions';
 import { JWTData } from '../controllers/definitions';
@@ -37,19 +38,7 @@ export const parseJWT = (token: string, publicKey: string): JWT | null => {
 		};
 	}
 
-	// const jwtData = JSON.parse(Buffer.from(jwtPayload, 'base64').toString());
-	const base64Payload = jwtPayload.replace(/-/g, '+').replace(/_/g, '/');
-	const jsonPayload = decodeURIComponent(
-		Buffer.from(base64Payload, 'base64')
-			.toString()
-			.split('')
-			.map((c) => {
-				return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-			})
-			.join(''),
-	);
-
-	const jwtData = JSON.parse(jsonPayload) as JWTData;
+	const jwtData = jwt_decode<JWTData>(token);
 	const { exp } = jwtData;
 	const expired = Date.now() >= exp * 1000;
 	if (expired) {

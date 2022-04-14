@@ -25,7 +25,7 @@ function App() {
    * to keep track of auth state locally
    */
   React.useEffect(() => {
-    bitloops.auth.onAuthStateChange((user: any) => {
+    bitloops.auth.onAuthStateChanged((user: any) => {
       setUser(user);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps

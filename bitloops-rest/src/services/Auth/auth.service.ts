@@ -14,9 +14,7 @@ import IAuthenticationService from './interface';
 import { GRANT_TYPES } from '../../controllers/definitions';
 import { getPublicKey } from '../../routes/helpers';
 import { JWTStatuses } from '../../routes/definitions';
-import { Options } from '..';
-import { KeycloakSettings } from '../../constants';
-import { OAuthProvider } from './definitions';
+import { BitloopsUser, OAuthProvider } from './definitions';
 
 const replaceCookie = (cookies: Cookie[], newCookie: Cookie): Cookie[] => {
 	const newCookies = cookies.filter((cookie) => cookie.name !== newCookie.name);
@@ -52,9 +50,7 @@ export default class AuthService implements IAuthenticationService {
 		oAuthProvider: OAuthProvider,
 		{ provider_id, client_id, session_uuid, workspace_id, redirect_uri },
 	) {
-		const redirectUri =
-			redirect_uri ?? `${this.REST_URI}/${provider_id}/auth/${this.mapper[oAuthProvider]}/final-callback`;
-		// console.log('redirectUri', redirectUri);
+		const redirectUri = redirect_uri ?? `${this.REST_URI}/bitloops/auth/${this.mapper[oAuthProvider]}/final-callback`;
 		const url = this.getAuthSessionBaseURL(provider_id);
 		const authSessionURL = buildUrlWithParams(url, {
 			client_id,
@@ -156,7 +152,7 @@ export default class AuthService implements IAuthenticationService {
 		}
 		const jwtData = jwt?.jwtData;
 		// console.log('jwtData', jwtData);
-		const payload = {
+		const payload: BitloopsUser = {
 			displayName: jwtData.name,
 			email: jwtData.email,
 			emailVerified: jwtData.email_verified,
@@ -170,6 +166,7 @@ export default class AuthService implements IAuthenticationService {
 			clientId: sessionInfo.clientId,
 			sessionState: response.data.session_state,
 			isAnonymous: false,
+			jwt: jwtData,
 		};
 		const authStateChangeTopic = `workflow-events.${sessionInfo.workspaceId}.auth:${sessionInfo.providerId}:${sessionInfo.sessionUuid}`;
 		console.log(`publishing to ${authStateChangeTopic}`);
