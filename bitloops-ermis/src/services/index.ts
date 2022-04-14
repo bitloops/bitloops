@@ -5,12 +5,16 @@ import Options from './Options';
 import {
     SSETopicToConnectionsCache,
     SSEConnectionToTopicsCache,
+    SSEConnectionsCache,
+    SubscriptionTopicsCache,
 } from './Cache';
 
 import { IMQ } from './MQ/interfaces';
 import {
     ISSETopicToConnectionsCache,
     ISSEConnectionToTopicsCache,
+    ISSEConnectionsCache,
+    ISubscriptionTopicsCache,
 } from './Cache/interfaces';
 
 import { Services as TServices } from './definitions';
@@ -18,6 +22,8 @@ import { Services as TServices } from './definitions';
 class Services {
     private static sseTopicToConnectionsCache: ISSETopicToConnectionsCache = new SSETopicToConnectionsCache();
     private static sseConnectionToTopicsCache: ISSEConnectionToTopicsCache = new SSEConnectionToTopicsCache();
+    private static sseConnectionsCache: ISSEConnectionsCache = new SSEConnectionsCache();
+    private static subscriptionTopicsCache: ISubscriptionTopicsCache = new SubscriptionTopicsCache();
 
     private static mq: IMQ = new NATS();
     private static services: TServices;
@@ -33,6 +39,8 @@ class Services {
             mq: Services.mq,
             sseTopicToConnectionsCache: Services.sseTopicToConnectionsCache,
             sseConnectionToTopicsCache: Services.sseConnectionToTopicsCache,
+            sseConnectionsCache: Services.sseConnectionsCache,
+            subscriptionTopicsCache: Services.subscriptionTopicsCache,
             Options: Options,
         };
         Services.services = services;

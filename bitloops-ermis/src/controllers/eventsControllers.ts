@@ -2,7 +2,7 @@ import { IMQ } from '../services/MQ/interfaces';
 import { RouteHandlerMethod } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { Options } from '../services';
-import { CORS, /**MQTopics**/ } from '../constants';
+import { CORS, UNAUTHORIZED_REQUEST, /**MQTopics**/ } from '../constants';
 import {
 	EventRequest,
 	// 	SrResponse,
@@ -10,6 +10,8 @@ import {
 	// 	TSseConnectionIds,
 	UnSubscribeRequest,
 } from '../routes/definitions';
+import { getErmisConnectionTopic } from '../helpers/topics';
+import { Services as TServices } from '../services/definitions';
 
 export const NULL_CONNECTION_ID = '';
 // export const SR_SSE_SERVER_TOPIC = Options.getOption(MQTopics.SR_SSE_SERVER_TOPIC) ?? 'ssevent';
@@ -17,12 +19,14 @@ export const NULL_CONNECTION_ID = '';
 
 const headers = { [CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN };
 
-const endConnection = (connectionId: string) => {
-	// delete sseConnectionIds[connectionId];
+const endConnection = (services: TServices, connectionId: string) => {
+	services.sseConnectionsCache.delete(connectionId);
+	// TODO delete from other caches and unsubscribe topics and connections
 };
 
 export const establishSseConnection: RouteHandlerMethod = async function (request: EventRequest, reply) {
 	const { connectionId } = request.params;
+	// TODO ask if headers are needed below
 	let headers = {
 		'Content-Type': 'text/event-stream',
 		Connection: 'keep-alive',
@@ -33,12 +37,18 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	// Very important line
 	reply.raw.flushHeaders();
 
+	const creds = request.verification ?? UNAUTHORIZED_REQUEST.verification;
+	this.services.sseConnectionsCache.cache(connectionId, reply.raw, creds);
+
+	const connectionTopic = getErmisConnectionTopic(connectionId);
+	this.subscriptionEvents.subscribe(connectionTopic);
+
 	headers = null;
 	// https://www.fastify.io/docs/latest/Reply/#sent
 	reply.sent = true;
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
-		endConnection(connectionId);
+		endConnection(this.services, connectionId);
 	});
 };
 

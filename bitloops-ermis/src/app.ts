@@ -31,8 +31,8 @@ const optionsHandler = async (request: requestEventRequest, reply: FastifyReply)
 const build = async (opts: FastifyServerOptions = {}) => {
     const server = fastify(opts);
     const services = await Services.initializeServices();
-    const { mq } = services;
-    const subscriptionEvents = new SubscriptionEvents(mq);
+    const { mq, subscriptionTopicsCache } = services;
+    const subscriptionEvents = new SubscriptionEvents(mq, subscriptionTopicsCache);
 
     server
         .register(formBodyPlugin)
@@ -42,7 +42,7 @@ const build = async (opts: FastifyServerOptions = {}) => {
         .options('*', optionsHandler)
         .register(healthRoutes, { prefix: '/healthy' })
         .register(readyRoutes, { prefix: '/ready' })
-        .register(eventsRoutes(mq, subscriptionEvents), { prefix: '/bitloops/events' })
+        .register(eventsRoutes(services, subscriptionEvents), { prefix: '/bitloops/events' })
         .register(cookie)
         .setNotFoundHandler((_req, reply) => {
             reply.status(404).send('Route not found');

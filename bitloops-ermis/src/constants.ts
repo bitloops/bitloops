@@ -1,3 +1,5 @@
+import { AuthorizedRequest } from "./routes/definitions";
+
 export const enum AppOptions {
     NATS_IP = 'NATS_IP',
     NATS_PORT = 'NATS_PORT',
@@ -46,3 +48,11 @@ export enum PublishHeaders {
     MESSAGE_ID = 'message-id',
     WORKSPACE_ID = 'workspace-id',
 }
+
+export const ERMIS_CONNECTION_PREFIX_TOPIC = 'ermis.connection';
+
+export const UNAUTHORIZED_REQUEST: AuthorizedRequest = {
+    verification: {
+        authType: AuthTypes.Unauthorized,
+    }
+};

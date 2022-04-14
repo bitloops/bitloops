@@ -74,7 +74,7 @@ export interface IFirebaseCredentials {
 export type SubscribeRequest = AuthorizedRequest &
 	FastifyRequest<{
 		Params: { connectionId: string };
-		Body: { topics: string[]; workspaceId: string };
+		Body: { topic: string; workspaceId: string };
 	}>;
 
 export type UnSubscribeRequest = AuthorizedRequest &

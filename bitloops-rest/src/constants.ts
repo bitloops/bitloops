@@ -84,3 +84,5 @@ export enum KeycloakSettings {
 }
 
 export const CLOUD_PROVIDER = 'CLOUD_PROVIDER';
+
+export const ERMIS_CONNECTION_PREFIX_TOPIC = 'ermis.connection';

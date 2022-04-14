@@ -1,4 +1,5 @@
-import { FastifyRequest } from 'fastify';
+import { FastifyRequest, RawReplyDefaultExpression } from 'fastify';
+
 // import { ServerResponse } from 'http';
 import { AuthTypes, RequestHeaders } from '../constants';
 import { JWTData } from '../controllers/definitions';
@@ -7,18 +8,22 @@ import { JWTData } from '../controllers/definitions';
 // 	event: string;
 // }
 
+export type RawReply = RawReplyDefaultExpression;
+
 export interface IEventParams {
 	connectionId: string;
 }
 
-export type AuthorizedRequest = {
-	verification: {
-		authType: AuthTypes;
-		authData?: {
-			token: string;
-			decodedToken: any;
-		};
+export type AuthVerificationRequest = {
+	authType: AuthTypes;
+	authData?: {
+		token: string;
+		decodedToken: any;
 	};
+};
+
+export type AuthorizedRequest = {
+	verification: AuthVerificationRequest;
 };
 
 export type EventRequest = AuthorizedRequest &

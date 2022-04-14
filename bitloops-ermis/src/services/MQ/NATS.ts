@@ -7,6 +7,7 @@ import {
     SubscriptionOptions,
     Msg,
     NatsError,
+    Subscription,
 } from 'nats';
 import { AppOptions } from '../../constants';
 import { IMQ } from './interfaces';
@@ -110,7 +111,7 @@ class NATS implements IMQ {
         return response;
     }
 
-    async subscribe(topic: string, topicHandler: (data, subject: string) => void, subscriptionGroup: string) {
+    subscribe(topic: string, topicHandler: (data, subject: string) => void, subscriptionGroup: string): Subscription {
         const subscriptionParams: SubscriptionOptions = {
             callback: function (err: NatsError | null, msg: Msg) {
                 if (err) {
@@ -128,7 +129,7 @@ class NATS implements IMQ {
         if (subscriptionGroup) {
             subscriptionParams.queue = subscriptionGroup;
         }
-        this.natsConnection.subscribe(topic, subscriptionParams);
+        return this.natsConnection.subscribe(topic, subscriptionParams);
     }
 }
 
