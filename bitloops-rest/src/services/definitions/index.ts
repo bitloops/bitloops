@@ -1,3 +1,4 @@
+import { IPublicKeysCache } from './../interfaces/index';
 import admin from 'firebase-admin';
 import { Document, WithId } from 'mongodb';
 import {
@@ -22,6 +23,7 @@ export type Services = {
 	xApiKeyCache?: IXApiKeyCache;
 	workflowEventTriggerCache?: IWorkflowEventTriggerCache;
 	sseConnectionsCache: ISSEConnectionsCache;
+	publicKeysCache: IPublicKeysCache;
 	db?: IDatabase;
 	mq?: IMQ;
 	imdb?: IIMDB;

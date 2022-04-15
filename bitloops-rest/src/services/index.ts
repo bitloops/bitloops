@@ -1,3 +1,4 @@
+import { IPublicKeysCache } from './interfaces/index';
 import { v4 as uuid } from 'uuid';
 
 import NATS from './NATS';
@@ -8,6 +9,7 @@ import {
 	WorkflowEventTriggerCache,
 	FirebaseConnectionsCache,
 	FirebaseTokensCache,
+	PublicKeysCache,
 } from './Cache';
 import Options from './Options';
 import { Mongo } from './mongo';
@@ -36,6 +38,7 @@ enum ServicesOptions {
 	MAX_EVENT_TRIGGERS_CACHE = 'MAX_EVENT_TRIGGERS_CACHE',
 	MAX_FIREBASE_CONNECTIONS_CACHE = 'MAX_FIREBASE_CONNECTIONS_CACHE',
 	MAX_FIREBASE_TOKENS_CACHE = 'MAX_FIREBASE_TOKENS_CACHE',
+	MAX_PUBLIC_KEYS_CACHE = 'MAX_PUBLIC_KEYS_CACHE',
 }
 
 class Services {
@@ -43,6 +46,9 @@ class Services {
 	private static sseConnectionsCache: ISSEConnectionsCache = new SSEConnectionsCache();
 	private static secretCache: ISecretCache = new SecretCache(
 		Options.getOptionAsNumber(ServicesOptions.MAX_SECRETS_CACHE, 1000),
+	);
+	private static publicKeysCache: IPublicKeysCache = new PublicKeysCache(
+		Options.getOptionAsNumber(ServicesOptions.MAX_PUBLIC_KEYS_CACHE, 1000),
 	);
 	private static xApiKeyCache: IXApiKeyCache = new XApiKeyCache(
 		Options.getOptionAsNumber(AppOptions.MAX_X_API_KEY_CACHE, 1000),
@@ -89,6 +95,7 @@ class Services {
 			xApiKeyCache: Services.xApiKeyCache,
 			workflowEventTriggerCache: Services.workflowEventTriggerCache,
 			sseConnectionsCache: Services.sseConnectionsCache,
+			publicKeysCache: Services.publicKeysCache,
 			Options: Options,
 		};
 		Services.services = services;
