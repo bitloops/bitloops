@@ -69,9 +69,11 @@ Bitloops is the only platform you will need for all your backend needs. We are s
 ## Prequisitions
 
 - node (we suggest to install via nvm)
-  ```bash
-    install nvm node
-  ```
+
+```bash
+nvm install node
+```
+
 - docker [install from docker site](https://docs.docker.com/get-docker/)
 - docker-compose
 
