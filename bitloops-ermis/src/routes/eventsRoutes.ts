@@ -17,33 +17,6 @@ const injectedEventsRoutes = (services: TServices, subscriptionEvents) => async 
 			},
 			EventsController.establishSseConnection,
 		)
-		.post(
-			'/subscribe/:connectionId',
-			{
-				// schema: {
-				// 	// body: PostSubscribeEventsBody,
-				// 	// params: PostSubscribeEventsParams,
-				// 	// headers: AuthHeadersSchema,
-				// },
-				preHandler: authMiddleware,
-			},
-			EventsController.subscribeHandler,
-		)
-		.post(
-			'/unsubscribe/:connectionId',
-			{
-				preHandler: authMiddleware,
-			},
-			EventsController.unsubscribeHandler,
-		)
-		.post(
-			'/test',
-			(request: any, reply) => {
-				const { topic } = request.body;
-				subscriptionEvents.subscribe(topic);
-				reply.send('OK')
-			}
-		);
 };
 
 export default injectedEventsRoutes;

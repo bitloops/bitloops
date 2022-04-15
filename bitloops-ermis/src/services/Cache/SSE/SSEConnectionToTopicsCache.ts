@@ -9,16 +9,10 @@ export default class SSEConnectionToTopicsCache implements ISSEConnectionToTopic
         this._cache = {};
     }
 
-    cacheTopic(connectionId: string, topic: string) {
+    cache(connectionId: string, topic: string) {
         const key = this.getCacheKey(connectionId);
-        this.initializeConnectionCache(key);
-        this._cache[key].topics.push(topic);
-    }
-
-    cacheCreds(connectionId: string, creds: any) {
-        const key = this.getCacheKey(connectionId);
-        this.initializeConnectionCache(key);
-        this._cache[key].creds = creds;
+        if (!this._cache[key]) this._cache[key] = [];
+        this._cache[key].push(topic);
     }
 
     fetch(connectionId: string): SSETopicsType {
@@ -26,8 +20,22 @@ export default class SSEConnectionToTopicsCache implements ISSEConnectionToTopic
         return this._cache[key];
     }
 
-    private initializeConnectionCache(key: string) {
-        if (!this._cache[key]) this._cache[key] = { topics: [], creds: {} };
+    deleteTopicFromConnectionId(connectionId: string, topic: string) {
+        const key = this.getCacheKey(connectionId);
+        if (!this._cache[key]) return;
+        const index = this._cache[key].indexOf(topic);
+        if (index === -1) return;
+        this._cache[key].splice(index, 1);
+
+        // if the connectionId is empty, delete it
+        if (this._cache[key].length === 0) {
+            delete this._cache[key];
+        }
+    }
+
+    delete(connectionId: string) {
+        const key = this.getCacheKey(connectionId);
+        delete this._cache[key];
     }
 
     private getCacheKey(connectionId: string) {

@@ -44,6 +44,20 @@ export type requestEventRequest = AuthorizedRequest &
 		Params: any;
 	}>;
 
+export type CacheParams = {
+	cacheType: string;
+}
+
+export type CacheQuery = {
+	id: string;
+}
+
+export type CacheRequest = AuthorizedRequest &
+	FastifyRequest<{
+		Params: CacheParams;
+		Querystring: CacheQuery;
+	}>;
+
 // export type publishEventRequest = AuthorizedRequest &
 // 	FastifyRequest<{
 // 		Headers: {

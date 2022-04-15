@@ -56,3 +56,5 @@ export const UNAUTHORIZED_REQUEST: AuthorizedRequest = {
         authType: AuthTypes.Unauthorized,
     }
 };
+
+export const WORKFLOW_EVENTS_PREFIX: string = 'workflow-events';

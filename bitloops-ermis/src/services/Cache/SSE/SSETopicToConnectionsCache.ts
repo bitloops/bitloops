@@ -20,6 +20,24 @@ export default class SSETopicToConnectionsCache implements ISSETopicToConnection
         return this._cache[key];
     }
 
+    deleteConnectionIdFromTopic(topic: string, connectionId: string) {
+        const key = this.getCacheKey(topic);
+        if (!this._cache[key]) return;
+        const index = this._cache[key].indexOf(connectionId);
+        if (index === -1) return;
+        this._cache[key].splice(index, 1);
+
+        // if the topic is empty, delete it
+        if (this._cache[key].length === 0) {
+            delete this._cache[key];
+        }
+    }
+
+    delete(topic: string) {
+        const key = this.getCacheKey(topic);
+        delete this._cache[key];
+    }
+
     private getCacheKey(topic: string) {
         return `${this.prefixKey}:${topic}`;
     }

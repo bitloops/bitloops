@@ -134,3 +134,10 @@ const handleUnauthorized = (request: any) => {
 		authType: AuthTypes.Unauthorized,
 	};
 };
+
+
+export const extractTopicFromSubject = (subject: string) => {
+	const tokens = subject.split('.');
+	const topic = `${tokens.splice(2).join('.')}`;
+	return topic;
+}
