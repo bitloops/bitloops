@@ -14,7 +14,6 @@ import { getErmisConnectionTopic } from '../helpers/topics';
 import { Services as TServices } from '../services/definitions';
 import { ISubscriptionTopicsCache } from '../services/Cache/interfaces';
 import { ConnectionSubscribeHandlerType } from '../handlers/interfaces';
-import { extractTopicFromSubject } from '../routes/helpers';
 
 export const NULL_CONNECTION_ID = '';
 const SUBSCRIBE_ACTION = 'subscribe';
@@ -106,7 +105,7 @@ const connectionTopicSubscribeHandler: ConnectionSubscribeHandlerType = (service
 	if (action === SUBSCRIBE_ACTION) {
 		services.sseConnectionToTopicsCache.cache(connectionId, finalTopic);
 		services.sseTopicToConnectionsCache.cache(finalTopic, connectionId);
-		services.mq.subscribe(finalTopic, finalSubscribeHandler(services));
+		subscriptionEvents.subscribe(finalTopic, finalSubscribeHandler(services, finalTopic));
 	} else if (action === UNSUBSCRIBE_ACTION) {
 		endTopic(services, finalTopic);
 	}
@@ -126,9 +125,10 @@ const notifySubscribedConnections = (services: TServices, topic: string, data: a
 	}
 }
 
-const finalSubscribeHandler = (services: TServices) => (data, subject: string) => {
-	const topic = extractTopicFromSubject(subject);
+const finalSubscribeHandler = (services: TServices, topic: string) => (data, subject: string) => {
+	console.log('finalSubscribeHandler topic', topic);
 	const subscribedConnections = services.sseTopicToConnectionsCache.fetch(topic);
+	console.log('subscribedConnections', subscribedConnections);
 	const connections = notifySubscribedConnections(services, topic, data, subscribedConnections);
 }
 
