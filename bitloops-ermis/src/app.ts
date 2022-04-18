@@ -12,6 +12,7 @@ import {
     healthRoutes,
     readyRoutes,
     eventsRoutes,
+    cacheRoutes,
 } from './routes';
 import { CORS } from './constants';
 import SubscriptionEvents from './handlers/SubscriptionEvents';
@@ -43,6 +44,7 @@ const build = async (opts: FastifyServerOptions = {}) => {
         .register(healthRoutes, { prefix: '/healthy' })
         .register(readyRoutes, { prefix: '/ready' })
         .register(eventsRoutes(services, subscriptionEvents), { prefix: '/bitloops/events' })
+        .register(cacheRoutes(services), { prefix: '/bitloops/cache' })
         .register(cookie)
         .setNotFoundHandler((_req, reply) => {
             reply.status(404).send('Route not found');

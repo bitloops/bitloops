@@ -70,6 +70,7 @@ const unsubscribeFromTopic = (topic: string, subscriptionTopicsCache: ISubscript
 export const establishSseConnection: RouteHandlerMethod = async function (request: EventRequest, reply) {
 	const { connectionId } = request.params;
 	// TODO ask if headers are needed below
+	console.log('establishSseConnection', connectionId);
 	let headers = {
 		'Content-Type': 'text/event-stream',
 		Connection: 'keep-alive',
@@ -99,6 +100,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 
 const connectionTopicSubscribeHandler: ConnectionSubscribeHandlerType = (services, subscriptionEvents, connectionId) => (data, subject) => {
 	const { topic, workspaceId, action } = data;
+	console.log('connectionTopicSubscribeHandler', subject, data);
 	const finalTopic = `${WORKFLOW_EVENTS_PREFIX}.${workspaceId}.${topic}`;
 
 	if (action === SUBSCRIBE_ACTION) {

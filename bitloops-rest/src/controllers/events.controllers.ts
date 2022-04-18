@@ -76,6 +76,7 @@ export const subscribeHandler: RouteHandlerMethod = async function (request: Sub
 	};
 
 	const ermisTopic = getErmisConnectionIdTopic(connectionId);
+	console.log('ermisPayload', ermisPayload);
 
 	await this.mq.publish(ermisTopic, ermisPayload);
 	//TODO maybe response?

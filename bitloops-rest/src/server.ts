@@ -12,10 +12,10 @@ const handleShutdown = async () => {
 	const services = Services.getServices();
 	if (services) {
 		const { mq, runningRequestsCache, imdb } = services;
-		const topic = `${Options.getOption(MQTopics.SR_SSE_SERVER_TOPIC) ?? 'ssevent'}.*`;
-		await mq.publish(topic, {
-			type: { name: SSE_MESSAGE_TYPE.POD_SHUTDOWN, podId: Options.getServerUUID() },
-		});
+		// const topic = `${Options.getOption(MQTopics.SR_SSE_SERVER_TOPIC) ?? 'ssevent'}.*`;
+		// await mq.publish(topic, {
+		// 	type: { name: SSE_MESSAGE_TYPE.POD_SHUTDOWN, podId: Options.getServerUUID() },
+		// });
 		console.info('Quitting mq connection...');
 		await mq.gracefullyCloseConnection();
 		console.info('Quitting imdb connection...');

@@ -20,6 +20,10 @@ export default class SSEConnectionToTopicsCache implements ISSEConnectionToTopic
         return this._cache[key];
     }
 
+    fetchAll(): Array<string> {
+        return Object.keys(this._cache);
+    }
+
     deleteTopicFromConnectionId(connectionId: string, topic: string) {
         const key = this.getCacheKey(connectionId);
         if (!this._cache[key]) return;

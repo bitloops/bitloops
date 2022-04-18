@@ -23,6 +23,10 @@ export default class SSEConnectionsCache implements ISSEConnectionsCache {
         return this._cache[key];
     }
 
+    fetchAll(): Array<string> {
+        return Object.keys(this._cache);
+    }
+
     delete(connectionId: string) {
         const key = this.getCacheKey(connectionId);
         delete this._cache[key];

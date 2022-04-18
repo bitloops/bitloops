@@ -5,9 +5,13 @@ import {
     ISSEConnectionsCache,
 } from './SSE/interfaces';
 
-interface ISubscriptionTopicsCache {
+export interface ICache<T> {
+    fetch(id: string): T;
+    fetchAll(): Array<string>;
+}
+
+interface ISubscriptionTopicsCache extends ICache<SubscriptionType> {
     cache(topic: string, subscription: SubscriptionType);
-    fetch(topic: string): SubscriptionType;
     delete(topic: string);
 }
 

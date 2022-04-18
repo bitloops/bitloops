@@ -19,6 +19,10 @@ export default class SubscriptionTopicsCache implements ISubscriptionTopicsCache
         return this._cache[key];
     }
 
+    fetchAll(): Array<string> {
+        return Object.keys(this._cache);
+    }
+
     delete(topic: string) {
         const key = this.getCacheKey(topic);
         delete this._cache[key];
