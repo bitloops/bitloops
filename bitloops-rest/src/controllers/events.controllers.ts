@@ -79,7 +79,7 @@ export const subscribeHandler: RouteHandlerMethod = async function (request: Sub
 	console.log('ermisPayload', ermisPayload);
 
 	await this.mq.publish(ermisTopic, ermisPayload);
-	//TODO maybe response?
+	reply.status(201).headers(headers).send();
 };
 
 export const unsubscribeHandler: RouteHandlerMethod = async function (request: UnSubscribeRequest, reply) {
@@ -97,4 +97,5 @@ export const unsubscribeHandler: RouteHandlerMethod = async function (request: U
 	const ermisTopic = getErmisConnectionIdTopic(connectionId);
 
 	await this.mq.publish(ermisTopic, ermisPayload);
+	reply.status(201).headers(headers).send();
 };
