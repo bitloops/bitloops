@@ -101,11 +101,12 @@ const connectionTopicSubscribeHandler: ConnectionSubscribeHandlerType = (service
 	const { topic, workspaceId, action } = data;
 	console.log('connectionTopicSubscribeHandler', subject, data);
 	const finalTopic = `${WORKFLOW_EVENTS_PREFIX}.${workspaceId}.${topic}`;
+	console.log('connectionTopicSubscribeHandler finalTopic', finalTopic);
 
 	if (action === SUBSCRIBE_ACTION) {
 		services.sseConnectionToTopicsCache.cache(connectionId, finalTopic);
 		services.sseTopicToConnectionsCache.cache(finalTopic, connectionId);
-		subscriptionEvents.subscribe(finalTopic, finalSubscribeHandler(services, finalTopic));
+		subscriptionEvents.subscribe(finalTopic, finalSubscribeHandler(services, topic, finalTopic));
 	} else if (action === UNSUBSCRIBE_ACTION) {
 		endTopic(services, finalTopic);
 	}
@@ -120,7 +121,6 @@ const notifySubscribedConnections = (services: TServices, topic: string, data: a
 			console.error('Received unexpected connection from cache');
 			continue;
 		}
-		console.log('notifySubscribedConnections', connection);
 		console.log('topic', topic);
 		console.log('data', data);
 		connection.write(`event: ${topic}\n`);
@@ -128,9 +128,11 @@ const notifySubscribedConnections = (services: TServices, topic: string, data: a
 	}
 }
 
-const finalSubscribeHandler = (services: TServices, topic: string) => (data, subject: string) => {
+const finalSubscribeHandler = (services: TServices, topic: string, finalTopic: string) => (data, subject: string) => {
 	console.log('finalSubscribeHandler topic', topic);
-	const subscribedConnections = services.sseTopicToConnectionsCache.fetch(topic);
+	console.log('finalSubscribeHandler final topic', finalTopic);
+
+	const subscribedConnections = services.sseTopicToConnectionsCache.fetch(finalTopic);
 	console.log('subscribedConnections', subscribedConnections);
 	const connections = notifySubscribedConnections(services, topic, data, subscribedConnections);
 }
