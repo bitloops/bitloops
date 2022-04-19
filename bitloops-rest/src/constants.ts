@@ -12,6 +12,7 @@ export const enum AppOptions {
 	NATS_USER = 'NATS_USER',
 	NATS_PASSWORD = 'NATS_PASSWORD',
 	BITLOOPS_ENGINE_URL = 'BITLOOPS_ENGINE_URL',
+	JAEGER_URL = 'JAEGER_URL',
 }
 
 export const CORS = {

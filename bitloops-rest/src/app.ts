@@ -4,9 +4,11 @@
  */
 import fastify, { FastifyReply, FastifyServerOptions } from 'fastify';
 import formBodyPlugin from 'fastify-formbody';
+import opentelemetry from '@opentelemetry/api';
 import fastifyStaticPlugin from 'fastify-static';
 import * as path from 'path';
 import cookie from 'fastify-cookie';
+
 import Services, { Options } from './services';
 import {
 	healthRoutes,
@@ -21,6 +23,14 @@ import { CORS, MQTopics } from './constants';
 import SubscriptionEvents from './handlers/SubscriptionEvents/SubscriptionEvents';
 import { requestEventRequest } from './routes/definitions';
 import { sseConnectionIds } from './controllers/events.controllers';
+
+import init from './tracing';
+
+/**
+ * Service name and environment
+ */
+const tracing = init('bitloops-rest', 'development');
+// const { context, trace } = opentelemetry;
 
 const optionsHandler = async (request: requestEventRequest, reply: FastifyReply) => {
 	reply
@@ -38,6 +48,8 @@ const build = async (opts: FastifyServerOptions = {}) => {
 	const { mq, imdb, db } = services;
 
 	server
+		// Needed for Open-Telemetry
+		.register(require('fastify-express'))
 		.register(formBodyPlugin)
 		.register(fastifyStaticPlugin, {
 			root: path.join(__dirname, 'public'),
