@@ -1,9 +1,6 @@
 import opentelemetry, { DiagLogLevel, DiagConsoleLogger } from '@opentelemetry/api';
 import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
 
-const { diag } = opentelemetry;
-diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.INFO);
-
 import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
@@ -14,11 +11,6 @@ import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { OTTracePropagator } from '@opentelemetry/propagator-ot-trace';
 import { Options } from './services';
 import { AppOptions } from './constants';
-
-function log(...args: any[]) {
-	args.unshift(new Date());
-	console.log.apply(this, args);
-}
 
 const jaegerOptions = {
 	tags: [], // optional
@@ -58,7 +50,6 @@ export default (serviceName: string, environment: string) => {
 	// Initialize the OpenTelemetry APIs to use the NodeTracerProvider bindings
 	provider.register({});
 	return {
-		log,
 		provider,
 		tracer: provider.getTracer(serviceName),
 	};
