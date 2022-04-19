@@ -120,6 +120,9 @@ const notifySubscribedConnections = (services: TServices, topic: string, data: a
 			console.error('Received unexpected connection from cache');
 			continue;
 		}
+		console.log('notifySubscribedConnections', connection);
+		console.log('topic', topic);
+		console.log('data', data);
 		connection.write(`event: ${topic}\n`);
 		connection.write(`data: ${JSON.stringify(data)}\n\n`);
 	}
