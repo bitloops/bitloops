@@ -2,6 +2,7 @@ import { NatsConnection } from 'nats';
 
 import { FirebaseCredentials, IXApiKeyDefinition, tokenInfo } from '../definitions';
 import FirebaseAdmin from '../FirebaseAdmin';
+import { CachedPublicKey } from '../Cache/PublicKeysCache';
 
 export interface IIMDB {
 	initializeConnection(): Promise<void>;
@@ -37,6 +38,11 @@ export interface IXApiKeyCache {
 export interface ISecretCache {
 	cache(workflowId: string, workflowVersion: string, secrets: any);
 	fetch(workflowId: string, workflowVersion: string): any; // .getHashValues(`blsws:${workflowId}`)
+}
+
+export interface IPublicKeysCache {
+	cache(providerId: string, pk: string);
+	fetch(providerId: string): CachedPublicKey;
 }
 
 export interface IWorkflowEventTriggerCache {

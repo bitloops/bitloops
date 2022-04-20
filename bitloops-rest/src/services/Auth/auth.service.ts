@@ -12,9 +12,9 @@ import * as qs from 'qs';
 import { IDatabase, IIMDB, IMQ } from '../interfaces';
 import IAuthenticationService from './interface';
 import { GRANT_TYPES } from '../../controllers/definitions';
-import { getPublicKey } from '../../routes/helpers';
 import { JWTStatuses } from '../../routes/definitions';
 import { BitloopsUser, OAuthProvider } from './definitions';
+import { getPublicKey } from '../../middlewares/auth/public-keys';
 
 const replaceCookie = (cookies: Cookie[], newCookie: Cookie): Cookie[] => {
 	const newCookies = cookies.filter((cookie) => cookie.name !== newCookie.name);
@@ -143,7 +143,7 @@ export default class AuthService implements IAuthenticationService {
 			throw new Error('unexpected axios error');
 		}
 
-		const PUBLIC_KEY = await getPublicKey(sessionInfo.providerId, sessionInfo.clientId);
+		const PUBLIC_KEY = await getPublicKey(sessionInfo.providerId);
 		const jwt = parseJWT(response.data.access_token, PUBLIC_KEY);
 		if (!PUBLIC_KEY || jwt.status === JWTStatuses.INVALID || JWTStatuses.ERROR) {
 			if (!PUBLIC_KEY) {

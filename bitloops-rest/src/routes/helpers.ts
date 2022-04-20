@@ -6,6 +6,7 @@ import { Options } from '../services';
 import { extractAuthTypeAndToken } from '../utils';
 import { parseJWT } from '../utils/auth';
 import { IFirebaseCredentials, JWTStatuses } from './definitions';
+import { getPublicKey } from '../middlewares/auth/public-keys';
 
 export const authMiddleware = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
 	// 1. User is not logged-in and resource doesn't require authorized user    => All good nothing extra needs to happen
@@ -76,18 +77,11 @@ function handleAnonymousUser(request: any) {
 	};
 }
 
-export const getPublicKey = async (providerId: string, clientId: string): Promise<string> => {
-	// TODO get public key using providerId and clientId from Mongo or local cache
-	const base64PublicKey = Options.getOption(KeycloakSettings.PUBLIC_KEY);
-	const publicKeyString = Buffer.from(base64PublicKey, 'base64').toString();
-	return publicKeyString;
-};
-
 const handleUser = async (request: any, reply: any) => {
 	const { token } = extractAuthTypeAndToken(request.headers?.authorization);
 	const providerId = request.headers['provider-id'];
-	const clientId = request.headers['client-id'];
-	const PUBLIC_KEY = await getPublicKey(providerId, clientId);
+	// const clientId = request.headers['client-id'];
+	const PUBLIC_KEY = await getPublicKey(providerId);
 	const jwt = parseJWT(token, PUBLIC_KEY);
 	console.log('jwt status', jwt.status);
 	request.verification = AuthTypes.User;
