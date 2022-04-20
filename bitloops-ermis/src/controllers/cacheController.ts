@@ -1,10 +1,9 @@
 import { FastifyReply, RouteHandlerMethod } from 'fastify';
-import { CORS } from '../constants';
+import { ALLOW_ORIGIN_HEADERS } from '../constants';
 import { CacheRequest } from '../routes/definitions';
 import { CacheTypeName } from '../services/Cache/definitions';
 import { ISSEConnectionToTopicsCache, ISSETopicToConnectionsCache, ISSEConnectionsCache, ISubscriptionTopicsCache } from '../services/Cache/interfaces';
 
-const HEADERS = { [CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN };
 export const getCacheInfo: RouteHandlerMethod = async function (request: CacheRequest, reply: FastifyReply) {
     const { cacheType } = request.params;
     const { id } = request.query;
@@ -32,15 +31,15 @@ export const getCacheInfo: RouteHandlerMethod = async function (request: CacheRe
             break;
         }
         default:
-            console.error(`Cache type ${cacheType} - not implemented`);
+            const message = `Cache type ${cacheType} - not found`;
+            reply.code(404).headers(ALLOW_ORIGIN_HEADERS).send(message);
             break;
     }
 
     let data;
     if (validCacheType(cacheType) && id) data = cache.fetch(id);
     else data = cache.fetchAll();
-    console.log('data', data);
-    reply.code(200).headers(HEADERS).send(data);
+    reply.code(200).headers(ALLOW_ORIGIN_HEADERS).send(data);
 };
 
 const validCacheType = (cacheType: string) => {

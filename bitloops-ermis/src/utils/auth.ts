@@ -53,12 +53,4 @@ const parseJWT = (token: string, publicKey: string): JWT | null => {
 	};
 };
 
-
-
-const buildUrlWithParams = (baseUrl: string, params: Record<string, string>): string => {
-	const url = new URL(baseUrl);
-	url.search = new URLSearchParams(params).toString();
-	return url.toString();
-};
-
-export { parseJWT, buildUrlWithParams };
+export { parseJWT };

@@ -12,7 +12,6 @@ const injectedEventsRoutes = (services: TServices, subscriptionEvents) => async 
 		.get(
 			'/:connectionId',
 			{
-				// schema: { params: EventsParams, headers: AuthHeadersSchema }, // TODO see how we can add validations again but allow for unauthorized subscriptions
 				preHandler: authMiddleware,
 			},
 			EventsController.establishSseConnection,

@@ -5,6 +5,7 @@ export const enum AppOptions {
     NATS_PORT = 'NATS_PORT',
     NATS_USER = 'NATS_USER',
     NATS_PASSWORD = 'NATS_PASSWORD',
+    MAX_X_API_KEY_CACHE = 'MAX_X_API_KEY_CACHE',
     X_API_KEY_CACHE_TIMEOUT = 'X_API_KEY_CACHE_TIMEOUT',
     UNAUTHORIZED_STATUS = 401,
     AUTHORIZED_STATUS = 200,
@@ -21,6 +22,8 @@ export const CORS = {
     ALLOW_HEADERS:
         'cache-control,authorization,content-type,environment-id,node-id,provider-id,workflow-id,workspace-id,client-id,session-uuid,message-id',
 };
+
+export const ALLOW_ORIGIN_HEADERS = { [CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN };
 
 export enum AuthTypes {
     Basic = 'Basic',
@@ -44,11 +47,6 @@ export enum KeycloakSettings {
     PUBLIC_KEY = 'KEYCLOAK_PK',
 }
 
-export enum PublishHeaders {
-    MESSAGE_ID = 'message-id',
-    WORKSPACE_ID = 'workspace-id',
-}
-
 export const ERMIS_CONNECTION_PREFIX_TOPIC = 'ermis.connection';
 
 export const UNAUTHORIZED_REQUEST: AuthorizedRequest = {
@@ -58,3 +56,8 @@ export const UNAUTHORIZED_REQUEST: AuthorizedRequest = {
 };
 
 export const WORKFLOW_EVENTS_PREFIX: string = 'workflow-events';
+
+export enum ERMIS_CONNECTION_TOPIC_ACTIONS {
+    SUBSCRIBE = 'subscribe',
+    UNSUBSCRIBE = 'unsubscribe',
+}

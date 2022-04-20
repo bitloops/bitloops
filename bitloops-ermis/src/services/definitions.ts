@@ -1,9 +1,11 @@
 import { IMQ } from './MQ/interfaces';
+import { IDatabase } from './Database/interfaces';
 import {
     ISSEConnectionsCache,
     ISSEConnectionToTopicsCache,
     ISSETopicToConnectionsCache,
-    ISubscriptionTopicsCache
+    ISubscriptionTopicsCache,
+    IXApiKeyCache
 } from './Cache/interfaces';
 
 export type Services = {
@@ -11,5 +13,7 @@ export type Services = {
     sseTopicToConnectionsCache: ISSETopicToConnectionsCache;
     sseConnectionsCache: ISSEConnectionsCache;
     subscriptionTopicsCache: ISubscriptionTopicsCache;
+    xApiKeyCache: IXApiKeyCache;
     mq: IMQ;
+    db: IDatabase;
 };

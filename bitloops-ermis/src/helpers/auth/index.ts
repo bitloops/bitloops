@@ -1,9 +1,9 @@
 import { AppOptions } from '../../constants';
 import Services, { Options } from '../../services';
+import { IXApiKeyDefinition } from '../../services/Database/definitions';
 import { getHash } from '../../utils/crypto';
 
 const expired = (cachedKey: any) => {
-	// TODO make it generic(not only for x_api_key)
 	return (
 		Date.now() - cachedKey.cached_at > Options.getOptionAsNumber(AppOptions.X_API_KEY_CACHE_TIMEOUT, 1000 * 60 * 10)
 	);
@@ -42,22 +42,13 @@ async function getXApiKey(hash: string, services) {
 	return cachedXApiKey;
 }
 
-// TODO fix this
-interface IXApiKeyDefinition {
-	id: string;
-	status: number;
-}
 export const verifyXApiKeyAuthentication = async (token: string): Promise<IXApiKeyDefinition> => {
 	console.log('received token', token);
-	// const { xApiKeyCache, db } = Services.getServices();
-	// const services = { xApiKeyCache, db };
-	// const hash = getHash(token);
-	// console.log('hash', hash);
-	// const cachedXApiKey = await getXApiKey(hash, services);
-	// console.log('cachedXApiKey', cachedXApiKey);
-	// return cachedXApiKey;
-	return {
-		id: "cachedXApiKey",
-		status: 200,
-	};
+	const { xApiKeyCache, db } = Services.getServices();
+	const services = { xApiKeyCache, db };
+	const hash = getHash(token);
+	console.log('hash', hash);
+	const cachedXApiKey = await getXApiKey(hash, services);
+	console.log('cachedXApiKey', cachedXApiKey);
+	return cachedXApiKey;
 };

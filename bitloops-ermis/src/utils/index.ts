@@ -1,3 +1,5 @@
+import HTTPErrorResponse from './http';
+
 export const sleep = (ms: number) => {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 };
@@ -8,5 +10,4 @@ export const extractAuthTypeAndToken = (str: string) => {
 	return { authType, token };
 };
 
-import HTTPErrorResponse from './http';
 export { HTTPErrorResponse };

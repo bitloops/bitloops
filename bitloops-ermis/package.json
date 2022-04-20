@@ -25,6 +25,7 @@
     "fastify-formbody": "^5.2.0",
     "fastify-static": "^4.6.1",
     "jwt-decode": "^3.1.2",
+    "mongodb": "^4.5.0",
     "nats": "^2.6.1",
     "uuid": "^8.3.2"
   }
