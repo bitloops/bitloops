@@ -20,8 +20,6 @@ env:
   REDIS_PORT: 6379
   MONGO_URL_PREFIX: mongodb://
   MONGO_URL_SUFFIX: localhost:27017
-  WORKFLOW_EVENTS_PREFIX: workflow-events
-  SSE_REGISTER_CONTROL: ssevent
   VERSION: v0.0.1
   CLOUD_PROVIDER: AWS
   NODE1_ENDPOINT: localhost

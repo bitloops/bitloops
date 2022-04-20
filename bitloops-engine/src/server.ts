@@ -3,7 +3,6 @@ import express from 'express';
 import { Admin, BitloopsEngine, GRPC, REST, Message } from './handlers';
 import Services, { Options } from './services';
 import { MQTopics, ServerSettings } from './constants';
-import SubscriptionRouter from './handlers/sr/SubscriptionRouter';
 
 let shutDownCalled = false;
 
@@ -54,14 +53,13 @@ app.listen(Options.getOption(ServerSettings.SERVICE_PORT) || ServerSettings.DEFA
 (async () => {
 	const services = await Services.initializeServices();
 	app.get('/caches', cachesHandler(services));
-	const { mq, imdb } = services;
+	const { mq } = services;
 	// const bitloopsEngine = new BitloopsEngine(services);
 	const bitloopsEngine = new BitloopsEngine(services);
 	// const events = new Events(services);
 	const grpc = new GRPC(mq);
 	const rest = new REST(mq);
 	const admin = new Admin(services);
-	const sr = new SubscriptionRouter(imdb, mq);
 	const message = new Message(mq);
 
 	// A service is a subscriber that listens for messages, and responds
@@ -90,17 +88,6 @@ app.listen(Options.getOption(ServerSettings.SERVICE_PORT) || ServerSettings.DEFA
 	const engineAdminTopic = `*.${Options.getOption(MQTopics.ENGINE_ADMIN_TOPIC)}`;
 	mq.subscribe(engineAdminTopic, (msg) => admin.callback(msg));
 
-	/**
-	 * Messages received from Bitloops-Engine
-	 */
-	// const srPublishedEventsTopic = `${Options.getOption(MQTopics.WORKFLOW_EVENTS_PREFIX)}.>`;
-	// mq.subscribe(srPublishedEventsTopic, (msg, subject) => sr.handleNodeIntermediateMessage(msg, subject), engineQueue);
-
-	/**
-	 * Commands received from Bitloops-Rest
-	 */
-	// const sseventsTopic = `${Options.getOption(MQTopics.SSE_REGISTER_CONTROL)}.*`;
-	// mq.subscribe(sseventsTopic, (msg, subject) => sr.registerSubscription(msg, subject), engineQueue);
 	// const kpi = nc.subscribe(process.env.ENGINE_KPI_NATS_TOPIC, { queue: process.env.BITLOOPS_ENGINE_QUEUE });
 	// const statusBroker = nc.subscribe(process.env.ENGINE_STATUS_LOGGER);
 	// @TODO error handling here to the handlers as well as to all the handlers
