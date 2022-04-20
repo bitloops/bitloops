@@ -21,14 +21,12 @@ import {
 	IXApiKeyCache,
 	IWorkflowEventTriggerCache,
 	IFirebaseConnectionsCache,
-	ISSEConnectionsCache,
 	IFirebaseTokensCache,
 	IIMDB,
 } from './interfaces';
 
 import { Services as TServices } from '../services/definitions';
 import { AppOptions } from '../constants';
-import SSEConnectionsCache from './Cache/SSE/SSEConnectionsCache';
 import Redis from './Redis';
 
 enum ServicesOptions {
@@ -40,7 +38,6 @@ enum ServicesOptions {
 
 class Services {
 	private static runningRequestsCache: IRunningRequestsCache = new RunningRequestsCache();
-	private static sseConnectionsCache: ISSEConnectionsCache = new SSEConnectionsCache();
 	private static secretCache: ISecretCache = new SecretCache(
 		Options.getOptionAsNumber(ServicesOptions.MAX_SECRETS_CACHE, 1000),
 	);
@@ -88,7 +85,6 @@ class Services {
 			secretCache: Services.secretCache,
 			xApiKeyCache: Services.xApiKeyCache,
 			workflowEventTriggerCache: Services.workflowEventTriggerCache,
-			sseConnectionsCache: Services.sseConnectionsCache,
 			Options: Options,
 		};
 		Services.services = services;

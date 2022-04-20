@@ -83,13 +83,6 @@ export type UnSubscribeRequest = AuthorizedRequest &
 		Body: { topic: string; workspaceId: string };
 	}>;
 
-export type PENDING = 'pending';
-type connectionId = string;
-export type TTopicToConnections = Record<string, connectionId[]>;
-export type TSseConnectionIds = Record<connectionId, ServerResponse>;
-
-export type SrResponse = { result: any; error: Error };
-
 export const PostSubscribeEventsBody = {
 	type: 'object',
 	additionalProperties: false, // it will remove all the field that is NOT in the JSON schema

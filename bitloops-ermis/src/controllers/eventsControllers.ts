@@ -136,7 +136,3 @@ const finalSubscribeHandler = (services: TServices, topic: string, finalTopic: s
 	console.log('subscribedConnections', subscribedConnections);
 	const connections = notifySubscribedConnections(services, topic, data, subscribedConnections);
 }
-
-
-
-

@@ -1,10 +1,7 @@
-import admin from 'firebase-admin';
 import { NatsConnection } from 'nats';
 
-import { FirebaseCredentials, IXApiKeyDefinition, Services, tokenInfo } from '../definitions';
+import { FirebaseCredentials, IXApiKeyDefinition, tokenInfo } from '../definitions';
 import FirebaseAdmin from '../FirebaseAdmin';
-import { SSEConnectionReply, SSEUserConnectionInfo } from '../Cache/SSE/definitions';
-import { ServerResponse } from 'http';
 
 export interface IIMDB {
 	initializeConnection(): Promise<void>;
@@ -61,13 +58,6 @@ export interface IFirebaseConnectionsCache {
 export interface IFirebaseTokensCache {
 	cache(token: string, tokenInfo: Omit<tokenInfo, 'cached_at'>);
 	fetch(token: string): tokenInfo;
-}
-
-export interface ISSEConnectionsCache {
-	cache(workspaceId: string, connection: SSEUserConnectionInfo);
-	// fetch(workspaceId: string, token: string): SSEConnectionReply;
-	// fetchAll(workspaceId: string): SSEConnection;
-	fetchWorkspaceConnections(workspaceId: string): SSEUserConnectionInfo[];
 }
 
 export interface ILogger {
