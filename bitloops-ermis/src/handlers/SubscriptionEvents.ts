@@ -16,8 +16,9 @@ export default class SubscriptionEvents implements ISubscriptionEvents {
     }
 
     public subscribe(topic: string, subscribeHandler: SubscribeHandlerType) {
-        console.log('subscribed to topic', topic);
+        console.log('subscribing to topic', topic);
         if (!this.subscriptionTopicsCache.fetch(topic)) {
+            console.log('subscribed to topic', topic);
             const sub = this.mq.subscribe(topic, subscribeHandler);
             this.subscriptionTopicsCache.cache(topic, sub);
         }
@@ -50,8 +51,9 @@ export default class SubscriptionEvents implements ISubscriptionEvents {
                 }
                 console.log('topic', topic);
                 console.log('data', data);
+                if (data.payload) data = data.payload;
                 connection.write(`event: ${topic}\n`);
-                connection.write(`data: ${JSON.stringify(data.payload)}\n\n`);
+                connection.write(`data: ${JSON.stringify(data)}\n\n`);
             }
         }
     }
