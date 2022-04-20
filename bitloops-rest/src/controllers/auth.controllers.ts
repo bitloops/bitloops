@@ -50,7 +50,7 @@ export const OAuthProviderHandler: RouteHandlerMethod = async function (request:
 			console.log('Redirecting to', googleLocation);
 			reply.redirect(googleLocation);
 		} catch (error) {
-			console.log(`${OAuthProvider}-login-error`, error);
+			console.log(`${OAuthProvider}-login-error`, error?.response?.data ?? error);
 			return reply.code(500).headers(HEADERS).send(error.response.data);
 		}
 	}

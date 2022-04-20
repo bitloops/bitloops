@@ -105,14 +105,14 @@ const hopRequest = async (url: string, headers: AxiosRequestHeaders) => {
 	}
 };
 
-const replaceRedirectUrl = (originalUrl: string): string => {
+const replaceRedirectUrl = (originalUrl: string, value: string): string => {
 	//redirect_uri
 	const REDIRECT_URI_PARAM = 'redirect_uri';
-	const REDIRECT_URI_VALUE = 'http://localhost:3005/bitloops/auth/google/callback';
-	// const REDIRECT_URI_VALUE = 'http://localhost:8080/auth/realms/bitloops/broker/google/endpoint';
+
+	// const REDIRECT_URI_VALUE = 'http://localhost:3005/bitloops/auth/google/callback';
 	const url = new URL(originalUrl);
 	const originalRedirect = url.searchParams.get(REDIRECT_URI_PARAM);
-	url.searchParams.set(REDIRECT_URI_PARAM, REDIRECT_URI_VALUE);
+	url.searchParams.set(REDIRECT_URI_PARAM, value);
 	console.log('OLD url\n', originalUrl);
 	console.log('REPLACED url\n', url.href);
 	return url.href;

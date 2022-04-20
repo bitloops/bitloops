@@ -27,44 +27,51 @@ const CONN_TO_TOPICS_PREFIX = 'blsConnIdsToTopics';
 export default class RedisDB implements IIMDB {
 	private client: Redis.Redis | Redis.Cluster;
 	// private redisConnecting: Promise<any>;
-	constructor(private redisOptions: any = envRedisOptions) {
-        }
+	constructor(private redisOptions: any = envRedisOptions) {}
 
 	async initializeConnection(): Promise<void> {
-		let redisConnection: Redis.Redis | Redis.Cluster;
-		if (cloudProvider === 'AWS') {
-			console.log('CREATE CLUSTER ');
-			redisConnection = new Redis.Cluster(
-				[
-					{
-						host: Options.getOption(RedisSettings.NODE1_ENDPOINT),
-						port: +port,
-					},
-					{
-						host: Options.getOption(RedisSettings.NODE2_ENDPOINT),
-						port: +port,
-					},
-				],
-				{
-					redisOptions: {
-						tls: {
-							checkServerIdentity: (/*host, cert*/) => {
-								// skip certificate hostname validation
-								return undefined;
-							},
+		return new Promise((resolve, reject) => {
+			let redisConnection: Redis.Redis | Redis.Cluster;
+			if (cloudProvider === 'AWS') {
+				console.log('CREATE CLUSTER ');
+				redisConnection = new Redis.Cluster(
+					[
+						{
+							host: Options.getOption(RedisSettings.NODE1_ENDPOINT),
+							port: +port,
 						},
-						username,
-						password: pass,
+						{
+							host: Options.getOption(RedisSettings.NODE2_ENDPOINT),
+							port: +port,
+						},
+					],
+					{
+						redisOptions: {
+							tls: {
+								checkServerIdentity: (/*host, cert*/) => {
+									// skip certificate hostname validation
+									return undefined;
+								},
+							},
+							username,
+							password: pass,
+						},
 					},
-				},
-			);
-			console.log('Cluster instance created!');
-		} else {
-			redisConnection = new Redis(this.redisOptions);
-		}
-		redisConnection.on('error', (err) => console.log('Redis Client Error', err));
-		this.client = redisConnection;
-		console.log('Redis is ready!');
+				);
+				console.log('Cluster instance created!');
+			} else {
+				redisConnection = new Redis(this.redisOptions);
+			}
+			this.client = redisConnection;
+			redisConnection.on('connect', () => {
+				console.log('Redis is ready!');
+				resolve();
+			});
+			redisConnection.on('error', (err) => {
+				console.log('Redis Client Error', err);
+				reject(err);
+			});
+		});
 	}
 
 	async getConnection(): Promise<any> {
@@ -107,7 +114,7 @@ export default class RedisDB implements IIMDB {
 		return this.hGetAll(hashId);
 	}
 
-	async storeConnectionIdValue(connectionId: string, keyValues: Record<string, string>): Promise<void>        {
+	async storeConnectionIdValue(connectionId: string, keyValues: Record<string, string>): Promise<void> {
 		const hashId = `${CONNECTION_ID_PREFIX}:${connectionId}`;
 		await this.hMSet(hashId, keyValues);
 	}

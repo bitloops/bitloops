@@ -14,9 +14,7 @@ import IAuthenticationService from './interface';
 import { GRANT_TYPES } from '../../controllers/definitions';
 import { getPublicKey } from '../../routes/helpers';
 import { JWTStatuses } from '../../routes/definitions';
-import { Options } from '..';
-import { KeycloakSettings } from '../../constants';
-import { OAuthProvider } from './definitions';
+import { BitloopsUser, OAuthProvider } from './definitions';
 
 const replaceCookie = (cookies: Cookie[], newCookie: Cookie): Cookie[] => {
 	const newCookies = cookies.filter((cookie) => cookie.name !== newCookie.name);
@@ -96,7 +94,15 @@ export default class AuthService implements IAuthenticationService {
 
 		console.log('thirdResponse', thirdResponse.status);
 		let oAuthProviderLocation = thirdResponse?.headers?.location;
-		// googleLocation = replaceRedirectUrl(googleLocation);
+
+		// const REDIRECT_URI_VALUE = 'http://localhost:8080/auth/realms/bitloops/broker/google/endpoint';
+		// This env is defined inside localhost containers where keycloak returns
+		// an unreachable url for google(with containerName as domain)
+		const redirectUrl = process.env.KEYCLOAK_FROM_GOOGLE_URI
+			? `${process.env.KEYCLOAK_FROM_GOOGLE_URI}/auth/realms/${provider_id}/broker/${oAuthProvider}/endpoint`
+			: `${process.env.KEYCLOAK_URI}/auth/realms/${provider_id}/broker/${oAuthProvider}/endpoint`;
+
+		oAuthProviderLocation = replaceRedirectUrl(oAuthProviderLocation, redirectUrl);
 
 		return {
 			cookiesArray,
@@ -146,7 +152,7 @@ export default class AuthService implements IAuthenticationService {
 		}
 		const jwtData = jwt?.jwtData;
 		// console.log('jwtData', jwtData);
-		const payload = {
+		const payload: BitloopsUser = {
 			displayName: jwtData.name,
 			email: jwtData.email,
 			emailVerified: jwtData.email_verified,
@@ -160,6 +166,7 @@ export default class AuthService implements IAuthenticationService {
 			clientId: sessionInfo.clientId,
 			sessionState: response.data.session_state,
 			isAnonymous: false,
+			jwt: jwtData,
 		};
 		const authStateChangeTopic = `workflow-events.${sessionInfo.workspaceId}.auth:${sessionInfo.providerId}:${sessionInfo.sessionUuid}`;
 		console.log(`publishing to ${authStateChangeTopic}`);
