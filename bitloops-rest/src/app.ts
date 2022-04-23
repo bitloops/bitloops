@@ -2,9 +2,11 @@
  * All plugins and routes are
  * initialized here
  */
+import init from './tracing';
+const tracing = init('bitloops-rest', 'development');
 import fastify, { FastifyReply, FastifyServerOptions } from 'fastify';
 import formBodyPlugin from 'fastify-formbody';
-import opentelemetry from '@opentelemetry/api';
+import api from '@opentelemetry/api';
 import fastifyStaticPlugin from 'fastify-static';
 import * as path from 'path';
 import cookie from 'fastify-cookie';
@@ -23,14 +25,6 @@ import { CORS, MQTopics } from './constants';
 import SubscriptionEvents from './handlers/SubscriptionEvents/SubscriptionEvents';
 import { requestEventRequest } from './routes/definitions';
 import { sseConnectionIds } from './controllers/events.controllers';
-
-import init from './tracing';
-
-/**
- * Service name and environment
- */
-const tracing = init('bitloops-rest', 'development');
-// const { context, trace } = opentelemetry;
 
 const optionsHandler = async (request: requestEventRequest, reply: FastifyReply) => {
 	reply
@@ -55,6 +49,7 @@ const build = async (opts: FastifyServerOptions = {}) => {
 			root: path.join(__dirname, 'public'),
 		})
 		.options('*', optionsHandler)
+		.decorate('tracing', tracing)
 		.register(healthRoutes, { prefix: '/healthy' })
 		.register(readyRoutes, { prefix: '/ready' })
 		.register(bitloopsRoutes, { prefix: '/bitloops' })

@@ -1,4 +1,4 @@
-import { JSONCodec } from 'nats';
+import { JSONCodec, MsgHdrs } from 'nats';
 import { AppOptions } from './constants';
 import { Options } from './services';
 import { IMQ } from './services/interfaces';
@@ -23,14 +23,19 @@ export type BitloopsEventResponse = {
 	error: Error;
 };
 
-export const bitloopsRequestResponse = async (bitloopsRequestArgs: BitloopsRequest, mq: IMQ): Promise<any> => {
+export const bitloopsRequestResponse = async (
+	bitloopsRequestArgs: BitloopsRequest,
+	mq: IMQ,
+	headers?: MsgHdrs,
+): Promise<any> => {
 	const { workspaceId, workflowId, payload } = bitloopsRequestArgs;
 	console.log(`Sending...`, workspaceId, workflowId, payload);
 	const natsConnection = await mq.getConnection();
+
 	const m = await natsConnection.request(
 		Options.getOption(AppOptions.BITLOOPS_ENGINE_EVENTS_TOPIC) ?? 'test-bitloops-engine-events',
 		JSONCodec<BitloopsRequest>().encode(bitloopsRequestArgs),
-		{ timeout: 10000 },
+		{ timeout: 10000, headers },
 	);
 	const response = JSONCodec().decode(m.data);
 	// console.log('got response:', response);

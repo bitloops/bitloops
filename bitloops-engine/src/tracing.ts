@@ -5,12 +5,12 @@ import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { ConsoleSpanExporter, SimpleSpanProcessor, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
-import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { OTTracePropagator } from '@opentelemetry/propagator-ot-trace';
-import { Options } from './services';
-import { AppOptions } from './constants';
+// import { Options } from './services';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import { OPEN_TELEMETRY } from './constants';
+import NatsInstrumentation from './nats-instrumentation/nats';
 
 export default (serviceName: string, environment: string) => {
 	/**
@@ -31,23 +31,22 @@ export default (serviceName: string, environment: string) => {
 	registerInstrumentations({
 		tracerProvider: provider,
 		instrumentations: [
-			// Fastify instrumentation expects HTTP layer to be instrumented
 			new HttpInstrumentation(), // node native http library
-			new FastifyInstrumentation(),
+			new NatsInstrumentation(),
 		],
 	});
 
 	// const exporter = new CollectorTraceExporter();
 	const exporter = new JaegerExporter({
-		endpoint: Options.getOption(AppOptions.JAEGER_URL) ?? 'http://localhost:14268/api/traces',
+		endpoint: process.env[OPEN_TELEMETRY.JAEGER_ENDPOINT] ?? 'http://localhost:14268/api/traces',
 	});
 	// Generic setups
 	provider.addSpanProcessor(new BatchSpanProcessor(exporter));
 	// We can add a second exporter for debugging reasons
-	provider.addSpanProcessor(new BatchSpanProcessor(new ConsoleSpanExporter()));
+	// provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
 	// provider.addSpanProcessor(new BatchSpanProcessor(exporter));
 	// Initialize the OpenTelemetry APIs to use the NodeTracerProvider bindings
-	provider.register({});
+	provider.register();
 	return {
 		provider,
 		tracer: provider.getTracer(serviceName),

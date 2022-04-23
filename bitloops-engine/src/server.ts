@@ -1,3 +1,6 @@
+// import { WebSocketServer } from 'ws';
+import init from './tracing';
+const tracing = init('bitloops-engine', 'development');
 import { healthyHandler, readyHandler, cachesHandler } from './httpHandlers';
 import express from 'express';
 import { Admin, BitloopsEngine, GRPC, REST, Message } from './handlers';

@@ -6,5 +6,9 @@ declare module 'fastify' {
 		imdb: import('../../src/services/interfaces/index').IIMDB;
 		mq: import('../../src/services/interfaces/index').IMQ;
 		authService: import('../../src/services/Auth/interface').default;
+		tracing: {
+			provider: import('@opentelemetry/sdk-trace-node').NodeTracerProvider;
+			tracer: import('@opentelemetry/sdk-trace-base').Tracer;
+		};
 	}
 }

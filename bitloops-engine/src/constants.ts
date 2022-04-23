@@ -40,7 +40,6 @@ export const ENCRYPTION_KEY = 'ENCRYPTION_KEY';
 
 export const KEYCLOAK_PK = 'KEYCLOAK_PK';
 
-
 export const ADMIN_WORKSPACE_ID = 'ADMIN_WORKSPACE_ID';
 
 export const NOT_VALID_AUTH_MESSAGE = 'Provided authentication was not valid';
@@ -52,4 +51,8 @@ export const ADMIN_COMMANDS = {
 	UPDATE_WORFKLOW_CACHE: 'updateWorkflowCache',
 	UPDATE_WORFKLOW_VERSION_MAPPING_CACHE: 'updateWorkflowVersionMappingCache',
 	PUBLISH_TO_TOPIC: 'publishToTopic',
+};
+
+export enum OPEN_TELEMETRY {
+	JAEGER_ENDPOINT = 'JAEGER_ENDPOINT',
 }

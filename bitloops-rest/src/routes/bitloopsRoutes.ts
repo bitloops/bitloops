@@ -1,9 +1,12 @@
+import * as otApi from '@opentelemetry/api';
 import { CORS, PublishHeaders, RequestHeaders } from './../constants';
-import { FastifyInstance, FastifyReply } from 'fastify';
+import { FastifyInstance, FastifyReply, RouteHandlerMethod } from 'fastify';
 import { bitloopsMessage, bitloopsRequestResponse } from '../bitloops';
 import Services from '../services';
 import { publishEventRequest, PublishHeadersSchema, requestEventRequest, RequestHeadersSchema } from './definitions';
 import { authMiddleware, getWorkspaceId } from './helpers';
+import { headers, MsgHdrs } from 'nats';
+import { TextMapSetter } from '@opentelemetry/api';
 
 async function bitloopsRoutes(fastify: FastifyInstance, _opts) {
 	// TODO inject mq properly
@@ -15,8 +18,7 @@ async function bitloopsRoutes(fastify: FastifyInstance, _opts) {
 	);
 }
 
-const publishHandler = async (request: publishEventRequest, reply: FastifyReply) => {
-	console.log('HANDLER request ip', request.ip);
+const publishHandler: RouteHandlerMethod = async function (request: publishEventRequest, reply: FastifyReply) {
 	const { mq } = Services.getServices();
 	const {
 		[PublishHeaders.MESSAGE_ID]: messageId,
@@ -44,8 +46,8 @@ const publishHandler = async (request: publishEventRequest, reply: FastifyReply)
 		.send('OK');
 };
 
-const requestResponseHandler = async (request: requestEventRequest, reply: FastifyReply) => {
-	console.log('HANDLER request ip', request.ip);
+const requestResponseHandler: RouteHandlerMethod = async function (request: requestEventRequest, reply: FastifyReply) {
+	// console.log('decorated tracing', this.tracing);
 	const { mq } = Services.getServices();
 	const {
 		[RequestHeaders.WORKFLOW_ID]: workflowId,
@@ -72,7 +74,20 @@ const requestResponseHandler = async (request: requestEventRequest, reply: Fasti
 			auth: { authType: verification.authType, authData: verification.authData?.token },
 		},
 	};
-	const result = await bitloopsRequestResponse(requestArgs, mq);
+
+	const h = headers();
+	const engineSpan = this.tracing.tracer.startSpan(`Engine publish-event`);
+	const setter: TextMapSetter<MsgHdrs> = {
+		set: (h, key, value) => {
+			h.append(key, value);
+		},
+	};
+	otApi.propagation.inject<MsgHdrs>(otApi.trace.setSpan(otApi.context.active(), engineSpan), h, setter);
+
+	console.log('headers', headers);
+	const result = await bitloopsRequestResponse(requestArgs, mq, h);
+	engineSpan.end();
+
 	if (result?.headers && result?.content) {
 		const statusCode = result.statusCode || 200;
 		result.headers[CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN] = CORS.ALLOW_ORIGIN;
