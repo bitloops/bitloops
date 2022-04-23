@@ -4,14 +4,12 @@ import {
 	InstrumentationModuleDefinition,
 	InstrumentationNodeModuleDefinition,
 } from '@opentelemetry/instrumentation';
-import * as api from '@opentelemetry/api';
+import { context, diag, propagation, ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import * as nats from 'nats';
-// import { ProtocolHandler } from 'nats/lib/nats-base-client/protocol';
 import * as natsProtocol from 'nats/lib/nats-base-client/protocol';
-// import * as natsProtocol from 'nats/lib/nats-base-client/headers';
 import { SubscriptionImpl } from 'nats/lib/nats-base-client/subscription';
 import { PublishOptions, MsgHdrs } from 'nats';
-import ParseUtils from './parse-utils';
+import PropagatorUtils from './propagator-utils';
 import {
 	MessagingDestinationKindValues,
 	MessagingOperationValues,
@@ -25,107 +23,92 @@ export default class NatsInstrumentation extends InstrumentationBase<typeof nats
 	static natsHeaders: () => MsgHdrs;
 
 	constructor(config?: InstrumentationConfig) {
-		super('my-nats-instrumentation', '0.0.1', config);
+		super('opentelemetry-nats-instrumentation', '0.0.1', config);
 	}
 
 	protected init(): InstrumentationModuleDefinition<typeof nats | typeof natsProtocol>[] {
-		console.log('nats init');
-
-		return [
-			new InstrumentationNodeModuleDefinition(
+		const modules = [
+			new InstrumentationNodeModuleDefinition<typeof nats>(
 				NatsInstrumentation.component,
 				['*'], // any version of nats
 				this.patchNats.bind(this),
 				this.unPatchNats.bind(this),
 			),
-			new InstrumentationNodeModuleDefinition(
+			new InstrumentationNodeModuleDefinition<typeof natsProtocol>(
 				'nats/lib/nats-base-client/protocol',
-				['*'], // any version of nats
-				// invoked every time that nats module is loaded/patched
-				// invoked on un-patching of module
+				['*'],
 				this.patchNatsProtocol.bind(this),
-				(moduleExports) => {},
+				this.unPatchNatsProtocol.bind(this),
 			),
 		];
+		return modules;
 	}
 
 	protected patchNats(moduleExports: typeof nats, moduleVersion: string) {
-		api.diag.debug('nats instrumentation: patching');
-		// we could differ this callback based of nats moduleVersion
 		const self = this;
-		console.log(`nats version: ${moduleVersion}`);
+		diag.debug(`@opentelemetry Applying patch for nats@${moduleVersion}`);
 		NatsInstrumentation.natsHeaders = moduleExports.headers;
-		// We need to return the module
 		return moduleExports;
 	}
 
-	protected unPatchNats(moduleExports) {
-		api.diag.debug('nats instrumentation: un-patching');
+	protected unPatchNats(moduleExports: typeof nats) {
+		diag.debug('nats instrumentation: un-patching');
 	}
 
-	protected patchNatsProtocol(moduleExports: any, moduleVersion) {
-		// we could differ this callback based of nats moduleVersion
-		// moduleExports.;
+	protected patchNatsProtocol(moduleExports: typeof natsProtocol, moduleVersion: string) {
+		diag.debug(`@opentelemetry Applying patch for nats/lib/nats-base-client/protocol@${moduleVersion}`);
 		const self = this;
-		console.log(`nats/lib/nats-base-client/protocol version: ${moduleVersion}`);
 
-		console.log(`subscribe :${moduleVersion}`, moduleExports.ProtocolHandler.prototype.subscribe);
-		console.log(`publish :${moduleVersion}`, moduleExports.ProtocolHandler.prototype.publish);
+		// console.log(`subscribe :${moduleVersion}`, moduleExports.ProtocolHandler.prototype.subscribe);
+		// console.log(`publish :${moduleVersion}`, moduleExports.ProtocolHandler.prototype.publish);
 
 		this._wrap(moduleExports.ProtocolHandler.prototype, 'subscribe', self.getSubscribePatch.bind(self));
-
-		/**
-		 * This includes publishes back to originalReply topic
-		 */
-		this._wrap(moduleExports.ProtocolHandler.prototype, 'publish', self.getPublishPatch.bind(this));
+		this._wrap(moduleExports.ProtocolHandler.prototype, 'publish', self.getPublishPatch.bind(self));
 		// request(r: Request): Request;
 		return moduleExports;
 	}
 
 	protected unPatchNatsProtocol(moduleExports) {
-		api.diag.debug('nats-protocol instrumentation: un-patching');
+		diag.debug('nats/protocol instrumentation: un-patching');
 	}
 
 	private getSubscribePatch(original: (...args: unknown[]) => Promise<void>) {
 		const self = this;
-
-		console.log('Wrapping subscribe method');
+		diag.debug('Wrapping subscribe method');
 
 		return function (s: SubscriptionImpl) {
-			// console.log('wrapping ORIGINAL subscribe', s.callback.toString());
-			const originalCb = s.callback;
-			s.callback = (err: nats.NatsError, msg: nats.Msg) => {
-				console.log('hi cb running :)');
-
-				const propagatedContext = api.propagation.extract(api.ROOT_CONTEXT, msg.headers, ParseUtils.getter);
-				const span = self.startSubscriberSpan(msg.subject, MessagingOperationValues.PROCESS, propagatedContext);
-				// TODO understand api.context.with
-				const cbPromise = api.context.with(api.trace.setSpan(propagatedContext, span), () => {
-					return originalCb(err, msg);
-				});
-				Promise.resolve(cbPromise).finally(() => {
-					span.end();
-				});
-			};
+			const originalCallback = s.callback;
+			s.callback = self.subscriberCallbackWrapper(originalCallback);
 			const result = original.apply(this, [s]);
-
 			return result;
 		};
 	}
 
 	private getPublishPatch(original: (...args: unknown[]) => Promise<void>) {
 		const self = this;
-		console.log(`Wrapping publish method`);
-		console.log('nats headers', NatsInstrumentation.natsHeaders);
-		// console.log(moduleExports);
+		diag.debug('Wrapping publish method');
 
 		return function (subject: string, data: Uint8Array, options?: PublishOptions) {
 			options = options ?? {};
 			const activeSpan = self.startPublisherSpan(subject, options);
-			console.log('PUBLISHING TO', subject);
 			const result = original.apply(this, [subject, data, options]);
 			activeSpan.end();
 			return result;
+		};
+	}
+
+	private subscriberCallbackWrapper(originalCallback) {
+		const self = this;
+		return function (err: nats.NatsError, msg: nats.Msg) {
+			const propagatedContext = propagation.extract(ROOT_CONTEXT, msg.headers, PropagatorUtils.getter);
+			const span = self.startSubscriberSpan(msg.subject, MessagingOperationValues.PROCESS, propagatedContext);
+			// TODO understand context.with
+			const cbPromise = context.with(trace.setSpan(propagatedContext, span), () => {
+				return originalCallback(err, msg);
+			});
+			Promise.resolve(cbPromise).finally(() => {
+				span.end();
+			});
 		};
 	}
 
@@ -147,7 +130,7 @@ export default class NatsInstrumentation extends InstrumentationBase<typeof nats
 	}
 
 	private startPublisherSpan(topic: string, options: PublishOptions) {
-		// const activeSpan = api.trace.getSpan(api.context.active());
+		// const activeSpan = trace.getSpan(context.active());
 		const span = this.tracer.startSpan(`${topic} send`, {
 			kind: SpanKind.PRODUCER,
 			attributes: {
@@ -158,7 +141,7 @@ export default class NatsInstrumentation extends InstrumentationBase<typeof nats
 		});
 
 		options.headers = options.headers ?? NatsInstrumentation.natsHeaders();
-		api.propagation.inject(api.trace.setSpan(api.context.active(), span), options.headers, ParseUtils.setter);
+		propagation.inject(trace.setSpan(context.active(), span), options.headers, PropagatorUtils.setter);
 		return span;
 	}
 }

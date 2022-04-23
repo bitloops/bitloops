@@ -1,4 +1,6 @@
-import opentelemetry, { DiagLogLevel, DiagConsoleLogger } from '@opentelemetry/api';
+import opentelemetry, { diag, DiagLogLevel, DiagConsoleLogger } from '@opentelemetry/api';
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+
 import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
 
 import { Resource } from '@opentelemetry/resources';

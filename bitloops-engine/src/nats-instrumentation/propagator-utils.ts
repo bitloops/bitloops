@@ -1,7 +1,7 @@
 import { TextMapGetter, TextMapSetter } from '@opentelemetry/api';
 import { MsgHdrs } from 'nats';
 
-export default class ParseUtils {
+export default class PropagatorUtils {
 	static getter: TextMapGetter<MsgHdrs> = {
 		keys(carrier) {
 			return carrier.keys();
