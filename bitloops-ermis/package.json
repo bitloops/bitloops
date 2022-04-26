@@ -4,7 +4,7 @@
   "main": "server.js",
   "license": "SEE LICENSE IN LICENSE.md",
   "scripts": {
-    "build": "rimraf ./dist && mkdir ./dist && tsc && yarn copy-files",
+    "build": "rimraf ./dist && mkdir ./dist && tsc",
     "start": "node dist/server.js",
     "start:dev": "./node_modules/.bin/env-cmd -f .env.dev nodemon --config nodemon.json src/server.ts"
   },
