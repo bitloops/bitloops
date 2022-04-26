@@ -1,0 +1,60 @@
+name: Push Bitloops Ermis image and Deploy to Dev
+on:
+  push:
+    tags:
+    - 'v*.*.*-ermis-dev'
+jobs: 
+  push_to_registry:
+    name: Push Docker image to Docker Hub
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+  
+      - name: Set tag
+        id: tag
+        run: echo ::set-output name=tag::${GITHUB_REF#refs/*/}
+      
+      - name: Login to DockerHub Registry
+        run: echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USER }} --password-stdin
+        
+      - name: List
+        run: ls
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: ./bitloops-ermis
+          push: true
+          tags: bitloops/ermis:${{ steps.tag.outputs.tag }}
+  deploy_bitloops:
+    name: Deploy Bitloops
+    runs-on: ubuntu-latest
+    needs: push_to_registry
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+      with:
+        repository: bitloops/k8s-manifest
+        token: ${{ secrets.GH_ACCESS_TOKEN }}
+        ref: main
+    - name: Setup Kustomize
+      uses: imranismail/setup-kustomize@v1
+      with:
+        kustomize-version: "3.8.8"
+    - name: Update Kubernetes resources
+      run: |
+        git pull
+        git config --global user.email "git-admin@bitloops.com"
+        git config --global user.name "bitloops-bot"
+        echo "Update new image with kustomize"
+        cd bitloops-ermis/overlays/dev
+        kustomize edit set image bitloops-ermis-image=bitloops/ermis:${{ needs.push_to_registry.outputs.tag }}
+        git add kustomization.yaml
+        git commit -am "[${{ github.repository }}] $GITHUB_ACTOR - ${{github.event.head_commit.message }}"
+        git push -u origin main
+

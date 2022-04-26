@@ -74,7 +74,7 @@ export interface IFirebaseCredentials {
 export type SubscribeRequest = AuthorizedRequest &
 	FastifyRequest<{
 		Params: { connectionId: string };
-		Body: { topics: string[]; workspaceId: string };
+		Body: { topic: string; workspaceId: string };
 	}>;
 
 export type UnSubscribeRequest = AuthorizedRequest &
@@ -82,13 +82,6 @@ export type UnSubscribeRequest = AuthorizedRequest &
 		Params: { connectionId: string };
 		Body: { topic: string; workspaceId: string };
 	}>;
-
-export type PENDING = 'pending';
-type connectionId = string;
-export type TTopicToConnections = Record<string, connectionId[]>;
-export type TSseConnectionIds = Record<connectionId, ServerResponse>;
-
-export type SrResponse = { result: any; error: Error };
 
 export const PostSubscribeEventsBody = {
 	type: 'object',

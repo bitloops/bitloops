@@ -10,7 +10,6 @@ import {
 	IDatabase,
 	IMQ,
 	ILogger,
-	ISSEConnectionsCache,
 	IFirebaseTokensCache,
 	IIMDB,
 } from '../interfaces';
@@ -22,7 +21,6 @@ export type Services = {
 	secretCache?: ISecretCache;
 	xApiKeyCache?: IXApiKeyCache;
 	workflowEventTriggerCache?: IWorkflowEventTriggerCache;
-	sseConnectionsCache: ISSEConnectionsCache;
 	publicKeysCache: IPublicKeysCache;
 	db?: IDatabase;
 	mq?: IMQ;

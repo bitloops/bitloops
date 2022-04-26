@@ -42,19 +42,9 @@ export enum AuthTypes {
 
 export enum MQTopics {
 	WORKFLOW_EVENTS_TOPIC = 'WORKFLOW_EVENTS_TOPIC',
-	SR_SSE_SERVER_TOPIC = 'SR_SERVER_TOPIC',
 }
 
 export const BITLOOPS_PROVIDER_ID = 'BITLOOPS_PROVIDER_ID';
-
-export enum SSE_MESSAGE_TYPE {
-	VALIDATION = 'validation',
-	TOPICS_ADD_CONNECTION = 'topics-add-connection',
-	POD_ID_REGISTRATION = 'pod-id-registration',
-	CONNECTION_END = 'connection-end',
-	POD_SHUTDOWN = 'pod-shutdown',
-	TOPIC_UNSUBSCRIBE = 'topic-unsubscribe',
-}
 
 export enum RequestHeaders {
 	WORKFLOW_ID = 'workflow-id',
@@ -85,3 +75,5 @@ export enum KeycloakSettings {
 }
 
 export const CLOUD_PROVIDER = 'CLOUD_PROVIDER';
+
+export const ERMIS_CONNECTION_PREFIX_TOPIC = 'ermis.connection';
