@@ -115,7 +115,7 @@ bitloops tunnel -w "<Workspace Id>"
 **Visit the [Bitloops Console](https://console.bitloops.com/login), and login with Google with the same account you logged in during Step 2.**
 ## On Windows
 
-**It is recommended to use [git bash](https://gitforwindows.org/).**
+You need to have a terminal which can run bash commands e.g. [git bash](https://gitforwindows.org/), and use this to execute the bitloops commands. After install a restart may be required to be able to use docker commands.
 
 ## On Linux
 
