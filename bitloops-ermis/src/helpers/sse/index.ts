@@ -23,18 +23,15 @@ export const endConnection = (services: TServices, connectionId: string) => {
 };
 
 export const endTopic = (services: TServices, topic: string) => {
-    unsubscribeFromTopic(topic, services.subscriptionTopicsCache);
     const connections = services.sseTopicToConnectionsCache.fetch(topic);
     if (connections) {
+        if (connections.length <= 1) unsubscribeFromTopic(topic, services.subscriptionTopicsCache);
         for (let i = 0; i < connections.length; i++) {
             const connectionId = connections[i];
             services.sseConnectionToTopicsCache.deleteTopicFromConnectionId(connectionId, topic);
-
-            const topics = services.sseConnectionToTopicsCache.fetch(connectionId);
-            if (!topics || topics.length === 0) {
-                endConnection(services, connectionId);
-            }
         }
+    } else {
+        unsubscribeFromTopic(topic, services.subscriptionTopicsCache);
     }
     services.sseTopicToConnectionsCache.delete(topic);
 }

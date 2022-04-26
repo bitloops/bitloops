@@ -6,7 +6,6 @@ import fastify, { FastifyReply, FastifyServerOptions } from 'fastify';
 import formBodyPlugin from 'fastify-formbody';
 import fastifyStaticPlugin from 'fastify-static';
 import * as path from 'path';
-import cookie from 'fastify-cookie';
 import Services from './services';
 import {
     healthRoutes,
@@ -45,7 +44,6 @@ const build = async (opts: FastifyServerOptions = {}) => {
         .register(readyRoutes, { prefix: '/ready' })
         .register(eventsRoutes(services, subscriptionEvents), { prefix: '/bitloops/events' })
         .register(cacheRoutes(services), { prefix: '/bitloops/cache' })
-        .register(cookie)
         .setNotFoundHandler((_req, reply) => {
             reply.status(404).send('Route not found');
         });
