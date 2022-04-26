@@ -1,5 +1,5 @@
-import init from './tracing';
-const tracing = init('bitloops-rest', 'development');
+import OpenTelemetry, { CounterName } from './opentelemetry/Opentelemetry';
+OpenTelemetry.initialize();
 import Services, { Options } from './services';
 import { sleep } from './utils';
 import { MQTopics, SSE_MESSAGE_TYPE } from './constants';

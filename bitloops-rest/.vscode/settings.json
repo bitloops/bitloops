@@ -5,5 +5,8 @@
 	"[typescript]": {
 		"editor.formatOnSave": true
 	},
+	"editor.codeActionsOnSave": {
+		"source.fixAll.eslint": true
+	},
 	"cSpell.words": ["fastify", "IIMDB", "imdb", "keycloak", "nats"]
 }

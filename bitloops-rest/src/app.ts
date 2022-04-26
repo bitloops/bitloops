@@ -23,6 +23,7 @@ import { CORS, MQTopics } from './constants';
 import SubscriptionEvents from './handlers/SubscriptionEvents/SubscriptionEvents';
 import { requestEventRequest } from './routes/definitions';
 import { sseConnectionIds } from './controllers/events.controllers';
+import OpenTelemetry, { CounterName } from './opentelemetry/Opentelemetry';
 
 const optionsHandler = async (request: requestEventRequest, reply: FastifyReply) => {
 	reply
@@ -39,6 +40,9 @@ const build = async (opts: FastifyServerOptions = {}) => {
 	const services = await Services.initializeServices();
 	const { mq, imdb, db } = services;
 
+	const openTelemetry = OpenTelemetry.instance;
+	openTelemetry.initializeAppCounters();
+	openTelemetry.increaseCounter(CounterName.RUNNING_INSTANCES);
 	server
 		// Needed for Open-Telemetry
 		.register(require('fastify-express'))
@@ -47,6 +51,7 @@ const build = async (opts: FastifyServerOptions = {}) => {
 			root: path.join(__dirname, 'public'),
 		})
 		.options('*', optionsHandler)
+		.decorate('openTelemetry', openTelemetry)
 		.register(healthRoutes, { prefix: '/healthy' })
 		.register(readyRoutes, { prefix: '/ready' })
 		.register(bitloopsRoutes, { prefix: '/bitloops' })
