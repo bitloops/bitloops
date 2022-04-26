@@ -113,6 +113,9 @@ bitloops tunnel -w "<Workspace Id>"
 ### Step 5
 
 **Visit the [Bitloops Console](https://console.bitloops.com/login), and login with Google with the same account you logged in during Step 2.**
+## On Windows
+
+**It is recommended to use [git bash](https://gitforwindows.org/).**
 
 ## On Linux
 
