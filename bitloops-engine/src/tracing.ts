@@ -1,5 +1,5 @@
 import opentelemetry, { diag, DiagLogLevel, DiagConsoleLogger } from '@opentelemetry/api';
-diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+// diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
 
 import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
 
@@ -9,7 +9,6 @@ import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { ConsoleSpanExporter, SimpleSpanProcessor, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { OTTracePropagator } from '@opentelemetry/propagator-ot-trace';
-// import { Options } from './services';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { OPEN_TELEMETRY } from './constants';
 import NatsInstrumentation from './nats-instrumentation/nats';

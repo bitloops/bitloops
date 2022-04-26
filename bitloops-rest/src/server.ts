@@ -1,3 +1,5 @@
+import init from './tracing';
+const tracing = init('bitloops-rest', 'development');
 import Services, { Options } from './services';
 import { sleep } from './utils';
 import { MQTopics, SSE_MESSAGE_TYPE } from './constants';

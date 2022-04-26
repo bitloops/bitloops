@@ -1,12 +1,9 @@
-import * as otApi from '@opentelemetry/api';
 import { CORS, PublishHeaders, RequestHeaders } from './../constants';
 import { FastifyInstance, FastifyReply, RouteHandlerMethod } from 'fastify';
 import { bitloopsMessage, bitloopsRequestResponse } from '../bitloops';
 import Services from '../services';
 import { publishEventRequest, PublishHeadersSchema, requestEventRequest, RequestHeadersSchema } from './definitions';
 import { authMiddleware, getWorkspaceId } from './helpers';
-import { headers, MsgHdrs } from 'nats';
-import { TextMapSetter } from '@opentelemetry/api';
 
 async function bitloopsRoutes(fastify: FastifyInstance, _opts) {
 	// TODO inject mq properly
@@ -75,18 +72,7 @@ const requestResponseHandler: RouteHandlerMethod = async function (request: requ
 		},
 	};
 
-	const h = headers();
-	const engineSpan = this.tracing.tracer.startSpan(`Engine publish-event`);
-	const setter: TextMapSetter<MsgHdrs> = {
-		set: (h, key, value) => {
-			h.append(key, value);
-		},
-	};
-	otApi.propagation.inject<MsgHdrs>(otApi.trace.setSpan(otApi.context.active(), engineSpan), h, setter);
-
-	console.log('headers', headers);
-	const result = await bitloopsRequestResponse(requestArgs, mq, h);
-	engineSpan.end();
+	const result = await bitloopsRequestResponse(requestArgs, mq);
 
 	if (result?.headers && result?.content) {
 		const statusCode = result.statusCode || 200;

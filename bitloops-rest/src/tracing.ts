@@ -1,5 +1,6 @@
-import opentelemetry, { DiagLogLevel, DiagConsoleLogger } from '@opentelemetry/api';
+import opentelemetry, { DiagLogLevel, DiagConsoleLogger, diag } from '@opentelemetry/api';
 import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
+// diag.setLogger(new DiagConsoleLogger(), +process.env.OPEN_TELEMETRY_LOG ?? DiagLogLevel.NONE);
 
 import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
@@ -8,9 +9,9 @@ import { ConsoleSpanExporter, SimpleSpanProcessor, BatchSpanProcessor } from '@o
 import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { OTTracePropagator } from '@opentelemetry/propagator-ot-trace';
-import { Options } from './services';
 import { AppOptions } from './constants';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import NatsInstrumentation from './nats-instrumentation/nats';
 
 export default (serviceName: string, environment: string) => {
 	/**
@@ -34,12 +35,13 @@ export default (serviceName: string, environment: string) => {
 			// Fastify instrumentation expects HTTP layer to be instrumented
 			new HttpInstrumentation(), // node native http library
 			new FastifyInstrumentation(),
+			new NatsInstrumentation(),
 		],
 	});
 
 	// const exporter = new CollectorTraceExporter();
 	const exporter = new JaegerExporter({
-		endpoint: Options.getOption(AppOptions.JAEGER_URL) ?? 'http://localhost:14268/api/traces',
+		endpoint: process.env[AppOptions.JAEGER_URL] ?? 'http://localhost:14268/api/traces',
 	});
 	// Generic setups
 	provider.addSpanProcessor(new BatchSpanProcessor(exporter));

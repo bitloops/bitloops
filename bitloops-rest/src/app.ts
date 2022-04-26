@@ -2,8 +2,6 @@
  * All plugins and routes are
  * initialized here
  */
-import init from './tracing';
-const tracing = init('bitloops-rest', 'development');
 import fastify, { FastifyReply, FastifyServerOptions } from 'fastify';
 import formBodyPlugin from 'fastify-formbody';
 import api from '@opentelemetry/api';
@@ -49,7 +47,6 @@ const build = async (opts: FastifyServerOptions = {}) => {
 			root: path.join(__dirname, 'public'),
 		})
 		.options('*', optionsHandler)
-		.decorate('tracing', tracing)
 		.register(healthRoutes, { prefix: '/healthy' })
 		.register(readyRoutes, { prefix: '/ready' })
 		.register(bitloopsRoutes, { prefix: '/bitloops' })
