@@ -77,6 +77,20 @@ nvm install node
 - docker [install from docker site](https://docs.docker.com/get-docker/)
 - docker-compose
 
+In order to validate that the above are installed correctly, running the commands below at the terminal should return the corresponding versions:
+
+```bash
+node -v
+docker -v
+docker-compose -v
+```
+
+To check if docker is up and running you may check by running the command below, without getting an error:
+
+```bash
+docker ps
+```
+
 ### Step 1
 
 ```bash
@@ -97,7 +111,9 @@ bitloops login
 ### Step 3
 
 ```bash
-# To create a workspace and give it a name
+# To create a workspace and give it a name 
+# This may take a while the first time you run it, since it will have to pull the necessary images from Docker Hub. So please try to be a bit patient 🙏.
+
 bitloops install -n "<Workspace Name>"
 ```
 
