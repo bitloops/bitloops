@@ -9,17 +9,6 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	const { connectionId } = request.params;
 	console.log('establishSseConnection', connectionId);
 
-	let headers = {
-		'Content-Type': 'text/event-stream',
-		Connection: 'keep-alive',
-		'Cache-Control': 'no-cache',
-		[CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN,
-	};
-	// reply.raw.writeHead(201, headers);
-	// Very important line
-	// reply.raw.flushHeaders(); // TODO check if this is needed
-	// console.log('after flushHeaders');
-
 	// saves connection
 	const creds = request.verification ?? UNAUTHORIZED_REQUEST.verification;
 	this.services.sseConnectionsCache.cache(connectionId, reply.raw, creds);
@@ -28,13 +17,20 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	const connectionTopic = getErmisConnectionTopic(connectionId);
 	this.subscriptionEvents.subscribe(connectionTopic, this.subscriptionEvents.connectionTopicSubscribeHandler(this.services, connectionId));
 
-	// headers = null;
+	let headers = {
+		'Content-Type': 'text/event-stream',
+		Connection: 'keep-alive',
+		'Cache-Control': 'no-cache',
+		[CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN,
+	};
+	reply.raw.writeHead(200, headers);
+	// Very important line
+	reply.raw.flushHeaders(); // TODO check if this is needed
+	headers = null;
 
-	// reply.sent = true;
-	// reply.raw.write('Connection established');
-	console.log('RElpy sending')
-	reply.send('OK').code(202).headers(headers);
-	console.log('reply sent done');
+	console.log('sending reply');
+	reply.sent = true;
+	console.log('reply sent');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
 		endConnection(this.services, connectionId);
