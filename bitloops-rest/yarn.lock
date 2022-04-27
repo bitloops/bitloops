@@ -265,6 +265,17 @@
     "@opentelemetry/semantic-conventions" "1.0.1"
     jaeger-client "^3.15.0"
 
+"@opentelemetry/exporter-metrics-otlp-http@^0.27.0":
+  version "0.27.0"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/exporter-metrics-otlp-http/-/exporter-metrics-otlp-http-0.27.0.tgz#1ae4d981e25ab15cc2a78a44971ea82cb6315eb9"
+  integrity sha512-97eAPtA9po403CpNnd4n8HtEN6HbXwb05eUL5Jxaj70RSKAHBKjAFG4/Bk75DX3G+glHN5Gm/waMmcuBqFW5rA==
+  dependencies:
+    "@opentelemetry/api-metrics" "0.27.0"
+    "@opentelemetry/core" "1.0.1"
+    "@opentelemetry/exporter-trace-otlp-http" "0.27.0"
+    "@opentelemetry/resources" "1.0.1"
+    "@opentelemetry/sdk-metrics-base" "0.27.0"
+
 "@opentelemetry/exporter-prometheus@^0.27.0":
   version "0.27.0"
   resolved "https://registry.yarnpkg.com/@opentelemetry/exporter-prometheus/-/exporter-prometheus-0.27.0.tgz#12d00aedb75ebcfd24d2b151504b2a7c4d51f0f4"
@@ -273,6 +284,15 @@
     "@opentelemetry/api-metrics" "0.27.0"
     "@opentelemetry/core" "1.0.1"
     "@opentelemetry/sdk-metrics-base" "0.27.0"
+
+"@opentelemetry/exporter-trace-otlp-http@0.27.0", "@opentelemetry/exporter-trace-otlp-http@^0.27.0":
+  version "0.27.0"
+  resolved "https://registry.yarnpkg.com/@opentelemetry/exporter-trace-otlp-http/-/exporter-trace-otlp-http-0.27.0.tgz#0d2798e89ecae1487c3a2e7fed45eec7157df7ee"
+  integrity sha512-ZE8Ns/GGW83E4igrby69shiqEkVo+cULzbm4DprSEMCWrPAL/NBobETFOiOQyBBBgIfrhi5EG6truUiafB1cMQ==
+  dependencies:
+    "@opentelemetry/core" "1.0.1"
+    "@opentelemetry/resources" "1.0.1"
+    "@opentelemetry/sdk-trace-base" "1.0.1"
 
 "@opentelemetry/instrumentation-fastify@^0.26.0":
   version "0.26.0"

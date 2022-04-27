@@ -12,6 +12,7 @@ import { OTTracePropagator } from '@opentelemetry/propagator-ot-trace';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { OPEN_TELEMETRY } from './constants';
 import NatsInstrumentation from './nats-instrumentation/nats';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 
 export default (serviceName: string, environment: string) => {
 	/**
@@ -37,12 +38,14 @@ export default (serviceName: string, environment: string) => {
 		],
 	});
 
-	// const exporter = new CollectorTraceExporter();
-	const exporter = new JaegerExporter({
-		endpoint: process.env[OPEN_TELEMETRY.JAEGER_ENDPOINT] ?? 'http://localhost:14268/api/traces',
+	const traceExporter = new OTLPTraceExporter({
+		url: 'http://localhost:4318/v1/traces',
 	});
+	// const traceExporter = new JaegerExporter({
+	// 	endpoint: process.env[OPEN_TELEMETRY.JAEGER_ENDPOINT] ?? 'http://localhost:14268/api/traces',
+	// });
 	// Generic setups
-	provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+	provider.addSpanProcessor(new SimpleSpanProcessor(traceExporter));
 	// We can add a second exporter for debugging reasons
 	// provider.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
 	// provider.addSpanProcessor(new BatchSpanProcessor(exporter));

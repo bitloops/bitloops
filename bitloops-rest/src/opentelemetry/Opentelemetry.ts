@@ -1,3 +1,4 @@
+import api from '@opentelemetry/api';
 import { Counter } from '@opentelemetry/api-metrics';
 import { Meter } from '@opentelemetry/sdk-metrics-base';
 import { Tracer } from '@opentelemetry/sdk-trace-base';
@@ -57,5 +58,10 @@ export default class OpenTelemetry {
 	increaseCounter(counterName: CounterName, value = 1) {
 		const counter = this.counters[counterName];
 		counter.add(value);
+	}
+
+	addTagToCurrentSpan(key: string, value: string) {
+		const activeSpan = api.trace.getSpan(api.context.active());
+		activeSpan.setAttribute(key, value);
 	}
 }

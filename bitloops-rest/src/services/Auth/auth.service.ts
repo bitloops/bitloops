@@ -242,8 +242,6 @@ export default class AuthService implements IAuthenticationService {
 			return { data: tokenData, error: null };
 		} catch (error) {
 			console.log('Refresh token error', error?.response?.status, error?.response?.data);
-			if (sessionUuid) {
-			}
 			return { data: error.response.data, error };
 		}
 	}
