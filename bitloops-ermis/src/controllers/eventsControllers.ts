@@ -17,7 +17,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	};
 	reply.raw.writeHead(200, headers);
 	// Very important line
-	// reply.raw.flushHeaders(); // TODO check if this is needed
+	reply.raw.flushHeaders(); // TODO check if this is needed
 	// console.log('after flushHeaders');
 
 	// saves connection
@@ -30,8 +30,10 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 
 	// headers = null;
 
-	// reply.sent = true;
-	reply.raw.write('Connection established');
+	reply.sent = true;
+	// reply.raw.write('Connection established');
+	console.log('RElpy sending')
+	reply.send('OK').code(200);
 	console.log('reply sent done');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
