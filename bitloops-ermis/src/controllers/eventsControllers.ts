@@ -15,7 +15,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 		'Cache-Control': 'no-cache',
 		[CORS.HEADERS.ACCESS_CONTROL_ALLOW_ORIGIN]: CORS.ALLOW_ORIGIN,
 	};
-	reply.raw.writeHead(200, headers);
+	reply.raw.writeHead(201, headers);
 	// Very important line
 	reply.raw.flushHeaders(); // TODO check if this is needed
 	// console.log('after flushHeaders');
@@ -33,7 +33,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	reply.sent = true;
 	// reply.raw.write('Connection established');
 	console.log('RElpy sending')
-	reply.send('OK').code(200);
+	reply.send('OK').code(202);
 	console.log('reply sent done');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
