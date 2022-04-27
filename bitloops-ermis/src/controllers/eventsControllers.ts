@@ -17,8 +17,8 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	};
 	reply.raw.writeHead(200, headers);
 	// Very important line
-	reply.raw.flushHeaders(); // TODO check if this is needed
-	console.log('after flushHeaders');
+	// reply.raw.flushHeaders(); // TODO check if this is needed
+	// console.log('after flushHeaders');
 
 	// saves connection
 	const creds = request.verification ?? UNAUTHORIZED_REQUEST.verification;
@@ -28,9 +28,10 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	const connectionTopic = getErmisConnectionTopic(connectionId);
 	this.subscriptionEvents.subscribe(connectionTopic, this.subscriptionEvents.connectionTopicSubscribeHandler(this.services, connectionId));
 
-	headers = null;
+	// headers = null;
 
-	reply.sent = true;
+	// reply.sent = true;
+	reply.raw.write('Connection established');
 	console.log('reply sent done');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
