@@ -9,14 +9,6 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	const { connectionId } = request.params;
 	console.log('establishSseConnection', connectionId);
 
-	// saves connection
-	const creds = request.verification ?? UNAUTHORIZED_REQUEST.verification;
-	this.services.sseConnectionsCache.cache(connectionId, reply.raw, creds);
-
-	// subscribe to ermis connection topic
-	const connectionTopic = getErmisConnectionTopic(connectionId);
-	this.subscriptionEvents.subscribe(connectionTopic, this.subscriptionEvents.connectionTopicSubscribeHandler(this.services, connectionId));
-
 	let headers = {
 		'Content-Type': 'text/event-stream',
 		Connection: 'keep-alive',
@@ -26,9 +18,20 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	reply.raw.writeHead(200, headers);
 	// Very important line
 	reply.raw.flushHeaders(); // TODO check if this is needed
+	console.log('after flushHeaders');
+
+	// saves connection
+	const creds = request.verification ?? UNAUTHORIZED_REQUEST.verification;
+	this.services.sseConnectionsCache.cache(connectionId, reply.raw, creds);
+
+	// subscribe to ermis connection topic
+	const connectionTopic = getErmisConnectionTopic(connectionId);
+	this.subscriptionEvents.subscribe(connectionTopic, this.subscriptionEvents.connectionTopicSubscribeHandler(this.services, connectionId));
+
 	headers = null;
 
 	reply.sent = true;
+	console.log('reply sent done');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
 		endConnection(this.services, connectionId);
