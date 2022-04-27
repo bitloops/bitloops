@@ -39,9 +39,11 @@ docker run -d --name jaeger \
   jaegertracing/all-in-one:latest
 ```
 
-**Prometheus**
+**Prometheus**  
+Create a [prometheus.yaml](https://opentelemetry.io/docs/instrumentation/js/exporters/#prometheus)  
+On Mac, you need to use `docker.for.mac.host.internal` as host, so that the Prometheus Docker container can scrape the metrics of the local Node.js HTTP server. On Windows, use `docker.for.win.localhost` and for Linux use `localhost`.
 
-```
+```bash
 docker run -d \
     -p 9090:9090 \
     -v ${PWD}/prometheus.yml:/etc/prometheus/prometheus.yml \
