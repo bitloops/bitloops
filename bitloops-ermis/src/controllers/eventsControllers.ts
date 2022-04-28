@@ -31,6 +31,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	console.log('sending reply');
 	reply.sent = true;
 	console.log('reply sent');
+	reply.raw.write('OK');
 	request.socket.on('close', () => {
 		console.log('sse connection closed for', connectionId);
 		endConnection(this.services, connectionId);
