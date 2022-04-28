@@ -25,8 +25,8 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	};
 	reply.raw.writeHead(200, headers);
 	// Very important line
-	reply.raw.flushHeaders(); // TODO check if this is needed
-	headers = null;
+	// reply.raw.flushHeaders(); // TODO check if this is needed
+	// headers = null;
 
 	console.log('sending reply');
 	reply.sent = true;
