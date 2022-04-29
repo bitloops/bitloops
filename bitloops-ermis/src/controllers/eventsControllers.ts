@@ -16,6 +16,7 @@ export const establishSseConnection: RouteHandlerMethod = async function (reques
 	// subscribe to ermis connection topic
 	const connectionTopic = getErmisConnectionTopic(connectionId);
 	this.subscriptionEvents.subscribe(connectionTopic, this.subscriptionEvents.connectionTopicSubscribeHandler(this.services, connectionId));
+	console.log('subscribed successfully');
 
 	let headers = {
 		'Content-Type': 'text/event-stream',
