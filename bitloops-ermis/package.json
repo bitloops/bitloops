@@ -6,6 +6,7 @@
   "scripts": {
     "build": "rimraf ./dist && mkdir ./dist && tsc",
     "start": "node dist/server.js",
+    "start:dev:docker": "./node_modules/.bin/env-cmd -f .env.dev.docker nodemon --config nodemon.json src/server.ts",
     "start:dev": "./node_modules/.bin/env-cmd -f .env.dev nodemon --config nodemon.json src/server.ts"
   },
   "devDependencies": {
