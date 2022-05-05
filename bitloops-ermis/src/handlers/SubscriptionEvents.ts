@@ -17,8 +17,8 @@ export default class SubscriptionEvents implements ISubscriptionEvents {
 
     public subscribe(topic: string, subscribeHandler: SubscribeHandlerType) {
         if (!this.subscriptionTopicsCache.fetch(topic)) {
-            console.log('subscribed to topic', topic);
             const sub = this.mq.subscribe(topic, subscribeHandler);
+            console.log('subscribed to topic', topic);
             this.subscriptionTopicsCache.cache(topic, sub);
         }
     }
