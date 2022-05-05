@@ -32,8 +32,7 @@ export const getCacheInfo: RouteHandlerMethod = async function (request: CacheRe
         }
         default:
             const message = `Cache type ${cacheType} - not found`;
-            reply.code(404).headers(ALLOW_ORIGIN_HEADERS).send(message);
-            break;
+            return reply.code(404).headers(ALLOW_ORIGIN_HEADERS).send(message);
     }
 
     let data;

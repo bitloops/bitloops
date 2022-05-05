@@ -36,7 +36,7 @@ process.on('SIGTERM', async () => {
 
 const start = async () => {
     try {
-        const server = await build({ logger: false, trustProxy: true });
+        const server = await build({ logger: true, trustProxy: true });
         console.log(`PORT: ${process.env.PORT || 8080}`);
         await server.listen(process.env.PORT || 8080, '0.0.0.0');
         const address = server.server.address();
