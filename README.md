@@ -1,4 +1,4 @@
-![Bitloops](https://bitloops.com/assets/img/bitloops-logo_320x80.png)
+![Bitloops](https://storage.googleapis.com/wwwbitloopscom/bitloops-logo_320x80.png)
 
 # Bitloops
 
