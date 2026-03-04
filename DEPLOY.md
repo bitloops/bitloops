@@ -62,14 +62,14 @@ Success criteria:
 macOS/Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.sh | bash
 bitloops --version
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/bitloops/bitloops/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.ps1 | iex
 bitloops --version
 ```
 
