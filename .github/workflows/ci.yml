@@ -36,6 +36,8 @@ jobs:
             target: x86_64-apple-darwin
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 
@@ -47,15 +49,27 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: contains(matrix.target, 'unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
+
+      - name: Configure Linux arm64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
+
+      - name: Install qemu for Linux arm64 smoke test
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: sudo apt-get install -y qemu-user
 
       - name: Build
         run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
         run: ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
+
+      - name: Smoke test (Linux arm64 via qemu)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: qemu-aarch64 ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
