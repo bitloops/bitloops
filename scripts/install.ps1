@@ -7,12 +7,20 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Get-TargetTriplet {
-  $arch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() } else { "unknown" }
-  switch ($arch) {
-    "amd64" { return "x86_64-pc-windows-msvc" }
-    "x86_64" { return "x86_64-pc-windows-msvc" }
-    default { throw "Unsupported Windows architecture: $arch" }
+  $archCandidates = @()
+  if ($env:PROCESSOR_ARCHITEW6432) { $archCandidates += $env:PROCESSOR_ARCHITEW6432.ToLowerInvariant() }
+  if ($env:PROCESSOR_ARCHITECTURE) { $archCandidates += $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() }
+
+  foreach ($arch in $archCandidates) {
+    switch ($arch) {
+      "arm64" { return "aarch64-pc-windows-msvc" }
+      "amd64" { return "x86_64-pc-windows-msvc" }
+      "x86_64" { return "x86_64-pc-windows-msvc" }
+    }
   }
+
+  $detected = if ($archCandidates.Count -gt 0) { ($archCandidates -join ", ") } else { "unknown" }
+  throw "Unsupported Windows architecture: $detected"
 }
 
 function Add-ToUserPath {

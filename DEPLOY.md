@@ -51,8 +51,10 @@ Success criteria:
 - GitHub Release is created
 - Artifacts are attached:
   - `bitloops-aarch64-apple-darwin.tar.gz`
+  - `bitloops-aarch64-unknown-linux-musl.tar.gz`
   - `bitloops-x86_64-apple-darwin.tar.gz`
   - `bitloops-x86_64-unknown-linux-musl.tar.gz`
+  - `bitloops-aarch64-pc-windows-msvc.zip`
   - `bitloops-x86_64-pc-windows-msvc.zip`
   - `checksums-sha256.txt`
 - Verify job passes (downloads assets from release, checksums, Linux smoke run)
@@ -70,6 +72,13 @@ Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.ps1 | iex
+bitloops --version
+```
+
+Windows (CMD):
+
+```cmd
+curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.cmd -o install.cmd && install.cmd && del install.cmd
 bitloops --version
 ```
 

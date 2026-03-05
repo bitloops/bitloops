@@ -4,9 +4,6 @@ on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -40,6 +37,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +59,11 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: sudo apt-get install -y qemu-user
 
+      - name: Configure Windows arm64 linker
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+
       - name: Build
         run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
@@ -72,7 +76,16 @@ jobs:
         run: qemu-aarch64 ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           & "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe" --version
+
+      - name: Validate Windows arm64 build output
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $path = "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe"
+          if (-not (Test-Path $path)) {
+            throw "Missing expected binary: $path"
+          }

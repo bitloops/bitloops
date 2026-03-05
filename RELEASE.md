@@ -12,7 +12,8 @@ That's it — the script tags current `main` and pushes the tag. GitHub Actions 
 Release assets include a `checksums-sha256.txt` file used by install scripts to verify integrity.
 
 Installers:
-- macOS/Linux: `install.sh`
-- Windows: `install.ps1`
+- macOS/Linux: `scripts/install.sh`
+- Windows (PowerShell): `scripts/install.ps1`
+- Windows (CMD): `scripts/install.cmd`
 
-See `DEPLOY.md` for release steps and `bitloops_cli/README.md` for distribution details.
+See `DEPLOY.md` for release steps.
