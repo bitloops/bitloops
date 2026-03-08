@@ -39,7 +39,7 @@ jobs:
 
       - name: Install cross for Linux musl builds
         if: contains(matrix.target, 'linux-musl')
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross
 
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
