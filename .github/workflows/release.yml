@@ -38,7 +38,9 @@ jobs:
 
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
-        run: sudo apt-get install -y musl-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Configure Linux arm64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'
@@ -46,7 +48,9 @@ jobs:
 
       - name: Install qemu for Linux arm64 smoke test
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: sudo apt-get install -y qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
 
       - name: Configure Windows arm64 linker
         if: matrix.target == 'aarch64-pc-windows-msvc'

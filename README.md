@@ -1,171 +1,66 @@
-# Bitloops CLI
+# Bitloops - Git captures what changed. Bitloops captures why
 
-## Quick Start
+The open-source intelligence layer for AI-native development. Captures the full developer–AI conversation on every commit and builds a structured semantic model of your codebase that you and your agents can query.
 
-```bash
-cd bitloops_cli
-cargo run -- status      # run in dev
-cargo build              # compile → target/debug/bitloops_cli
-cargo build --release    # compile → target/release/bitloops_cli
-cargo check              # type-check only (fast, like tsc --noEmit)
-cargo clippy             # lint
-cargo fmt                # format
-```
+## Installation
 
-## DevQL MVP
+### curl
 
-The CLI now includes an MVP DevQL ingestion/query flow:
+`curl -sSL https://bitloops.com/install.sh | bash`
 
-```bash
-# 1) Configure backends (persisted config)
-mkdir -p ~/.bitloops
-cat > ~/.bitloops/config.json <<'JSON'
-{
-  "devql": {
-    "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops",
-    "clickhouse_url": "http://localhost:8123",
-    "clickhouse_database": "default",
-    "clickhouse_user": "default",
-    "clickhouse_password": ""
-  }
-}
-JSON
+### brew
 
-# Optional: environment variables override ~/.bitloops/config.json
-# export BITLOOPS_DEVQL_PG_DSN='postgres://user:pass@localhost:5432/bitloops'
-# export BITLOOPS_DEVQL_CH_URL='http://localhost:8123'
-# export BITLOOPS_DEVQL_CH_DATABASE='default'
-# export BITLOOPS_DEVQL_CH_USER='default'
-# export BITLOOPS_DEVQL_CH_PASSWORD='...'
+`brew install bitloops/tap/bitloops`
 
-# 2) Verify backend connectivity
-cargo run -- --connection-status
-# equivalent:
-cargo run -- devql connection-status
-# outputs a DB Status table with statuses:
-# Connected / Could not authenticate / Could not reach DB / Not configured
+### cargo
 
-# 3) Create schema
-cargo run -- devql init
+`cargo install bitloops`
 
-# 4) Backfill checkpoints/events + file artefacts
-cargo run -- devql ingest
+## Getting Started
 
-# 5) Query with DevQL (MVP pipeline syntax)
-cargo run -- devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
-cargo run -- devql query 'repo("bitloops-cli")->asOf(ref:"main")->file("bitloops_cli/src/main.rs")->artefacts()->limit(20)'
+From within the repo you are currently working on run:
 
-# 6) Start dashboard (runs DB startup health checks and keeps pooled connections)
-cargo run -- dashboard
-# startup uses the same DB Status table as --connection-status
-# live DB health endpoint:
-# GET http://127.0.0.1:5667/api/db/health
-```
+`bitloops init`
 
-## Parity Tracking
+Select your agents or ctrl+a to select them all.
 
-- Root command parity matrix: [docs/root-command-parity-matrix.md](docs/root-command-parity-matrix.md)
+To start recording Checkpoints run:
 
-## E2E Test Suites
+`bitloops enable`
 
-```bash
-# Claude-focused E2E scenarios
-cargo test --quiet --test e2e_scenario_groups -- --test-threads=1
+That's all! Now all of your agent discussion are being saved on your git repo.
 
-# Cursor-focused E2E scenarios
-cargo test --quiet --test cursor_e2e_scenarios -- --test-threads=1
-```
+## Dashboard
 
-## Hello World Example
+To view your Checkpoints run the following command again from within the root of your repo:
 
-The minimal subcommand pattern — how `status` works end to end:
+`bitloops dashboard`
 
-**`src/commands/status.rs`**
+## Supported Agents
 
-```rust
-use anyhow::Result;
-use clap::Args;
+[X] Claude Code
+[ ] Codex (Coming as soon as OpenAI adds hooks to Codex (they are working on it))
+[X] Cursor
+[X] Gemini
+[ ] GitHub Copilot (Coming soon)
+[X] OpenCode
 
-#[derive(Args)]
-pub struct StatusArgs {
-    #[arg(long, help = "Show verbose output")]
-    pub verbose: bool,
-}
+## What is DevQL?
 
-pub async fn run(args: StatusArgs) -> Result<()> {
-    if args.verbose {
-        println!("Status: OK (verbose mode)");
-    } else {
-        println!("Status: OK");
-    }
-    Ok(())
-}
-```
+DevQL is a query language created to offer you and your AI agents valuable and targeted insights regarding your codebases within milliseconds.
 
-**`src/commands/mod.rs`** — wire it in:
+[Read more here](./DEVQL-Getting_Started.md)
 
-```rust
-pub mod status;                          // 1. declare module
+## FAQs
 
-#[derive(Subcommand)]
-pub enum Commands {
-    Status(status::StatusArgs),          // 2. add variant
-}
+1. Do you need access to my codebase?
 
-pub async fn run(cli: Cli) -> Result<()> {
-    match cli.command {
-        Commands::Status(args) => status::run(args).await,   // 3. dispatch
-    }
-}
-```
+No! None of your code is sent to our servers. Your data is stored in your git repo (bitloops/checkpoints branch) as well as your DBs.
 
-Run it:
+2. Is this totally free for real?
 
-```bash
-cargo run -- status
-cargo run -- status --verbose
-cargo run -- --help
-```
+You bet!
 
-## Project Structure
+3. What kind of databases do I need?
 
-```
-bitloops_cli/
-├── Cargo.toml           → package.json
-├── Cargo.lock           → package-lock.json
-└── src/
-    ├── lib.rs           → library boundary exporting `engine`
-    ├── main.rs          → binary entrypoint: parse args, dispatch commands/server
-    ├── commands/
-    │   ├── mod.rs       → Cli struct, Commands enum, run() — like commands/index.ts
-    │   └── status.rs    → one file per subcommand — like commands/status.ts
-    ├── server/
-    │   └── dashboard/   → HTTP API surface
-    └── engine/          → shared runtime/domain logic
-```
-
-### Adding a new subcommand
-
-1. Create `src/commands/new_cmd.rs`:
-
-   ```rust
-   use anyhow::Result;
-   use clap::Args;
-
-   #[derive(Args)]
-   pub struct NewCmdArgs {}
-
-   pub async fn run(_args: NewCmdArgs) -> Result<()> {
-       println!("new-cmd!");
-       Ok(())
-   }
-   ```
-
-2. In `src/commands/mod.rs` add:
-   ```rust
-   pub mod new_cmd;
-   // in Commands enum:
-   NewCmd(new_cmd::NewCmdArgs),
-   // in run() match:
-   Commands::NewCmd(args) => new_cmd::run(args).await,
-   ```
+Bitloops works with Clickhouse (for events) and Postgresql (for codebase intelligence). You can install these for free locally via Docker Compose or natively.
