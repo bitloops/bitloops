@@ -1,0 +1,12 @@
+[hooks]
+
+pre-commit = [
+    "bash \"$(git rev-parse --show-toplevel)/scripts/check-rust-file-size.sh\" \"$(git rev-parse --show-toplevel)/bitloops_cli\"",
+    "cargo fmt --all",
+    "cargo clippy --all-targets --all-features -- -D warnings",
+    "cargo check"
+]
+
+pre-push = [
+    "cargo test"
+]

@@ -1,0 +1,9 @@
+{
+  "devql": {
+    "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops",
+    "clickhouse_url": "http://localhost:8123",
+    "clickhouse_database": "default",
+    "clickhouse_user": "default",
+    "clickhouse_password": ""
+  }
+}

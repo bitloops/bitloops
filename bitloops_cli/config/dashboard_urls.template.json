@@ -1,0 +1,4 @@
+{
+  "dashboard_cdn_base_url": "https://cdn.example.com/bitloops-dashboard/",
+  "dashboard_manifest_url": "https://cdn.example.com/bitloops-dashboard/bundle_versions.json"
+}

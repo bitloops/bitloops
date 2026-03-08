@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  rust-file-size:
+    name: Rust File Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Check Rust file size limits
+        run: bash scripts/check-rust-file-size.sh
   test:
     name: Test compile (Ubuntu)
     runs-on: ubuntu-latest

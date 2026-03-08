@@ -1,0 +1,254 @@
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bitloops Dashboard Install</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+    .card {
+      width: min(680px, 92vw);
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 1.35rem;
+      line-height: 1.25;
+    }
+    p {
+      margin: 0 0 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+    .status {
+      margin: 18px 0;
+      font-size: 0.98rem;
+      color: #cbd5e1;
+      min-height: 22px;
+    }
+    .version {
+      margin-bottom: 18px;
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    #install-btn {
+      background: #7404e4;
+      color: #f8fafc;
+    }
+    #retry-btn {
+      background: #334155;
+      color: #f8fafc;
+      display: none;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .error {
+      color: #fca5a5;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Install dashboard bundle</h1>
+    <p>The dashboard bundle is missing. Install the latest compatible version to continue.</p>
+    <div id="status" class="status">Checking available bundle versions...</div>
+    <div id="version" class="version"></div>
+    <div class="actions">
+      <button id="install-btn" type="button" disabled>Install dashboard bundle</button>
+      <button id="retry-btn" type="button">Retry</button>
+    </div>
+  </main>
+  <script>
+    const state = {
+      phase: 'loading',
+      currentVersion: null,
+      latestApplicableVersion: null,
+      reason: null,
+      errorCode: null,
+      errorMessage: null,
+    };
+
+    const statusEl = document.getElementById('status');
+    const versionEl = document.getElementById('version');
+    const installBtn = document.getElementById('install-btn');
+    const retryBtn = document.getElementById('retry-btn');
+
+    const errorMessages = {
+      manifest_fetch_failed: 'Could not check available versions. Verify network/CDN and retry.',
+      bundle_download_failed: 'Bundle download failed. Please retry.',
+      checksum_mismatch: 'Downloaded bundle failed integrity checks. Please retry.',
+      bundle_install_failed: 'Bundle installation failed. Please retry.',
+      no_compatible_version: 'No compatible bundle version was found for this CLI version.',
+      internal: 'Unexpected server error. Please retry.',
+    };
+
+    function setState(phase, patch = {}) {
+      Object.assign(state, patch);
+      state.phase = phase;
+      render();
+    }
+
+    function toApiError(payload) {
+      const code = payload && payload.error && payload.error.code ? payload.error.code : 'internal';
+      const message = errorMessages[code] || errorMessages.internal;
+      return { code, message };
+    }
+
+    async function apiGetJson(path) {
+      const res = await fetch(path, { method: 'GET' });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw toApiError(payload);
+      }
+      return payload;
+    }
+
+    async function apiPostJson(path, body) {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw toApiError(payload);
+      }
+      return payload;
+    }
+
+    function render() {
+      installBtn.disabled = true;
+      retryBtn.style.display = 'none';
+      statusEl.classList.remove('error');
+      versionEl.textContent = '';
+
+      if (state.phase === 'loading') {
+        statusEl.textContent = 'Checking available bundle versions...';
+        return;
+      }
+
+      if (state.phase === 'install_available') {
+        statusEl.textContent = state.currentVersion
+          ? 'A newer compatible dashboard bundle is available.'
+          : 'A compatible dashboard bundle is available.';
+        versionEl.textContent = state.latestApplicableVersion
+          ? `Latest compatible version: ${state.latestApplicableVersion}`
+          : '';
+        installBtn.disabled = false;
+        installBtn.textContent = state.currentVersion ? 'Update dashboard bundle' : 'Install dashboard bundle';
+        return;
+      }
+
+      if (state.phase === 'up_to_date') {
+        statusEl.textContent = 'Dashboard bundle is already up to date.';
+        versionEl.textContent = state.currentVersion ? `Current version: ${state.currentVersion}` : '';
+        return;
+      }
+
+      if (state.phase === 'no_compatible_version') {
+        statusEl.textContent = 'No compatible dashboard bundle version is available.';
+        statusEl.classList.add('error');
+        retryBtn.style.display = 'inline-block';
+        return;
+      }
+
+      if (state.phase === 'installing') {
+        statusEl.textContent = 'Installing dashboard bundle...';
+        installBtn.textContent = 'Installing...';
+        return;
+      }
+
+      if (state.phase === 'install_success') {
+        statusEl.textContent = 'Dashboard bundle installed. Reloading...';
+        return;
+      }
+
+      if (state.phase === 'error') {
+        statusEl.textContent = state.errorMessage || 'Unexpected server error. Please retry.';
+        statusEl.classList.add('error');
+        retryBtn.style.display = 'inline-block';
+      }
+    }
+
+    async function checkBundleVersion() {
+      setState('loading', { errorCode: null, errorMessage: null });
+      try {
+        const payload = await apiGetJson('/api/check_bundle_version');
+        if (payload.installAvailable) {
+          setState('install_available', {
+            currentVersion: payload.currentVersion || null,
+            latestApplicableVersion: payload.latestApplicableVersion || null,
+            reason: payload.reason || null,
+          });
+          return;
+        }
+
+        if (payload.reason === 'up_to_date') {
+          setState('up_to_date', {
+            currentVersion: payload.currentVersion || null,
+            latestApplicableVersion: payload.latestApplicableVersion || null,
+            reason: payload.reason || null,
+          });
+          return;
+        }
+
+        setState('no_compatible_version', {
+          currentVersion: payload.currentVersion || null,
+          latestApplicableVersion: payload.latestApplicableVersion || null,
+          reason: payload.reason || null,
+        });
+      } catch (error) {
+        setState('error', {
+          errorCode: error.code || 'internal',
+          errorMessage: error.message || errorMessages.internal,
+        });
+      }
+    }
+
+    async function installBundle() {
+      setState('installing');
+      try {
+        await apiPostJson('/api/fetch_bundle', {});
+        setState('install_success');
+        window.location.reload();
+      } catch (error) {
+        setState('error', {
+          errorCode: error.code || 'internal',
+          errorMessage: error.message || errorMessages.internal,
+        });
+      }
+    }
+
+    installBtn.addEventListener('click', installBundle);
+    retryBtn.addEventListener('click', checkBundleVersion);
+    checkBundleVersion();
+  </script>
+</body>
+</html>
