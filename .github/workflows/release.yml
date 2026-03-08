@@ -51,22 +51,30 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
 
-      # - name: Install qemu for Linux arm64 smoke test
-      #   if: matrix.target == 'aarch64-unknown-linux-musl'
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y qemu-user
+      - name: Install qemu for Linux arm64 smoke test
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
 
       - name: Configure Windows arm64 linker
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
-      - name: Build
+      - name: Build (musl targets)
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
           BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
         run: cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build (non-musl targets)
+        if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
+        env:
+          BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
+        run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
