@@ -10,10 +10,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// PostHog API key. Set at build time via BITLOOPS_POSTHOG_API_KEY (e.g. in GitHub Actions from secrets)
+/// or at runtime. If unset, no events are sent.
 pub const POSTHOG_API_KEY: &str = "phc_development_key";
+
+/// PostHog base URL; the REST capture endpoint is derived as `{POSTHOG_ENDPOINT}/capture/`.
 pub const POSTHOG_ENDPOINT: &str = "https://eu.i.posthog.com";
+
+/// If this env var is set to any non-empty value, telemetry is disabled (user opt-out).
 pub const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
-pub const DISTINCT_ID_NAMESPACE: &str = "bitloops-cli";
+
+/// Namespace used when hashing machine id into distinct_id (avoids collisions with other products).
+/// Not the PostHog project ID; use your project ID here if you want to namespace by project.
+pub const DISTINCT_ID_NAMESPACE: &str = "137911";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventPayload {
@@ -256,6 +265,9 @@ fn posthog_api_key() -> String {
     env::var("BITLOOPS_POSTHOG_API_KEY")
         .ok()
         .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            option_env!("BITLOOPS_POSTHOG_API_KEY").map(String::from).filter(|v| !v.trim().is_empty())
+        })
         .unwrap_or_else(|| POSTHOG_API_KEY.to_string())
 }
 

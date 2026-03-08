@@ -12,6 +12,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    environment: "Production CLI"
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +59,9 @@ jobs:
         run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Build
+        env:
+          BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
         run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
