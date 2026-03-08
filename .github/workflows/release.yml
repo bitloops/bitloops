@@ -38,8 +38,8 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cross for Linux musl builds
-        if: contains(matrix.target, 'linux-musl')
-        run: cargo install cross
+        if: contains(matrix.target, 'unknown-linux-musl')
+        run: cargo install cross --locked --version 0.2.30
 
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
@@ -62,16 +62,19 @@ jobs:
         shell: pwsh
         run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
-      - name: Build
+      - name: Build (musl targets)
+        if: contains(matrix.target, 'unknown-linux-musl')
         env:
           BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
-        run: |
-          if [[ "${{ matrix.target }}" == *"linux-musl"* ]]; then
-            cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
-          else
-            cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
-          fi
+        run: cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build (non-musl targets)
+        if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
+        env:
+          BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
+        run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
