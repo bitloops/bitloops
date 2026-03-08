@@ -37,9 +37,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross for Linux musl builds
-        if: contains(matrix.target, 'unknown-linux-musl')
-        run: cargo install cross --locked --version 0.2.30
+      - name: Install cross
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
+        run: cargo install cross --locked
 
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
@@ -63,7 +63,7 @@ jobs:
         run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Build (musl targets)
-        if: contains(matrix.target, 'unknown-linux-musl')
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         env:
           BITLOOPS_POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           POSTHOG_PROJECT_ID: ${{ vars.POSTHOG_PROJECT_ID }}
