@@ -56,6 +56,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install cross
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
+        run: cargo install cross --locked
+
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
@@ -75,7 +79,12 @@ jobs:
         shell: pwsh
         run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
-      - name: Build
+      - name: Build (musl targets)
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
+        run: cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build (non-musl targets)
+        if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
         run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
