@@ -53,14 +53,18 @@ DevQL is a query language created to offer you and your AI agents valuable and t
 
 ## FAQs
 
-1. Do you need access to my codebase?
+### Do you need access to my codebase?
 
 No! None of your code is sent to our servers. Your data is stored in your git repo (bitloops/checkpoints branch) as well as your DBs.
 
-2. Is this totally free for real?
+### Is this totally free for real?
 
 You bet!
 
-3. What kind of databases do I need?
+### What kind of databases do I need?
 
 Bitloops works with Clickhouse (for events) and Postgresql (for codebase intelligence). You can install these for free locally via Docker Compose or natively.
+
+### Why do you use telemetry and why should I opt-in?
+
+Telemetry data help us understand which features users are using the most and help us guide our development. The telemetry data are not connected to specific users and are analysed and considered in aggregate.
