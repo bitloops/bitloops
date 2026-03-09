@@ -118,7 +118,7 @@ fn TestGetSessionDir() {
     let agent = GeminiCliAgent;
 
     with_env_var(
-        "ENTIRE_TEST_GEMINI_PROJECT_DIR",
+        "BITLOOPS_TEST_GEMINI_PROJECT_DIR",
         Some("/test/override"),
         || {
             let session_dir = agent

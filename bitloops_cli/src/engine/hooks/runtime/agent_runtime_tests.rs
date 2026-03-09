@@ -685,7 +685,7 @@ fn cursor_before_submit_prompt_resolves_transcript_when_missing() {
     with_process_state(
         Some(dir.path()),
         &[(
-            "ENTIRE_TEST_CURSOR_PROJECT_DIR",
+            "BITLOOPS_TEST_CURSOR_PROJECT_DIR",
             Some(transcript_root.path().to_string_lossy().as_ref()),
         )],
         || {

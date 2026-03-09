@@ -119,7 +119,7 @@ fn auto_commit_save_step_commit_has_metadata_ref() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-04-test-session-123";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -189,7 +189,7 @@ fn auto_commit_save_step_metadata_ref_points_to_valid_commit() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-04-test-session-456";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -365,7 +365,7 @@ fn auto_commit_get_session_context() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-10-test-session-context";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -416,7 +416,7 @@ fn auto_commit_list_sessions_has_description() {
     fs::write(&test_file, "package main").expect("write test.rs");
 
     let session_id = "2025-12-10-test-session-description";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -577,7 +577,7 @@ fn auto_commit_save_step_files_already_committed() {
     .expect("metadata branch should exist");
 
     let session_id = "2025-12-22-already-committed-test";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -634,7 +634,7 @@ fn auto_commit_save_step_no_changes_skipped() {
     .expect("metadata branch should exist");
 
     let session_id = "2025-12-22-no-changes-test";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(
@@ -685,7 +685,7 @@ fn list_sessions_with_checkpoints_returns_entries() {
 
     fs::write(dir.path().join("x.rs"), "package x").expect("write x.rs");
     let session_id = "list-with-checkpoints";
-    let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, session_id);
+    let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
     let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
     fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
     fs::write(metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME), "log").expect("write log");
@@ -721,7 +721,7 @@ fn list_sessions_supports_multiple_sessions() {
 
     for (name, file) in [("sess-a", "a.rs"), ("sess-b", "b.rs")] {
         fs::write(dir.path().join(file), format!("package {}", &file[..1])).expect("write file");
-        let metadata_dir_rel = format!("{}/{}", paths::ENTIRE_METADATA_DIR, name);
+        let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, name);
         let metadata_dir_abs = dir.path().join(&metadata_dir_rel);
         fs::create_dir_all(&metadata_dir_abs).expect("create metadata dir");
         fs::write(metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME), "log").expect("write log");

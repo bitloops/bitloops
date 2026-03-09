@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const LOG_LEVEL_ENV_VAR: &str = "ENTIRE_LOG_LEVEL";
+pub const LOG_LEVEL_ENV_VAR: &str = "BITLOOPS_LOG_LEVEL";
 pub const LOGS_DIR: &str = ".bitloops/logs";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

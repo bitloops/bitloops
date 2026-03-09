@@ -35,7 +35,7 @@ impl LocalFileBackend {
 
     /// `.bitloops/tmp/`
     fn tmp_dir(&self) -> PathBuf {
-        self.repo_root.join(paths::ENTIRE_TMP_DIR)
+        self.repo_root.join(paths::BITLOOPS_TMP_DIR)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -573,7 +573,7 @@ mod tests {
     fn pre_task_state_file_path_ends_with_expected_suffix() {
         let (_dir, backend) = setup();
         let got = backend.pre_task_path("toolu_abc123");
-        let expected_suffix = std::path::Path::new(crate::engine::paths::ENTIRE_TMP_DIR)
+        let expected_suffix = std::path::Path::new(crate::engine::paths::BITLOOPS_TMP_DIR)
             .join("pre-task-toolu_abc123.json");
         assert!(got.is_absolute());
         assert!(
