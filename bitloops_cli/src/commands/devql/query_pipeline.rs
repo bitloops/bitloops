@@ -377,7 +377,7 @@ async fn execute_postgres_pipeline(
     }
 
     let sql = format!(
-        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language, a.start_line, a.end_line, a.blob_sha, a.symbol_fqn, a.content_hash, a.created_at \
+        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.blob_sha, a.symbol_fqn, a.content_hash, a.created_at \
 FROM artefacts a \
 WHERE {} \
 ORDER BY a.path, a.start_line \
@@ -847,4 +847,3 @@ fn lookup_nested_field<'a>(obj: &'a Map<String, Value>, field: &str) -> Option<&
     }
     current
 }
-

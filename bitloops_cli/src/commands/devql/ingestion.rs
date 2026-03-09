@@ -163,6 +163,9 @@ CREATE TABLE IF NOT EXISTS artefacts (
     parent_artefact_id TEXT,
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,
     content_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -180,6 +183,23 @@ ON artefacts (repo_id, canonical_kind);
     postgres_exec(pg_client, sql)
         .await
         .context("creating Postgres DevQL tables")?;
+
+    let artefacts_alter_sql = r#"
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS signature TEXT;
+UPDATE artefacts
+SET start_byte = 0
+WHERE start_byte IS NULL;
+UPDATE artefacts
+SET end_byte = 0
+WHERE end_byte IS NULL;
+ALTER TABLE artefacts ALTER COLUMN start_byte SET NOT NULL;
+ALTER TABLE artefacts ALTER COLUMN end_byte SET NOT NULL;
+"#;
+    postgres_exec(pg_client, artefacts_alter_sql)
+        .await
+        .context("updating Postgres artefacts columns for byte offsets/signature")?;
     Ok(())
 }
 
@@ -391,11 +411,15 @@ async fn upsert_file_artefact_row(
     let line_count = git_blob_line_count(&cfg.repo_root, blob_sha)
         .unwrap_or(1)
         .max(1);
+    let byte_count = git_blob_content(&cfg.repo_root, blob_sha)
+        .map(|content| content.len() as i32)
+        .unwrap_or(0)
+        .max(0);
 
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, 0, {}, NULL, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
         esc_pg(&artefact_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(blob_sha),
@@ -403,6 +427,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         esc_pg(&language),
         esc_pg(path),
         line_count,
+        byte_count,
         esc_pg(blob_sha),
     );
 
@@ -441,9 +466,9 @@ async fn upsert_language_artefacts(
         ));
 
         let sql = format!(
-            "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', 'function', 'function', '{}', '{}', {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, content_hash = EXCLUDED.content_hash",
+            "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', 'function', 'function', '{}', '{}', {}, {}, {}, {}, '{}', '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
             esc_pg(&artefact_id),
             esc_pg(&cfg.repo.repo_id),
             esc_pg(blob_sha),
@@ -453,6 +478,9 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
             esc_pg(&file_artefact.artefact_id),
             item.start_line,
             item.end_line,
+            item.start_byte,
+            item.end_byte,
+            esc_pg(&item.signature),
             esc_pg(&content_hash),
         );
 
@@ -510,6 +538,9 @@ struct FunctionArtefact {
     name: String,
     start_line: i32,
     end_line: i32,
+    start_byte: i32,
+    end_byte: i32,
+    signature: String,
 }
 
 fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
@@ -521,6 +552,7 @@ fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
     )?;
 
     let lines: Vec<&str> = content.lines().collect();
+    let line_spans = line_byte_spans(content);
     let mut seen = HashSet::new();
     let mut out = Vec::new();
 
@@ -540,14 +572,54 @@ fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
             continue;
         }
 
+        let end_line = find_block_end_line(&lines, idx).unwrap_or(start_line);
         out.push(FunctionArtefact {
-            end_line: find_block_end_line(&lines, idx).unwrap_or(start_line),
+            start_byte: line_start_byte(&line_spans, start_line),
+            end_byte: line_end_byte(&line_spans, end_line),
+            end_line,
             name,
+            signature: line.trim().to_string(),
             start_line,
         });
     }
 
     Ok(out)
+}
+
+fn line_byte_spans(content: &str) -> Vec<(i32, i32)> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let mut spans = Vec::new();
+    let mut cursor: i32 = 0;
+    for segment in content.split_inclusive('\n') {
+        let start = cursor;
+        let end = start + segment.len() as i32;
+        spans.push((start, end));
+        cursor = end;
+    }
+    spans
+}
+
+fn line_start_byte(spans: &[(i32, i32)], line: i32) -> i32 {
+    if line <= 0 {
+        return 0;
+    }
+    spans
+        .get((line - 1) as usize)
+        .map(|(start, _)| *start)
+        .unwrap_or(0)
+}
+
+fn line_end_byte(spans: &[(i32, i32)], line: i32) -> i32 {
+    if line <= 0 {
+        return 0;
+    }
+    if let Some((_, end)) = spans.get((line - 1) as usize) {
+        return *end;
+    }
+    spans.last().map(|(_, end)| *end).unwrap_or(0)
 }
 
 fn find_block_end_line(lines: &[&str], start_index: usize) -> Option<i32> {
@@ -622,4 +694,3 @@ struct TelemetryFilter {
     agent: Option<String>,
     since: Option<String>,
 }
-
