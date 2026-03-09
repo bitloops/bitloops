@@ -17,7 +17,7 @@ use crate::engine::agent::{
 use crate::engine::lifecycle::read_and_parse_hook_input;
 
 use super::cli_commands::{run_opencode_import, run_opencode_session_delete};
-use super::hooks::{ENTIRE_MARKER, get_plugin_path, render_plugin_template};
+use super::hooks::{BITLOOPS_MARKER, get_plugin_path, render_plugin_template};
 use super::transcript::{
     calculate_token_usage_from_bytes, extract_modified_files, parse_messages_from_file,
 };
@@ -141,7 +141,7 @@ impl Agent for OpenCodeAgent {
     }
 
     fn get_session_dir(&self, repo_path: &str) -> Result<String> {
-        if let Ok(override_path) = std::env::var("ENTIRE_TEST_OPENCODE_PROJECT_DIR")
+        if let Ok(override_path) = std::env::var("BITLOOPS_TEST_OPENCODE_PROJECT_DIR")
             && !override_path.is_empty()
         {
             return Ok(override_path);
@@ -281,7 +281,7 @@ impl OpenCodeAgent {
     }
 
     pub fn ensure_plugin_marker(content: &str) -> Result<()> {
-        if content.contains(ENTIRE_MARKER) {
+        if content.contains(BITLOOPS_MARKER) {
             return Ok(());
         }
         Err(anyhow!("plugin file does not contain Bitloops marker"))
@@ -490,7 +490,7 @@ mod tests {
                 .join("bitloops.ts");
             let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
             assert!(
-                content.contains(r#"const ENTIRE_CMD = "bitloops""#),
+                content.contains(r#"const BITLOOPS_CMD = "bitloops""#),
                 "plugin file does not contain production command constant"
             );
             assert!(

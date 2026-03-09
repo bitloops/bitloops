@@ -31,7 +31,7 @@ pub const HOOK_NAME_NOTIFICATION: &str = "notification";
 
 pub const GEMINI_SETTINGS_FILE_NAME: &str = "settings.json";
 
-const ENTIRE_HOOK_PREFIXES: [&str; 2] = ["bitloops ", "cargo run -- "];
+const BITLOOPS_HOOK_PREFIXES: [&str; 2] = ["bitloops ", "cargo run -- "];
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GeminiCliAgent;
@@ -239,7 +239,7 @@ impl Agent for GeminiCliAgent {
     }
 
     fn get_session_dir(&self, repo_path: &str) -> Result<String> {
-        if let Ok(override_path) = std::env::var("ENTIRE_TEST_GEMINI_PROJECT_DIR")
+        if let Ok(override_path) = std::env::var("BITLOOPS_TEST_GEMINI_PROJECT_DIR")
             && !override_path.is_empty()
         {
             return Ok(override_path);
@@ -804,7 +804,7 @@ impl GeminiCliAgent {
     }
 
     fn is_bitloops_hook(command: &str) -> bool {
-        ENTIRE_HOOK_PREFIXES
+        BITLOOPS_HOOK_PREFIXES
             .iter()
             .any(|prefix| command.starts_with(prefix))
     }

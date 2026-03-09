@@ -83,7 +83,7 @@ impl Agent for CursorAgent {
     }
 
     fn get_session_dir(&self, repo_path: &str) -> Result<String> {
-        if let Ok(override_path) = std::env::var("ENTIRE_TEST_CURSOR_PROJECT_DIR")
+        if let Ok(override_path) = std::env::var("BITLOOPS_TEST_CURSOR_PROJECT_DIR")
             && !override_path.is_empty()
         {
             return Ok(override_path);
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn get_session_dir_uses_override() {
         with_env_var(
-            "ENTIRE_TEST_CURSOR_PROJECT_DIR",
+            "BITLOOPS_TEST_CURSOR_PROJECT_DIR",
             Some("/tmp/cursor-override"),
             || {
                 let agent = CursorAgent;

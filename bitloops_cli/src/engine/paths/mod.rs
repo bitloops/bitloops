@@ -8,9 +8,7 @@ use std::sync::{OnceLock, RwLock};
 // Directory constants.
 pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TMP_DIR: &str = ".bitloops/tmp";
-pub const ENTIRE_TMP_DIR: &str = BITLOOPS_TMP_DIR;
 pub const BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
-pub const ENTIRE_METADATA_DIR: &str = BITLOOPS_METADATA_DIR;
 
 // Metadata file names.
 pub const CONTEXT_FILE_NAME: &str = "context.md";

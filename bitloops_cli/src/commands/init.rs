@@ -20,7 +20,7 @@ const AGENT_CURSOR: &str = "cursor";
 const AGENT_GEMINI_CLI: &str = "gemini-cli";
 const AGENT_OPEN_CODE: &str = "opencode";
 const DEFAULT_AGENT: &str = AGENT_CLAUDE_CODE;
-const TELEMETRY_OPTOUT_ENV: &str = "ENTIRE_TELEMETRY_OPTOUT";
+const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
 
 pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, String>;
 
@@ -162,9 +162,6 @@ fn agent_display(agent: &str) -> &'static str {
 }
 
 pub fn can_prompt_interactively() -> bool {
-    if let Ok(v) = env::var("ENTIRE_TEST_TTY") {
-        return v == "1";
-    }
     if let Ok(v) = env::var("BITLOOPS_TEST_TTY") {
         return v == "1";
     }
@@ -693,7 +690,7 @@ mod tests {
     fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("0"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
             assert_eq!(selected, vec![DEFAULT_AGENT.to_string()]);
@@ -705,7 +702,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("0"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
             assert_eq!(selected, vec![AGENT_CLAUDE_CODE.to_string()]);
@@ -723,7 +720,7 @@ mod tests {
             Ok(vec![AGENT_CURSOR.to_string()])
         };
 
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("1"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
             assert_eq!(selected, vec![AGENT_CURSOR.to_string()]);
@@ -737,7 +734,7 @@ mod tests {
         let select = |_available: &[String]| -> std::result::Result<Vec<String>, String> {
             Err("user cancelled".to_string())
         };
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("1"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
             let mut out = Vec::new();
             let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
             assert!(format!("{err:#}").contains("user cancelled"));
@@ -750,7 +747,7 @@ mod tests {
         setup_git_repo(&dir);
         let select =
             |_available: &[String]| -> std::result::Result<Vec<String>, String> { Ok(vec![]) };
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("1"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
             let mut out = Vec::new();
             let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
             assert!(format!("{err:#}").contains("no agents selected"));
@@ -763,7 +760,7 @@ mod tests {
         setup_git_repo(&dir);
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("0"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
             assert_eq!(selected.len(), 2);
@@ -782,7 +779,7 @@ mod tests {
                 AGENT_CLAUDE_CODE.to_string(),
             ])
         };
-        with_process_state(Some(dir.path()), &[("ENTIRE_TEST_TTY", Some("1"))], || {
+        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
             assert_eq!(
@@ -848,7 +845,7 @@ mod tests {
 
     #[test]
     fn maybe_capture_telemetry_consent_no_tty_leaves_unset() {
-        with_env_var("ENTIRE_TEST_TTY", Some("0"), || {
+        with_env_var("BITLOOPS_TEST_TTY", Some("0"), || {
             let dir = tempfile::tempdir().unwrap();
             setup_git_repo(&dir);
 

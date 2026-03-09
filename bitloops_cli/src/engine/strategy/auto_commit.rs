@@ -272,7 +272,7 @@ impl AutoCommitStrategy {
 
         let staging_dir = self
             .repo_root
-            .join(paths::ENTIRE_TMP_DIR)
+            .join(paths::BITLOOPS_TMP_DIR)
             .join(format!("auto-commit-{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&staging_dir).context("creating auto-commit staging directory")?;
 

@@ -393,7 +393,7 @@ fn hook_logging_writes_to_session_log_file() {
         dir.path(),
         &["hooks", "git", "post-commit"],
         None,
-        &[("ENTIRE_LOG_LEVEL", "debug")],
+        &[("BITLOOPS_LOG_LEVEL", "debug")],
     );
     let _ = out;
 
@@ -432,7 +432,7 @@ fn hook_logging_writes_without_session() {
         dir.path(),
         &["hooks", "git", "post-commit"],
         None,
-        &[("ENTIRE_LOG_LEVEL", "debug")],
+        &[("BITLOOPS_LOG_LEVEL", "debug")],
     );
     let _ = out;
 
