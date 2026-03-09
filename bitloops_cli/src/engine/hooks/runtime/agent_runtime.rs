@@ -19,6 +19,7 @@ use crate::engine::agent::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CURSOR,
 };
 use crate::engine::git_operations;
+use crate::engine::history::devql_prefetch;
 #[cfg(test)]
 use crate::engine::logging;
 use crate::engine::paths;
@@ -226,7 +227,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     // Capture pre-prompt state for use by `stop`.
     let transcript_position = get_transcript_position(&input.transcript_path).unwrap_or_default();
     let prompt_trunc = truncate_prompt_for_storage(&input.prompt);
-    let pre_prompt = PrePromptState {
+    let mut pre_prompt = PrePromptState {
         session_id: input.session_id.clone(),
         timestamp: now_rfc3339(),
         source: String::new(),
@@ -238,8 +239,8 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         start_message_index: 0,
         step_transcript_start: 0,
         last_transcript_line_count: 0,
+        devql_prefetch: None,
     };
-    backend.save_pre_prompt(&pre_prompt)?;
 
     // InitializeSession is best-effort (warn, do not block hook).
     if let Err(err) = strategy.initialize_session(
@@ -275,6 +276,24 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         state.agent_type = profile.agent_type.to_string();
     }
 
+    if let Some(root) = repo_root {
+        match devql_prefetch::prefetch_for_prompt(
+            root,
+            &input.session_id,
+            &state.turn_id,
+            &input.prompt,
+        ) {
+            Ok(Some(prefetch)) => {
+                pre_prompt.devql_prefetch = Some(prefetch);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("[bitloops] Warning: pre-hook DevQL history prefetch failed: {err:#}");
+            }
+        }
+    }
+
+    backend.save_pre_prompt(&pre_prompt)?;
     backend.save_session(&state)
 }
 
