@@ -9,19 +9,21 @@ The open-source intelligence layer for AI-native development. Captures the full 
 macOS, Linux, WSL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.sh | bash
+curl -fsSL https://bitloops.com/install.sh | bash
 ```
+
+https://bitloops.com/
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.ps1 | iex
+irm https://bitloops.com/install.ps1 | iex
 ```
 
 Windows CMD:
 
 ```cmd
-curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.cmd -o install.cmd && install.cmd && del install.cmd
+curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
 ### Homebrew (macOS/Linux)
