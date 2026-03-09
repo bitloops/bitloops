@@ -23,6 +23,7 @@ docker run -d --name bitloops-clickhouse \
 
 
 ## 1) Configure database connections
+_Create config.json to your home folder_
 
 Create `~/.bitloops/config.json`:
 
