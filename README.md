@@ -4,17 +4,31 @@ The open-source intelligence layer for AI-native development. Captures the full 
 
 ## Installation
 
-### curl
+### Native Install (Recommended)
 
-`curl -sSL https://bitloops.com/install.sh | bash`
+macOS, Linux, WSL:
 
-### brew
+```bash
+curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.sh | bash
+```
 
-`brew install bitloops/tap/bitloops`
+Windows PowerShell:
 
-### cargo
+```powershell
+irm https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.ps1 | iex
+```
 
-`cargo install bitloops`
+Windows CMD:
+
+```cmd
+curl -fsSL https://raw.githubusercontent.com/bitloops/bitloops/main/scripts/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install bitloops/tap/bitloops
+```
 
 ## Getting Started
 
