@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - 'bitloops_cli/**'
+      - 'scripts/check-rust-file-size.sh'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
