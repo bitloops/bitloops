@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  rust-file-size:
+    name: Rust File Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Check Rust file size limits
+        run: bash scripts/check-rust-file-size.sh
+  test:
+    name: Test compile (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile test targets
+        run: cargo test --manifest-path bitloops_cli/Cargo.toml --no-run
+
+  build-matrix:
+    name: Build smoke ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
+        run: cargo install cross --locked
+
+      - name: Install musl-tools
+        if: contains(matrix.target, 'unknown-linux-musl')
+        run: sudo apt-get install -y musl-tools
+
+      - name: Configure Linux arm64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
+
+      - name: Install qemu for Linux arm64 smoke test
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+
+      - name: Configure Windows arm64 linker
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: '"CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=rust-lld" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+
+      - name: Build (musl targets)
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
+        run: cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Build (non-musl targets)
+        if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
+        run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
+        run: ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
+
+      - name: Smoke test (Linux arm64 via qemu)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: qemu-aarch64 ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
+
+      - name: Smoke test (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          & "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe" --version
+
+      - name: Validate Windows arm64 build output
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $path = "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe"
+          if (-not (Test-Path $path)) {
+            throw "Missing expected binary: $path"
+          }

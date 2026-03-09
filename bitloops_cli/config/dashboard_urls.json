@@ -1,0 +1,4 @@
+{
+  "dashboard_cdn_base_url": "https://test_cdn_base_url",
+  "dashboard_manifest_url": "https://raw.githubusercontent.com/bitloops/local-dashboard/main/bundle_versions.json"
+}
