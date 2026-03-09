@@ -12,8 +12,6 @@ macOS, Linux, WSL:
 curl -fsSL https://bitloops.com/install.sh | bash
 ```
 
-https://bitloops.com/
-
 Windows PowerShell:
 
 ```powershell
