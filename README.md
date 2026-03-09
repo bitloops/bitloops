@@ -52,12 +52,12 @@ To view your Checkpoints run the following command again from within the root of
 
 ## Supported Agents
 
-[X] Claude Code
-[ ] Codex (Coming as soon as OpenAI adds hooks to Codex (they are working on it))
-[X] Cursor
-[X] Gemini
-[ ] GitHub Copilot (Coming soon)
-[X] OpenCode
+- [x] Claude Code
+- [ ] Codex (Coming as soon as OpenAI adds hooks to Codex; they are working on it)
+- [x] Cursor
+- [x] Gemini
+- [ ] GitHub Copilot (Coming soon)
+- [x] OpenCode
 
 ## What is DevQL?
 
