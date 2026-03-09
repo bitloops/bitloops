@@ -4,17 +4,31 @@ The open-source intelligence layer for AI-native development. Captures the full 
 
 ## Installation
 
-### curl
+### Native Install (Recommended)
 
-`curl -sSL https://bitloops.com/install.sh | bash`
+macOS, Linux, WSL:
 
-### brew
+```bash
+curl -fsSL https://bitloops.com/install.sh | bash
+```
 
-`brew install bitloops/tap/bitloops`
+Windows PowerShell:
 
-### cargo
+```powershell
+irm https://bitloops.com/install.ps1 | iex
+```
 
-`cargo install bitloops`
+Windows CMD:
+
+```cmd
+curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install bitloops/tap/bitloops
+```
 
 ## Getting Started
 
@@ -38,12 +52,12 @@ To view your Checkpoints run the following command again from within the root of
 
 ## Supported Agents
 
-[X] Claude Code
-[ ] Codex (Coming as soon as OpenAI adds hooks to Codex (they are working on it))
-[X] Cursor
-[X] Gemini
-[ ] GitHub Copilot (Coming soon)
-[X] OpenCode
+- [x] Claude Code
+- [ ] Codex (Coming as soon as OpenAI adds hooks to Codex; they are working on it)
+- [x] Cursor
+- [x] Gemini
+- [ ] GitHub Copilot (Coming soon)
+- [x] OpenCode
 
 ## What is DevQL?
 
