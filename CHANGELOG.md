@@ -17,3 +17,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Native Windows CMD installer at `scripts/install.cmd` with GitHub Releases download and SHA256 verification.
 - Windows ARM64 (`aarch64-pc-windows-msvc`) release artifacts and installer support.
 - DevQL query history injest in agent pre-hook.
+- Added workflow to protect main branch from merges of other than develop branches.
