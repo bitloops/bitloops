@@ -241,6 +241,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         last_transcript_line_count: 0,
         devql_prefetch: None,
     };
+    backend.save_pre_prompt(&pre_prompt)?;
 
     // InitializeSession is best-effort (warn, do not block hook).
     if let Err(err) = strategy.initialize_session(
@@ -285,6 +286,11 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         ) {
             Ok(Some(prefetch)) => {
                 pre_prompt.devql_prefetch = Some(prefetch);
+                if let Err(err) = backend.save_pre_prompt(&pre_prompt) {
+                    eprintln!(
+                        "[bitloops] Warning: failed to persist pre-hook DevQL prefetch: {err:#}"
+                    );
+                }
             }
             Ok(None) => {}
             Err(err) => {
@@ -293,7 +299,6 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         }
     }
 
-    backend.save_pre_prompt(&pre_prompt)?;
     backend.save_session(&state)
 }
 
