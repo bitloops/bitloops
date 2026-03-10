@@ -345,6 +345,14 @@ fn agent_matches_filter(info: &CommittedInfo, agent_filter: Option<&str>) -> boo
         return true;
     }
 
+    if !info.agents.is_empty() {
+        return info
+            .agents
+            .iter()
+            .map(|agent| canonical_agent_key(agent))
+            .any(|agent| agent == normalized);
+    }
+
     canonical_agent_key(&info.agent) == normalized
 }
 

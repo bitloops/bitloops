@@ -140,6 +140,154 @@ fn seed_dashboard_repo() -> TempDir {
     dir
 }
 
+fn seed_dashboard_repo_multi_session() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    git_ok(repo_root, &["init"]);
+    git_ok(repo_root, &["checkout", "-B", "main"]);
+    git_ok(repo_root, &["config", "user.name", "Alice"]);
+    git_ok(repo_root, &["config", "user.email", "alice@example.com"]);
+
+    fs::write(repo_root.join("app.rs"), "fn main() {}\n").expect("write app.rs");
+    git_ok(repo_root, &["add", "app.rs"]);
+    git_ok(repo_root, &["commit", "-m", "Initial commit"]);
+
+    fs::write(
+        repo_root.join("app.rs"),
+        "fn main() { println!(\"ok\"); }\n",
+    )
+    .expect("update app.rs");
+    git_ok(repo_root, &["add", "app.rs"]);
+    git_ok(
+        repo_root,
+        &[
+            "commit",
+            "-m",
+            "Checkpoint commit",
+            "-m",
+            &format!("{CHECKPOINT_TRAILER_KEY}: 112233445566"),
+        ],
+    );
+
+    git_ok(
+        repo_root,
+        &["checkout", "--orphan", "bitloops/checkpoints/v1"],
+    );
+    let checkpoint_bucket = repo_root.join("11").join("2233445566");
+    fs::create_dir_all(checkpoint_bucket.join("0")).expect("create checkpoint directories");
+    fs::create_dir_all(checkpoint_bucket.join("1")).expect("create checkpoint directories");
+
+    let top_metadata = json!({
+        "checkpoint_id": "112233445566",
+        "strategy": "manual-commit",
+        "branch": "main",
+        "checkpoints_count": 3,
+        "files_touched": ["app.rs"],
+        "sessions": [{
+            "metadata": "/11/2233445566/0/metadata.json",
+            "transcript": "/11/2233445566/0/full.jsonl",
+            "context": "/11/2233445566/0/context.md",
+            "content_hash": "/11/2233445566/0/content_hash.txt",
+            "prompt": "/11/2233445566/0/prompt.txt"
+        }, {
+            "metadata": "/11/2233445566/1/metadata.json",
+            "transcript": "/11/2233445566/1/full.jsonl",
+            "context": "/11/2233445566/1/context.md",
+            "content_hash": "/11/2233445566/1/content_hash.txt",
+            "prompt": "/11/2233445566/1/prompt.txt"
+        }],
+        "token_usage": {
+            "input_tokens": 200,
+            "output_tokens": 80,
+            "cache_creation_tokens": 20,
+            "cache_read_tokens": 10,
+            "api_call_count": 6
+        }
+    });
+    let session_zero_metadata = json!({
+        "checkpoint_id": "112233445566",
+        "session_id": "session-1",
+        "checkpoints_count": 1,
+        "strategy": "manual-commit",
+        "agent": "claude-code",
+        "created_at": "2026-02-27T12:00:00Z",
+        "cli_version": "0.0.3",
+        "files_touched": ["app.rs"],
+        "is_task": false,
+        "tool_use_id": ""
+    });
+    let session_one_metadata = json!({
+        "checkpoint_id": "112233445566",
+        "session_id": "session-2",
+        "checkpoints_count": 2,
+        "strategy": "manual-commit",
+        "agent": "gemini-cli",
+        "created_at": "2026-02-27T12:10:00Z",
+        "cli_version": "0.0.3",
+        "files_touched": ["app.rs"],
+        "is_task": false,
+        "tool_use_id": ""
+    });
+
+    fs::write(
+        checkpoint_bucket.join("metadata.json"),
+        serde_json::to_string_pretty(&top_metadata).expect("serialize top metadata"),
+    )
+    .expect("write top metadata");
+    fs::write(
+        checkpoint_bucket.join("0").join("metadata.json"),
+        serde_json::to_string_pretty(&session_zero_metadata).expect("serialize session metadata"),
+    )
+    .expect("write session metadata");
+    fs::write(
+        checkpoint_bucket.join("1").join("metadata.json"),
+        serde_json::to_string_pretty(&session_one_metadata).expect("serialize session metadata"),
+    )
+    .expect("write session metadata");
+    fs::write(
+        checkpoint_bucket.join("0").join("full.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"A\"}]}}\n",
+    )
+    .expect("write transcript");
+    fs::write(
+        checkpoint_bucket.join("1").join("full.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"B\"}]}}\n",
+    )
+    .expect("write transcript");
+
+    let first_prompt_core = "A".repeat(200);
+    let first_prompt = format!(
+        "<file_bundle>\nfoo.txt\nbar.md\n</file_bundle>\n<context_block>\nrepo-index\n</context_block>\n   \n\t{first_prompt_core}"
+    );
+    fs::write(
+        checkpoint_bucket.join("0").join("prompt.txt"),
+        format!("{first_prompt}\n\n---\n\nSecond prompt in first session"),
+    )
+    .expect("write prompt");
+    fs::write(
+        checkpoint_bucket.join("1").join("prompt.txt"),
+        "Second session prompt",
+    )
+    .expect("write prompt");
+    fs::write(
+        checkpoint_bucket.join("0").join("context.md"),
+        "Context one",
+    )
+    .expect("write context");
+    fs::write(
+        checkpoint_bucket.join("1").join("context.md"),
+        "Context two",
+    )
+    .expect("write context");
+
+    git_ok(repo_root, &["add", "11"]);
+    git_ok(repo_root, &["commit", "-m", "checkpoint metadata"]);
+    git_ok(repo_root, &["checkout", "main"]);
+
+    dir
+}
+
 async fn request_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     request_json_with_method(app, Method::GET, uri, Body::empty()).await
 }
@@ -523,18 +671,38 @@ async fn api_commits_filters_by_user_agent_and_time() {
     let commits = commits_payload.as_array().expect("commits array");
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0]["checkpoint"]["checkpoint_id"], "aabbccddeeff");
+    assert!(commits[0]["checkpoint"].get("agent").is_none());
     assert_eq!(
-        commits[0]["checkpoint"]["agent"]
-            .as_str()
-            .map(super::canonical_agent_key),
-        Some("claude-code".to_string())
-    );
-    assert_eq!(
-        commits[0]["commit"]["files_touched"]["app.rs"]["additionsCount"].as_u64(),
+        commits[0]["checkpoint"]["agents"].as_array().map(Vec::len),
         Some(1)
     );
     assert_eq!(
-        commits[0]["commit"]["files_touched"]["app.rs"]["deletionsCount"].as_u64(),
+        commits[0]["checkpoint"]["agents"][0].as_str(),
+        Some("claude-code")
+    );
+    assert_eq!(
+        commits[0]["checkpoint"]["first_prompt_preview"].as_str(),
+        Some("Build dashboard API")
+    );
+    let commit_files_touched = commits[0]["commit"]["files_touched"]
+        .as_array()
+        .expect("commit files_touched array");
+    assert_eq!(commit_files_touched.len(), 1);
+    assert_eq!(commit_files_touched[0]["filepath"], "app.rs");
+    assert_eq!(commit_files_touched[0]["additionsCount"].as_u64(), Some(1));
+    assert_eq!(commit_files_touched[0]["deletionsCount"].as_u64(), Some(1));
+
+    let checkpoint_files_touched = commits[0]["checkpoint"]["files_touched"]
+        .as_array()
+        .expect("checkpoint files_touched array");
+    assert_eq!(checkpoint_files_touched.len(), 1);
+    assert_eq!(checkpoint_files_touched[0]["filepath"], "app.rs");
+    assert_eq!(
+        checkpoint_files_touched[0]["additionsCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        checkpoint_files_touched[0]["deletionsCount"].as_u64(),
         Some(1)
     );
 
@@ -559,6 +727,51 @@ async fn api_commits_filters_by_user_agent_and_time() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(time_filtered.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
+    let repo = seed_dashboard_repo_multi_session();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, commits_payload) = request_json(app.clone(), "/api/commits?branch=main").await;
+    assert_eq!(status, StatusCode::OK);
+    let commits = commits_payload.as_array().expect("commits array");
+    assert_eq!(commits.len(), 1);
+
+    let checkpoint = &commits[0]["checkpoint"];
+    assert_eq!(checkpoint["checkpoint_id"], "112233445566");
+    assert_eq!(
+        checkpoint["agents"].as_array().cloned().unwrap_or_default(),
+        vec![json!("claude-code"), json!("gemini-cli")]
+    );
+    let expected_preview = "A".repeat(160);
+    assert_eq!(
+        checkpoint["first_prompt_preview"].as_str(),
+        Some(expected_preview.as_str())
+    );
+    assert!(checkpoint.get("agent").is_none());
+
+    let (status, claude_filtered) =
+        request_json(app.clone(), "/api/commits?branch=main&agent=claude-code").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(claude_filtered.as_array().map(Vec::len), Some(1));
+
+    let (status, gemini_filtered) =
+        request_json(app.clone(), "/api/commits?branch=main&agent=gemini-cli").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(gemini_filtered.as_array().map(Vec::len), Some(1));
+
+    let (status, agents_payload) = request_json(app, "/api/agents?branch=main").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        agents_payload.as_array().cloned().unwrap_or_default(),
+        vec![json!({"key": "claude-code"}), json!({"key": "gemini-cli"})]
+    );
 }
 
 #[tokio::test]
@@ -590,6 +803,13 @@ async fn api_checkpoint_returns_detailed_session_payload() {
     assert_eq!(payload["checkpoint_id"], "aabbccddeeff");
     assert_eq!(payload["session_count"].as_u64(), Some(1));
     assert_eq!(payload["token_usage"]["input_tokens"].as_u64(), Some(100));
+    let files_touched = payload["files_touched"]
+        .as_array()
+        .expect("files_touched array");
+    assert_eq!(files_touched.len(), 1);
+    assert_eq!(files_touched[0]["filepath"], "app.rs");
+    assert_eq!(files_touched[0]["additionsCount"].as_u64(), Some(1));
+    assert_eq!(files_touched[0]["deletionsCount"].as_u64(), Some(1));
 
     let sessions = payload["sessions"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 1);
