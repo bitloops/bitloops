@@ -266,7 +266,9 @@ fn posthog_api_key() -> String {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            option_env!("BITLOOPS_POSTHOG_API_KEY").map(String::from).filter(|v| !v.trim().is_empty())
+            option_env!("BITLOOPS_POSTHOG_API_KEY")
+                .map(String::from)
+                .filter(|v| !v.trim().is_empty())
         })
         .unwrap_or_else(|| POSTHOG_API_KEY.to_string())
 }
