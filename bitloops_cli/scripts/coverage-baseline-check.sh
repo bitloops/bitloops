@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-BASELINE_FILE="$PROJECT_ROOT/.coverage-baseline.json"
+BASELINE_FILE_JSONL="$PROJECT_ROOT/.coverage-baseline.jsonl"
 COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
 CANONICAL_CMD="cargo llvm-cov --workspace --all-features --all-targets --lcov --output-path target/llvm-cov.info"
 EPSILON="0.05"
@@ -16,7 +16,7 @@ Usage: ./scripts/coverage-baseline-check.sh [check|update]
 
 Modes:
   check   Run coverage and fail if current coverage is lower than baseline.
-  update  Run coverage and rewrite .coverage-baseline.json with current metrics.
+  update  Run coverage and append a new JSON entry to .coverage-baseline.jsonl.
 EOF
 }
 
@@ -60,20 +60,46 @@ percent() {
   }'
 }
 
-read_baseline_metric() {
-  local key="$1"
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+current_git_branch() {
+  local branch
+  branch="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+    printf "DETACHED_HEAD"
+    return
+  fi
+  printf "%s" "$branch"
+}
+
+read_latest_baseline_line() {
+  if [[ ! -f "$BASELINE_FILE_JSONL" ]]; then
+    echo "Coverage baseline history file not found: $BASELINE_FILE_JSONL"
+    echo "Create it first with: ./scripts/coverage-baseline-check.sh update"
+    exit 1
+  fi
+
+  local line
+  line="$(tail -n 1 "$BASELINE_FILE_JSONL")"
+  if [[ -z "${line//[[:space:]]/}" ]]; then
+    echo "Baseline history file is malformed: last line is empty."
+    echo "Fix $BASELINE_FILE_JSONL or regenerate with: ./scripts/coverage-baseline-check.sh update"
+    exit 1
+  fi
+
+  printf '%s' "$line"
+}
+
+read_baseline_metric_from_line() {
+  local line="$1"
+  local key="$2"
   local value
-  value="$(awk -v key="$key" '
-    $0 ~ "\"" key "\"" {
-      if (match($0, /-?[0-9]+(\.[0-9]+)?/)) {
-        print substr($0, RSTART, RLENGTH)
-        exit
-      }
-    }
-  ' "$BASELINE_FILE")"
+  value="$(printf '%s\n' "$line" | sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*(-?[0-9]+([.][0-9]+)?).*/\\1/p")"
 
   if [[ -z "$value" ]]; then
-    echo "Failed to read baseline metric \"$key\" from $BASELINE_FILE" >&2
+    echo "Failed to read baseline metric \"$key\" from latest JSONL entry in $BASELINE_FILE_JSONL" >&2
     exit 1
   fi
 
@@ -100,34 +126,28 @@ write_baseline() {
   local lines_total="$4"
   local fn_cov="$5"
   local fn_total="$6"
-  local now_utc
+  local now_utc git_branch escaped_branch escaped_cmd
 
   now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  git_branch="$(current_git_branch)"
+  escaped_branch="$(json_escape "$git_branch")"
+  escaped_cmd="$(json_escape "$CANONICAL_CMD")"
 
-  cat > "$BASELINE_FILE" <<EOF
-{
-  "version": 1,
-  "generated_at_utc": "$now_utc",
-  "command": "$CANONICAL_CMD",
-  "metrics": {
-    "lines_pct": $lines_pct,
-    "functions_pct": $functions_pct
-  },
-  "raw": {
-    "lines": { "covered": $lines_cov, "total": $lines_total },
-    "functions": { "covered": $fn_cov, "total": $fn_total }
-  }
-}
-EOF
+  printf '{"version":1,"generated_at_utc":"%s","git_branch":"%s","command":"%s","epsilon":%s,"metrics":{"lines_pct":%s,"functions_pct":%s},"raw":{"lines":{"covered":%s,"total":%s},"functions":{"covered":%s,"total":%s}}}\n' \
+    "$now_utc" \
+    "$escaped_branch" \
+    "$escaped_cmd" \
+    "$EPSILON" \
+    "$lines_pct" \
+    "$functions_pct" \
+    "$lines_cov" \
+    "$lines_total" \
+    "$fn_cov" \
+    "$fn_total" \
+    >> "$BASELINE_FILE_JSONL"
 }
 
 check_mode() {
-  if [[ ! -f "$BASELINE_FILE" ]]; then
-    echo "Coverage baseline file not found: $BASELINE_FILE"
-    echo "Create it first with: ./scripts/coverage-baseline-check.sh update"
-    exit 1
-  fi
-
   run_coverage
 
   read -r lines_cov lines_total fn_cov fn_total <<<"$(read_coverage_totals)"
@@ -135,11 +155,13 @@ check_mode() {
   lines_pct="$(percent "$lines_cov" "$lines_total")"
   functions_pct="$(percent "$fn_cov" "$fn_total")"
 
-  local base_lines base_functions
-  base_lines="$(read_baseline_metric "lines_pct")"
-  base_functions="$(read_baseline_metric "functions_pct")"
+  local latest_baseline_line base_lines base_functions
+  latest_baseline_line="$(read_latest_baseline_line)"
+  base_lines="$(read_baseline_metric_from_line "$latest_baseline_line" "lines_pct")"
+  base_functions="$(read_baseline_metric_from_line "$latest_baseline_line" "functions_pct")"
 
   echo "Coverage comparison (current vs baseline):"
+  echo "  Baseline source: $(basename "$BASELINE_FILE_JSONL") (last entry via tail -n 1)"
   echo "  Tolerance: -${EPSILON} percentage points"
   printf "  %-10s baseline: %7.2f%%  current: %7.2f%%  delta: %s\n" \
     "Lines" "$base_lines" "$lines_pct" "$(delta "$lines_pct" "$base_lines")"
@@ -179,7 +201,7 @@ update_mode() {
     "$lines_cov" "$lines_total" \
     "$fn_cov" "$fn_total"
 
-  echo "Coverage baseline updated: $BASELINE_FILE"
+  echo "Coverage baseline entry appended: $BASELINE_FILE_JSONL"
   printf "  %-10s %7.2f%% (%d/%d)\n" "Lines" "$lines_pct" "$lines_cov" "$lines_total"
   printf "  %-10s %7.2f%% (%d/%d)\n" "Functions" "$functions_pct" "$fn_cov" "$fn_total"
 }
