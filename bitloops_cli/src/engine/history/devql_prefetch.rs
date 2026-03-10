@@ -36,8 +36,7 @@ pub fn prefetch_for_prompt(
         return Ok(None);
     };
 
-    let repo_name = infer_repo_name(repo_root);
-    let query = build_devql_history_query(&repo_name, &primary_target);
+    let query = build_devql_history_query(&primary_target);
     let rows = run_devql_query(repo_root, &query)?;
 
     Ok(Some(PrefetchResult {
@@ -49,7 +48,7 @@ pub fn prefetch_for_prompt(
     }))
 }
 
-fn extract_history_target_from_prompt( repo_root: &Path,prompt: &str) -> Option<HistoryTarget> {
+fn extract_history_target_from_prompt(repo_root: &Path, prompt: &str) -> Option<HistoryTarget> {
     let targets = extract_candidate_history_targets_from_prompt(prompt);
     let Some(primary_target) = get_history_target(repo_root, targets) else {
         return None;
@@ -168,18 +167,39 @@ fn sanitize_target_path(path: &str) -> Option<String> {
 }
 
 fn get_history_target(repo_root: &Path, targets: Vec<HistoryTarget>) -> Option<HistoryTarget> {
-    targets.into_iter().find(|target| {
-        let candidate = Path::new(&target.path);
-        if candidate.is_absolute() {
-            candidate.is_file()
-        } else {
-            repo_root.join(candidate).is_file()
-        }
+    targets.into_iter().find_map(|target| {
+        normalize_target_for_repo(repo_root, &target.path).and_then(|repo_relative_path| {
+            if repo_root.join(&repo_relative_path).is_file() {
+                let mut normalized = target;
+                normalized.path = repo_relative_path;
+                Some(normalized)
+            } else {
+                None
+            }
+        })
     })
 }
 
-fn build_devql_history_query(repo_name: &str, target: &HistoryTarget) -> String {
-    let escaped_repo = repo_name.replace('"', "\\\"");
+fn normalize_target_for_repo(repo_root: &Path, raw_path: &str) -> Option<String> {
+    let repo_root = repo_root.canonicalize().ok()?;
+    let input = Path::new(raw_path);
+    let candidate = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        repo_root.join(input)
+    };
+    let candidate = candidate.canonicalize().ok()?;
+    if !candidate.starts_with(&repo_root) {
+        return None;
+    }
+    let rel = candidate.strip_prefix(&repo_root).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
+fn build_devql_history_query(target: &HistoryTarget) -> String {
     let escaped_path = target.path.replace('"', "\\\"");
 
     let artefacts_stage = match (target.start_line, target.end_line) {
@@ -188,17 +208,9 @@ fn build_devql_history_query(repo_name: &str, target: &HistoryTarget) -> String 
     };
 
     format!(
-        "repo(\"{escaped_repo}\")->file(\"{escaped_path}\")->{}->chatHistory()->limit(5)",
+        "file(\"{escaped_path}\")->{}->chatHistory()->limit(5)",
         artefacts_stage
     )
-}
-
-fn infer_repo_name(repo_root: &Path) -> String {
-    repo_root
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown-repo".to_string())
 }
 
 fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
@@ -243,7 +255,8 @@ mod tests {
 
     #[test]
     fn extract_targets_falls_back_to_file_level_history() {
-        let targets = extract_candidate_history_targets_from_prompt("please check src/main.rs for context");
+        let targets =
+            extract_candidate_history_targets_from_prompt("please check src/main.rs for context");
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].path, "src/main.rs");
         assert_eq!(targets[0].start_line, None);
@@ -251,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_targets_ignores_non_file_tokens() {
+    fn extract_targets_returns_non_file_tokens() {
         let targets = extract_candidate_history_targets_from_prompt(
             "await app.register(swagger, { openapi: { info: { title: 'My API' } } });",
         );
@@ -269,18 +282,31 @@ mod tests {
     }
 
     #[test]
+    fn get_history_target_converts_absolute_path_to_repo_relative() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("src").join("main.rs");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&file, "fn main() {}").expect("write");
+
+        let targets = vec![HistoryTarget {
+            path: file.to_string_lossy().to_string(),
+            start_line: Some(1),
+            end_line: Some(1),
+        }];
+        let selected = get_history_target(dir.path(), targets).expect("target selected");
+        assert_eq!(selected.path, "src/main.rs");
+    }
+
+    #[test]
     fn build_history_query_includes_line_range_when_present() {
-        let query = build_devql_history_query(
-            "bitloops-cli",
-            &HistoryTarget {
-                path: "src/main.rs".to_string(),
-                start_line: Some(10),
-                end_line: Some(25),
-            },
-        );
+        let query = build_devql_history_query(&HistoryTarget {
+            path: "src/main.rs".to_string(),
+            start_line: Some(10),
+            end_line: Some(25),
+        });
         assert_eq!(
             query,
-            "repo(\"bitloops-cli\")->file(\"src/main.rs\")->artefacts(lines:10..25)->chatHistory()->limit(5)"
+            "file(\"src/main.rs\")->artefacts(lines:10..25)->chatHistory()->limit(5)"
         );
     }
 }
