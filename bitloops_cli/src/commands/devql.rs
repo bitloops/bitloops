@@ -355,7 +355,25 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
 }
 
 async fn run_query(cfg: &DevqlConfig, args: &DevqlQueryArgs) -> Result<()> {
-    let parsed = parse_devql_query(&args.query)?;
+    let output = execute_query_json(cfg, &args.query).await?;
+    if args.compact {
+        println!("{}", serde_json::to_string(&output)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)] // Compiled in both bin/lib crates; used by lib hook runtime path.
+pub async fn execute_query_json_for_repo_root(repo_root: &Path, query: &str) -> Result<Value> {
+    let repo = resolve_repo_identity(repo_root)?;
+    let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo);
+    execute_query_json(&cfg, query).await
+}
+
+async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
+    let parsed = parse_devql_query(query)?;
     let pg_client = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None
     } else {
@@ -367,14 +385,7 @@ async fn run_query(cfg: &DevqlConfig, args: &DevqlQueryArgs) -> Result<()> {
         rows = project_rows(rows, &parsed.select_fields);
     }
 
-    let output = Value::Array(rows);
-    if args.compact {
-        println!("{}", serde_json::to_string(&output)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    }
-
-    Ok(())
+    Ok(Value::Array(rows))
 }
 
 include!("devql/support.rs");

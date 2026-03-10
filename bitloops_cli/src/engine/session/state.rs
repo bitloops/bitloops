@@ -163,6 +163,8 @@ pub struct PrePromptState {
     pub step_transcript_start: i64,
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub last_transcript_line_count: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devql_prefetch: Option<crate::engine::history::devql_prefetch::PrefetchResult>,
 }
 
 /// Marker written by `pre-task`; checked by `post-todo` and `post-task`.
