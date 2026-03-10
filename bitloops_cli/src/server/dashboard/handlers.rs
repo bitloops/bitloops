@@ -21,6 +21,7 @@ use axum::{
     http::StatusCode,
 };
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use utoipa::OpenApi;
 
 #[utoipa::path(
@@ -97,25 +98,14 @@ pub(crate) async fn handle_api_commits(
     let mut result = Vec::with_capacity(rows.len());
     for pair in rows {
         let files_touched = match read_commit_numstat(&state.repo_root, &pair.commit.sha) {
-            Ok(stats) => stats
-                .into_iter()
-                .map(|(path, (adds, dels))| {
-                    (
-                        path,
-                        ApiCommitFileDiffDto {
-                            additions_count: adds,
-                            deletions_count: dels,
-                        },
-                    )
-                })
-                .collect(),
+            Ok(stats) => api_file_diff_list_from_numstat(stats),
             Err(err) => {
                 log::warn!(
                     "dashboard commits endpoint: failed to read numstat for {}: {:#}",
                     pair.commit.sha,
                     err
                 );
-                HashMap::new()
+                api_zeroed_file_diff_list(&pair.checkpoint.files_touched)
             }
         };
         result.push(api_commit_row_from_pair(pair, files_touched));
@@ -251,17 +241,12 @@ pub(crate) async fn handle_api_agents(
     let pairs = query_commit_checkpoint_pairs_all(&state.repo_root, &filter)
         .map_err(|err| ApiError::internal(format!("Failed to query dashboard agents: {err:#}")))?;
 
-    let mut agents: Vec<ApiAgentDto> = pairs
-        .into_iter()
-        .filter_map(|pair| {
-            let key = canonical_agent_key(&pair.checkpoint.agent);
-            if key.is_empty() {
-                None
-            } else {
-                Some(ApiAgentDto { key })
-            }
-        })
-        .collect();
+    let mut agents: Vec<ApiAgentDto> = Vec::new();
+    for pair in pairs {
+        for key in checkpoint_agent_keys(&pair.checkpoint) {
+            agents.push(ApiAgentDto { key });
+        }
+    }
     agents.sort_by(|left, right| left.key.cmp(&right.key));
     agents.dedup_by(|left, right| left.key == right.key);
 
@@ -348,13 +333,19 @@ pub(crate) async fn handle_api_checkpoint(
         });
     }
 
+    let files_touched = resolve_checkpoint_files_touched(
+        &state.repo_root,
+        &info.branch,
+        &info.checkpoint_id,
+        &info.files_touched,
+    );
     let token_usage = api_token_usage_from_committed(&info);
     Ok(Json(ApiCheckpointDetailResponse {
         checkpoint_id: info.checkpoint_id,
         strategy: info.strategy,
         branch: info.branch,
         checkpoints_count: info.checkpoints_count,
-        files_touched: info.files_touched,
+        files_touched,
         session_count: info.session_count,
         token_usage,
         sessions,
@@ -655,8 +646,7 @@ fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
             continue;
         }
 
-        let agent_key = canonical_agent_key(&pair.checkpoint.agent);
-        if !agent_key.is_empty() {
+        for agent_key in checkpoint_agent_keys(&pair.checkpoint) {
             unique_agents.insert(agent_key);
         }
         total_sessions += pair.checkpoint.session_count;
@@ -702,6 +692,27 @@ fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
     }
 }
 
+fn checkpoint_agent_keys(info: &CommittedInfo) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+
+    if info.agents.is_empty() {
+        let key = canonical_agent_key(&info.agent);
+        if !key.is_empty() {
+            keys.push(key);
+        }
+        return keys;
+    }
+
+    for agent in &info.agents {
+        let key = canonical_agent_key(agent);
+        if key.is_empty() || keys.iter().any(|existing| existing == &key) {
+            continue;
+        }
+        keys.push(key);
+    }
+    keys
+}
+
 fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {
     info.token_usage.as_ref().map(|usage| ApiTokenUsageDto {
         input_tokens: usage.input_tokens,
@@ -712,19 +723,101 @@ fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageD
     })
 }
 
-fn api_checkpoint_from_committed(info: CommittedInfo) -> ApiCheckpointDto {
+fn api_file_diff_list_from_numstat(
+    stats: HashMap<String, (u64, u64)>,
+) -> Vec<ApiCommitFileDiffDto> {
+    let mut files_touched: Vec<ApiCommitFileDiffDto> = stats
+        .into_iter()
+        .map(|(filepath, (adds, dels))| ApiCommitFileDiffDto {
+            filepath,
+            additions_count: adds,
+            deletions_count: dels,
+        })
+        .collect();
+    files_touched.sort_by(|left, right| left.filepath.cmp(&right.filepath));
+    files_touched
+}
+
+fn api_zeroed_file_diff_list(files_touched: &[String]) -> Vec<ApiCommitFileDiffDto> {
+    let mut files_touched: Vec<ApiCommitFileDiffDto> = files_touched
+        .iter()
+        .cloned()
+        .map(|filepath| ApiCommitFileDiffDto {
+            filepath,
+            additions_count: 0,
+            deletions_count: 0,
+        })
+        .collect();
+    files_touched.sort_by(|left, right| left.filepath.cmp(&right.filepath));
+    files_touched
+}
+
+fn resolve_checkpoint_files_touched(
+    repo_root: &Path,
+    branch: &str,
+    checkpoint_id: &str,
+    fallback_files_touched: &[String],
+) -> Vec<ApiCommitFileDiffDto> {
+    let branch_commits = match walk_branch_commits_with_checkpoints(
+        repo_root,
+        branch,
+        None,
+        None,
+        API_GIT_SCAN_LIMIT,
+    ) {
+        Ok(commits) => commits,
+        Err(err) => {
+            log::warn!(
+                "dashboard checkpoint endpoint: failed to walk branch {} while resolving files_touched for {}: {:#}",
+                branch,
+                checkpoint_id,
+                err
+            );
+            return api_zeroed_file_diff_list(fallback_files_touched);
+        }
+    };
+
+    let Some(commit_sha) = branch_commits
+        .into_iter()
+        .find(|commit| commit.checkpoint_id == checkpoint_id)
+        .map(|commit| commit.sha)
+    else {
+        return api_zeroed_file_diff_list(fallback_files_touched);
+    };
+
+    match read_commit_numstat(repo_root, &commit_sha) {
+        Ok(stats) => api_file_diff_list_from_numstat(stats),
+        Err(err) => {
+            log::warn!(
+                "dashboard checkpoint endpoint: failed to read numstat for {} (checkpoint {}): {:#}",
+                commit_sha,
+                checkpoint_id,
+                err
+            );
+            api_zeroed_file_diff_list(fallback_files_touched)
+        }
+    }
+}
+
+fn api_checkpoint_from_committed(
+    info: CommittedInfo,
+    files_touched: Vec<ApiCommitFileDiffDto>,
+) -> ApiCheckpointDto {
     let token_usage = api_token_usage_from_committed(&info);
+    let agents = checkpoint_agent_keys(&info);
 
     ApiCheckpointDto {
         checkpoint_id: info.checkpoint_id,
         strategy: info.strategy,
         branch: info.branch,
         checkpoints_count: info.checkpoints_count,
-        files_touched: info.files_touched,
+        files_touched,
         session_count: info.session_count,
         token_usage,
         session_id: info.session_id,
         agent: info.agent,
+        agents,
+        first_prompt_preview: info.first_prompt_preview,
         created_at: info.created_at,
         is_task: info.is_task,
         tool_use_id: info.tool_use_id,
@@ -733,8 +826,9 @@ fn api_checkpoint_from_committed(info: CommittedInfo) -> ApiCheckpointDto {
 
 fn api_commit_row_from_pair(
     pair: CommitCheckpointPair,
-    files_touched: HashMap<String, ApiCommitFileDiffDto>,
+    files_touched: Vec<ApiCommitFileDiffDto>,
 ) -> ApiCommitRowDto {
+    let checkpoint_files_touched = files_touched.clone();
     ApiCommitRowDto {
         commit: ApiCommitDto {
             sha: pair.commit.sha,
@@ -745,6 +839,6 @@ fn api_commit_row_from_pair(
             message: pair.commit.message,
             files_touched,
         },
-        checkpoint: api_checkpoint_from_committed(pair.checkpoint),
+        checkpoint: api_checkpoint_from_committed(pair.checkpoint, checkpoint_files_touched),
     }
 }

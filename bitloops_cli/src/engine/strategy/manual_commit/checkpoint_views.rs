@@ -75,6 +75,10 @@ pub struct CommittedInfo {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub agent: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub first_prompt_preview: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub created_at: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -107,51 +111,94 @@ fn to_committed_info(
         return info;
     }
 
-    let idx = info.session_count - 1;
     let (a, b) = checkpoint_dir_parts(&summary.checkpoint_id);
-    let meta_path = format!("{a}/{b}/{idx}/{}", paths::METADATA_FILE_NAME);
-    let Ok(raw) = git_show_file(repo_root, read_ref, &meta_path) else {
-        return info;
-    };
+    let latest_session_index = info.session_count - 1;
 
-    if let Ok(meta) = serde_json::from_str::<CommittedMetadata>(&raw) {
-        info.session_id = meta.session_id;
-        info.agent = canonicalize_agent_type(&meta.agent);
-        info.created_at = meta.created_at;
-        info.is_task = meta.is_task;
-        info.tool_use_id = meta.tool_use_id;
-        return info;
+    for idx in 0..info.session_count {
+        let meta_path = format!("{a}/{b}/{idx}/{}", paths::METADATA_FILE_NAME);
+        let Ok(raw) = git_show_file(repo_root, read_ref, &meta_path) else {
+            continue;
+        };
+
+        if let Ok(meta) = serde_json::from_str::<CommittedMetadata>(&raw) {
+            push_unique_agent(&mut info.agents, &meta.agent);
+            if idx == latest_session_index {
+                info.session_id = meta.session_id;
+                info.agent = canonicalize_agent_type(&meta.agent);
+                info.created_at = meta.created_at;
+                info.is_task = meta.is_task;
+                info.tool_use_id = meta.tool_use_id;
+            }
+            continue;
+        }
+
+        // Keep list/read behavior resilient to legacy metadata with partial fields.
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&raw) {
+            push_unique_agent(
+                &mut info.agents,
+                meta.get("agent")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            );
+
+            if idx == latest_session_index {
+                info.session_id = meta
+                    .get("session_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                info.agent = canonicalize_agent_type(
+                    meta.get("agent")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+                info.created_at = meta
+                    .get("created_at")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                info.is_task = meta
+                    .get("is_task")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                info.tool_use_id = meta
+                    .get("tool_use_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+            }
+        }
     }
 
-    // Keep list/read behavior resilient to legacy metadata with partial fields.
-    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&raw) {
-        info.session_id = meta
-            .get("session_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        info.agent = canonicalize_agent_type(
-            meta.get("agent")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default(),
-        );
-        info.created_at = meta
-            .get("created_at")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        info.is_task = meta
-            .get("is_task")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        info.tool_use_id = meta
-            .get("tool_use_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+    if info.agent.is_empty()
+        && let Some(last) = info.agents.last()
+    {
+        info.agent = last.clone();
+    }
+
+    let first_prompt_path = format!("{a}/{b}/0/{}", paths::PROMPT_FILE_NAME);
+    if let Ok(raw_prompts) = git_show_file(repo_root, read_ref, &first_prompt_path) {
+        info.first_prompt_preview = first_prompt_preview(&raw_prompts);
     }
 
     info
+}
+
+fn push_unique_agent(agents: &mut Vec<String>, agent: &str) {
+    let normalized = canonicalize_agent_type(agent);
+    if normalized.is_empty() || agents.iter().any(|existing| existing == &normalized) {
+        return;
+    }
+    agents.push(normalized);
+}
+
+fn first_prompt_preview(prompts_blob: &str) -> String {
+    let first_prompt = prompts_blob
+        .split("\n\n---\n\n")
+        .next()
+        .unwrap_or_default()
+        .trim();
+    first_prompt.chars().take(160).collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -671,4 +718,3 @@ fn redact_jsonl_bytes_with_fallback(input: &[u8]) -> Vec<u8> {
 fn redact_text(input: &str) -> String {
     redact::string(input)
 }
-
