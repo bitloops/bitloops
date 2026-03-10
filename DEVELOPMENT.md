@@ -37,7 +37,7 @@ bash scripts/setup-hooks.sh
 This configures git to use the versioned hooks in `.githooks/`:
 
 - `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
-- `pre-push`: `cargo test`
+- `pre-push`: strict coverage non-regression check via `./bitloops_cli/scripts/coverage-baseline-check.sh check`
 
 ## Testing
 
@@ -70,6 +70,13 @@ brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
 # If preview error, do
 rustup component add llvm-tools-preview
 
+# Coverage baseline gate (lines + functions, strict no-regression)
+# - check: fail if current coverage < baseline for either metric
+./scripts/coverage-baseline-check.sh check
+
+# - update: rewrite baseline file intentionally
+./scripts/coverage-baseline-check.sh update
+
 # Coverage baseline (HTML + LCOV, default cargo threading)
 cargo test-coverage
 
@@ -87,6 +94,19 @@ Coverage outputs:
 
 - HTML: `target/llvm-cov-html/html/index.html`
 - LCOV: `target/llvm-cov.info`
+- Baseline file: `.coverage-baseline.json` (inside `bitloops_cli/`)
+
+Coverage gate policy:
+
+- Enforced in local `pre-push`.
+- Metrics: lines and functions.
+- Rule: `current >= baseline` for both metrics (no epsilon/tolerance).
+
+When baseline changes are intentional:
+
+- Run `./scripts/coverage-baseline-check.sh update` from `bitloops_cli/`.
+- Commit the baseline file update with your code changes.
+- If baseline decreases, include a short justification in the PR description.
 
 ---
 

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "generated_at_utc": "2026-03-10T14:14:44Z",
+  "command": "cargo llvm-cov --workspace --all-features --all-targets --lcov --output-path target/llvm-cov.info",
+  "metrics": {
+    "lines_pct": 79.99,
+    "functions_pct": 73.86
+  },
+  "raw": {
+    "lines": { "covered": 25162, "total": 31456 },
+    "functions": { "covered": 2181, "total": 2953 }
+  }
+}
