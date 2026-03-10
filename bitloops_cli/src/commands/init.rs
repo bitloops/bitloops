@@ -690,11 +690,15 @@ mod tests {
     fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
-            let mut out = Vec::new();
-            let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
-            assert_eq!(selected, vec![DEFAULT_AGENT.to_string()]);
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("0"))],
+            || {
+                let mut out = Vec::new();
+                let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
+                assert_eq!(selected, vec![DEFAULT_AGENT.to_string()]);
+            },
+        );
     }
 
     #[test]
@@ -702,11 +706,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
-            let mut out = Vec::new();
-            let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
-            assert_eq!(selected, vec![AGENT_CLAUDE_CODE.to_string()]);
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("0"))],
+            || {
+                let mut out = Vec::new();
+                let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
+                assert_eq!(selected, vec![AGENT_CLAUDE_CODE.to_string()]);
+            },
+        );
     }
 
     #[test]
@@ -720,11 +728,15 @@ mod tests {
             Ok(vec![AGENT_CURSOR.to_string()])
         };
 
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
-            let mut out = Vec::new();
-            let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
-            assert_eq!(selected, vec![AGENT_CURSOR.to_string()]);
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("1"))],
+            || {
+                let mut out = Vec::new();
+                let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
+                assert_eq!(selected, vec![AGENT_CURSOR.to_string()]);
+            },
+        );
     }
 
     #[test]
@@ -734,11 +746,15 @@ mod tests {
         let select = |_available: &[String]| -> std::result::Result<Vec<String>, String> {
             Err("user cancelled".to_string())
         };
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
-            let mut out = Vec::new();
-            let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
-            assert!(format!("{err:#}").contains("user cancelled"));
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("1"))],
+            || {
+                let mut out = Vec::new();
+                let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
+                assert!(format!("{err:#}").contains("user cancelled"));
+            },
+        );
     }
 
     #[test]
@@ -747,11 +763,15 @@ mod tests {
         setup_git_repo(&dir);
         let select =
             |_available: &[String]| -> std::result::Result<Vec<String>, String> { Ok(vec![]) };
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
-            let mut out = Vec::new();
-            let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
-            assert!(format!("{err:#}").contains("no agents selected"));
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("1"))],
+            || {
+                let mut out = Vec::new();
+                let err = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap_err();
+                assert!(format!("{err:#}").contains("no agents selected"));
+            },
+        );
     }
 
     #[test]
@@ -760,11 +780,15 @@ mod tests {
         setup_git_repo(&dir);
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("0"))], || {
-            let mut out = Vec::new();
-            let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
-            assert_eq!(selected.len(), 2);
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("0"))],
+            || {
+                let mut out = Vec::new();
+                let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
+                assert_eq!(selected.len(), 2);
+            },
+        );
     }
 
     #[test]
@@ -779,14 +803,18 @@ mod tests {
                 AGENT_CLAUDE_CODE.to_string(),
             ])
         };
-        with_process_state(Some(dir.path()), &[("BITLOOPS_TEST_TTY", Some("1"))], || {
-            let mut out = Vec::new();
-            let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
-            assert_eq!(
-                selected,
-                vec![AGENT_GEMINI_CLI.to_string(), AGENT_CLAUDE_CODE.to_string()]
-            );
-        });
+        with_process_state(
+            Some(dir.path()),
+            &[("BITLOOPS_TEST_TTY", Some("1"))],
+            || {
+                let mut out = Vec::new();
+                let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
+                assert_eq!(
+                    selected,
+                    vec![AGENT_GEMINI_CLI.to_string(), AGENT_CLAUDE_CODE.to_string()]
+                );
+            },
+        );
     }
 
     #[test]

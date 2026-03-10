@@ -26,6 +26,19 @@ Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.jso
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
+## Local git hooks (one-time setup)
+
+Run once from the repo root:
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+This configures git to use the versioned hooks in `.githooks/`:
+
+- `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
+- `pre-push`: `cargo test`
+
 ## Testing
 
 Run from the `bitloops_cli/` directory:
