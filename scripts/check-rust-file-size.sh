@@ -13,12 +13,12 @@ INCLUDE_TESTS="${INCLUDE_TESTS:-0}"
 
 declare -A LEGACY_MAX_LINES=()
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "error: ripgrep (rg) is required"
-  exit 2
+if command -v rg >/dev/null 2>&1; then
+  mapfile -t rust_files < <(rg --files "$ROOT" -g '*.rs')
+else
+  echo "warning: ripgrep (rg) not found; falling back to find"
+  mapfile -t rust_files < <(find "$ROOT" -type f -name '*.rs' | sort)
 fi
-
-mapfile -t rust_files < <(rg --files "$ROOT" -g '*.rs')
 if [[ "${#rust_files[@]}" -eq 0 ]]; then
   echo "No Rust files found under $ROOT"
   exit 0
