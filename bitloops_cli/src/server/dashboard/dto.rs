@@ -93,7 +93,6 @@ pub(super) struct ApiCheckpointDto {
     pub(super) session_count: usize,
     pub(super) token_usage: Option<ApiTokenUsageDto>,
     pub(super) session_id: String,
-    pub(super) agent: String,
     pub(super) agents: Vec<String>,
     pub(super) first_prompt_preview: String,
     pub(super) created_at: String,

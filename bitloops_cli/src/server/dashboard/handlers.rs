@@ -815,7 +815,6 @@ fn api_checkpoint_from_committed(
         session_count: info.session_count,
         token_usage,
         session_id: info.session_id,
-        agent: info.agent,
         agents,
         first_prompt_preview: info.first_prompt_preview,
         created_at: info.created_at,

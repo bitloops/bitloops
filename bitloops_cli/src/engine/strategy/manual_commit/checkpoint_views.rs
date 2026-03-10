@@ -193,12 +193,43 @@ fn push_unique_agent(agents: &mut Vec<String>, agent: &str) {
 }
 
 fn first_prompt_preview(prompts_blob: &str) -> String {
-    let first_prompt = prompts_blob
-        .split("\n\n---\n\n")
-        .next()
-        .unwrap_or_default()
-        .trim();
-    first_prompt.chars().take(160).collect()
+    let first_prompt = prompts_blob.split("\n\n---\n\n").next().unwrap_or_default();
+    let stripped = strip_leading_wrapped_tags(first_prompt).trim_start();
+    stripped.chars().take(160).collect()
+}
+
+fn strip_leading_wrapped_tags(input: &str) -> &str {
+    let mut rest = input.trim_start();
+    loop {
+        let Some((tag_name, after_open)) = parse_leading_open_tag(rest) else {
+            return rest;
+        };
+        let closing_tag = format!("</{tag_name}>");
+        let Some(close_idx) = after_open.find(&closing_tag) else {
+            return rest;
+        };
+        rest = after_open[close_idx + closing_tag.len()..].trim_start();
+    }
+}
+
+fn parse_leading_open_tag(input: &str) -> Option<(String, &str)> {
+    let trimmed = input.trim_start();
+    if !trimmed.starts_with('<') || trimmed.starts_with("</") {
+        return None;
+    }
+
+    let open_end = trimmed.find('>')?;
+    let inside = trimmed.get(1..open_end)?.trim();
+    if inside.is_empty() || inside.ends_with('/') {
+        return None;
+    }
+
+    let tag_name = inside.split_whitespace().next()?.trim();
+    if tag_name.is_empty() {
+        return None;
+    }
+
+    Some((tag_name.to_string(), trimmed.get(open_end + 1..)?))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

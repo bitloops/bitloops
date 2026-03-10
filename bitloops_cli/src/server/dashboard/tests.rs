@@ -256,7 +256,10 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
     )
     .expect("write transcript");
 
-    let first_prompt = "A".repeat(200);
+    let first_prompt_core = "A".repeat(200);
+    let first_prompt = format!(
+        "<file_bundle>\nfoo.txt\nbar.md\n</file_bundle>\n<context_block>\nrepo-index\n</context_block>\n   \n\t{first_prompt_core}"
+    );
     fs::write(
         checkpoint_bucket.join("0").join("prompt.txt"),
         format!("{first_prompt}\n\n---\n\nSecond prompt in first session"),
@@ -668,12 +671,7 @@ async fn api_commits_filters_by_user_agent_and_time() {
     let commits = commits_payload.as_array().expect("commits array");
     assert_eq!(commits.len(), 1);
     assert_eq!(commits[0]["checkpoint"]["checkpoint_id"], "aabbccddeeff");
-    assert_eq!(
-        commits[0]["checkpoint"]["agent"]
-            .as_str()
-            .map(super::canonical_agent_key),
-        Some("claude-code".to_string())
-    );
+    assert!(commits[0]["checkpoint"].get("agent").is_none());
     assert_eq!(
         commits[0]["checkpoint"]["agents"].as_array().map(Vec::len),
         Some(1)
@@ -747,7 +745,6 @@ async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
 
     let checkpoint = &commits[0]["checkpoint"];
     assert_eq!(checkpoint["checkpoint_id"], "112233445566");
-    assert_eq!(checkpoint["agent"], "gemini-cli");
     assert_eq!(
         checkpoint["agents"].as_array().cloned().unwrap_or_default(),
         vec![json!("claude-code"), json!("gemini-cli")]
@@ -757,6 +754,7 @@ async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
         checkpoint["first_prompt_preview"].as_str(),
         Some(expected_preview.as_str())
     );
+    assert!(checkpoint.get("agent").is_none());
 
     let (status, claude_filtered) =
         request_json(app.clone(), "/api/commits?branch=main&agent=claude-code").await;
