@@ -50,9 +50,7 @@ pub fn prefetch_for_prompt(
 
 fn extract_history_target_from_prompt(repo_root: &Path, prompt: &str) -> Option<HistoryTarget> {
     let targets = extract_candidate_history_targets_from_prompt(prompt);
-    let Some(primary_target) = get_history_target(repo_root, targets) else {
-        return None;
-    };
+    let primary_target = get_history_target(repo_root, targets)?;
     Some(primary_target)
 }
 

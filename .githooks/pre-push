@@ -3,4 +3,4 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 
-cargo test --manifest-path "$ROOT/bitloops_cli/Cargo.toml"
+bash "$ROOT/bitloops_cli/scripts/coverage-baseline-check.sh" check
