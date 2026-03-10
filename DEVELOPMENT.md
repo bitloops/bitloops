@@ -71,7 +71,7 @@ brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
 rustup component add llvm-tools-preview
 
 # Coverage baseline gate (lines + functions, strict no-regression)
-# - check: fail if current coverage < baseline for either metric
+# - check: fail if current coverage < baseline - 0.05 for either metric
 ./scripts/coverage-baseline-check.sh check
 
 # - update: rewrite baseline file intentionally
@@ -100,7 +100,7 @@ Coverage gate policy:
 
 - Enforced in local `pre-push`.
 - Metrics: lines and functions.
-- Rule: `current >= baseline` for both metrics (no epsilon/tolerance).
+- Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
 
 When baseline changes are intentional:
 

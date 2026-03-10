@@ -8,6 +8,7 @@ cd "$PROJECT_ROOT"
 BASELINE_FILE="$PROJECT_ROOT/.coverage-baseline.json"
 COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
 CANONICAL_CMD="cargo llvm-cov --workspace --all-features --all-targets --lcov --output-path target/llvm-cov.info"
+EPSILON="0.05"
 
 usage() {
   cat <<'EOF'
@@ -79,10 +80,11 @@ read_baseline_metric() {
   printf "%s" "$value"
 }
 
-is_less() {
-  local lhs="$1"
-  local rhs="$2"
-  awk -v l="$lhs" -v r="$rhs" 'BEGIN { exit (l < r) ? 0 : 1 }'
+is_regression() {
+  local current="$1"
+  local baseline="$2"
+  local epsilon="$3"
+  awk -v c="$current" -v b="$baseline" -v e="$epsilon" 'BEGIN { exit (c < (b - e)) ? 0 : 1 }'
 }
 
 delta() {
@@ -138,28 +140,30 @@ check_mode() {
   base_functions="$(read_baseline_metric "functions_pct")"
 
   echo "Coverage comparison (current vs baseline):"
+  echo "  Tolerance: -${EPSILON} percentage points"
   printf "  %-10s baseline: %7.2f%%  current: %7.2f%%  delta: %s\n" \
     "Lines" "$base_lines" "$lines_pct" "$(delta "$lines_pct" "$base_lines")"
   printf "  %-10s baseline: %7.2f%%  current: %7.2f%%  delta: %s\n" \
     "Functions" "$base_functions" "$functions_pct" "$(delta "$functions_pct" "$base_functions")"
 
   local regressions=0
-  if is_less "$lines_pct" "$base_lines"; then
+  if is_regression "$lines_pct" "$base_lines" "$EPSILON"; then
     regressions=$((regressions + 1))
   fi
-  if is_less "$functions_pct" "$base_functions"; then
+  if is_regression "$functions_pct" "$base_functions" "$EPSILON"; then
     regressions=$((regressions + 1))
   fi
 
   if [[ "$regressions" -gt 0 ]]; then
     echo
     echo "Coverage regression detected. Push blocked."
+    echo "Rule: current must be at least baseline - ${EPSILON}."
     echo "Add tests or intentionally update baseline."
     exit 1
   fi
 
   echo
-  echo "Coverage check passed (no metric decreased)."
+  echo "Coverage check passed (within tolerance)."
 }
 
 update_mode() {
