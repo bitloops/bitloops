@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+bash "$ROOT/bitloops_cli/scripts/coverage-baseline-check.sh" check

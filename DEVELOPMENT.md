@@ -26,6 +26,19 @@ Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.jso
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
+## Local git hooks (one-time setup)
+
+Run once from the repo root:
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+This configures git to use the versioned hooks in `.githooks/`:
+
+- `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
+- `pre-push`: strict coverage non-regression check via `./bitloops_cli/scripts/coverage-baseline-check.sh check`
+
 ## Testing
 
 Run from the `bitloops_cli/` directory:
@@ -57,6 +70,13 @@ brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
 # If preview error, do
 rustup component add llvm-tools-preview
 
+# Coverage baseline gate (lines + functions, strict no-regression)
+# - check: fail if current coverage < baseline - 0.05 for either metric
+./scripts/coverage-baseline-check.sh check
+
+# - update: append a new baseline entry intentionally (JSONL history)
+./scripts/coverage-baseline-check.sh update
+
 # Coverage baseline (HTML + LCOV, default cargo threading)
 cargo test-coverage
 
@@ -74,6 +94,20 @@ Coverage outputs:
 
 - HTML: `target/llvm-cov-html/html/index.html`
 - LCOV: `target/llvm-cov.info`
+- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops_cli/`)
+
+Coverage gate policy:
+
+- Enforced in local `pre-push`.
+- Metrics: lines and functions.
+- Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
+- Baseline source on check: latest JSONL record (`tail -n 1`).
+
+When baseline changes are intentional:
+
+- Run `./scripts/coverage-baseline-check.sh update` from `bitloops_cli/`.
+- Commit the appended baseline history entries with your code changes.
+- If baseline decreases, include a short justification in the PR description.
 
 ---
 
