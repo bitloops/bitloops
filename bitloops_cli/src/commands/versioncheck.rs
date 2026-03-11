@@ -4,7 +4,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const GLOBAL_CONFIG_DIR_NAME: &str = ".config/bitloops";
@@ -13,6 +12,10 @@ pub const DEFAULT_GITHUB_API_URL: &str =
     "https://storage.googleapis.com/wwwbitloopscom/cli/latest.json";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const CONFIG_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE";
+#[cfg(test)]
+const GITHUB_API_URL_OVERRIDE_ENV: &str = "BITLOOPS_TEST_GITHUB_API_URL_OVERRIDE";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionCache {
@@ -20,45 +23,22 @@ pub struct VersionCache {
     pub last_check_time_secs: u64,
 }
 
-fn config_dir_override() -> &'static Mutex<Option<PathBuf>> {
-    static OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-    OVERRIDE.get_or_init(|| Mutex::new(None))
-}
-
-fn github_api_url_override() -> &'static Mutex<Option<String>> {
-    static OVERRIDE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    OVERRIDE.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(test)]
-fn set_config_dir_override_for_tests(path: Option<PathBuf>) {
-    *config_dir_override()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = path;
-}
-
-#[cfg(test)]
-fn set_github_api_url_for_tests(url: Option<String>) {
-    *github_api_url_override()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = url;
-}
-
 fn github_api_url() -> String {
-    github_api_url_override()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-        .unwrap_or_else(|| DEFAULT_GITHUB_API_URL.to_string())
+    #[cfg(test)]
+    if let Ok(override_url) = std::env::var(GITHUB_API_URL_OVERRIDE_ENV) {
+        let trimmed = override_url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    DEFAULT_GITHUB_API_URL.to_string()
 }
 
 pub fn global_config_dir_path() -> io::Result<PathBuf> {
-    if let Some(path) = config_dir_override()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-    {
-        return Ok(path);
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os(CONFIG_DIR_OVERRIDE_ENV).filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(path));
     }
 
     let home = std::env::var_os("HOME")

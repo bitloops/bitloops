@@ -1,9 +1,8 @@
 use std::env;
 use std::ffi::OsString;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[allow(dead_code)]
 pub(crate) const GIT_ENV_KEYS: [&str; 6] = [
@@ -70,12 +69,31 @@ fn fallback_cwd() -> PathBuf {
     env::current_dir().unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-pub(crate) fn with_process_state<T>(
+// Shared test helper for process-global cwd/env mutation.
+pub(crate) struct ProcessStateGuard {
+    _lock_guard: MutexGuard<'static, ()>,
+    previous_env: Vec<(String, Option<OsString>)>,
+    original_cwd: Option<PathBuf>,
+}
+
+impl Drop for ProcessStateGuard {
+    fn drop(&mut self) {
+        if let Some(old) = &self.original_cwd {
+            if env::set_current_dir(old).is_err() {
+                let _ = env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
+            }
+            crate::engine::paths::clear_repo_root_cache();
+        }
+
+        restore_env_vars(&self.previous_env);
+    }
+}
+
+pub(crate) fn enter_process_state(
     cwd: Option<&Path>,
     env_vars: &[(&str, Option<&str>)],
-    f: impl FnOnce() -> T,
-) -> T {
-    let _guard = process_state_lock()
+) -> ProcessStateGuard {
+    let lock_guard = process_state_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -87,21 +105,24 @@ pub(crate) fn with_process_state<T>(
         crate::engine::paths::clear_repo_root_cache();
     }
 
-    let result = catch_unwind(AssertUnwindSafe(f));
-
-    if let Some(old) = original_cwd {
-        if env::set_current_dir(&old).is_err() {
-            let _ = env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
-        }
-        crate::engine::paths::clear_repo_root_cache();
+    ProcessStateGuard {
+        _lock_guard: lock_guard,
+        previous_env,
+        original_cwd,
     }
+}
 
-    restore_env_vars(&previous_env);
+pub(crate) fn enter_env_vars(env_vars: &[(&str, Option<&str>)]) -> ProcessStateGuard {
+    enter_process_state(None, env_vars)
+}
 
-    match result {
-        Ok(value) => value,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+pub(crate) fn with_process_state<T>(
+    cwd: Option<&Path>,
+    env_vars: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let _guard = enter_process_state(cwd, env_vars);
+    f()
 }
 
 pub(crate) fn with_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
