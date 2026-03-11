@@ -134,7 +134,17 @@ async fn check_relational_connection_status(
     cfg: &DevqlConnectionConfig,
 ) -> DatabaseConnectionStatus {
     match cfg.backends.relational.provider {
-        RelationalProvider::Sqlite => DatabaseConnectionStatus::NotConfigured,
+        RelationalProvider::Sqlite => {
+            let db_path = match cfg.backends.relational.resolve_sqlite_db_path() {
+                Ok(path) => path,
+                Err(err) => return classify_connection_error(&err.to_string()),
+            };
+
+            match check_sqlite_connection(&db_path).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
         RelationalProvider::Postgres => match cfg.backends.relational.postgres_dsn.as_deref() {
             Some(dsn) => match check_postgres_connection(dsn).await {
                 Ok(_) => DatabaseConnectionStatus::Connected,
@@ -166,17 +176,20 @@ async fn check_events_connection_status(cfg: &DevqlConnectionConfig) -> Database
 }
 
 async fn check_postgres_connection(dsn: &str) -> Result<()> {
-    let client = connect_postgres_client(dsn).await?;
-
-    let row = tokio::time::timeout(Duration::from_secs(10), client.query_one("SELECT 1", &[]))
-        .await
-        .context("Postgres health query timeout after 10s")?
-        .context("running Postgres health query `SELECT 1`")?;
-    let value: i32 = row
-        .try_get(0)
-        .context("reading Postgres health query result")?;
+    let store = PostgresRelationalStore::connect(dsn).await?;
+    let value = store_contracts::RelationalStore::ping(&store).await?;
     if value != 1 {
         bail!("unexpected Postgres health query result: {value}");
+    }
+
+    Ok(())
+}
+
+async fn check_sqlite_connection(db_path: &Path) -> Result<()> {
+    let store = SqliteRelationalStore::connect(db_path.to_path_buf()).await?;
+    let value = store_contracts::RelationalStore::ping(&store).await?;
+    if value != 1 {
+        bail!("unexpected SQLite health query result: {value}");
     }
 
     Ok(())
@@ -215,16 +228,6 @@ impl DevqlConfig {
         self.backends.events.provider
     }
 
-    fn ensure_postgres_relational_provider(&self) -> Result<()> {
-        if self.relational_provider() != RelationalProvider::Postgres {
-            bail!(
-                "relational provider `{}` is not implemented yet in this build (tracked by CLI-1328); use `postgres` for now",
-                self.relational_provider().as_str()
-            );
-        }
-        Ok(())
-    }
-
     fn ensure_clickhouse_events_provider(&self) -> Result<()> {
         if self.events_provider() != EventsProvider::ClickHouse {
             bail!(
@@ -236,12 +239,19 @@ impl DevqlConfig {
     }
 
     fn require_pg_dsn(&self) -> Result<&str> {
-        self.ensure_postgres_relational_provider()?;
         self.backends.relational.postgres_dsn.as_deref().ok_or_else(|| {
             anyhow!(
                 "postgres_dsn is required when `devql.relational.provider=postgres` (set `devql.relational.postgres_dsn` or `BITLOOPS_DEVQL_PG_DSN`)"
             )
         })
+    }
+
+    fn sqlite_db_path(&self) -> Result<PathBuf> {
+        self.backends.relational.resolve_sqlite_db_path()
+    }
+
+    fn events_backend_enabled(&self) -> bool {
+        self.events_provider() == EventsProvider::ClickHouse
     }
 
     fn clickhouse_endpoint(&self) -> Result<String> {
@@ -258,26 +268,48 @@ impl DevqlConfig {
     }
 }
 
+async fn connect_relational_store(
+    cfg: &DevqlConfig,
+) -> Result<Box<dyn store_contracts::RelationalStore>> {
+    match cfg.relational_provider() {
+        RelationalProvider::Postgres => {
+            let store = PostgresRelationalStore::connect(cfg.require_pg_dsn()?).await?;
+            Ok(Box::new(store))
+        }
+        RelationalProvider::Sqlite => {
+            let store = SqliteRelationalStore::connect(cfg.sqlite_db_path()?).await?;
+            Ok(Box::new(store))
+        }
+    }
+}
+
 async fn run_init(cfg: &DevqlConfig) -> Result<()> {
-    let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
-    init_clickhouse_schema(cfg).await?;
-    init_postgres_schema(cfg, &pg_client).await?;
+    let relational_store = connect_relational_store(cfg).await?;
+    if cfg.events_backend_enabled() {
+        init_clickhouse_schema(cfg).await?;
+    }
+    init_relational_schema(relational_store.as_ref()).await?;
 
     println!(
-        "DevQL schema ready for repo {} ({})",
-        cfg.repo.identity, cfg.repo.repo_id
+        "DevQL schema ready for repo {} ({}) [relational={}, events={}]",
+        cfg.repo.identity,
+        cfg.repo.repo_id,
+        cfg.relational_provider().as_str(),
+        cfg.events_provider().as_str(),
     );
     Ok(())
 }
 
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
-    let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
+    let relational_store = connect_relational_store(cfg).await?;
     if args.init {
-        init_clickhouse_schema(cfg).await?;
-        init_postgres_schema(cfg, &pg_client).await?;
+        if cfg.events_backend_enabled() {
+            init_clickhouse_schema(cfg).await?;
+        }
+        init_relational_schema(relational_store.as_ref()).await?;
     }
 
-    ensure_repository_row(cfg, &pg_client).await?;
+    ensure_repository_row(cfg, relational_store.as_ref()).await?;
 
     let mut checkpoints = list_committed(&cfg.repo_root)?;
     checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -286,7 +318,12 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
     }
 
     let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
-    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg).await?;
+    let events_enabled = cfg.events_backend_enabled();
+    let mut existing_event_ids = if events_enabled {
+        fetch_existing_checkpoint_event_ids(cfg).await?
+    } else {
+        HashSet::new()
+    };
 
     let mut counters = IngestionCounters::default();
 
@@ -300,7 +337,7 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
             cfg.repo.repo_id, cp.checkpoint_id, cp.session_id
         ));
 
-        if !existing_event_ids.contains(&event_id) {
+        if events_enabled && !existing_event_ids.contains(&event_id) {
             insert_checkpoint_event(cfg, &cp, &event_id, commit_info).await?;
             existing_event_ids.insert(event_id);
             counters.events_inserted += 1;
@@ -313,7 +350,7 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
 
         upsert_commit_row(
             cfg,
-            &pg_client,
+            relational_store.as_ref(),
             &cp,
             commit_info.expect("commit_info exists when sha exists"),
         )
@@ -331,12 +368,29 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
                 continue;
             };
 
-            upsert_file_state_row(cfg, &pg_client, &commit_sha, &normalized_path, &blob_sha)
-                .await?;
-            let file_artefact =
-                upsert_file_artefact_row(cfg, &pg_client, &normalized_path, &blob_sha).await?;
-            upsert_language_artefacts(cfg, &pg_client, &normalized_path, &blob_sha, &file_artefact)
-                .await?;
+            upsert_file_state_row(
+                cfg,
+                relational_store.as_ref(),
+                &commit_sha,
+                &normalized_path,
+                &blob_sha,
+            )
+            .await?;
+            let file_artefact = upsert_file_artefact_row(
+                cfg,
+                relational_store.as_ref(),
+                &normalized_path,
+                &blob_sha,
+            )
+            .await?;
+            upsert_language_artefacts(
+                cfg,
+                relational_store.as_ref(),
+                &normalized_path,
+                &blob_sha,
+                &file_artefact,
+            )
+            .await?;
             counters.artefacts_upserted += 1;
         }
 
@@ -344,7 +398,9 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
     }
 
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}",
+        "DevQL ingest complete [relational={}, events={}]: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}",
+        cfg.relational_provider().as_str(),
+        cfg.events_provider().as_str(),
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
@@ -398,19 +454,16 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
     let backend_usage = resolve_query_backend_usage(&parsed);
 
-    if backend_usage.uses_relational {
-        cfg.ensure_postgres_relational_provider()?;
-    }
     if backend_usage.uses_events {
         cfg.ensure_clickhouse_events_provider()?;
     }
 
-    let pg_client = if backend_usage.uses_relational {
-        Some(connect_postgres_client(cfg.require_pg_dsn()?).await?)
+    let relational_store = if backend_usage.uses_relational {
+        Some(connect_relational_store(cfg).await?)
     } else {
         None
     };
-    let mut rows = execute_devql_query(cfg, &parsed, pg_client.as_ref()).await?;
+    let mut rows = execute_devql_query(cfg, &parsed, relational_store.as_deref()).await?;
 
     if !parsed.select_fields.is_empty() {
         rows = project_rows(rows, &parsed.select_fields);

@@ -81,7 +81,7 @@ DevQL now uses a provider model:
 - Relational backend: `sqlite` or `postgres`
 - Events backend: `duckdb` or `clickhouse`
 
-Current runtime adapters are `postgres` + `clickhouse`; legacy `postgres_dsn` / `clickhouse_*` and `BITLOOPS_DEVQL_*` settings remain supported for backward compatibility.
+Current runtime adapters are `sqlite`/`postgres` for relational and `clickhouse` for events (`duckdb` pending); legacy `postgres_dsn` / `clickhouse_*` and `BITLOOPS_DEVQL_*` settings remain supported for backward compatibility.
 
 ### Why do you use telemetry and why should I opt-in?
 

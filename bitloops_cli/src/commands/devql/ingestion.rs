@@ -114,18 +114,14 @@ ORDER BY (repo_id, event_time, event_id)
     Ok(())
 }
 
-async fn init_postgres_schema(
-    _cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
-) -> Result<()> {
-    let sql = r#"
+const RELATIONAL_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS repositories (
     repo_id TEXT PRIMARY KEY,
     provider TEXT NOT NULL,
     organization TEXT NOT NULL,
     name TEXT NOT NULL,
     default_branch TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS commits (
@@ -164,7 +160,7 @@ CREATE TABLE IF NOT EXISTS artefacts (
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
     content_hash TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS artefacts_blob_idx
@@ -177,15 +173,13 @@ CREATE INDEX IF NOT EXISTS artefacts_kind_idx
 ON artefacts (repo_id, canonical_kind);
 "#;
 
-    postgres_exec(pg_client, sql)
-        .await
-        .context("creating Postgres DevQL tables")?;
-    Ok(())
+async fn init_relational_schema(relational_store: &dyn store_contracts::RelationalStore) -> Result<()> {
+    relational_store.init_schema().await
 }
 
 async fn ensure_repository_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
 ) -> Result<()> {
     let sql = format!(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
@@ -196,7 +190,7 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
         esc_pg(&cfg.repo.name),
         esc_pg(&default_branch_name(&cfg.repo_root))
     );
-    postgres_exec(pg_client, &sql).await
+    relational_store.execute(&sql).await
 }
 
 fn default_branch_name(repo_root: &Path) -> String {
@@ -332,12 +326,18 @@ VALUES ('{}', {}, '{}', '{}', '{}', '{}', '{}', 'checkpoint_committed', '{}', '{
 
 async fn upsert_commit_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     cp: &CommittedInfo,
     commit_info: &CheckpointCommitInfo,
 ) -> Result<()> {
+    let committed_at_expr = match relational_store.provider() {
+        RelationalProvider::Postgres => format!("to_timestamp({})", commit_info.commit_unix),
+        RelationalProvider::Sqlite => {
+            format!("datetime({}, 'unixepoch')", commit_info.commit_unix)
+        }
+    };
     let sql = format!(
-        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', to_timestamp({})) \
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', {}) \
 ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name = EXCLUDED.author_name, author_email = EXCLUDED.author_email, commit_message = EXCLUDED.commit_message, committed_at = EXCLUDED.committed_at",
         esc_pg(&commit_info.commit_sha),
         esc_pg(&cfg.repo.repo_id),
@@ -348,15 +348,15 @@ ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name =
         } else {
             &commit_info.subject
         }),
-        commit_info.commit_unix,
+        committed_at_expr,
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational_store.execute(&sql).await
 }
 
 async fn upsert_file_state_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     commit_sha: &str,
     path: &str,
     blob_sha: &str,
@@ -370,7 +370,7 @@ ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_s
         esc_pg(blob_sha),
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational_store.execute(&sql).await
 }
 
 #[derive(Debug, Clone)]
@@ -381,7 +381,7 @@ struct FileArtefactRow {
 
 async fn upsert_file_artefact_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     path: &str,
     blob_sha: &str,
 ) -> Result<FileArtefactRow> {
@@ -406,7 +406,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         esc_pg(blob_sha),
     );
 
-    postgres_exec(pg_client, &sql).await?;
+    relational_store.execute(&sql).await?;
     Ok(FileArtefactRow {
         artefact_id,
         language,
@@ -415,7 +415,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
 
 async fn upsert_language_artefacts(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     path: &str,
     blob_sha: &str,
     file_artefact: &FileArtefactRow,
@@ -456,7 +456,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
             esc_pg(&content_hash),
         );
 
-        postgres_exec(pg_client, &sql).await?;
+        relational_store.execute(&sql).await?;
     }
 
     Ok(())
@@ -622,4 +622,3 @@ struct TelemetryFilter {
     agent: Option<String>,
     since: Option<String>,
 }
-

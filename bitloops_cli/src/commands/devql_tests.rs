@@ -1,6 +1,7 @@
 use super::*;
 use crate::devql_config::DevqlFileConfig;
 use clap::Parser;
+use tempfile::TempDir;
 
 fn test_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -25,6 +26,34 @@ fn test_cfg() -> DevqlConfig {
                 clickhouse_user: None,
                 clickhouse_password: None,
                 clickhouse_database: Some("default".to_string()),
+            },
+        },
+    }
+}
+
+fn sqlite_test_cfg(repo_root: PathBuf, sqlite_path: String) -> DevqlConfig {
+    DevqlConfig {
+        repo_root,
+        repo: RepoIdentity {
+            provider: "local".to_string(),
+            organization: "local".to_string(),
+            name: "temp-sqlite".to_string(),
+            identity: "local://local/temp-sqlite".to_string(),
+            repo_id: deterministic_uuid("repo://local/temp-sqlite"),
+        },
+        backends: crate::devql_config::DevqlBackendConfig {
+            relational: crate::devql_config::RelationalBackendConfig {
+                provider: crate::devql_config::RelationalProvider::Sqlite,
+                sqlite_path: Some(sqlite_path),
+                postgres_dsn: None,
+            },
+            events: crate::devql_config::EventsBackendConfig {
+                provider: crate::devql_config::EventsProvider::DuckDb,
+                duckdb_path: None,
+                clickhouse_url: None,
+                clickhouse_user: None,
+                clickhouse_password: None,
+                clickhouse_database: None,
             },
         },
     }
@@ -138,6 +167,31 @@ async fn execute_devql_query_rejects_combining_checkpoints_and_artefacts_stage()
         err.to_string()
             .contains("MVP limitation: telemetry/checkpoints stages cannot be combined")
     );
+}
+
+#[tokio::test]
+async fn execute_devql_query_requires_relational_store_for_artefacts_stage() {
+    let cfg = test_cfg();
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->file("src/main.rs")->artefacts()->limit(1)"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(err.to_string().contains("relational store is required"));
+}
+
+#[tokio::test]
+async fn connection_status_reports_connected_for_sqlite_relational_provider() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+
+    let status = check_relational_connection_status(&DevqlConnectionConfig {
+        backends: cfg.backends.clone(),
+    })
+    .await;
+    assert_eq!(status, DatabaseConnectionStatus::Connected);
 }
 
 #[test]
@@ -309,4 +363,102 @@ fn postgres_sslmode_validation_rejects_verify_full_dsn() {
     let dsn = "postgres://user:pass@localhost:5432/bitloops?sslmode=verify-full";
     let err = validate_postgres_sslmode_for_notls(dsn, SslMode::Prefer).unwrap_err();
     assert!(err.to_string().contains("sslmode=verify-ca/verify-full"));
+}
+
+#[tokio::test]
+async fn sqlite_relational_store_supports_init_execute_and_query() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+
+    let sql = format!(
+        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, start_line, end_line, content_hash) VALUES ('{}', '{}', 'blob1', 'src/main.rs', 'rust', 'file', 1, 10, 'blob1')",
+        esc_pg("artifact-1"),
+        esc_pg(&cfg.repo.repo_id),
+    );
+    store.execute(&sql).await.expect("insert artefact row");
+
+    let rows = store
+        .query_rows("SELECT path, canonical_kind, start_line FROM artefacts LIMIT 1")
+        .await
+        .expect("query artefact row");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], "src/main.rs");
+    assert_eq!(rows[0]["canonical_kind"], "file");
+    assert_eq!(rows[0]["start_line"], 1);
+}
+
+#[tokio::test]
+async fn run_init_and_ingest_work_with_sqlite_without_events_backend() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+
+    run_init(&cfg).await.expect("sqlite init should succeed");
+    run_ingest(
+        &cfg,
+        &DevqlIngestArgs {
+            init: true,
+            max_checkpoints: 10,
+        },
+    )
+    .await
+    .expect("sqlite ingest should succeed without clickhouse");
+
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    let rows = store
+        .query_rows("SELECT repo_id FROM repositories LIMIT 1")
+        .await
+        .expect("query repository row");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["repo_id"], cfg.repo.repo_id);
+}
+
+#[tokio::test]
+async fn execute_query_json_reads_from_sqlite_relational_store() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+
+    let insert_sql = format!(
+        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, start_line, end_line, content_hash) VALUES ('{}', '{}', 'blob1', 'src/main.rs', 'rust', 'file', 1, 12, 'blob1')",
+        esc_pg("artifact-query"),
+        esc_pg(&cfg.repo.repo_id),
+    );
+    store
+        .execute(&insert_sql)
+        .await
+        .expect("insert artefact row");
+
+    let result = execute_query_json(&cfg, r#"file("src/main.rs")->artefacts()->limit(5)"#)
+        .await
+        .expect("query should succeed");
+    let rows = result.as_array().cloned().expect("array result");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], "src/main.rs");
 }

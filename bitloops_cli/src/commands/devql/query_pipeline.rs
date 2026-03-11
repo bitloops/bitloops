@@ -228,7 +228,7 @@ fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
 async fn execute_devql_query(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: Option<&tokio_postgres::Client>,
+    relational_store: Option<&dyn store_contracts::RelationalStore>,
 ) -> Result<Vec<Value>> {
     if (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
         && (parsed.file.is_some() || parsed.files_path.is_some() || parsed.has_artefacts_stage)
@@ -251,8 +251,9 @@ async fn execute_devql_query(
         return execute_clickhouse_pipeline(cfg, parsed).await;
     }
 
-    let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
-    execute_postgres_pipeline(cfg, parsed, pg_client).await
+    let relational_store =
+        relational_store.ok_or_else(|| anyhow!("relational store is required"))?;
+    execute_relational_pipeline(cfg, parsed, relational_store).await
 }
 
 async fn execute_clickhouse_pipeline(
@@ -310,12 +311,11 @@ async fn execute_clickhouse_pipeline(
     Ok(data.as_array().cloned().unwrap_or_default())
 }
 
-async fn execute_postgres_pipeline(
+async fn execute_relational_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
 ) -> Result<Vec<Value>> {
-    let _ = cfg.require_pg_dsn()?;
     let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
 
     let mut where_clauses = vec![format!("a.repo_id = '{}'", esc_pg(&repo_id))];
@@ -361,7 +361,7 @@ async fn execute_postgres_pipeline(
     if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
         let blob_shas = blob_shas_changed_in_events(
             cfg,
-            pg_client,
+            relational_store,
             &repo_id,
             parsed.artefacts.agent.as_deref(),
             parsed.artefacts.since.as_deref(),
@@ -386,9 +386,9 @@ LIMIT {}",
         parsed.limit.max(1)
     );
 
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational_store.query_rows(&sql).await?;
     if parsed.has_chat_history_stage {
-        return attach_chat_history_to_artefacts(cfg, pg_client, &repo_id, rows).await;
+        return attach_chat_history_to_artefacts(cfg, relational_store, &repo_id, rows).await;
     }
     Ok(rows)
 }
@@ -410,7 +410,7 @@ fn resolve_commit_selector(cfg: &DevqlConfig, parsed: &ParsedDevqlQuery) -> Resu
 
 async fn blob_shas_changed_in_events(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     repo_id: &str,
     agent: Option<&str>,
     since: Option<&str>,
@@ -459,7 +459,7 @@ async fn blob_shas_changed_in_events(
         esc_pg(repo_id),
         sql_string_list_pg(&commit_shas),
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational_store.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -474,7 +474,7 @@ async fn blob_shas_changed_in_events(
 
 async fn attach_chat_history_to_artefacts(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     repo_id: &str,
     rows: Vec<Value>,
 ) -> Result<Vec<Value>> {
@@ -507,7 +507,8 @@ async fn attach_chat_history_to_artefacts(
             cached.clone()
         } else {
             let commit_shas =
-                commit_shas_for_artefact_blob(pg_client, repo_id, &path, &blob_sha).await?;
+                commit_shas_for_artefact_blob(relational_store, repo_id, &path, &blob_sha)
+                    .await?;
             let events = checkpoint_events_for_commits(cfg, repo_id, &path, &commit_shas).await?;
             let mut history_entries = Vec::with_capacity(events.len());
 
@@ -551,7 +552,7 @@ async fn attach_chat_history_to_artefacts(
 }
 
 async fn commit_shas_for_artefact_blob(
-    pg_client: &tokio_postgres::Client,
+    relational_store: &dyn store_contracts::RelationalStore,
     repo_id: &str,
     path: &str,
     blob_sha: &str,
@@ -564,7 +565,7 @@ async fn commit_shas_for_artefact_blob(
         esc_pg(blob_sha),
         path_clause
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational_store.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -847,4 +848,3 @@ fn lookup_nested_field<'a>(obj: &'a Map<String, Value>, field: &str) -> Option<&
     }
     current
 }
-

@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::Url;
 use std::fmt;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
@@ -13,6 +16,11 @@ use crate::devql_config::{
 const POSTGRES_POOL_SIZE: usize = 4;
 /// Max time allowed per backend health ping so /api/db/health stays responsive.
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+type RelationalHealthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
+pub(super) trait RelationalHealthStore: Send + Sync {
+    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32>;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BackendHealthKind {
@@ -114,7 +122,7 @@ pub(super) struct DashboardDbInit {
 pub(in crate::server) struct DashboardDbPools {
     pub(super) relational_provider: RelationalProvider,
     pub(super) events_provider: EventsProvider,
-    pub(super) postgres: Option<PostgresPool>,
+    pub(super) relational: Option<Arc<dyn RelationalHealthStore>>,
     pub(super) clickhouse: Option<ClickHousePool>,
 }
 
@@ -123,7 +131,7 @@ impl Default for DashboardDbPools {
         Self {
             relational_provider: RelationalProvider::Sqlite,
             events_provider: EventsProvider::DuckDb,
-            postgres: None,
+            relational: None,
             clickhouse: None,
         }
     }
@@ -134,7 +142,7 @@ impl fmt::Debug for DashboardDbPools {
         f.debug_struct("DashboardDbPools")
             .field("relational_provider", &self.relational_provider.as_str())
             .field("events_provider", &self.events_provider.as_str())
-            .field("postgres_enabled", &self.postgres.is_some())
+            .field("relational_enabled", &self.relational.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
             .finish()
     }
@@ -142,12 +150,12 @@ impl fmt::Debug for DashboardDbPools {
 
 impl DashboardDbPools {
     pub(super) async fn health_check(&self) -> DashboardDbHealth {
-        let postgres_pool = self.postgres.as_ref();
+        let relational_store = self.relational.clone();
         let clickhouse_pool = self.clickhouse.as_ref();
 
-        let postgres_fut = async move {
-            match postgres_pool {
-                Some(pool) => match timeout(HEALTH_CHECK_TIMEOUT, pool.ping()).await {
+        let relational_fut = async move {
+            match relational_store {
+                Some(store) => match timeout(HEALTH_CHECK_TIMEOUT, store.ping()).await {
                     Ok(Ok(value)) => BackendHealth::ok(format!("SELECT 1 => {value}")),
                     Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
                     Err(_) => BackendHealth::fail("health check timed out".to_string()),
@@ -166,10 +174,9 @@ impl DashboardDbPools {
             }
         };
 
-        let (postgres, clickhouse) = tokio::join!(postgres_fut, clickhouse_fut);
+        let (relational_backend, clickhouse) = tokio::join!(relational_fut, clickhouse_fut);
         let relational = match self.relational_provider {
-            RelationalProvider::Postgres => postgres.clone(),
-            RelationalProvider::Sqlite => BackendHealth::skip("provider sqlite is not wired yet"),
+            RelationalProvider::Postgres | RelationalProvider::Sqlite => relational_backend.clone(),
         };
         let events = match self.events_provider {
             EventsProvider::ClickHouse => clickhouse.clone(),
@@ -234,7 +241,7 @@ impl PostgresPool {
         &self.inner.clients[idx]
     }
 
-    async fn ping(&self) -> Result<i32> {
+    async fn ping_inner(&self) -> Result<i32> {
         let row = self
             .pick_client()
             .query_one("SELECT 1", &[])
@@ -245,6 +252,73 @@ impl PostgresPool {
             .context("reading Postgres health query result")?;
         Ok(value)
     }
+}
+
+impl RelationalHealthStore for PostgresPool {
+    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32> {
+        Box::pin(async move { self.ping_inner().await })
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct SqlitePool {
+    db_path: PathBuf,
+}
+
+impl fmt::Debug for SqlitePool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqlitePool")
+            .field("db_path", &self.db_path.display().to_string())
+            .finish()
+    }
+}
+
+impl SqlitePool {
+    async fn connect(db_path: PathBuf) -> Result<Self> {
+        ensure_sqlite_parent_dir(&db_path)?;
+        let pool = Self { db_path };
+        let _ = pool.ping_inner().await?;
+        Ok(pool)
+    }
+
+    async fn ping_inner(&self) -> Result<i32> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<i32> {
+            let conn = open_sqlite_connection(&db_path)?;
+            let value: i32 = conn
+                .query_row("SELECT 1", [], |row| row.get(0))
+                .context("running SQLite health query `SELECT 1`")?;
+            Ok(value)
+        })
+        .await
+        .context("joining SQLite health query task")?
+    }
+}
+
+impl RelationalHealthStore for SqlitePool {
+    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32> {
+        Box::pin(async move { self.ping_inner().await })
+    }
+}
+
+fn ensure_sqlite_parent_dir(db_path: &Path) -> Result<()> {
+    let parent = db_path
+        .parent()
+        .filter(|candidate| !candidate.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating SQLite parent directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_parent_dir(db_path)?;
+    let conn = rusqlite::Connection::open(db_path)
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(30))
+        .context("setting SQLite busy timeout")?;
+    Ok(conn)
 }
 
 #[derive(Clone)]
@@ -370,6 +444,10 @@ impl DashboardDbConfig {
             password: self.backends.events.clickhouse_password.clone(),
         }
     }
+
+    fn sqlite_db_path(&self) -> Result<PathBuf> {
+        self.backends.relational.resolve_sqlite_db_path()
+    }
 }
 
 pub(super) async fn init_dashboard_db() -> DashboardDbInit {
@@ -392,37 +470,66 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
     let mut pools = DashboardDbPools {
         relational_provider: cfg.backends.relational.provider,
         events_provider: cfg.backends.events.provider,
-        postgres: None,
+        relational: None,
         clickhouse: None,
     };
-    let mut relational_health = match pools.relational_provider {
-        RelationalProvider::Postgres => BackendHealth::skip("not configured"),
-        RelationalProvider::Sqlite => BackendHealth::skip("provider sqlite is not wired yet"),
-    };
+    let relational_health: BackendHealth;
     let mut events_health = match pools.events_provider {
         EventsProvider::ClickHouse => BackendHealth::skip("not configured"),
         EventsProvider::DuckDb => BackendHealth::skip("provider duckdb is not wired yet"),
     };
 
-    if pools.relational_provider == RelationalProvider::Postgres {
-        if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
-            match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
-                Ok(pool) => match pool.ping().await {
-                    Ok(value) => {
-                        pools.postgres = Some(pool);
-                        relational_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
+    match pools.relational_provider {
+        RelationalProvider::Postgres => {
+            if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
+                match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
+                    Ok(pool) => {
+                        let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
+                        match relational_store.ping().await {
+                            Ok(value) => {
+                                pools.relational = Some(relational_store);
+                                relational_health =
+                                    BackendHealth::ok(format!("SELECT 1 => {value}"));
+                            }
+                            Err(err) => {
+                                relational_health = BackendHealth::fail(format!("{err:#}"));
+                            }
+                        }
                     }
                     Err(err) => {
                         relational_health = BackendHealth::fail(format!("{err:#}"));
                     }
-                },
-                Err(err) => {
-                    relational_health = BackendHealth::fail(format!("{err:#}"));
+                }
+            } else {
+                relational_health = BackendHealth::skip("postgres_dsn is not configured");
+            }
+        }
+        RelationalProvider::Sqlite => match cfg.sqlite_db_path() {
+            Ok(db_path) => {
+                let db_label = db_path.display().to_string();
+                match SqlitePool::connect(db_path).await {
+                    Ok(pool) => {
+                        let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
+                        match relational_store.ping().await {
+                            Ok(value) => {
+                                pools.relational = Some(relational_store);
+                                relational_health =
+                                    BackendHealth::ok(format!("SELECT 1 => {value} ({db_label})"));
+                            }
+                            Err(err) => {
+                                relational_health = BackendHealth::fail(format!("{err:#}"));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        relational_health = BackendHealth::fail(format!("{err:#}"));
+                    }
                 }
             }
-        } else {
-            relational_health = BackendHealth::skip("postgres_dsn is not configured");
-        }
+            Err(err) => {
+                relational_health = BackendHealth::fail(format!("{err:#}"));
+            }
+        },
     }
 
     if pools.events_provider == EventsProvider::ClickHouse {
