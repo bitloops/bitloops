@@ -1,3 +1,5 @@
+mod test_command_support;
+
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -9,8 +11,10 @@ fn bitloops_bin() -> PathBuf {
 }
 
 fn run_cmd(repo: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    let mut cmd = Command::new(bitloops_bin());
-    cmd.args(args).current_dir(repo);
+    let bin = bitloops_bin();
+    let (mut cmd, _isolated_home) = test_command_support::new_isolated_bitloops_command(
+        &bin, repo, args,
+    );
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn bitloops command");
