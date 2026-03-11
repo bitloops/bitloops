@@ -3,9 +3,7 @@ use serde_json::Value;
 
 use crate::engine::infra::postgres::{esc_pg, pg_query_rows, postgres_exec};
 
-use super::{
-    PreStageArtefactRow, SemanticFeatureIndexState, SemanticFeatureRows,
-};
+use super::{PreStageArtefactRow, SemanticFeatureIndexState, SemanticFeatureRows};
 
 pub(super) async fn get_artefacts(
     pg_client: &tokio_postgres::Client,
