@@ -544,7 +544,7 @@ fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
         Some("Fetch a user record by its id.")
     );
     assert_eq!(output.semantics.llm_summary, None);
-    assert_eq!(output.semantics.template_summary, "Loads by id.");
+    assert_eq!(output.semantics.template_summary, "Implements get by id.");
     assert_eq!(
         output.semantics.summary_source,
         semantic::SemanticSummarySource::DocComment
@@ -581,7 +581,7 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
         output.semantics.llm_summary.as_deref(),
         Some("Normalizes email addresses before storage")
     );
-    assert_eq!(output.semantics.template_summary, "Formats email.");
+    assert_eq!(output.semantics.template_summary, "Implements normalize email.");
     assert_eq!(
         output.semantics.summary_source,
         semantic::SemanticSummarySource::Llm
@@ -603,10 +603,10 @@ fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
         },
     );
 
-    assert_eq!(output.semantics.summary, "Formats email.");
+    assert_eq!(output.semantics.summary, "Implements normalize email.");
     assert_eq!(output.semantics.doc_comment_summary, None);
     assert_eq!(output.semantics.llm_summary.as_deref(), Some("bad"));
-    assert_eq!(output.semantics.template_summary, "Formats email.");
+    assert_eq!(output.semantics.template_summary, "Implements normalize email.");
     assert_eq!(
         output.semantics.summary_source,
         semantic::SemanticSummarySource::TemplateFallback
@@ -635,7 +635,7 @@ fn semantic_features_store_doc_comment_and_llm_candidates_together() {
         output.semantics.llm_summary.as_deref(),
         Some("Loads a user entity by id from storage")
     );
-    assert_eq!(output.semantics.template_summary, "Loads by id.");
+    assert_eq!(output.semantics.template_summary, "Implements get by id.");
     assert_eq!(
         output.semantics.summary,
         "Loads a user entity by id from storage."

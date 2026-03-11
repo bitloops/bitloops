@@ -313,18 +313,6 @@ pub struct SymbolSemanticsRow {
     pub summary_source: SemanticSummarySource,
     pub source_model: Option<String>,
 }
-enum TemplateAction {
-    Parse,
-    Validate,
-    Load,
-    Build,
-    Update,
-    Handle,
-    Format,
-    Query,
-    Implement,
-}
-
 pub(super) fn build_semantics_row(
     input: &SemanticFeatureInput,
     summary_provider: &dyn SemanticSummaryProvider,
@@ -429,46 +417,13 @@ fn build_template_summary(input: &SemanticFeatureInput) -> String {
     let subject = summary_subject(input);
     let summary = match input.canonical_kind.as_str() {
         "file" | "module" => format!("Defines the {} source file.", input.language),
-        "class" if input.name.ends_with("Service") => format!("Coordinates {subject}."),
-        "class" | "interface" | "type" | "enum" | "variable" | "constructor" => {
-            format!("Defines {subject}.")
-        }
+        "class" | "interface" | "type" | "enum" | "variable" => format!("Defines {subject}."),
+        "constructor" => format!("Constructs {subject}."),
         "test" => format!("Tests {subject}."),
-        _ => match infer_template_action(input) {
-            TemplateAction::Parse => format!("Parses {subject}."),
-            TemplateAction::Validate => format!("Validates {subject}."),
-            TemplateAction::Load => format!("Loads {subject}."),
-            TemplateAction::Build => format!("Builds {subject}."),
-            TemplateAction::Update => format!("Updates {subject}."),
-            TemplateAction::Handle => format!("Handles {subject}."),
-            TemplateAction::Format => format!("Formats {subject}."),
-            TemplateAction::Query => format!("Queries {subject}."),
-            TemplateAction::Implement => format!("Implements {subject}."),
-        },
+        _ => format!("Implements {subject}."),
     };
 
     ensure_terminal_period(&summary)
-}
-
-fn infer_template_action(input: &SemanticFeatureInput) -> TemplateAction {
-    let name_tokens = split_identifier_tokens(&input.name);
-    let first = name_tokens.first().map(String::as_str).unwrap_or_default();
-    match first {
-        "parse" | "decode" | "tokenize" => TemplateAction::Parse,
-        "validate" | "assert" | "ensure" => TemplateAction::Validate,
-        "check" if input.return_shape_hint.as_deref() == Some("boolean") => {
-            TemplateAction::Validate
-        }
-        "read" | "load" | "fetch" | "get" | "list" | "find" => TemplateAction::Load,
-        "create" | "build" | "make" | "compose" => TemplateAction::Build,
-        "update" | "set" | "write" | "save" | "persist" | "insert" | "append" => {
-            TemplateAction::Update
-        }
-        "handle" | "process" | "execute" | "run" | "dispatch" => TemplateAction::Handle,
-        "format" | "render" | "serialize" | "normalize" => TemplateAction::Format,
-        "query" | "select" | "filter" => TemplateAction::Query,
-        _ => TemplateAction::Implement,
-    }
 }
 
 fn ensure_terminal_period(summary: &str) -> String {
@@ -498,20 +453,9 @@ fn summary_subject(input: &SemanticFeatureInput) -> String {
     }
 
     let tokens = split_identifier_tokens(&input.name);
-    let subject_tokens = match tokens.first().map(String::as_str) {
-        Some(
-            "parse" | "validate" | "assert" | "ensure" | "check" | "read" | "load" | "fetch"
-            | "get" | "list" | "find" | "create" | "build" | "make" | "compose" | "update" | "set"
-            | "write" | "save" | "persist" | "insert" | "append" | "handle" | "process" | "execute"
-            | "run" | "dispatch" | "format" | "render" | "serialize" | "normalize" | "query"
-            | "select" | "filter",
-        ) if tokens.len() > 1 => &tokens[1..],
-        _ => &tokens[..],
-    };
-
-    if subject_tokens.is_empty() {
+    if tokens.is_empty() {
         input.name.to_ascii_lowercase()
     } else {
-        subject_tokens.join(" ")
+        tokens.join(" ")
     }
 }
