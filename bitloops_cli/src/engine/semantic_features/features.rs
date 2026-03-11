@@ -1,8 +1,8 @@
 use super::common::{
-    build_body_tokens, dedupe_tokens, normalize_name, normalize_string_list,
+    build_body_tokens, dedupe_tokens, normalize_name, normalize_repo_path, normalize_string_list,
     split_identifier_tokens,
 };
-use super::{MAX_CONTEXT_TOKENS, MAX_IDENTIFIER_TOKENS, SemanticFeatureInput, normalize_repo_path};
+use super::{MAX_CONTEXT_TOKENS, MAX_IDENTIFIER_TOKENS, SemanticFeatureInput};
 
 #[derive(Debug, Clone, PartialEq)]
 // Stores lexical and structural signals used later for matching and reranking.

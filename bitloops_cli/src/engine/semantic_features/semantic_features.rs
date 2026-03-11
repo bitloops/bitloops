@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use anyhow::Result;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 #[path = "common.rs"]
@@ -12,8 +11,10 @@ mod common;
 mod features;
 #[path = "semantic.rs"]
 mod semantic;
+#[path = "store.rs"]
+mod store;
 
-use self::common::{build_body_tokens, normalize_name, normalize_string_list};
+use self::common::{build_body_tokens, normalize_name, normalize_repo_path, normalize_string_list};
 use self::features::{
     SymbolFeaturesRow, build_features_row, count_parameters_from_signature,
     infer_return_shape_hint, normalize_signature,
@@ -112,22 +113,7 @@ pub async fn load_pre_stage_artefacts_for_blob(
     blob_sha: &str,
     path: &str,
 ) -> Result<Vec<PreStageArtefactRow>> {
-    let sql = format!(
-        "SELECT artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash \
-FROM artefacts \
-WHERE repo_id = '{repo_id}' AND blob_sha = '{blob_sha}' AND path = '{path}' \
-ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
-        repo_id = esc_pg(repo_id),
-        blob_sha = esc_pg(blob_sha),
-        path = esc_pg(path),
-    );
-
-    let rows = pg_query_rows(pg_client, &sql).await?;
-    let mut artefacts = Vec::new();
-    for row in rows {
-        artefacts.push(serde_json::from_value::<PreStageArtefactRow>(row)?);
-    }
-    Ok(artefacts)
+    store::get_artefacts(pg_client, repo_id, blob_sha, path).await
 }
 
 pub fn build_semantic_feature_inputs_from_artefacts(
@@ -142,11 +128,15 @@ pub fn build_semantic_feature_inputs_from_artefacts(
 
     artefacts
         .iter()
-        .filter(|row| is_semantic_feature_candidate_kind(&row.canonical_kind))
+        .filter(|row| artefact_supports_semantic_enrichment(row))
         .map(|row| {
             build_semantic_feature_input_from_artefact(row, blob_content, &by_id, &child_kinds)
         })
         .collect()
+}
+
+fn artefact_supports_semantic_enrichment(row: &PreStageArtefactRow) -> bool {
+    row.canonical_kind != "import" && row.language_kind != "import"
 }
 
 fn build_child_kind_index(artefacts: &[PreStageArtefactRow]) -> HashMap<String, Vec<String>> {
@@ -222,23 +212,6 @@ fn build_semantic_feature_input_from_artefact(
         context_hints,
         content_hash: row.content_hash.clone(),
     }
-}
-
-fn is_semantic_feature_candidate_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "file"
-            | "module"
-            | "function"
-            | "method"
-            | "class"
-            | "interface"
-            | "type"
-            | "enum"
-            | "variable"
-            | "constructor"
-            | "test"
-    )
 }
 
 fn derive_symbol_name(row: &PreStageArtefactRow) -> String {
@@ -414,7 +387,7 @@ pub async fn upsert_semantic_feature_rows(
 
     for input in inputs {
         let rows = build_semantic_feature_rows(input, summary_provider);
-        let state = load_semantic_feature_index_state(pg_client, &input.artefact_id).await?;
+        let state = store::get_index_state(pg_client, &input.artefact_id).await?;
         if !semantic_features_require_reindex(
             &state,
             &rows.semantic_features_input_hash,
@@ -425,7 +398,7 @@ pub async fn upsert_semantic_feature_rows(
             continue;
         }
 
-        persist_semantic_feature_rows(pg_client, &rows).await?;
+        store::persist_rows(pg_client, &rows).await?;
         stats.upserted += 1;
     }
 
@@ -482,44 +455,6 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
     )
 }
 
-async fn load_semantic_feature_index_state(
-    pg_client: &tokio_postgres::Client,
-    artefact_id: &str,
-) -> Result<SemanticFeatureIndexState> {
-    let sql = format!(
-        "SELECT \
-            (SELECT semantic_features_input_hash FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_hash, \
-            (SELECT prompt_version FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_prompt_version, \
-            (SELECT semantic_features_input_hash FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_hash, \
-            (SELECT prompt_version FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_prompt_version",
-        artefact_id = esc_pg(artefact_id),
-    );
-
-    let rows = pg_query_rows(pg_client, &sql).await?;
-    let Some(row) = rows.first() else {
-        return Ok(SemanticFeatureIndexState::default());
-    };
-
-    Ok(SemanticFeatureIndexState {
-        semantics_hash: row
-            .get("semantics_hash")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        semantics_prompt_version: row
-            .get("semantics_prompt_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        features_hash: row
-            .get("features_hash")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        features_prompt_version: row
-            .get("features_prompt_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-    })
-}
-
 // Incremental indexing rule: recompute enrichment only when symbol inputs or prompt versions change.
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
@@ -533,166 +468,11 @@ pub fn semantic_features_require_reindex(
         || state.features_prompt_version.as_deref() != Some(features_prompt_version)
 }
 
-async fn persist_semantic_feature_rows(
-    pg_client: &tokio_postgres::Client,
-    rows: &SemanticFeatureRows,
-) -> Result<()> {
-    let semantics = &rows.semantics;
-    let features = &rows.features;
-
-    let doc_comment_summary_expr = match semantics.doc_comment_summary.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let llm_summary_expr = match semantics.llm_summary.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let source_model_expr = match semantics.source_model.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let normalized_signature_expr = match features.normalized_signature.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let parent_kind_expr = match features.parent_kind.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let parent_symbol_expr = match features.parent_symbol.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let parameter_count_expr = match features.parameter_count {
-        Some(value) => value.to_string(),
-        None => "NULL".to_string(),
-    };
-    let return_shape_expr = match features.return_shape_hint.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let identifier_tokens = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.identifier_tokens)?)
-    );
-    let body_tokens = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.normalized_body_tokens)?)
-    );
-    let modifiers = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.modifiers)?)
-    );
-    let local_relationships = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.local_relationships)?)
-    );
-    let context_tokens = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.context_tokens)?)
-    );
-
-    let sql = format!(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, summary_source, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, '{summary_source}', {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, summary_source = EXCLUDED.summary_source, source_model = EXCLUDED.source_model, generated_at = now(); \
-INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, parameter_count, return_shape_hint, modifiers, local_relationships, context_tokens) \
-VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {parameter_count}, {return_shape_hint}, {modifiers}, {local_relationships}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, parameter_count = EXCLUDED.parameter_count, return_shape_hint = EXCLUDED.return_shape_hint, modifiers = EXCLUDED.modifiers, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
-        artefact_id = esc_pg(&semantics.artefact_id),
-        repo_id = esc_pg(&semantics.repo_id),
-        blob_sha = esc_pg(&semantics.blob_sha),
-        input_hash = esc_pg(&rows.semantic_features_input_hash),
-        prompt_version = esc_pg(&semantics.prompt_version),
-        doc_comment_summary = doc_comment_summary_expr,
-        llm_summary = llm_summary_expr,
-        template_summary = esc_pg(&semantics.template_summary),
-        summary = esc_pg(&semantics.summary),
-        confidence = semantics.confidence,
-        summary_source = semantics.summary_source.as_str(),
-        source_model = source_model_expr,
-        features_artefact_id = esc_pg(&features.artefact_id),
-        features_repo_id = esc_pg(&features.repo_id),
-        features_blob_sha = esc_pg(&features.blob_sha),
-        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
-        features_prompt_version = esc_pg(&features.prompt_version),
-        normalized_name = esc_pg(&features.normalized_name),
-        normalized_signature = normalized_signature_expr,
-        identifier_tokens = identifier_tokens,
-        body_tokens = body_tokens,
-        parent_kind = parent_kind_expr,
-        parent_symbol = parent_symbol_expr,
-        parameter_count = parameter_count_expr,
-        return_shape_hint = return_shape_expr,
-        modifiers = modifiers,
-        local_relationships = local_relationships,
-        context_tokens = context_tokens,
-    );
-
-    postgres_exec(pg_client, &sql).await
-}
-
 fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {
         out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), pg_client.batch_execute(sql))
-        .await
-        .context("Postgres statement timeout after 30s")?
-        .context("executing Postgres statements")?;
-    Ok(())
-}
-
-async fn pg_query_rows(pg_client: &tokio_postgres::Client, sql: &str) -> Result<Vec<Value>> {
-    let wrapped = format!(
-        "SELECT coalesce(json_agg(t), '[]'::json)::text FROM ({}) t",
-        sql.trim().trim_end_matches(';')
-    );
-    let raw = tokio::time::timeout(Duration::from_secs(30), pg_client.query_one(&wrapped, &[]))
-        .await
-        .context("Postgres query timeout after 30s")?
-        .context("executing Postgres query")?
-        .try_get::<_, String>(0)
-        .context("reading Postgres scalar text result")?;
-    let parsed: Value = serde_json::from_str(raw.trim()).with_context(|| {
-        format!(
-            "parsing Postgres JSON payload failed: {}",
-            truncate_for_error(&raw)
-        )
-    })?;
-    match parsed {
-        Value::Array(rows) => Ok(rows),
-        Value::Object(_) => Ok(vec![parsed]),
-        Value::Null => Ok(vec![]),
-        other => bail!("unexpected Postgres JSON payload type: {other}"),
-    }
-}
-
-fn esc_pg(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-fn normalize_repo_path(path: &str) -> String {
-    let mut normalized = path.trim().replace('\\', "/");
-    while normalized.starts_with("./") {
-        normalized = normalized[2..].to_string();
-    }
-    normalized.trim_start_matches('/').to_string()
-}
-
-fn truncate_for_error(input: &str) -> String {
-    const MAX: usize = 500;
-    let mut out = input.to_string();
-    if out.len() > MAX {
-        out.truncate(MAX);
-        out.push_str("...");
     }
     out
 }

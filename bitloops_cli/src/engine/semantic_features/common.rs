@@ -54,6 +54,14 @@ pub(super) fn dedupe_tokens(tokens: Vec<String>, limit: usize) -> Vec<String> {
     out
 }
 
+pub(super) fn normalize_repo_path(path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    while normalized.starts_with("./") {
+        normalized = normalized[2..].to_string();
+    }
+    normalized.trim_start_matches('/').to_string()
+}
+
 fn semantic_identifier_regex() -> &'static Regex {
     static IDENTIFIER_REGEX: OnceLock<Regex> = OnceLock::new();
     IDENTIFIER_REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap())

@@ -1,47 +1,9 @@
 async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
-    run_postgres_exec(pg_client, sql).await
+    crate::engine::infra::postgres::postgres_exec(pg_client, sql).await
 }
 
 async fn pg_query_rows(pg_client: &tokio_postgres::Client, sql: &str) -> Result<Vec<Value>> {
-    let wrapped = format!(
-        "SELECT coalesce(json_agg(t), '[]'::json)::text FROM ({}) t",
-        sql.trim().trim_end_matches(';')
-    );
-    let raw = run_postgres_query_scalar_text(pg_client, &wrapped).await?;
-    let parsed: Value = serde_json::from_str(raw.trim()).with_context(|| {
-        format!(
-            "parsing Postgres JSON payload failed: {}",
-            truncate_for_error(&raw)
-        )
-    })?;
-    match parsed {
-        Value::Array(rows) => Ok(rows),
-        Value::Object(_) => Ok(vec![parsed]),
-        Value::Null => Ok(vec![]),
-        other => bail!("unexpected Postgres JSON payload type: {other}"),
-    }
-}
-
-async fn run_postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), pg_client.batch_execute(sql))
-        .await
-        .context("Postgres statement timeout after 30s")?
-        .context("executing Postgres statements")?;
-    Ok(())
-}
-
-async fn run_postgres_query_scalar_text(
-    pg_client: &tokio_postgres::Client,
-    sql: &str,
-) -> Result<String> {
-    let row = tokio::time::timeout(Duration::from_secs(30), pg_client.query_one(sql, &[]))
-        .await
-        .context("Postgres query timeout after 30s")?
-        .context("executing Postgres query")?;
-    let value: String = row
-        .try_get(0)
-        .context("reading Postgres scalar text result")?;
-    Ok(value)
+    crate::engine::infra::postgres::pg_query_rows(pg_client, sql).await
 }
 
 fn validate_postgres_sslmode_for_notls(dsn: &str, ssl_mode: SslMode) -> Result<()> {
@@ -87,16 +49,6 @@ async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
     });
 
     Ok(client)
-}
-
-fn truncate_for_error(input: &str) -> String {
-    const MAX: usize = 500;
-    let mut out = input.to_string();
-    if out.len() > MAX {
-        out.truncate(MAX);
-        out.push_str("...");
-    }
-    out
 }
 
 async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<String> {
@@ -191,7 +143,7 @@ fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
 }
 
 fn esc_pg(value: &str) -> String {
-    value.replace('\'', "''")
+    crate::engine::infra::postgres::esc_pg(value)
 }
 
 fn esc_ch(value: &str) -> String {

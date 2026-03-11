@@ -1,13 +1,11 @@
-use std::time::Duration;
+use anyhow::{Result, anyhow};
 
-use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Value, json};
+use crate::engine::providers::llm::{LlmProvider, build_llm_provider};
 
-use super::common::split_identifier_tokens;
-use super::{
-    MAX_SUMMARY_BODY_CHARS, SEMANTIC_SUMMARY_PROMPT_VERSION, SemanticFeatureInput,
-    normalize_repo_path,
-};
+use super::common::{normalize_repo_path, split_identifier_tokens};
+use super::{MAX_SUMMARY_BODY_CHARS, SEMANTIC_SUMMARY_PROMPT_VERSION, SemanticFeatureInput};
+
+pub use crate::engine::providers::llm::resolve_semantic_summary_endpoint;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
@@ -82,40 +80,17 @@ pub fn build_semantic_summary_provider(
         })?
         .trim()
         .to_string();
-    let endpoint = resolve_semantic_summary_endpoint(&provider, cfg.semantic_base_url.as_deref())?;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("building semantic summary HTTP client")?;
-
-    Ok(Box::new(HostedSemanticSummaryProvider {
-        provider,
-        model,
-        endpoint,
-        api_key,
-        client,
+    Ok(Box::new(LlmSemanticSummaryProvider {
+        llm_provider: build_llm_provider(
+            &provider,
+            model,
+            api_key,
+            cfg.semantic_base_url.as_deref(),
+        )?,
     }))
 }
 
-pub fn resolve_semantic_summary_endpoint(provider: &str, base_url: Option<&str>) -> Result<String> {
-    if let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(base_url.to_string());
-    }
-
-    match provider {
-        "openai" => Ok("https://api.openai.com/v1/chat/completions".to_string()),
-        "openrouter" => Ok("https://openrouter.ai/api/v1/chat/completions".to_string()),
-        "openai_compatible" | "custom" => {
-            bail!("BITLOOPS_DEVQL_SEMANTIC_BASE_URL is required for semantic provider `{provider}`")
-        }
-        other => bail!(
-            "unsupported semantic provider `{other}`. Use `openai`, `openrouter`, or `openai_compatible` with BITLOOPS_DEVQL_SEMANTIC_BASE_URL"
-        ),
-    }
-}
-
-fn build_hosted_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
+fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
     let body = input.body.trim();
     let body = if body.chars().count() > MAX_SUMMARY_BODY_CHARS {
         body.chars()
@@ -173,30 +148,6 @@ body:\n{body}",
     )
 }
 
-fn extract_openai_compatible_message_content(value: &Value) -> Option<String> {
-    let content = value.pointer("/choices/0/message/content")?;
-    match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(items) => {
-            let mut parts = Vec::new();
-            for item in items {
-                if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        parts.push(trimmed.to_string());
-                    }
-                }
-            }
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
-            }
-        }
-        _ => None,
-    }
-}
-
 fn parse_semantic_summary_candidate_json(content: &str) -> Option<HostedSemanticSummaryJson> {
     let payload = extract_json_object_from_text(content)?;
     serde_json::from_str::<HostedSemanticSummaryJson>(&payload).ok()
@@ -221,63 +172,27 @@ fn extract_json_object_from_text(content: &str) -> Option<String> {
     Some(trimmed[start..=end].to_string())
 }
 
-struct HostedSemanticSummaryProvider {
-    provider: String,
-    model: String,
-    endpoint: String,
-    api_key: String,
-    client: reqwest::blocking::Client,
+struct LlmSemanticSummaryProvider {
+    llm_provider: Box<dyn LlmProvider>,
 }
 
-impl SemanticSummaryProvider for HostedSemanticSummaryProvider {
+impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
-        let payload = json!({
-            "model": self.model,
-            "temperature": 0.1,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You summarize code symbols. Return only JSON with keys summary and confidence."
-                },
-                {
-                    "role": "user",
-                    "content": build_hosted_semantic_summary_prompt(input),
-                }
-            ]
-        });
-
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&payload)
-            .send()
-            .ok()?;
-        if !response.status().is_success() {
-            log::warn!(
-                "semantic summary provider request failed: provider={}, model={}, status={}",
-                self.provider,
-                self.model,
-                response.status()
-            );
-            return None;
-        }
-
-        let value: Value = response.json().ok()?;
-        let content = extract_openai_compatible_message_content(&value)?;
+        let content = self.llm_provider.complete(
+            "You summarize code symbols. Return only JSON with keys summary and confidence.",
+            &build_semantic_summary_prompt(input),
+        )?;
         let parsed = parse_semantic_summary_candidate_json(&content)?;
         Some(SemanticSummaryCandidate {
             summary: parsed.summary,
             confidence: parsed.confidence.unwrap_or(0.75),
-            source_model: Some(format!("{}:{}", self.provider, self.model)),
+            source_model: Some(self.llm_provider.descriptor()),
         })
     }
 
     fn prompt_version(&self) -> String {
-        format!(
-            "{SEMANTIC_SUMMARY_PROMPT_VERSION}::provider={}::model={}",
-            self.provider, self.model
-        )
+        self.llm_provider
+            .prompt_version(SEMANTIC_SUMMARY_PROMPT_VERSION)
     }
 }
 
