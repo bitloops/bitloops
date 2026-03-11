@@ -75,6 +75,30 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
+        if let Some(inner) = stage
+            .strip_prefix("deps(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_deps_stage = true;
+            parsed.deps.kind = args.get("kind").cloned();
+            if let Some(direction) = args.get("direction") {
+                parsed.deps.direction = direction.clone();
+            }
+            if let Some(include_unresolved) = args.get("include_unresolved") {
+                parsed.deps.include_unresolved = matches!(
+                    include_unresolved.to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes"
+                );
+            }
+            continue;
+        }
+
+        if stage == "deps()" {
+            parsed.has_deps_stage = true;
+            continue;
+        }
+
         if stage == "chatHistory()" {
             parsed.has_chat_history_stage = true;
             continue;
@@ -242,6 +266,10 @@ async fn execute_devql_query(
         bail!("chatHistory() requires an artefacts() stage in the query");
     }
 
+    if parsed.has_deps_stage && parsed.has_chat_history_stage {
+        bail!("deps() cannot be combined with chatHistory() stage");
+    }
+
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
     {
         bail!("chatHistory() cannot be combined with checkpoints()/telemetry() stages");
@@ -318,6 +346,10 @@ async fn execute_postgres_pipeline(
     let _ = cfg.require_pg_dsn()?;
     let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
 
+    if parsed.has_deps_stage {
+        return execute_postgres_deps_pipeline(cfg, parsed, pg_client, &repo_id).await;
+    }
+
     let mut where_clauses = vec![format!("a.repo_id = '{}'", esc_pg(&repo_id))];
 
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
@@ -391,6 +423,117 @@ LIMIT {}",
         return attach_chat_history_to_artefacts(cfg, pg_client, &repo_id, rows).await;
     }
     Ok(rows)
+}
+
+async fn execute_postgres_deps_pipeline(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    pg_client: &tokio_postgres::Client,
+    repo_id: &str,
+) -> Result<Vec<Value>> {
+    let mut source_filters = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(kind) = parsed.artefacts.kind.as_deref() {
+        source_filters.push(format!("a.canonical_kind = '{}'", esc_pg(kind)));
+    }
+    if let Some((start, end)) = parsed.artefacts.lines {
+        source_filters.push(format!("a.start_line <= {end} AND a.end_line >= {start}"));
+    }
+    if let Some(path) = parsed.file.as_deref() {
+        let path_candidates = build_path_candidates(path);
+        if let Some(commit_sha) = resolve_commit_selector(cfg, parsed)? {
+            let git_blob = path_candidates.iter().find_map(|candidate| {
+                git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, candidate)
+            });
+            if let Some(blob_sha) = git_blob {
+                source_filters.push(format!("a.blob_sha = '{}'", esc_pg(&blob_sha)));
+            } else {
+                source_filters.push(format!(
+                    "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",
+                    esc_pg(repo_id),
+                    esc_pg(&commit_sha),
+                    sql_path_candidates_clause("path", &path_candidates),
+                ));
+            }
+        } else {
+            source_filters.push(format!(
+                "({})",
+                sql_path_candidates_clause("a.path", &path_candidates)
+            ));
+        }
+    }
+    if let Some(glob) = parsed.files_path.as_deref() {
+        let like = glob_to_sql_like(glob);
+        source_filters.push(format!("a.path LIKE '{}'", esc_pg(&like)));
+    }
+
+    let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(kind) = parsed.deps.kind.as_deref() {
+        edge_filters.push(format!("e.edge_kind = '{}'", esc_pg(kind)));
+    }
+    if !parsed.deps.include_unresolved {
+        edge_filters.push("e.to_artefact_id IS NOT NULL".to_string());
+    }
+
+    let direction = parsed.deps.direction.to_ascii_lowercase();
+    let sql = if direction == "in" {
+        format!(
+            "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
+af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
+FROM artefact_edges e \
+JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
+JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
+WHERE {} AND {} \
+ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+LIMIT {}",
+            edge_filters.join(" AND "),
+            source_filters
+                .iter()
+                .map(|f| f.replace("a.", "at."))
+                .collect::<Vec<_>>()
+                .join(" AND "),
+            parsed.limit.max(1)
+        )
+    } else if direction == "both" {
+        format!(
+            "WITH out_edges AS ( \
+SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
+FROM artefact_edges e JOIN artefacts a ON a.artefact_id = e.from_artefact_id \
+WHERE {} AND {} \
+), in_edges AS ( \
+SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
+FROM artefact_edges e JOIN artefacts a ON a.artefact_id = e.to_artefact_id \
+WHERE {} AND {} \
+) \
+SELECT DISTINCT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
+af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
+FROM (SELECT * FROM out_edges UNION ALL SELECT * FROM in_edges) e \
+JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
+LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
+ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+LIMIT {}",
+            edge_filters.join(" AND "),
+            source_filters.join(" AND "),
+            edge_filters.join(" AND "),
+            source_filters.join(" AND "),
+            parsed.limit.max(1)
+        )
+    } else {
+        format!(
+            "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
+af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
+FROM artefact_edges e \
+JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
+LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
+WHERE {} AND {} \
+ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+LIMIT {}",
+            edge_filters.join(" AND "),
+            source_filters.join(" AND "),
+            parsed.limit.max(1)
+        )
+    };
+
+    pg_query_rows(pg_client, &sql).await
 }
 
 fn resolve_commit_selector(cfg: &DevqlConfig, parsed: &ParsedDevqlQuery) -> Result<Option<String>> {

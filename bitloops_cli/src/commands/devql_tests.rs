@@ -1,5 +1,6 @@
 use super::*;
 use clap::Parser;
+use std::env;
 
 fn test_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -62,6 +63,20 @@ fn parse_devql_chat_history_stage_basic() {
     assert_eq!(parsed.limit, 3);
 }
 
+#[test]
+fn parse_devql_deps_stage_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"both",include_unresolved:false)->limit(25)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_deps_stage);
+    assert_eq!(parsed.deps.kind.as_deref(), Some("calls"));
+    assert_eq!(parsed.deps.direction, "both");
+    assert!(!parsed.deps.include_unresolved);
+    assert_eq!(parsed.limit, 25);
+}
+
 #[tokio::test]
 async fn execute_devql_query_rejects_chat_history_without_artefacts_stage() {
     let cfg = test_cfg();
@@ -83,6 +98,20 @@ async fn execute_devql_query_rejects_combining_checkpoints_and_artefacts_stage()
     assert!(
         err.to_string()
             .contains("MVP limitation: telemetry/checkpoints stages cannot be combined")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->chatHistory()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("deps() cannot be combined with chatHistory()")
     );
 }
 
@@ -189,6 +218,9 @@ fn extract_js_ts_functions_detects_basic_function() {
     assert_eq!(functions[0].name, "hello");
     assert_eq!(functions[0].start_line, 1);
     assert_eq!(functions[0].end_line, 3);
+    assert_eq!(functions[0].start_byte, 0);
+    assert_eq!(functions[0].end_byte as usize, content.len());
+    assert_eq!(functions[0].signature, "export function hello() {");
 }
 
 #[test]
@@ -202,6 +234,177 @@ fn extract_js_ts_functions_detects_arrow_function_assignment() {
     assert_eq!(functions[0].name, "hello");
     assert_eq!(functions[0].start_line, 1);
     assert_eq!(functions[0].end_line, 3);
+    assert_eq!(functions[0].start_byte, 0);
+    assert_eq!(functions[0].end_byte as usize, content.len());
+    assert_eq!(functions[0].signature, "export const hello = () => {");
+}
+
+#[test]
+fn extract_js_ts_artefacts_covers_phase1_kinds() {
+    let content = r#"import { helper } from "./helper";
+export interface User {
+  id: string;
+}
+export type UserId = string;
+export class Service {
+  run(input: string) {
+    return input;
+  }
+}
+export const answer = 42;
+export function greet(name: string) {
+  return helper(name);
+}
+"#;
+
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let kinds = artefacts
+        .iter()
+        .map(|a| a.canonical_kind.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(kinds.contains(&"import"));
+    assert!(kinds.contains(&"interface"));
+    assert!(kinds.contains(&"type"));
+    assert!(kinds.contains(&"class"));
+    assert!(kinds.contains(&"method"));
+    assert!(kinds.contains(&"variable"));
+    assert!(kinds.contains(&"function"));
+
+    let method = artefacts
+        .iter()
+        .find(|a| a.canonical_kind == "method" && a.name == "run")
+        .expect("expected class method artefact");
+    assert_eq!(
+        method.parent_symbol_fqn.as_deref(),
+        Some("src/sample.ts::Service")
+    );
+    assert_eq!(method.symbol_fqn, "src/sample.ts::Service::run");
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_resolves_imports_and_calls() {
+    let content = r#"import { helper as extHelper } from "./utils";
+function local() {
+  return 1;
+}
+function caller() {
+  local();
+  extHelper();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "imports"
+            && e.from_symbol_fqn == "src/sample.ts"
+            && e.to_symbol_ref.as_deref() == Some("./utils")
+    }));
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::local")
+    }));
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_symbol_ref.as_deref() == Some("./utils::helper")
+    }));
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_emits_unresolved_call_fallback() {
+    let content = r#"function caller() {
+  mystery();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_symbol_ref.as_deref() == Some("src/sample.ts::mystery")
+    }));
+}
+
+#[test]
+fn extract_rust_artefacts_covers_phase1_kinds() {
+    let content = r#"use std::fmt::Debug;
+
+struct User {
+    id: u64,
+}
+
+trait DoThing {
+    fn do_it(&self);
+}
+
+impl DoThing for User {
+    fn do_it(&self) {}
+}
+
+fn run() {
+    println!("ok");
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let kinds = artefacts
+        .iter()
+        .map(|a| a.canonical_kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"import"));
+    assert!(kinds.contains(&"struct"));
+    assert!(kinds.contains(&"trait"));
+    assert!(kinds.contains(&"impl"));
+    assert!(kinds.contains(&"method"));
+    assert!(kinds.contains(&"function"));
+}
+
+#[test]
+fn extract_rust_dependency_edges_emits_import_calls_and_implements() {
+    let content = r#"use crate::math::sum;
+
+trait DoThing { fn do_it(&self); }
+struct User;
+
+impl DoThing for User {
+    fn do_it(&self) {
+        sum(1, 2);
+    }
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "imports" && e.to_symbol_ref.as_deref() == Some("crate::math::sum")
+    }));
+    assert!(edges.iter().any(|e| e.edge_kind == "implements" && e.to_symbol_ref.as_deref() == Some("DoThing")));
+    assert!(edges.iter().any(|e| e.edge_kind == "calls"));
+}
+
+#[test]
+fn postgres_schema_sql_includes_artefact_edges_hardening() {
+    let sql = postgres_schema_sql();
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
+    assert!(sql.contains("metadata JSONB DEFAULT '{}'::jsonb"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
+}
+
+#[test]
+fn artefact_edges_hardening_sql_includes_constraints_and_indexes() {
+    let sql = artefact_edges_hardening_sql();
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_target_chk"));
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_line_range_chk"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
 }
 
 #[test]
@@ -255,4 +458,65 @@ fn postgres_sslmode_validation_rejects_verify_full_dsn() {
     let dsn = "postgres://user:pass@localhost:5432/bitloops?sslmode=verify-full";
     let err = validate_postgres_sslmode_for_notls(dsn, SslMode::Prefer).unwrap_err();
     assert!(err.to_string().contains("sslmode=verify-ca/verify-full"));
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn artefact_edges_constraints_and_dedup_work_in_postgres() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let artefact_id = deterministic_uuid("test-art-a");
+    let upsert_artefact_sql = format!(
+        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', 'blob1', 'src/a.ts', 'typescript', 'function', 'function_declaration', 'src/a.ts::a', NULL, 1, 3, 0, 10, 'function a() {{', 'h1') \
+ON CONFLICT (artefact_id) DO NOTHING",
+        esc_pg(&artefact_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &upsert_artefact_sql).await.unwrap();
+
+    let invalid_target_sql = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, edge_kind, language) \
+VALUES ('{}', '{}', 'blob1', '{}', 'calls', 'typescript')",
+        esc_pg(&deterministic_uuid("invalid-target")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &invalid_target_sql).await.is_err());
+
+    let invalid_range_sql = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'x', 'calls', 'typescript', 4, 3)",
+        esc_pg(&deterministic_uuid("invalid-range")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &invalid_range_sql).await.is_err());
+
+    let edge_id_a = deterministic_uuid("dedup-a");
+    let edge_insert_a = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'src/a.ts::x', 'calls', 'typescript', 2, 2)",
+        esc_pg(&edge_id_a),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    postgres_exec(&client, &edge_insert_a).await.unwrap();
+
+    let edge_id_b = deterministic_uuid("dedup-b");
+    let edge_insert_b = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'src/a.ts::x', 'calls', 'typescript', 2, 2)",
+        esc_pg(&edge_id_b),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &edge_insert_b).await.is_err());
 }
