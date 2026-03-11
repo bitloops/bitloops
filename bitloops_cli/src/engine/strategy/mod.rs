@@ -19,7 +19,6 @@ use anyhow::Result;
 
 /// Context passed to `save_step` when a turn ends.
 ///
-#[allow(dead_code)] // fields consumed by ManualCommitStrategy
 #[derive(Debug, Clone, Default)]
 pub struct StepContext {
     pub session_id: String,
@@ -42,7 +41,6 @@ pub struct StepContext {
 
 /// Context passed to `save_task_step` for subagent / incremental checkpoints.
 ///
-#[allow(dead_code)] // fields consumed by ManualCommitStrategy
 #[derive(Debug, Clone, Default)]
 pub struct TaskStepContext {
     pub session_id: String,
