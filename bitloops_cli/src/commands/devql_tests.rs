@@ -581,7 +581,10 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
         output.semantics.llm_summary.as_deref(),
         Some("Normalizes email addresses before storage")
     );
-    assert_eq!(output.semantics.template_summary, "Implements normalize email.");
+    assert_eq!(
+        output.semantics.template_summary,
+        "Implements normalize email."
+    );
     assert_eq!(
         output.semantics.summary_source,
         semantic::SemanticSummarySource::Llm
@@ -606,7 +609,10 @@ fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
     assert_eq!(output.semantics.summary, "Implements normalize email.");
     assert_eq!(output.semantics.doc_comment_summary, None);
     assert_eq!(output.semantics.llm_summary.as_deref(), Some("bad"));
-    assert_eq!(output.semantics.template_summary, "Implements normalize email.");
+    assert_eq!(
+        output.semantics.template_summary,
+        "Implements normalize email."
+    );
     assert_eq!(
         output.semantics.summary_source,
         semantic::SemanticSummarySource::TemplateFallback
