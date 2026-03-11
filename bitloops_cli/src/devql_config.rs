@@ -80,10 +80,7 @@ impl DevqlFileConfig {
             ),
             semantic_provider: read_any_string(
                 root,
-                &[
-                    "semantic_provider",
-                    "BITLOOPS_DEVQL_SEMANTIC_PROVIDER",
-                ],
+                &["semantic_provider", "BITLOOPS_DEVQL_SEMANTIC_PROVIDER"],
             ),
             semantic_model: read_any_string(
                 root,

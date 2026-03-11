@@ -1,4 +1,8 @@
 use super::*;
+use crate::engine::semantic_features::{
+    PreStageArtefactRow, SemanticFeatureIndexState, SemanticFeatureInput,
+    build_semantic_feature_rows, semantic_features_require_reindex,
+};
 use clap::Parser;
 
 fn test_cfg() -> DevqlConfig {
@@ -43,7 +47,8 @@ fn parse_devql_pipeline_basic() {
 
 #[test]
 fn semantic_summary_provider_resolves_default_openai_endpoint() {
-    let endpoint = resolve_semantic_summary_endpoint("openai", None).expect("openai endpoint");
+    let endpoint =
+        semantic::resolve_semantic_summary_endpoint("openai", None).expect("openai endpoint");
     assert_eq!(endpoint, "https://api.openai.com/v1/chat/completions");
 }
 
@@ -53,7 +58,7 @@ fn semantic_summary_provider_requires_model_when_enabled() {
     cfg.semantic_provider = Some("openai".to_string());
     cfg.semantic_api_key = Some("test-key".to_string());
 
-    let err = match build_semantic_summary_provider(&cfg) {
+    let err = match semantic::build_semantic_summary_provider(&semantic_provider_config(&cfg)) {
         Ok(_) => panic!("provider should require model"),
         Err(err) => err,
     };
@@ -285,11 +290,14 @@ fn postgres_sslmode_validation_rejects_verify_full_dsn() {
 
 #[derive(Clone)]
 struct MockSemanticSummaryProvider {
-    candidate: Option<SemanticSummaryCandidate>,
+    candidate: Option<semantic::SemanticSummaryCandidate>,
 }
 
-impl SemanticSummaryProvider for MockSemanticSummaryProvider {
-    fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+impl semantic::SemanticSummaryProvider for MockSemanticSummaryProvider {
+    fn generate(
+        &self,
+        _input: &SemanticFeatureInput,
+    ) -> Option<semantic::SemanticSummaryCandidate> {
         self.candidate.clone()
     }
 
@@ -528,7 +536,7 @@ fn semantic_features_build_inputs_from_mock_prestage_rows() {
 #[test]
 fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
     let input = semantic_feature_input_named("getById");
-    let output = build_semantic_feature_rows(&input, &NoopSemanticSummaryProvider);
+    let output = build_semantic_feature_rows(&input, &semantic::NoopSemanticSummaryProvider);
 
     assert_eq!(output.semantics.summary, "Fetch a user record by its id.");
     assert_eq!(
@@ -539,9 +547,8 @@ fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
     assert_eq!(output.semantics.template_summary, "Loads by id.");
     assert_eq!(
         output.semantics.summary_source,
-        SemanticSummarySource::DocComment
+        semantic::SemanticSummarySource::DocComment
     );
-    assert_eq!(output.semantics.role_tag, "reader");
     assert_eq!(output.features.normalized_name, "get_by_id");
     assert!(
         output
@@ -557,9 +564,8 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
     let output = build_semantic_feature_rows(
         &input,
         &MockSemanticSummaryProvider {
-            candidate: Some(SemanticSummaryCandidate {
+            candidate: Some(semantic::SemanticSummaryCandidate {
                 summary: "Normalizes email addresses before storage".to_string(),
-                role_tag: None,
                 confidence: 0.87,
                 source_model: Some("mock-llm".to_string()),
             }),
@@ -576,8 +582,10 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
         Some("Normalizes email addresses before storage")
     );
     assert_eq!(output.semantics.template_summary, "Formats email.");
-    assert_eq!(output.semantics.summary_source, SemanticSummarySource::Llm);
-    assert_eq!(output.semantics.role_tag, "formatter");
+    assert_eq!(
+        output.semantics.summary_source,
+        semantic::SemanticSummarySource::Llm
+    );
     assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
 }
 
@@ -587,9 +595,8 @@ fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
     let output = build_semantic_feature_rows(
         &input,
         &MockSemanticSummaryProvider {
-            candidate: Some(SemanticSummaryCandidate {
+            candidate: Some(semantic::SemanticSummaryCandidate {
                 summary: "bad".to_string(),
-                role_tag: None,
                 confidence: 0.8,
                 source_model: Some("mock-llm".to_string()),
             }),
@@ -602,9 +609,8 @@ fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
     assert_eq!(output.semantics.template_summary, "Formats email.");
     assert_eq!(
         output.semantics.summary_source,
-        SemanticSummarySource::TemplateFallback
+        semantic::SemanticSummarySource::TemplateFallback
     );
-    assert_eq!(output.semantics.role_tag, "formatter");
 }
 
 #[test]
@@ -613,9 +619,8 @@ fn semantic_features_store_doc_comment_and_llm_candidates_together() {
     let output = build_semantic_feature_rows(
         &input,
         &MockSemanticSummaryProvider {
-            candidate: Some(SemanticSummaryCandidate {
+            candidate: Some(semantic::SemanticSummaryCandidate {
                 summary: "Loads a user entity by id from storage".to_string(),
-                role_tag: Some("reader".to_string()),
                 confidence: 0.82,
                 source_model: Some("mock-llm".to_string()),
             }),
@@ -635,15 +640,18 @@ fn semantic_features_store_doc_comment_and_llm_candidates_together() {
         output.semantics.summary,
         "Loads a user entity by id from storage."
     );
-    assert_eq!(output.semantics.summary_source, SemanticSummarySource::Llm);
+    assert_eq!(
+        output.semantics.summary_source,
+        semantic::SemanticSummarySource::Llm
+    );
     assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
 }
 
 #[test]
 fn semantic_features_reindex_when_hash_or_prompt_version_changes() {
     let input = semantic_feature_input_named("normalizeEmail");
-    let output = build_semantic_feature_rows(&input, &NoopSemanticSummaryProvider);
-    let hash = output.semantics.semantic_features_input_hash.clone();
+    let output = build_semantic_feature_rows(&input, &semantic::NoopSemanticSummaryProvider);
+    let hash = output.semantic_features_input_hash.clone();
 
     let unchanged = SemanticFeatureIndexState {
         semantics_hash: Some(hash.clone()),

@@ -197,7 +197,6 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    role_tag TEXT NOT NULL,
     confidence DOUBLE PRECISION NOT NULL,
     summary_source TEXT NOT NULL,
     source_model TEXT,
@@ -230,6 +229,9 @@ ADD COLUMN IF NOT EXISTS llm_summary TEXT;
 
 ALTER TABLE symbol_semantics
 ADD COLUMN IF NOT EXISTS template_summary TEXT;
+
+ALTER TABLE symbol_semantics
+DROP COLUMN IF EXISTS role_tag;
 
 UPDATE symbol_semantics
 SET template_summary = summary

@@ -16,6 +16,11 @@ use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
 use crate::engine::paths;
+use crate::engine::semantic_features as semantic;
+use crate::engine::semantic_features::{
+    build_semantic_feature_inputs_from_artefacts, load_pre_stage_artefacts_for_blob,
+    upsert_semantic_feature_rows,
+};
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_committed, read_session_content, run_git,
 };
@@ -279,6 +284,15 @@ impl DevqlConfig {
     }
 }
 
+fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
+    semantic::SemanticSummaryProviderConfig {
+        semantic_provider: cfg.semantic_provider.clone(),
+        semantic_model: cfg.semantic_model.clone(),
+        semantic_api_key: cfg.semantic_api_key.clone(),
+        semantic_base_url: cfg.semantic_base_url.clone(),
+    }
+}
+
 async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     init_clickhouse_schema(cfg).await?;
@@ -293,7 +307,8 @@ async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
-    let summary_provider = build_semantic_summary_provider(cfg)?;
+    let summary_provider =
+        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
     if args.init {
         init_clickhouse_schema(cfg).await?;
         init_postgres_schema(cfg, &pg_client).await?;

@@ -6,6 +6,7 @@ pub mod hooks;
 pub mod lifecycle;
 pub mod logging;
 pub mod paths;
+pub mod semantic_features;
 pub mod session;
 pub mod settings;
 pub mod strategy;
