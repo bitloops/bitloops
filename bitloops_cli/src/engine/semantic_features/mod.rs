@@ -1,6 +1,7 @@
-pub mod semantic_features;
+#[path = "semantic_features.rs"]
+mod core;
 
-pub use semantic_features::{
+pub use core::{
     NoopSemanticSummaryProvider, PreStageArtefactRow, SemanticFeatureIndexState,
     SemanticFeatureInput, SemanticSummaryCandidate, SemanticSummaryProvider,
     SemanticSummaryProviderConfig, SemanticSummarySource,

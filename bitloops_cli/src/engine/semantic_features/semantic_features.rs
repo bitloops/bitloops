@@ -266,10 +266,10 @@ fn extract_symbol_body(row: &PreStageArtefactRow, blob_content: &str) -> String 
     if let (Some(start_byte), Some(end_byte)) = (row.start_byte, row.end_byte) {
         let start_byte = start_byte.max(0) as usize;
         let end_byte = end_byte.max(start_byte as i32) as usize;
-        if let Some(slice) = blob_content.get(start_byte..end_byte.min(blob_content.len())) {
-            if !slice.trim().is_empty() {
-                return slice.to_string();
-            }
+        if let Some(slice) = blob_content.get(start_byte..end_byte.min(blob_content.len()))
+            && !slice.trim().is_empty()
+        {
+            return slice.to_string();
         }
     }
 
@@ -286,9 +286,7 @@ fn extract_symbol_body(row: &PreStageArtefactRow, blob_content: &str) -> String 
 }
 
 fn extract_symbol_doc_comment(blob_content: &str, start_line: Option<i32>) -> Option<String> {
-    let Some(start_line) = start_line else {
-        return None;
-    };
+    let start_line = start_line?;
     if start_line <= 1 {
         return None;
     }

@@ -366,7 +366,7 @@ pub(super) fn build_semantics_row(
         )
     };
 
-    let semantics = SymbolSemanticsRow {
+    SymbolSemanticsRow {
         artefact_id: input.artefact_id.clone(),
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
@@ -378,9 +378,7 @@ pub(super) fn build_semantics_row(
         confidence,
         summary_source,
         source_model: llm_candidate.and_then(|candidate| candidate.source_model),
-    };
-
-    semantics
+    }
 }
 
 fn extract_summary_from_doc_comment(comment: Option<&str>) -> Option<String> {
@@ -496,9 +494,7 @@ fn is_valid_summary(summary: &str) -> bool {
 
 fn summary_subject(input: &SemanticFeatureInput) -> String {
     if input.canonical_kind == "file" {
-        return normalize_repo_path(&input.path)
-            .replace('/', " ")
-            .replace('.', " ");
+        return normalize_repo_path(&input.path).replace(['/', '.'], " ");
     }
 
     let tokens = split_identifier_tokens(&input.name);
