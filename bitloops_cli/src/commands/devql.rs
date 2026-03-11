@@ -212,6 +212,10 @@ struct DevqlConfig {
     clickhouse_user: Option<String>,
     clickhouse_password: Option<String>,
     clickhouse_database: String,
+    semantic_provider: Option<String>,
+    semantic_model: Option<String>,
+    semantic_api_key: Option<String>,
+    semantic_base_url: Option<String>,
 }
 
 impl DevqlConfig {
@@ -242,6 +246,22 @@ impl DevqlConfig {
                 .filter(|s| !s.trim().is_empty())
                 .or(file_cfg.clickhouse_database)
                 .unwrap_or_else(|| "default".to_string()),
+            semantic_provider: env::var("BITLOOPS_DEVQL_SEMANTIC_PROVIDER")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or(file_cfg.semantic_provider),
+            semantic_model: env::var("BITLOOPS_DEVQL_SEMANTIC_MODEL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or(file_cfg.semantic_model),
+            semantic_api_key: env::var("BITLOOPS_DEVQL_SEMANTIC_API_KEY")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or(file_cfg.semantic_api_key),
+            semantic_base_url: env::var("BITLOOPS_DEVQL_SEMANTIC_BASE_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or(file_cfg.semantic_base_url),
         }
     }
 
@@ -273,6 +293,7 @@ async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
+    let summary_provider = build_semantic_summary_provider(cfg)?;
     if args.init {
         init_clickhouse_schema(cfg).await?;
         init_postgres_schema(cfg, &pg_client).await?;
@@ -331,6 +352,7 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
             let Some(blob_sha) = blob_sha else {
                 continue;
             };
+            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
             upsert_file_state_row(cfg, &pg_client, &commit_sha, &normalized_path, &blob_sha)
                 .await?;
@@ -338,18 +360,37 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
                 upsert_file_artefact_row(cfg, &pg_client, &normalized_path, &blob_sha).await?;
             upsert_language_artefacts(cfg, &pg_client, &normalized_path, &blob_sha, &file_artefact)
                 .await?;
+            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                &pg_client,
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs =
+                build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
+            let semantic_feature_stats = upsert_semantic_feature_rows(
+                &pg_client,
+                &semantic_feature_inputs,
+                summary_provider.as_ref(),
+            )
+            .await?;
             counters.artefacts_upserted += 1;
+            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
         counters.checkpoints_processed += 1;
     }
 
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
-        counters.checkpoints_without_commit
+        counters.checkpoints_without_commit,
+        counters.semantic_feature_rows_upserted,
+        counters.semantic_feature_rows_skipped,
     );
     Ok(())
 }

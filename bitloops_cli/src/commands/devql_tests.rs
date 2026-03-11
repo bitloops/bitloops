@@ -16,6 +16,10 @@ fn test_cfg() -> DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
     }
 }
 
@@ -35,6 +39,28 @@ fn parse_devql_pipeline_basic() {
     assert_eq!(parsed.artefacts.since.as_deref(), Some("2026-03-01"));
     assert_eq!(parsed.limit, 10);
     assert_eq!(parsed.select_fields, vec!["path", "canonical_kind"]);
+}
+
+#[test]
+fn semantic_summary_provider_resolves_default_openai_endpoint() {
+    let endpoint = resolve_semantic_summary_endpoint("openai", None).expect("openai endpoint");
+    assert_eq!(endpoint, "https://api.openai.com/v1/chat/completions");
+}
+
+#[test]
+fn semantic_summary_provider_requires_model_when_enabled() {
+    let mut cfg = test_cfg();
+    cfg.semantic_provider = Some("openai".to_string());
+    cfg.semantic_api_key = Some("test-key".to_string());
+
+    let err = match build_semantic_summary_provider(&cfg) {
+        Ok(_) => panic!("provider should require model"),
+        Err(err) => err,
+    };
+    assert!(
+        err.to_string()
+            .contains("BITLOOPS_DEVQL_SEMANTIC_MODEL is required")
+    );
 }
 
 #[test]
@@ -255,4 +281,402 @@ fn postgres_sslmode_validation_rejects_verify_full_dsn() {
     let dsn = "postgres://user:pass@localhost:5432/bitloops?sslmode=verify-full";
     let err = validate_postgres_sslmode_for_notls(dsn, SslMode::Prefer).unwrap_err();
     assert!(err.to_string().contains("sslmode=verify-ca/verify-full"));
+}
+
+#[derive(Clone)]
+struct MockSemanticSummaryProvider {
+    candidate: Option<SemanticSummaryCandidate>,
+}
+
+impl SemanticSummaryProvider for MockSemanticSummaryProvider {
+    fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+        self.candidate.clone()
+    }
+
+    fn prompt_version(&self) -> String {
+        "semantic-summary-v1::provider=mock::model=test".to_string()
+    }
+}
+
+fn mock_semantic_feature_blob_content() -> &'static str {
+    r#"/* Service helpers for user operations. */
+import { db } from './db';
+
+export interface User {
+  id: string;
+  email: string;
+}
+
+export class UserService {
+  // Fetch a user record by its id.
+  async getById(id: string): Promise<User | null> {
+    return db.users.findById(id);
+  }
+}
+
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export const DEFAULT_PAGE_SIZE = 20;
+export type UserId = string;
+"#
+}
+
+fn mock_prestage_artefacts() -> Vec<PreStageArtefactRow> {
+    serde_json::from_value(serde_json::json!([
+        {
+            "artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "symbol_id": "1a2b3c4d-5e6f-7890-abcd-ef1234567890",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "file",
+            "language_kind": "module",
+            "symbol_fqn": "src/services/user.ts",
+            "parent_artefact_id": null,
+            "start_line": 1,
+            "end_line": 21,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "src/services/user.ts",
+            "content_hash": "c9d2e3f4-1a2b-3c4d-5e6f-7a8b9c0d1e2f"
+        },
+        {
+            "artefact_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+            "symbol_id": "2b3c4d5e-6f7a-8901-bcde-f12345678901",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "import",
+            "language_kind": "import",
+            "symbol_fqn": "src/services/user.ts::import::./db",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 2,
+            "end_line": 2,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "import { db } from './db';",
+            "content_hash": null
+        },
+        {
+            "artefact_id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+            "symbol_id": "3c4d5e6f-7a8b-9012-cdef-123456789012",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "interface",
+            "language_kind": "interface",
+            "symbol_fqn": "src/services/user.ts::User",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 4,
+            "end_line": 7,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "export interface User {",
+            "content_hash": "d4e5f6a7-2b3c-4d5e-6f7a-8b9c0d1e2f3a"
+        },
+        {
+            "artefact_id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+            "symbol_id": "4d5e6f7a-8b9c-0123-defa-234567890123",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "class",
+            "language_kind": "class",
+            "symbol_fqn": "src/services/user.ts::UserService",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 9,
+            "end_line": 14,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "export class UserService {",
+            "content_hash": "e5f6a7b8-3c4d-5e6f-7a8b-9c0d1e2f3a4b"
+        },
+        {
+            "artefact_id": "e5f6a7b8-c9d0-1234-efab-345678901234",
+            "symbol_id": "5e6f7a8b-9c0d-1234-efab-345678901234",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "method",
+            "language_kind": "method",
+            "symbol_fqn": "src/services/user.ts::UserService::getById",
+            "parent_artefact_id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+            "start_line": 11,
+            "end_line": 13,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "async getById(id: string): Promise<User | null> {",
+            "content_hash": "f6a7b8c9-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
+        },
+        {
+            "artefact_id": "f6a7b8c9-d0e1-2345-fabc-456789012345",
+            "symbol_id": "6f7a8b9c-0d1e-2345-fabc-456789012345",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "function",
+            "language_kind": "function",
+            "symbol_fqn": "src/services/user.ts::normalizeEmail",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 16,
+            "end_line": 18,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "export function normalizeEmail(email: string): string {",
+            "content_hash": "a7b8c9d0-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+        },
+        {
+            "artefact_id": "a8b9c0d1-e2f3-4567-abcd-567890123456",
+            "symbol_id": "7a8b9c0d-1e2f-4567-abcd-567890123456",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "variable",
+            "language_kind": "const",
+            "symbol_fqn": "src/services/user.ts::DEFAULT_PAGE_SIZE",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 20,
+            "end_line": 20,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "export const DEFAULT_PAGE_SIZE = 20;",
+            "content_hash": null
+        },
+        {
+            "artefact_id": "b9c0d1e2-f3a4-5678-bcde-678901234567",
+            "symbol_id": "8b9c0d1e-2f3a-5678-bcde-678901234567",
+            "repo_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "blob_sha": "a3f1e2b7c4d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3",
+            "path": "src/services/user.ts",
+            "language": "typescript",
+            "canonical_kind": "type",
+            "language_kind": "type_alias",
+            "symbol_fqn": "src/services/user.ts::UserId",
+            "parent_artefact_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "start_line": 21,
+            "end_line": 21,
+            "start_byte": null,
+            "end_byte": null,
+            "signature": "export type UserId = string;",
+            "content_hash": null
+        }
+    ]))
+    .expect("mock artefacts should parse")
+}
+
+fn semantic_feature_input_named(name: &str) -> SemanticFeatureInput {
+    build_semantic_feature_inputs_from_artefacts(
+        &mock_prestage_artefacts(),
+        mock_semantic_feature_blob_content(),
+    )
+    .into_iter()
+    .find(|input| input.name == name)
+    .expect("semantic feature input should exist")
+}
+
+#[test]
+fn semantic_features_build_inputs_from_mock_prestage_rows() {
+    let inputs = build_semantic_feature_inputs_from_artefacts(
+        &mock_prestage_artefacts(),
+        mock_semantic_feature_blob_content(),
+    );
+
+    assert_eq!(
+        inputs.len(),
+        7,
+        "import rows should not be enriched in stage 1"
+    );
+    assert!(inputs.iter().all(|input| input.canonical_kind != "import"));
+
+    let file = inputs
+        .iter()
+        .find(|input| input.canonical_kind == "file")
+        .expect("file input");
+    assert!(
+        file.local_relationships
+            .contains(&"contains:class".to_string()),
+        "{:?}",
+        file.local_relationships
+    );
+
+    let method = inputs
+        .iter()
+        .find(|input| input.name == "getById")
+        .expect("method input");
+    assert_eq!(method.parent_kind.as_deref(), Some("class"));
+    assert_eq!(
+        method.parent_symbol.as_deref(),
+        Some("src/services/user.ts::UserService")
+    );
+    assert_eq!(method.parameter_count, Some(1));
+    assert_eq!(method.return_shape_hint.as_deref(), Some("promise"));
+    assert!(
+        method.body.contains("findById"),
+        "expected method body to be sliced from blob content"
+    );
+}
+
+#[test]
+fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
+    let input = semantic_feature_input_named("getById");
+    let output = build_semantic_feature_rows(&input, &NoopSemanticSummaryProvider);
+
+    assert_eq!(output.semantics.summary, "Fetch a user record by its id.");
+    assert_eq!(
+        output.semantics.doc_comment_summary.as_deref(),
+        Some("Fetch a user record by its id.")
+    );
+    assert_eq!(output.semantics.llm_summary, None);
+    assert_eq!(output.semantics.template_summary, "Loads by id.");
+    assert_eq!(
+        output.semantics.summary_source,
+        SemanticSummarySource::DocComment
+    );
+    assert_eq!(output.semantics.role_tag, "reader");
+    assert_eq!(output.features.normalized_name, "get_by_id");
+    assert!(
+        output
+            .features
+            .normalized_body_tokens
+            .contains(&"find".to_string())
+    );
+}
+
+#[test]
+fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
+    let input = semantic_feature_input_named("normalizeEmail");
+    let output = build_semantic_feature_rows(
+        &input,
+        &MockSemanticSummaryProvider {
+            candidate: Some(SemanticSummaryCandidate {
+                summary: "Normalizes email addresses before storage".to_string(),
+                role_tag: None,
+                confidence: 0.87,
+                source_model: Some("mock-llm".to_string()),
+            }),
+        },
+    );
+
+    assert_eq!(
+        output.semantics.summary,
+        "Normalizes email addresses before storage."
+    );
+    assert_eq!(output.semantics.doc_comment_summary, None);
+    assert_eq!(
+        output.semantics.llm_summary.as_deref(),
+        Some("Normalizes email addresses before storage")
+    );
+    assert_eq!(output.semantics.template_summary, "Formats email.");
+    assert_eq!(output.semantics.summary_source, SemanticSummarySource::Llm);
+    assert_eq!(output.semantics.role_tag, "formatter");
+    assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
+}
+
+#[test]
+fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
+    let input = semantic_feature_input_named("normalizeEmail");
+    let output = build_semantic_feature_rows(
+        &input,
+        &MockSemanticSummaryProvider {
+            candidate: Some(SemanticSummaryCandidate {
+                summary: "bad".to_string(),
+                role_tag: None,
+                confidence: 0.8,
+                source_model: Some("mock-llm".to_string()),
+            }),
+        },
+    );
+
+    assert_eq!(output.semantics.summary, "Formats email.");
+    assert_eq!(output.semantics.doc_comment_summary, None);
+    assert_eq!(output.semantics.llm_summary.as_deref(), Some("bad"));
+    assert_eq!(output.semantics.template_summary, "Formats email.");
+    assert_eq!(
+        output.semantics.summary_source,
+        SemanticSummarySource::TemplateFallback
+    );
+    assert_eq!(output.semantics.role_tag, "formatter");
+}
+
+#[test]
+fn semantic_features_store_doc_comment_and_llm_candidates_together() {
+    let input = semantic_feature_input_named("getById");
+    let output = build_semantic_feature_rows(
+        &input,
+        &MockSemanticSummaryProvider {
+            candidate: Some(SemanticSummaryCandidate {
+                summary: "Loads a user entity by id from storage".to_string(),
+                role_tag: Some("reader".to_string()),
+                confidence: 0.82,
+                source_model: Some("mock-llm".to_string()),
+            }),
+        },
+    );
+
+    assert_eq!(
+        output.semantics.doc_comment_summary.as_deref(),
+        Some("Fetch a user record by its id.")
+    );
+    assert_eq!(
+        output.semantics.llm_summary.as_deref(),
+        Some("Loads a user entity by id from storage")
+    );
+    assert_eq!(output.semantics.template_summary, "Loads by id.");
+    assert_eq!(
+        output.semantics.summary,
+        "Loads a user entity by id from storage."
+    );
+    assert_eq!(output.semantics.summary_source, SemanticSummarySource::Llm);
+    assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
+}
+
+#[test]
+fn semantic_features_reindex_when_hash_or_prompt_version_changes() {
+    let input = semantic_feature_input_named("normalizeEmail");
+    let output = build_semantic_feature_rows(&input, &NoopSemanticSummaryProvider);
+    let hash = output.semantics.semantic_features_input_hash.clone();
+
+    let unchanged = SemanticFeatureIndexState {
+        semantics_hash: Some(hash.clone()),
+        semantics_prompt_version: Some(output.semantics.prompt_version.clone()),
+        features_hash: Some(hash.clone()),
+        features_prompt_version: Some(output.features.prompt_version.clone()),
+    };
+    assert!(!semantic_features_require_reindex(
+        &unchanged,
+        &hash,
+        &output.semantics.prompt_version,
+        &output.features.prompt_version,
+    ));
+
+    let stale_prompt = SemanticFeatureIndexState {
+        semantics_prompt_version: Some("semantic-summary-v0::provider=noop".to_string()),
+        ..unchanged.clone()
+    };
+    assert!(semantic_features_require_reindex(
+        &stale_prompt,
+        &hash,
+        &output.semantics.prompt_version,
+        &output.features.prompt_version,
+    ));
+
+    let stale_hash = SemanticFeatureIndexState {
+        features_hash: Some("different-hash".to_string()),
+        ..unchanged
+    };
+    assert!(semantic_features_require_reindex(
+        &stale_hash,
+        &hash,
+        &output.semantics.prompt_version,
+        &output.features.prompt_version,
+    ));
 }

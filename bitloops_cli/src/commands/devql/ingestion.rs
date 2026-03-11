@@ -4,6 +4,8 @@ struct IngestionCounters {
     events_inserted: usize,
     artefacts_upserted: usize,
     checkpoints_without_commit: usize,
+    semantic_feature_rows_upserted: usize,
+    semantic_feature_rows_skipped: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +155,7 @@ ON file_state (repo_id, commit_sha);
 
 CREATE TABLE IF NOT EXISTS artefacts (
     artefact_id TEXT PRIMARY KEY,
+    symbol_id TEXT,
     repo_id TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -163,9 +166,17 @@ CREATE TABLE IF NOT EXISTS artefacts (
     parent_artefact_id TEXT,
     start_line INTEGER NOT NULL,
     end_line INTEGER NOT NULL,
+    start_byte INTEGER,
+    end_byte INTEGER,
+    signature TEXT,
     content_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS symbol_id TEXT;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS signature TEXT;
 
 CREATE INDEX IF NOT EXISTS artefacts_blob_idx
 ON artefacts (repo_id, blob_sha);
@@ -175,6 +186,98 @@ ON artefacts (repo_id, path);
 
 CREATE INDEX IF NOT EXISTS artefacts_kind_idx
 ON artefacts (repo_id, canonical_kind);
+
+CREATE TABLE IF NOT EXISTS symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    doc_comment_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    role_tag TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    summary_source TEXT NOT NULL,
+    source_model TEXT,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'symbol_semantics' AND column_name = 'stage1_input_hash'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'symbol_semantics' AND column_name = 'semantic_features_input_hash'
+    ) THEN
+        ALTER TABLE symbol_semantics RENAME COLUMN stage1_input_hash TO semantic_features_input_hash;
+    END IF;
+END $$;
+
+ALTER TABLE symbol_semantics
+ADD COLUMN IF NOT EXISTS semantic_features_input_hash TEXT;
+
+ALTER TABLE symbol_semantics
+ADD COLUMN IF NOT EXISTS doc_comment_summary TEXT;
+
+ALTER TABLE symbol_semantics
+ADD COLUMN IF NOT EXISTS llm_summary TEXT;
+
+ALTER TABLE symbol_semantics
+ADD COLUMN IF NOT EXISTS template_summary TEXT;
+
+UPDATE symbol_semantics
+SET template_summary = summary
+WHERE template_summary IS NULL;
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
+ON symbol_semantics (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_features (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    identifier_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    parent_kind TEXT,
+    parent_symbol TEXT,
+    parameter_count INTEGER,
+    return_shape_hint TEXT,
+    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    local_relationships JSONB NOT NULL DEFAULT '[]'::jsonb,
+    context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'symbol_features' AND column_name = 'stage1_input_hash'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'symbol_features' AND column_name = 'semantic_features_input_hash'
+    ) THEN
+        ALTER TABLE symbol_features RENAME COLUMN stage1_input_hash TO semantic_features_input_hash;
+    END IF;
+END $$;
+
+ALTER TABLE symbol_features
+ADD COLUMN IF NOT EXISTS semantic_features_input_hash TEXT;
+
+CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
+ON symbol_features (repo_id, blob_sha);
 "#;
 
     postgres_exec(pg_client, sql)
@@ -393,9 +496,10 @@ async fn upsert_file_artefact_row(
         .max(1);
 
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'file', 'module', '{}', NULL, 1, {}, 0, NULL, '{}', '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
+        esc_pg(&artefact_id),
         esc_pg(&artefact_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(blob_sha),
@@ -403,6 +507,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         esc_pg(&language),
         esc_pg(path),
         line_count,
+        esc_pg(path),
         esc_pg(blob_sha),
     );
 
@@ -441,9 +546,10 @@ async fn upsert_language_artefacts(
         ));
 
         let sql = format!(
-            "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', 'function', 'function', '{}', '{}', {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, content_hash = EXCLUDED.content_hash",
+            "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'function', 'function', '{}', '{}', {}, {}, NULL, NULL, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
+            esc_pg(&artefact_id),
             esc_pg(&artefact_id),
             esc_pg(&cfg.repo.repo_id),
             esc_pg(blob_sha),
@@ -453,6 +559,10 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
             esc_pg(&file_artefact.artefact_id),
             item.start_line,
             item.end_line,
+            item.signature
+                .as_deref()
+                .map(|value| format!("'{}'", esc_pg(value)))
+                .unwrap_or_else(|| "NULL".to_string()),
             esc_pg(&content_hash),
         );
 
@@ -510,6 +620,7 @@ struct FunctionArtefact {
     name: String,
     start_line: i32,
     end_line: i32,
+    signature: Option<String>,
 }
 
 fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
@@ -540,14 +651,30 @@ fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
             continue;
         }
 
+        let end_line = find_block_end_line(&lines, idx).unwrap_or(start_line);
         out.push(FunctionArtefact {
-            end_line: find_block_end_line(&lines, idx).unwrap_or(start_line),
+            end_line,
             name,
+            signature: extract_signature_from_line(line),
             start_line,
         });
     }
 
     Ok(out)
+}
+
+fn extract_signature_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let signature = trimmed.trim_end_matches('{').trim();
+    if signature.is_empty() {
+        None
+    } else {
+        Some(signature.to_string())
+    }
 }
 
 fn find_block_end_line(lines: &[&str], start_index: usize) -> Option<i32> {
@@ -622,4 +749,3 @@ struct TelemetryFilter {
     agent: Option<String>,
     since: Option<String>,
 }
-
