@@ -2,7 +2,27 @@
 
 This guide shows the minimum commands to get DevQL working in the CLI.
 
-## 0) Run Postgres and ClickHouse with docker
+## Provider model (foundation contract)
+
+DevQL backend configuration is now split into logical providers:
+
+- `devql.relational.provider`: `sqlite` | `postgres`
+- `devql.events.provider`: `duckdb` | `clickhouse`
+
+Current runtime adapters are `postgres` + `clickhouse`. `sqlite`/`duckdb` are contract-level providers reserved for follow-up implementation tasks.
+
+Config precedence is:
+
+1. Environment variables
+2. `~/.bitloops/config.json`
+3. Defaults
+
+Legacy keys remain supported for backward compatibility:
+
+- `postgres_dsn`, `clickhouse_url`, `clickhouse_user`, `clickhouse_password`, `clickhouse_database`
+- `BITLOOPS_DEVQL_PG_DSN`, `BITLOOPS_DEVQL_CH_*`
+
+## 0) Run Postgres and ClickHouse with docker (current adapters)
 
 ```bash
 docker run -d --name mypostgres -p 5432:5432 \
@@ -29,18 +49,24 @@ Create `~/.bitloops/config.json`:
 ```json
 {
   "devql": {
-    "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops",
-    "clickhouse_url": "http://localhost:8123",
-    "clickhouse_database": "bitloops",
-    "clickhouse_user": "bitloops",
-    "clickhouse_password": "bitloops"
+    "relational": {
+      "provider": "postgres",
+      "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops"
+    },
+    "events": {
+      "provider": "clickhouse",
+      "clickhouse_url": "http://localhost:8123",
+      "clickhouse_database": "bitloops",
+      "clickhouse_user": "bitloops",
+      "clickhouse_password": "bitloops"
+    }
   }
 }
 ```
 
 What this does:
-- Tells DevQL where Postgres (artefacts) and ClickHouse (checkpoint events) live.
-- These can also be overridden by `BITLOOPS_DEVQL_*` environment variables.
+- Tells DevQL to use `postgres` for relational data and `clickhouse` for events.
+- These can be overridden by `BITLOOPS_DEVQL_RELATIONAL_PROVIDER`, `BITLOOPS_DEVQL_EVENTS_PROVIDER`, and legacy/new `BITLOOPS_DEVQL_*` backend settings.
 - Postgres is used via `psql` with a 10s connect timeout and 30s statement timeout for health checks and queries; you can override with `PGCONNECT_TIMEOUT` and `PGOPTIONS` if needed.
 
 ## 2) Check backend connectivity
@@ -58,7 +84,7 @@ cargo run -- devql connection-status
 ```
 
 What this does:
-- Runs a connectivity check against Postgres and ClickHouse.
+- Runs a connectivity check against the configured logical backends.
 - Prints a `DB Status` table with human-friendly statuses:
   - `Connected` (green)
   - `Could not authenticate` (red)
@@ -73,8 +99,8 @@ DB Status
 +------------+-----------------------+
 | DB         | Status                |
 +------------+-----------------------+
-| Postgres   | Connected             |
-| ClickHouse | Could not reach DB    |
+| Relational | Connected             |
+| Events     | Could not reach DB    |
 +------------+-----------------------+
 ```
 
@@ -85,7 +111,7 @@ cargo run -- devql init
 ```
 
 What this does:
-- Creates required tables in ClickHouse and Postgres for DevQL MVP.
+- Creates required tables in the currently supported adapters (`clickhouse` + `postgres`).
 
 ## 4) Ingest checkpoint + artefact data
 
@@ -95,8 +121,8 @@ cargo run -- devql ingest
 
 What this does:
 - Reads committed checkpoints from the repo.
-- Writes checkpoint events to ClickHouse.
-- Writes repository/commit/file/artefact rows to Postgres.
+- Writes checkpoint events to the events backend (`clickhouse`).
+- Writes repository/commit/file/artefact rows to the relational backend (`postgres`).
 
 Optional flags:
 
@@ -147,8 +173,8 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 
 What this does:
 - Parses the DevQL pipeline.
-- Routes checkpoint/telemetry stages to ClickHouse.
-- Routes artefact stages to Postgres.
+- Routes checkpoint/telemetry stages to the events backend (`clickhouse`).
+- Routes artefact stages to the relational backend (`postgres`).
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
 - Prints JSON output.
 
@@ -161,7 +187,7 @@ cargo run -- dashboard --no-open
 What this does:
 - On startup, checks DB health for configured backends.
 - Uses the same `DB Status` table/status semantics as `--connection-status`.
-- Keeps pooled Postgres and ClickHouse clients while dashboard runs.
+- Keeps pooled clients for currently supported adapters (`postgres` + `clickhouse`) while dashboard runs.
 - Exposes live health at:
 
 ```text

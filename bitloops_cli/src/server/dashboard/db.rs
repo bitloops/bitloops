@@ -1,13 +1,14 @@
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::Url;
-use std::env;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
 use tokio_postgres::NoTls;
 
-use crate::devql_config::DevqlFileConfig;
+use crate::devql_config::{
+    DevqlBackendConfig, EventsProvider, RelationalProvider, resolve_devql_backend_config,
+};
 
 const POSTGRES_POOL_SIZE: usize = 4;
 /// Max time allowed per backend health ping so /api/db/health stays responsive.
@@ -59,14 +60,47 @@ impl BackendHealth {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DashboardDbHealth {
+    pub(super) relational: BackendHealth,
+    pub(super) events: BackendHealth,
     pub(super) postgres: BackendHealth,
     pub(super) clickhouse: BackendHealth,
 }
 
 impl DashboardDbHealth {
+    fn with_compat_fields(
+        relational: BackendHealth,
+        events: BackendHealth,
+        relational_provider: RelationalProvider,
+        events_provider: EventsProvider,
+    ) -> Self {
+        let postgres = if relational_provider == RelationalProvider::Postgres {
+            relational.clone()
+        } else {
+            BackendHealth::skip(format!(
+                "inactive compatibility key (relational.provider={})",
+                relational_provider.as_str()
+            ))
+        };
+        let clickhouse = if events_provider == EventsProvider::ClickHouse {
+            events.clone()
+        } else {
+            BackendHealth::skip(format!(
+                "inactive compatibility key (events.provider={})",
+                events_provider.as_str()
+            ))
+        };
+
+        Self {
+            relational,
+            events,
+            postgres,
+            clickhouse,
+        }
+    }
+
     pub(super) fn has_failures(&self) -> bool {
-        self.postgres.kind == BackendHealthKind::Fail
-            || self.clickhouse.kind == BackendHealthKind::Fail
+        self.relational.kind == BackendHealthKind::Fail
+            || self.events.kind == BackendHealthKind::Fail
     }
 }
 
@@ -76,15 +110,30 @@ pub(super) struct DashboardDbInit {
     pub(super) startup_health: DashboardDbHealth,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(in crate::server) struct DashboardDbPools {
+    pub(super) relational_provider: RelationalProvider,
+    pub(super) events_provider: EventsProvider,
     pub(super) postgres: Option<PostgresPool>,
     pub(super) clickhouse: Option<ClickHousePool>,
+}
+
+impl Default for DashboardDbPools {
+    fn default() -> Self {
+        Self {
+            relational_provider: RelationalProvider::Sqlite,
+            events_provider: EventsProvider::DuckDb,
+            postgres: None,
+            clickhouse: None,
+        }
+    }
 }
 
 impl fmt::Debug for DashboardDbPools {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DashboardDbPools")
+            .field("relational_provider", &self.relational_provider.as_str())
+            .field("events_provider", &self.events_provider.as_str())
             .field("postgres_enabled", &self.postgres.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
             .finish()
@@ -118,11 +167,21 @@ impl DashboardDbPools {
         };
 
         let (postgres, clickhouse) = tokio::join!(postgres_fut, clickhouse_fut);
+        let relational = match self.relational_provider {
+            RelationalProvider::Postgres => postgres.clone(),
+            RelationalProvider::Sqlite => BackendHealth::skip("provider sqlite is not wired yet"),
+        };
+        let events = match self.events_provider {
+            EventsProvider::ClickHouse => clickhouse.clone(),
+            EventsProvider::DuckDb => BackendHealth::skip("provider duckdb is not wired yet"),
+        };
 
-        DashboardDbHealth {
-            postgres,
-            clickhouse,
-        }
+        DashboardDbHealth::with_compat_fields(
+            relational,
+            events,
+            self.relational_provider,
+            self.events_provider,
+        )
     }
 }
 
@@ -283,108 +342,114 @@ impl ClickHouseConfig {
 
 #[derive(Debug, Clone)]
 struct DashboardDbConfig {
-    postgres_dsn: Option<String>,
-    clickhouse: Option<ClickHouseConfig>,
+    backends: DevqlBackendConfig,
 }
 
 impl DashboardDbConfig {
-    fn from_env() -> Self {
-        let file_cfg = DevqlFileConfig::load();
+    fn from_env() -> Result<Self> {
+        Ok(Self {
+            backends: resolve_devql_backend_config()?,
+        })
+    }
 
-        let env_pg = env::var("BITLOOPS_DEVQL_PG_DSN")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let postgres_dsn = env_pg.or(file_cfg.pg_dsn);
-
-        let env_ch_url = env::var("BITLOOPS_DEVQL_CH_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let env_ch_db = env::var("BITLOOPS_DEVQL_CH_DATABASE")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let env_ch_user = env::var("BITLOOPS_DEVQL_CH_USER")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let env_ch_password = env::var("BITLOOPS_DEVQL_CH_PASSWORD")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-
-        let clickhouse_explicit = env_ch_url.is_some()
-            || env_ch_db.is_some()
-            || env_ch_user.is_some()
-            || env_ch_password.is_some()
-            || file_cfg.clickhouse_url.is_some()
-            || file_cfg.clickhouse_database.is_some()
-            || file_cfg.clickhouse_user.is_some()
-            || file_cfg.clickhouse_password.is_some();
-
-        let clickhouse = if clickhouse_explicit {
-            Some(ClickHouseConfig {
-                url: env_ch_url
-                    .or(file_cfg.clickhouse_url)
-                    .unwrap_or_else(|| "http://localhost:8123".to_string()),
-                database: env_ch_db
-                    .or(file_cfg.clickhouse_database)
-                    .unwrap_or_else(|| "default".to_string()),
-                user: env_ch_user.or(file_cfg.clickhouse_user),
-                password: env_ch_password.or(file_cfg.clickhouse_password),
-            })
-        } else {
-            None
-        };
-
-        Self {
-            postgres_dsn,
-            clickhouse,
+    fn clickhouse_config(&self) -> ClickHouseConfig {
+        ClickHouseConfig {
+            url: self
+                .backends
+                .events
+                .clickhouse_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:8123".to_string()),
+            database: self
+                .backends
+                .events
+                .clickhouse_database
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
+            user: self.backends.events.clickhouse_user.clone(),
+            password: self.backends.events.clickhouse_password.clone(),
         }
     }
 }
 
 pub(super) async fn init_dashboard_db() -> DashboardDbInit {
-    let cfg = DashboardDbConfig::from_env();
-    let mut pools = DashboardDbPools::default();
-    let mut postgres_health = BackendHealth::skip("not configured");
-    let mut clickhouse_health = BackendHealth::skip("not configured");
+    let cfg = match DashboardDbConfig::from_env() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            let failure = BackendHealth::fail(format!("{err:#}"));
+            return DashboardDbInit {
+                pools: DashboardDbPools::default(),
+                startup_health: DashboardDbHealth::with_compat_fields(
+                    failure.clone(),
+                    failure,
+                    RelationalProvider::Sqlite,
+                    EventsProvider::DuckDb,
+                ),
+            };
+        }
+    };
 
-    if let Some(dsn) = cfg.postgres_dsn {
-        match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
-            Ok(pool) => match pool.ping().await {
-                Ok(value) => {
-                    pools.postgres = Some(pool);
-                    postgres_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
-                }
+    let mut pools = DashboardDbPools {
+        relational_provider: cfg.backends.relational.provider,
+        events_provider: cfg.backends.events.provider,
+        postgres: None,
+        clickhouse: None,
+    };
+    let mut relational_health = match pools.relational_provider {
+        RelationalProvider::Postgres => BackendHealth::skip("not configured"),
+        RelationalProvider::Sqlite => BackendHealth::skip("provider sqlite is not wired yet"),
+    };
+    let mut events_health = match pools.events_provider {
+        EventsProvider::ClickHouse => BackendHealth::skip("not configured"),
+        EventsProvider::DuckDb => BackendHealth::skip("provider duckdb is not wired yet"),
+    };
+
+    if pools.relational_provider == RelationalProvider::Postgres {
+        if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
+            match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
+                Ok(pool) => match pool.ping().await {
+                    Ok(value) => {
+                        pools.postgres = Some(pool);
+                        relational_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
+                    }
+                    Err(err) => {
+                        relational_health = BackendHealth::fail(format!("{err:#}"));
+                    }
+                },
                 Err(err) => {
-                    postgres_health = BackendHealth::fail(format!("{err:#}"));
+                    relational_health = BackendHealth::fail(format!("{err:#}"));
                 }
-            },
-            Err(err) => {
-                postgres_health = BackendHealth::fail(format!("{err:#}"));
             }
+        } else {
+            relational_health = BackendHealth::skip("postgres_dsn is not configured");
         }
     }
 
-    if let Some(ch_cfg) = cfg.clickhouse {
+    if pools.events_provider == EventsProvider::ClickHouse {
+        let ch_cfg = cfg.clickhouse_config();
         match ClickHousePool::build(&ch_cfg) {
             Ok(pool) => match pool.ping().await {
                 Ok(value) => {
                     pools.clickhouse = Some(pool);
-                    clickhouse_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
+                    events_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
                 }
                 Err(err) => {
-                    clickhouse_health = BackendHealth::fail(format!("{err:#}"));
+                    events_health = BackendHealth::fail(format!("{err:#}"));
                 }
             },
             Err(err) => {
-                clickhouse_health = BackendHealth::fail(format!("{err:#}"));
+                events_health = BackendHealth::fail(format!("{err:#}"));
             }
         }
     }
 
     DashboardDbInit {
+        startup_health: DashboardDbHealth::with_compat_fields(
+            relational_health,
+            events_health,
+            pools.relational_provider,
+            pools.events_provider,
+        ),
         pools,
-        startup_health: DashboardDbHealth {
-            postgres: postgres_health,
-            clickhouse: clickhouse_health,
-        },
     }
 }

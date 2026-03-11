@@ -944,6 +944,8 @@ async fn api_db_health_reports_skip_when_backends_not_configured() {
 
     let (status, payload) = request_json(app, "/api/db/health").await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["relational"]["status"], "SKIP");
+    assert_eq!(payload["events"]["status"], "SKIP");
     assert_eq!(payload["postgres"]["status"], "SKIP");
     assert_eq!(payload["clickhouse"]["status"], "SKIP");
 }

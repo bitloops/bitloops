@@ -1,4 +1,5 @@
 use super::*;
+use crate::devql_config::DevqlFileConfig;
 use clap::Parser;
 
 fn test_cfg() -> DevqlConfig {
@@ -11,11 +12,21 @@ fn test_cfg() -> DevqlConfig {
             identity: "github/bitloops/temp2".to_string(),
             repo_id: deterministic_uuid("repo://github/bitloops/temp2"),
         },
-        pg_dsn: None,
-        clickhouse_url: "http://localhost:8123".to_string(),
-        clickhouse_user: None,
-        clickhouse_password: None,
-        clickhouse_database: "default".to_string(),
+        backends: crate::devql_config::DevqlBackendConfig {
+            relational: crate::devql_config::RelationalBackendConfig {
+                provider: crate::devql_config::RelationalProvider::Postgres,
+                sqlite_path: None,
+                postgres_dsn: Some("postgres://user:pass@localhost:5432/bitloops".to_string()),
+            },
+            events: crate::devql_config::EventsBackendConfig {
+                provider: crate::devql_config::EventsProvider::ClickHouse,
+                duckdb_path: None,
+                clickhouse_url: Some("http://localhost:8123".to_string()),
+                clickhouse_user: None,
+                clickhouse_password: None,
+                clickhouse_database: Some("default".to_string()),
+            },
+        },
     }
 }
 
@@ -60,6 +71,49 @@ fn parse_devql_chat_history_stage_basic() {
     assert!(parsed.has_artefacts_stage);
     assert!(parsed.has_chat_history_stage);
     assert_eq!(parsed.limit, 3);
+}
+
+#[test]
+fn query_backend_usage_for_checkpoints_is_events_only() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->checkpoints()->limit(5)"#).unwrap();
+    let usage = resolve_query_backend_usage(&parsed);
+
+    assert!(!usage.uses_relational);
+    assert!(usage.uses_events);
+}
+
+#[test]
+fn query_backend_usage_for_simple_artefacts_is_relational_only() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->file("src/main.rs")->artefacts()->limit(5)"#)
+            .unwrap();
+    let usage = resolve_query_backend_usage(&parsed);
+
+    assert!(usage.uses_relational);
+    assert!(!usage.uses_events);
+}
+
+#[test]
+fn query_backend_usage_for_agent_filtered_artefacts_uses_both_backends() {
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts(agent:"claude-code")->limit(5)"#)
+            .unwrap();
+    let usage = resolve_query_backend_usage(&parsed);
+
+    assert!(usage.uses_relational);
+    assert!(usage.uses_events);
+}
+
+#[test]
+fn query_backend_usage_for_chat_history_uses_both_backends() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("index.ts")->artefacts(lines:1..10)->chatHistory()->limit(3)"#,
+    )
+    .unwrap();
+    let usage = resolve_query_backend_usage(&parsed);
+
+    assert!(usage.uses_relational);
+    assert!(usage.uses_events);
 }
 
 #[tokio::test]

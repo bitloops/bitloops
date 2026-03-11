@@ -100,10 +100,11 @@ fn truncate_for_error(input: &str) -> String {
 }
 
 async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<String> {
+    let endpoint = cfg.clickhouse_endpoint()?;
     run_clickhouse_sql_http(
-        &cfg.clickhouse_endpoint(),
-        cfg.clickhouse_user.as_deref(),
-        cfg.clickhouse_password.as_deref(),
+        &endpoint,
+        cfg.clickhouse_user(),
+        cfg.clickhouse_password(),
         sql,
     )
     .await

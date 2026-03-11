@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -11,7 +10,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::devql_config::DevqlFileConfig;
+use crate::devql_config::{
+    DevqlBackendConfig, EventsProvider, RelationalProvider, resolve_devql_backend_config,
+};
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
@@ -30,13 +31,13 @@ pub struct DevqlArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevqlCommand {
-    /// Create ClickHouse/Postgres schema required by DevQL MVP.
+    /// Create schema for configured relational/events providers.
     Init(DevqlInitArgs),
-    /// Ingest checkpoint/event data into ClickHouse and file artefacts into Postgres.
+    /// Ingest checkpoint/event data into the configured providers.
     Ingest(DevqlIngestArgs),
     /// Execute an MVP DevQL query.
     Query(DevqlQueryArgs),
-    /// Check backend connectivity for Postgres and ClickHouse.
+    /// Check backend connectivity for configured relational/events providers.
     ConnectionStatus(DevqlConnectionStatusArgs),
 }
 
@@ -80,7 +81,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 
     let repo_root = paths::repo_root()?;
     let repo = resolve_repo_identity(&repo_root)?;
-    let cfg = DevqlConfig::from_env(repo_root, repo);
+    let cfg = DevqlConfig::from_env(repo_root, repo)?;
 
     match command {
         DevqlCommand::Init(_) => run_init(&cfg).await,
@@ -92,79 +93,31 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 
 #[derive(Debug, Clone)]
 struct DevqlConnectionConfig {
-    pg_dsn: Option<String>,
-    clickhouse_url: String,
-    clickhouse_user: Option<String>,
-    clickhouse_password: Option<String>,
-    clickhouse_database: String,
+    backends: DevqlBackendConfig,
 }
 
 impl DevqlConnectionConfig {
-    fn from_env() -> Self {
-        let file_cfg = DevqlFileConfig::load();
-        Self {
-            pg_dsn: env::var("BITLOOPS_DEVQL_PG_DSN")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.pg_dsn),
-            clickhouse_url: env::var("BITLOOPS_DEVQL_CH_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_url)
-                .unwrap_or_else(|| "http://localhost:8123".to_string()),
-            clickhouse_user: env::var("BITLOOPS_DEVQL_CH_USER")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_user),
-            clickhouse_password: env::var("BITLOOPS_DEVQL_CH_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_password),
-            clickhouse_database: env::var("BITLOOPS_DEVQL_CH_DATABASE")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_database)
-                .unwrap_or_else(|| "default".to_string()),
-        }
-    }
-
-    fn clickhouse_endpoint(&self) -> String {
-        let base = self.clickhouse_url.trim_end_matches('/');
-        format!("{base}/?database={}", self.clickhouse_database)
+    fn from_env() -> Result<Self> {
+        Ok(Self {
+            backends: resolve_devql_backend_config()?,
+        })
     }
 }
 
 pub async fn run_connection_status() -> Result<()> {
-    let cfg = DevqlConnectionConfig::from_env();
+    let cfg = DevqlConnectionConfig::from_env()?;
     let mut rows = Vec::new();
 
-    let postgres_status = match cfg.pg_dsn.as_deref() {
-        Some(dsn) => match check_postgres_connection(dsn).await {
-            Ok(_) => DatabaseConnectionStatus::Connected,
-            Err(err) => classify_connection_error(&err.to_string()),
-        },
-        None => DatabaseConnectionStatus::NotConfigured,
-    };
+    let relational_status = check_relational_connection_status(&cfg).await;
     rows.push(DatabaseStatusRow {
-        db: "Postgres",
-        status: postgres_status,
+        db: "Relational",
+        status: relational_status,
     });
 
-    let clickhouse_endpoint = cfg.clickhouse_endpoint();
-    let clickhouse_status = match run_clickhouse_sql_http(
-        &clickhouse_endpoint,
-        cfg.clickhouse_user.as_deref(),
-        cfg.clickhouse_password.as_deref(),
-        "SELECT 1 FORMAT TabSeparated",
-    )
-    .await
-    {
-        Ok(_) => DatabaseConnectionStatus::Connected,
-        Err(err) => classify_connection_error(&err.to_string()),
-    };
+    let events_status = check_events_connection_status(&cfg).await;
     rows.push(DatabaseStatusRow {
-        db: "ClickHouse",
-        status: clickhouse_status,
+        db: "Events",
+        status: events_status,
     });
 
     print_db_status_table(&rows);
@@ -175,6 +128,41 @@ pub async fn run_connection_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn check_relational_connection_status(
+    cfg: &DevqlConnectionConfig,
+) -> DatabaseConnectionStatus {
+    match cfg.backends.relational.provider {
+        RelationalProvider::Sqlite => DatabaseConnectionStatus::NotConfigured,
+        RelationalProvider::Postgres => match cfg.backends.relational.postgres_dsn.as_deref() {
+            Some(dsn) => match check_postgres_connection(dsn).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            },
+            None => DatabaseConnectionStatus::NotConfigured,
+        },
+    }
+}
+
+async fn check_events_connection_status(cfg: &DevqlConnectionConfig) -> DatabaseConnectionStatus {
+    match cfg.backends.events.provider {
+        EventsProvider::DuckDb => DatabaseConnectionStatus::NotConfigured,
+        EventsProvider::ClickHouse => {
+            let clickhouse_endpoint = cfg.backends.events.clickhouse_endpoint();
+            match run_clickhouse_sql_http(
+                &clickhouse_endpoint,
+                cfg.backends.events.clickhouse_user.as_deref(),
+                cfg.backends.events.clickhouse_password.as_deref(),
+                "SELECT 1 FORMAT TabSeparated",
+            )
+            .await
+            {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
+    }
 }
 
 async fn check_postgres_connection(dsn: &str) -> Result<()> {
@@ -207,55 +195,66 @@ struct RepoIdentity {
 struct DevqlConfig {
     repo_root: PathBuf,
     repo: RepoIdentity,
-    pg_dsn: Option<String>,
-    clickhouse_url: String,
-    clickhouse_user: Option<String>,
-    clickhouse_password: Option<String>,
-    clickhouse_database: String,
+    backends: DevqlBackendConfig,
 }
 
 impl DevqlConfig {
-    fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Self {
-        let file_cfg = DevqlFileConfig::load();
-        Self {
+    fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
+        Ok(Self {
             repo_root,
             repo,
-            pg_dsn: env::var("BITLOOPS_DEVQL_PG_DSN")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.pg_dsn),
-            clickhouse_url: env::var("BITLOOPS_DEVQL_CH_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_url)
-                .unwrap_or_else(|| "http://localhost:8123".to_string()),
-            clickhouse_user: env::var("BITLOOPS_DEVQL_CH_USER")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_user),
-            clickhouse_password: env::var("BITLOOPS_DEVQL_CH_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_password),
-            clickhouse_database: env::var("BITLOOPS_DEVQL_CH_DATABASE")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_database)
-                .unwrap_or_else(|| "default".to_string()),
+            backends: resolve_devql_backend_config()?,
+        })
+    }
+
+    fn relational_provider(&self) -> RelationalProvider {
+        self.backends.relational.provider
+    }
+
+    fn events_provider(&self) -> EventsProvider {
+        self.backends.events.provider
+    }
+
+    fn ensure_postgres_relational_provider(&self) -> Result<()> {
+        if self.relational_provider() != RelationalProvider::Postgres {
+            bail!(
+                "relational provider `{}` is not implemented yet in this build (tracked by CLI-1328); use `postgres` for now",
+                self.relational_provider().as_str()
+            );
         }
+        Ok(())
+    }
+
+    fn ensure_clickhouse_events_provider(&self) -> Result<()> {
+        if self.events_provider() != EventsProvider::ClickHouse {
+            bail!(
+                "events provider `{}` is not implemented yet in this build (tracked by CLI-1329); use `clickhouse` for now",
+                self.events_provider().as_str()
+            );
+        }
+        Ok(())
     }
 
     fn require_pg_dsn(&self) -> Result<&str> {
-        self.pg_dsn.as_deref().ok_or_else(|| {
+        self.ensure_postgres_relational_provider()?;
+        self.backends.relational.postgres_dsn.as_deref().ok_or_else(|| {
             anyhow!(
-                "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations (example: postgres://user:pass@localhost:5432/bitloops)"
+                "postgres_dsn is required when `devql.relational.provider=postgres` (set `devql.relational.postgres_dsn` or `BITLOOPS_DEVQL_PG_DSN`)"
             )
         })
     }
 
-    fn clickhouse_endpoint(&self) -> String {
-        let base = self.clickhouse_url.trim_end_matches('/');
-        format!("{base}/?database={}", self.clickhouse_database)
+    fn clickhouse_endpoint(&self) -> Result<String> {
+        self.ensure_clickhouse_events_provider()?;
+        Ok(self.backends.events.clickhouse_endpoint())
+    }
+
+    fn clickhouse_user(&self) -> Option<&str> {
+        self.backends.events.clickhouse_user.as_deref()
+    }
+
+    fn clickhouse_password(&self) -> Option<&str> {
+        self.backends.events.clickhouse_password.as_deref()
     }
 }
 
@@ -368,16 +367,48 @@ async fn run_query(cfg: &DevqlConfig, args: &DevqlQueryArgs) -> Result<()> {
 #[allow(dead_code)] // Compiled in both bin/lib crates; used by lib hook runtime path.
 pub async fn execute_query_json_for_repo_root(repo_root: &Path, query: &str) -> Result<Value> {
     let repo = resolve_repo_identity(repo_root)?;
-    let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo);
+    let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo)?;
     execute_query_json(&cfg, query).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueryBackendUsage {
+    uses_relational: bool,
+    uses_events: bool,
+}
+
+fn resolve_query_backend_usage(parsed: &ParsedDevqlQuery) -> QueryBackendUsage {
+    if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
+        return QueryBackendUsage {
+            uses_relational: false,
+            uses_events: true,
+        };
+    }
+
+    let uses_events = parsed.has_chat_history_stage
+        || parsed.artefacts.agent.is_some()
+        || parsed.artefacts.since.is_some();
+    QueryBackendUsage {
+        uses_relational: true,
+        uses_events,
+    }
 }
 
 async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let pg_client = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
-        None
-    } else {
+    let backend_usage = resolve_query_backend_usage(&parsed);
+
+    if backend_usage.uses_relational {
+        cfg.ensure_postgres_relational_provider()?;
+    }
+    if backend_usage.uses_events {
+        cfg.ensure_clickhouse_events_provider()?;
+    }
+
+    let pg_client = if backend_usage.uses_relational {
         Some(connect_postgres_client(cfg.require_pg_dsn()?).await?)
+    } else {
+        None
     };
     let mut rows = execute_devql_query(cfg, &parsed, pg_client.as_ref()).await?;
 
@@ -387,6 +418,9 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
 
     Ok(Value::Array(rows))
 }
+
+#[path = "devql/store_contracts.rs"]
+mod store_contracts;
 
 include!("devql/support.rs");
 
