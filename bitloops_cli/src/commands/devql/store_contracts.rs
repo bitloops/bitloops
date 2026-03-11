@@ -16,6 +16,7 @@ pub(crate) type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Se
 /// integration boundary for provider-specific tasks.
 pub(crate) trait RelationalStore {
     fn provider(&self) -> RelationalProvider;
+    fn ping<'a>(&'a self) -> StoreFuture<'a, i32>;
     fn init_schema<'a>(&'a self) -> StoreFuture<'a, ()>;
     fn execute<'a>(&'a self, sql: &'a str) -> StoreFuture<'a, ()>;
     fn query_rows<'a>(&'a self, sql: &'a str) -> StoreFuture<'a, Vec<Value>>;
@@ -113,6 +114,10 @@ mod tests {
     impl RelationalStore for FakeRelational {
         fn provider(&self) -> RelationalProvider {
             self.provider
+        }
+
+        fn ping<'a>(&'a self) -> StoreFuture<'a, i32> {
+            Box::pin(async { Ok(1) })
         }
 
         fn init_schema<'a>(&'a self) -> StoreFuture<'a, ()> {

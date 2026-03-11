@@ -1,8 +1,8 @@
 {
   "devql": {
     "relational": {
-      "provider": "postgres",
-      "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops"
+      "provider": "sqlite",
+      "sqlite_path": "~/.bitloops/devql/relational.db"
     },
     "events": {
       "provider": "duckdb",

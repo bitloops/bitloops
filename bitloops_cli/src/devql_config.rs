@@ -5,11 +5,13 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Relative path from user home to the DevQL config file (e.g. `~/.bitloops/config.json`).
 pub const DEVQL_CONFIG_RELATIVE_PATH: &str = ".bitloops/config.json";
 pub const DEVQL_DUCKDB_DEFAULT_PATH: &str = "~/.bitloops/devql/events.duckdb";
+/// Default relative path from user home to the local SQLite relational DB file.
+pub const DEVQL_SQLITE_RELATIVE_PATH: &str = ".bitloops/devql/relational.db";
 
 const ENV_RELATIONAL_PROVIDER: &str = "BITLOOPS_DEVQL_RELATIONAL_PROVIDER";
 const ENV_EVENTS_PROVIDER: &str = "BITLOOPS_DEVQL_EVENTS_PROVIDER";
@@ -62,6 +64,12 @@ pub struct RelationalBackendConfig {
     pub provider: RelationalProvider,
     pub sqlite_path: Option<String>,
     pub postgres_dsn: Option<String>,
+}
+
+impl RelationalBackendConfig {
+    pub fn resolve_sqlite_db_path(&self) -> Result<PathBuf> {
+        resolve_sqlite_db_path(self.sqlite_path.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +208,20 @@ pub fn resolve_devql_backend_config() -> Result<DevqlBackendConfig> {
     resolve_devql_backend_config_with(file_cfg, |key| env::var(key).ok())
 }
 
+pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
+    match raw_path {
+        Some(raw) if !raw.trim().is_empty() => normalize_sqlite_path(raw),
+        _ => {
+            let Some(home) = user_home_dir() else {
+                bail!(
+                    "unable to resolve home directory for default SQLite path; configure `devql.relational.sqlite_path` or `BITLOOPS_DEVQL_SQLITE_PATH`"
+                );
+            };
+            Ok(home.join(DEVQL_SQLITE_RELATIVE_PATH))
+        }
+    }
+}
+
 fn resolve_devql_backend_config_with<F>(
     file_cfg: DevqlFileConfig,
     env_lookup: F,
@@ -261,10 +283,43 @@ where
 }
 
 fn user_home_config_path() -> Option<PathBuf> {
+    user_home_dir().map(|home| home.join(DEVQL_CONFIG_RELATIVE_PATH))
+}
+
+fn user_home_dir() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .map(|home| home.join(DEVQL_CONFIG_RELATIVE_PATH))
+}
+
+fn normalize_sqlite_path(raw_path: &str) -> Result<PathBuf> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        bail!(
+            "sqlite path is empty; set `devql.relational.sqlite_path` or `BITLOOPS_DEVQL_SQLITE_PATH`"
+        );
+    }
+
+    let expanded = expand_home_prefix(trimmed)?;
+    Ok(Path::new(&expanded).to_path_buf())
+}
+
+fn expand_home_prefix(path: &str) -> Result<String> {
+    if path == "~" {
+        let Some(home) = user_home_dir() else {
+            bail!("unable to resolve home directory for `~` path");
+        };
+        return Ok(home.to_string_lossy().to_string());
+    }
+
+    if let Some(rest) = path.strip_prefix("~/") {
+        let Some(home) = user_home_dir() else {
+            bail!("unable to resolve home directory for `~` path");
+        };
+        return Ok(home.join(rest).to_string_lossy().to_string());
+    }
+
+    Ok(path.to_string())
 }
 
 fn read_any_string(root: &Map<String, Value>, keys: &[&str]) -> Option<String> {
@@ -477,5 +532,23 @@ mod tests {
             events.duckdb_path_or_default(),
             PathBuf::from("/tmp/custom-events.duckdb")
         );
+    }
+
+    #[test]
+    fn sqlite_path_resolution_uses_explicit_path() {
+        let resolved = resolve_sqlite_db_path(Some("/tmp/bitloops-relational.sqlite"))
+            .expect("explicit sqlite path should resolve");
+        assert_eq!(resolved, PathBuf::from("/tmp/bitloops-relational.sqlite"));
+    }
+
+    #[test]
+    fn sqlite_path_resolution_expands_tilde_prefix() {
+        let Some(home) = user_home_dir() else {
+            return;
+        };
+
+        let resolved = resolve_sqlite_db_path(Some("~/devql.sqlite"))
+            .expect("tilde sqlite path should resolve");
+        assert_eq!(resolved, home.join("devql.sqlite"));
     }
 }
