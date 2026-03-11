@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-#[allow(dead_code)]
 pub(crate) const GIT_ENV_KEYS: [&str; 6] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -19,14 +18,12 @@ fn process_state_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-#[allow(dead_code)]
 pub(crate) fn strip_inherited_git_env(cmd: &mut Command) {
     for key in GIT_ENV_KEYS {
         cmd.env_remove(key);
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn git_command() -> Command {
     let mut cmd = Command::new("git");
     strip_inherited_git_env(&mut cmd);
@@ -129,7 +126,6 @@ pub(crate) fn with_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     with_process_state(Some(path), &[], f)
 }
 
-#[allow(dead_code)]
 pub(crate) fn with_env_var<T>(key: &str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
     with_process_state(None, &[(key, value)], f)
 }
@@ -138,7 +134,6 @@ pub(crate) fn with_env_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -
     with_process_state(None, vars, f)
 }
 
-#[allow(dead_code)]
 pub(crate) fn with_git_env_cleared<T>(f: impl FnOnce() -> T) -> T {
     let mut updates = Vec::with_capacity(GIT_ENV_KEYS.len());
     for key in GIT_ENV_KEYS {
@@ -150,6 +145,8 @@ pub(crate) fn with_git_env_cleared<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn strip_inherited_git_env_removes_poisoned_git_dir_from_child() {
@@ -174,5 +171,20 @@ mod tests {
             "expected sanitized child git command to succeed"
         );
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), ".git");
+    }
+
+    #[test]
+    fn git_command_sets_program_to_git() {
+        let cmd = git_command();
+        assert_eq!(cmd.get_program(), OsStr::new("git"));
+    }
+
+    #[test]
+    fn with_git_env_cleared_runs_closure() {
+        let called = AtomicBool::new(false);
+        with_git_env_cleared(|| {
+            called.store(true, Ordering::SeqCst);
+        });
+        assert!(called.load(Ordering::SeqCst));
     }
 }

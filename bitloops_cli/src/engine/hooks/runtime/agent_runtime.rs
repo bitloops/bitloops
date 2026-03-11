@@ -78,7 +78,6 @@ pub struct UserPromptSubmitInput {
 
 /// Used by pre-task.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct TaskHookInput {
     #[serde(default)]
@@ -93,7 +92,6 @@ pub struct TaskHookInput {
 
 /// Used by post-task.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct PostTaskInput {
     #[serde(default)]
@@ -116,7 +114,6 @@ pub struct TaskToolResponse {
 
 /// Used by post-todo.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct PostTodoInput {
     #[serde(default)]
