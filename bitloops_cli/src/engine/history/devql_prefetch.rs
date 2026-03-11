@@ -8,6 +8,9 @@ use serde_json::Value;
 use tokio::runtime::Builder;
 use tokio::task;
 
+const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str =
+    "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryTarget {
     pub path: String,
@@ -37,7 +40,11 @@ pub fn prefetch_for_prompt(
     };
 
     let query = build_devql_history_query(&primary_target);
-    let rows = run_devql_query(repo_root, &query)?;
+    let rows = match run_devql_query(repo_root, &query) {
+        Ok(rows) => rows,
+        Err(err) if is_missing_pg_dsn_error(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
 
     Ok(Some(PrefetchResult {
         session_id: session_id.to_string(),
@@ -46,6 +53,14 @@ pub fn prefetch_for_prompt(
         targets: vec![primary_target],
         rows,
     }))
+}
+
+fn is_missing_pg_dsn_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains(DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX)
+    })
 }
 
 fn extract_history_target_from_prompt(repo_root: &Path, prompt: &str) -> Option<HistoryTarget> {
@@ -232,6 +247,7 @@ fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
 
     #[test]
     fn extract_targets_parses_single_line_anchor() {
@@ -306,5 +322,19 @@ mod tests {
             query,
             "file(\"src/main.rs\")->artefacts(lines:10..25)->chatHistory()->limit(5)"
         );
+    }
+
+    #[test]
+    fn missing_pg_dsn_error_is_detected() {
+        let err = anyhow!(
+            "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
+        );
+        assert!(is_missing_pg_dsn_error(&err));
+    }
+
+    #[test]
+    fn non_pg_dsn_errors_are_not_detected() {
+        let err = anyhow!("connection refused");
+        assert!(!is_missing_pg_dsn_error(&err));
     }
 }
