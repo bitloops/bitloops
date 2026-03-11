@@ -12,9 +12,8 @@ fn bitloops_bin() -> PathBuf {
 
 fn run_cmd(repo: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) = test_command_support::new_isolated_bitloops_command(
-        &bin, repo, args,
-    );
+    let (mut cmd, _isolated_home) =
+        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn bitloops command");
@@ -38,9 +37,8 @@ fn run_cmd_with_env(
     extra_env: &[(&str, &str)],
 ) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) = test_command_support::new_isolated_bitloops_command(
-        &bin, repo, args,
-    );
+    let (mut cmd, _isolated_home) =
+        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
