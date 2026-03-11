@@ -1,6 +1,8 @@
 use super::*;
 use crate::devql_config::DevqlFileConfig;
 use clap::Parser;
+use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn test_cfg() -> DevqlConfig {
@@ -32,6 +34,7 @@ fn test_cfg() -> DevqlConfig {
 }
 
 fn sqlite_test_cfg(repo_root: PathBuf, sqlite_path: String) -> DevqlConfig {
+    let duckdb_path = repo_root.join("events.duckdb");
     DevqlConfig {
         repo_root,
         repo: RepoIdentity {
@@ -49,7 +52,7 @@ fn sqlite_test_cfg(repo_root: PathBuf, sqlite_path: String) -> DevqlConfig {
             },
             events: crate::devql_config::EventsBackendConfig {
                 provider: crate::devql_config::EventsProvider::DuckDb,
-                duckdb_path: None,
+                duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
                 clickhouse_url: None,
                 clickhouse_user: None,
                 clickhouse_password: None,
@@ -57,6 +60,34 @@ fn sqlite_test_cfg(repo_root: PathBuf, sqlite_path: String) -> DevqlConfig {
             },
         },
     }
+}
+
+fn init_temp_git_repo() -> TempDir {
+    let temp = TempDir::new().expect("temp git dir");
+    run_git(temp.path(), &["init"]).expect("init git repo");
+    run_git(temp.path(), &["config", "user.email", "test@example.com"])
+        .expect("set test git user email");
+    run_git(temp.path(), &["config", "user.name", "Test User"]).expect("set test git user name");
+    temp
+}
+
+fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
+    let abs_path = repo_root.join(relative_path);
+    if let Some(parent) = abs_path.parent() {
+        fs::create_dir_all(parent).expect("create parent dirs");
+    }
+    fs::write(&abs_path, content).expect("write repo file");
+}
+
+fn commit_all(repo_root: &Path, subject: &str, body: Option<&str>) -> String {
+    run_git(repo_root, &["add", "."]).expect("git add");
+    let mut args = vec!["-c", "commit.gpgsign=false", "commit", "-m", subject];
+    if let Some(body) = body {
+        args.push("-m");
+        args.push(body);
+    }
+    run_git(repo_root, &args).expect("git commit");
+    run_git(repo_root, &["rev-parse", "HEAD"]).expect("read head sha")
 }
 
 #[test]
@@ -100,6 +131,51 @@ fn parse_devql_chat_history_stage_basic() {
     assert!(parsed.has_artefacts_stage);
     assert!(parsed.has_chat_history_stage);
     assert_eq!(parsed.limit, 3);
+}
+
+#[test]
+fn parse_devql_query_rejects_empty_pipeline() {
+    let err = parse_devql_query("   ").unwrap_err();
+    assert!(err.to_string().contains("empty DevQL query"));
+}
+
+#[test]
+fn parse_devql_query_rejects_unsupported_stage() {
+    let err = parse_devql_query(r#"repo("x")->unknownStage()"#).unwrap_err();
+    assert!(err.to_string().contains("unsupported DevQL stage"));
+}
+
+#[test]
+fn parse_devql_query_rejects_invalid_limit() {
+    let err = parse_devql_query(r#"repo("x")->artefacts()->limit(nope)"#).unwrap_err();
+    assert!(err.to_string().contains("invalid limit value"));
+}
+
+#[test]
+fn parse_devql_query_rejects_invalid_lines_range() {
+    let err = parse_devql_query(r#"repo("x")->artefacts(lines:10..2)"#).unwrap_err();
+    assert!(err.to_string().contains("invalid lines range"));
+}
+
+#[test]
+fn parse_named_args_supports_quoted_commas() {
+    let args = parse_named_args(r#"path:"src/a,b.ts",kind:"function",agent:"claude""#)
+        .expect("parse args with commas");
+    assert_eq!(args.get("path").map(String::as_str), Some("src/a,b.ts"));
+    assert_eq!(args.get("kind").map(String::as_str), Some("function"));
+    assert_eq!(args.get("agent").map(String::as_str), Some("claude"));
+}
+
+#[test]
+fn parse_single_quoted_or_double_rejects_unquoted_values() {
+    let err = parse_single_quoted_or_double("unquoted").unwrap_err();
+    assert!(err.to_string().contains("expected quoted string"));
+}
+
+#[test]
+fn parse_lines_range_rejects_non_positive_ranges() {
+    let err = parse_lines_range("0..5").unwrap_err();
+    assert!(err.to_string().contains("invalid lines range"));
 }
 
 #[test]
@@ -210,6 +286,24 @@ fn extract_chat_messages_from_transcript_parses_jsonl() {
 }
 
 #[test]
+fn extract_message_helpers_handle_fallback_shapes() {
+    let role = extract_message_role(&serde_json::json!({
+        "message": {"role": "assistant"},
+        "type": "ignored"
+    }));
+    assert_eq!(role.as_deref(), Some("assistant"));
+
+    let text = extract_message_text(&serde_json::json!({
+        "content": [
+            {"text": "hello"},
+            {"content": ["world"]},
+            {"input": "!"}
+        ]
+    }));
+    assert_eq!(text.as_deref(), Some("hello\nworld\n!"));
+}
+
+#[test]
 fn deterministic_uuid_is_stable() {
     let a = deterministic_uuid("same-input");
     let b = deterministic_uuid("same-input");
@@ -254,6 +348,159 @@ fn devql_file_config_parses_top_level_env_keys() {
 }
 
 #[test]
+fn parse_remote_owner_name_supports_multiple_remote_formats() {
+    assert_eq!(
+        parse_remote_owner_name("git@github.com:acme/api.git"),
+        Some(("acme".to_string(), "api".to_string()))
+    );
+    assert_eq!(
+        parse_remote_owner_name("https://gitlab.com/group/subgroup/repo.git"),
+        Some(("subgroup".to_string(), "repo".to_string()))
+    );
+    assert_eq!(
+        parse_remote_owner_name("ssh://git@server.local/myorg/service"),
+        Some(("myorg".to_string(), "service".to_string()))
+    );
+}
+
+#[test]
+fn parse_owner_name_path_rejects_incomplete_paths() {
+    assert_eq!(parse_owner_name_path("single"), None);
+    assert_eq!(parse_owner_name_path("/"), None);
+}
+
+#[test]
+fn resolve_repo_identity_falls_back_to_local_when_no_remote() {
+    let temp = TempDir::new().expect("temp dir");
+    let identity = resolve_repo_identity(temp.path()).expect("resolve local repo identity");
+
+    assert_eq!(identity.provider, "local");
+    assert_eq!(identity.organization, "local");
+    assert_eq!(
+        identity.name,
+        temp.path().file_name().unwrap().to_string_lossy()
+    );
+    assert_eq!(
+        identity.repo_id,
+        deterministic_uuid(&format!(
+            "local://local/{}",
+            temp.path().file_name().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn resolve_repo_identity_uses_remote_origin_information() {
+    let temp = init_temp_git_repo();
+    run_git(
+        temp.path(),
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    )
+    .expect("add remote origin");
+
+    let identity = resolve_repo_identity(temp.path()).expect("resolve remote identity");
+    assert_eq!(identity.provider, "github");
+    assert_eq!(identity.organization, "acme");
+    assert_eq!(identity.name, "widgets");
+    assert_eq!(identity.identity, "github://acme/widgets");
+}
+
+#[test]
+fn default_branch_name_falls_back_to_main_when_git_fails() {
+    let temp = TempDir::new().expect("temp dir");
+    assert_eq!(default_branch_name(temp.path()), "main");
+}
+
+#[test]
+fn default_branch_name_returns_active_branch() {
+    let temp = init_temp_git_repo();
+    write_repo_file(temp.path(), "README.md", "hello");
+    commit_all(temp.path(), "init", None);
+    run_git(temp.path(), &["checkout", "-b", "feature/devql"]).expect("create branch");
+    assert_eq!(default_branch_name(temp.path()), "feature/devql");
+}
+
+#[test]
+fn collect_checkpoint_commit_map_prefers_newest_commit_for_duplicate_checkpoint() {
+    let temp = init_temp_git_repo();
+    write_repo_file(temp.path(), "src/main.rs", "fn main() {}\n");
+    commit_all(
+        temp.path(),
+        "first checkpoint",
+        Some("Bitloops-Checkpoint: aabbccddeeff"),
+    );
+
+    write_repo_file(
+        temp.path(),
+        "src/main.rs",
+        "fn main() { println!(\"x\"); }\n",
+    );
+    let latest_sha = commit_all(
+        temp.path(),
+        "second checkpoint",
+        Some("Bitloops-Checkpoint: aabbccddeeff\nBitloops-Checkpoint: invalid"),
+    );
+
+    let map = collect_checkpoint_commit_map(temp.path()).expect("collect checkpoint map");
+    let info = map.get("aabbccddeeff").expect("checkpoint info exists");
+    assert_eq!(info.commit_sha, latest_sha);
+    assert_eq!(info.subject, "second checkpoint");
+}
+
+#[test]
+fn git_blob_helpers_return_expected_values() {
+    let temp = init_temp_git_repo();
+    write_repo_file(temp.path(), "src/newline.txt", "one\ntwo\n");
+    write_repo_file(temp.path(), "src/no-newline.txt", "one\ntwo");
+    let commit_sha = commit_all(temp.path(), "blob helpers", None);
+
+    let with_newline_sha = run_git(temp.path(), &["rev-parse", "HEAD:src/newline.txt"])
+        .expect("blob sha with newline");
+    let without_newline_sha = run_git(temp.path(), &["rev-parse", "HEAD:src/no-newline.txt"])
+        .expect("blob sha without newline");
+
+    assert_eq!(
+        git_blob_sha_at_commit(temp.path(), &commit_sha, "src/newline.txt").as_deref(),
+        Some(with_newline_sha.as_str())
+    );
+    assert_eq!(
+        git_blob_line_count(temp.path(), &with_newline_sha),
+        Some(3),
+        "run_git() trims stdout for this path, so newline-terminated blobs currently get +1"
+    );
+    assert_eq!(
+        git_blob_line_count(temp.path(), &without_newline_sha),
+        Some(3),
+        "non-newline-terminated file should get +1 according to current heuristic"
+    );
+    assert_eq!(
+        git_blob_sha_at_commit(temp.path(), "deadbeef", "src/newline.txt"),
+        None
+    );
+}
+
+#[test]
+fn detect_language_covers_supported_extensions_and_fallback() {
+    assert_eq!(detect_language("main.ts"), "typescript");
+    assert_eq!(detect_language("lib/index.TSX"), "typescript");
+    assert_eq!(detect_language("mod.rs"), "rust");
+    assert_eq!(detect_language("app.jsx"), "javascript");
+    assert_eq!(detect_language("script.py"), "python");
+    assert_eq!(detect_language("server.go"), "go");
+    assert_eq!(detect_language("Main.java"), "java");
+    assert_eq!(detect_language("README"), "text");
+}
+
+#[test]
+fn find_block_end_line_handles_missing_and_unbalanced_braces() {
+    let missing = vec!["export const x = 1;"];
+    assert_eq!(find_block_end_line(&missing, 0), None);
+
+    let unbalanced = vec!["function a() {", "  return 1;"];
+    assert_eq!(find_block_end_line(&unbalanced, 0), Some(2));
+}
+
+#[test]
 fn classify_connection_error_authentication() {
     let status = classify_connection_error("psql failed: FATAL: password authentication failed");
     assert_eq!(status, DatabaseConnectionStatus::CouldNotAuthenticate);
@@ -294,6 +541,31 @@ fn events_store_resolver_supports_duckdb_provider() {
     assert_eq!(
         store.provider(),
         crate::devql_config::EventsProvider::DuckDb
+    );
+}
+
+#[test]
+fn events_store_resolver_supports_clickhouse_provider() {
+    let backends = crate::devql_config::DevqlBackendConfig {
+        relational: crate::devql_config::RelationalBackendConfig {
+            provider: crate::devql_config::RelationalProvider::Postgres,
+            sqlite_path: None,
+            postgres_dsn: Some("postgres://user:pass@localhost:5432/bitloops".to_string()),
+        },
+        events: crate::devql_config::EventsBackendConfig {
+            provider: crate::devql_config::EventsProvider::ClickHouse,
+            duckdb_path: None,
+            clickhouse_url: Some("http://localhost:8123".to_string()),
+            clickhouse_user: Some("default".to_string()),
+            clickhouse_password: Some("secret".to_string()),
+            clickhouse_database: Some("default".to_string()),
+        },
+    };
+
+    let store = resolve_events_store_from_backends(&backends).expect("clickhouse events store");
+    assert_eq!(
+        store.provider(),
+        crate::devql_config::EventsProvider::ClickHouse
     );
 }
 
@@ -437,6 +709,43 @@ fn build_path_candidates_includes_variants() {
 }
 
 #[test]
+fn sql_path_candidates_clause_handles_empty_and_escaping() {
+    assert_eq!(sql_path_candidates_clause("a.path", &[]), "1=0");
+
+    let clause = sql_path_candidates_clause("a.path", &["src/a'b.rs".to_string()]);
+    assert_eq!(clause, "a.path = 'src/a''b.rs'");
+}
+
+#[test]
+fn glob_to_sql_like_converts_wildcards() {
+    assert_eq!(glob_to_sql_like("src/*.rs"), "src/%.rs");
+    assert_eq!(glob_to_sql_like("**/main.*"), "%/main.%");
+}
+
+#[test]
+fn format_ch_array_escapes_values() {
+    let encoded = format_ch_array(&["a'b".to_string(), "line\nbreak".to_string()]);
+    assert_eq!(encoded, "['a\\'b','line\\nbreak']");
+}
+
+#[test]
+fn parse_json_string_array_rejects_non_array_payloads() {
+    assert_eq!(
+        parse_json_string_array("{\"k\":1}".to_string()),
+        Value::Array(vec![])
+    );
+    assert_eq!(
+        parse_json_string_array("".to_string()),
+        Value::Array(vec![])
+    );
+}
+
+#[test]
+fn bytes_to_hex_encodes_binary_data() {
+    assert_eq!(bytes_to_hex(&[0x00, 0x0f, 0x10, 0xff]), "000f10ff");
+}
+
+#[test]
 fn extract_js_ts_functions_detects_basic_function() {
     let content = r#"export function hello() {
   return "Hello World";
@@ -487,6 +796,64 @@ fn resolve_repo_id_for_query_is_strict_for_unknown_repo_names() {
 
     assert_eq!(local, cfg.repo.repo_id);
     assert_ne!(unknown, cfg.repo.repo_id);
+}
+
+#[test]
+fn resolve_commit_selector_supports_literal_commit_and_ref() {
+    let temp = init_temp_git_repo();
+    write_repo_file(temp.path(), "src/lib.rs", "pub fn x() {}\n");
+    let head_sha = commit_all(temp.path(), "commit selector", None);
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        temp.path()
+            .join("devql.sqlite")
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    let parsed_commit =
+        parse_devql_query(r#"asOf(commit:"abc123")->file("src/lib.rs")->artefacts()"#)
+            .expect("parse commit selector query");
+    assert_eq!(
+        resolve_commit_selector(&cfg, &parsed_commit).expect("literal commit selector"),
+        Some("abc123".to_string())
+    );
+
+    let parsed_ref = parse_devql_query(r#"asOf(ref:"HEAD")->file("src/lib.rs")->artefacts()"#)
+        .expect("parse ref selector query");
+    assert_eq!(
+        resolve_commit_selector(&cfg, &parsed_ref).expect("resolve HEAD"),
+        Some(head_sha)
+    );
+}
+
+#[test]
+fn project_rows_supports_count_and_nested_field_projection() {
+    let rows = vec![
+        serde_json::json!({"path":"src/a.rs","meta":{"lang":"rust"}}),
+        serde_json::json!({"path":"src/b.ts","meta":{"lang":"typescript"}}),
+    ];
+    let count_only = project_rows(rows.clone(), &["count()".to_string()]);
+    assert_eq!(count_only, vec![serde_json::json!({"count": 2})]);
+
+    let projected = project_rows(
+        rows,
+        &[
+            "path".to_string(),
+            "meta.lang".to_string(),
+            "meta.kind".to_string(),
+        ],
+    );
+    assert_eq!(projected[0]["path"], "src/a.rs");
+    assert_eq!(projected[0]["meta.lang"], "rust");
+    assert_eq!(projected[0]["meta.kind"], Value::Null);
+}
+
+#[test]
+fn sql_string_list_helpers_escape_values() {
+    let values = vec!["a'b".to_string(), "x\\y".to_string()];
+    assert_eq!(sql_string_list_pg(&values), "'a''b','x\\y'");
+    assert_eq!(sql_string_list_ch(&values), "'a\\'b','x\\\\y'");
 }
 
 #[test]
@@ -611,4 +978,239 @@ async fn execute_query_json_reads_from_sqlite_relational_store() {
     let rows = result.as_array().cloned().expect("array result");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["path"], "src/main.rs");
+}
+
+#[tokio::test]
+async fn execute_events_pipeline_returns_empty_rows_for_fresh_events_store() {
+    let temp = init_temp_git_repo();
+    let cfg = DevqlConfig {
+        repo_root: temp.path().to_path_buf(),
+        repo: resolve_repo_identity(temp.path()).expect("repo identity"),
+        backends: crate::devql_config::DevqlBackendConfig {
+            relational: crate::devql_config::RelationalBackendConfig {
+                provider: crate::devql_config::RelationalProvider::Sqlite,
+                sqlite_path: Some(
+                    temp.path()
+                        .join("relational.sqlite")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                postgres_dsn: None,
+            },
+            events: crate::devql_config::EventsBackendConfig {
+                provider: crate::devql_config::EventsProvider::DuckDb,
+                duckdb_path: Some(
+                    temp.path()
+                        .join("events.duckdb")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                clickhouse_url: None,
+                clickhouse_user: None,
+                clickhouse_password: None,
+                clickhouse_database: None,
+            },
+        },
+    };
+
+    init_events_schema(&cfg).await.expect("init events schema");
+
+    let telemetry_query =
+        parse_devql_query(r#"telemetry(event_type:"x")->limit(5)"#).expect("parse telemetry query");
+    let telemetry_rows = execute_events_pipeline(&cfg, &telemetry_query)
+        .await
+        .expect("execute telemetry pipeline");
+    assert!(telemetry_rows.is_empty());
+
+    let checkpoints_query =
+        parse_devql_query(r#"checkpoints()->limit(5)"#).expect("parse checkpoints query");
+    let checkpoints_rows = execute_events_pipeline(&cfg, &checkpoints_query)
+        .await
+        .expect("execute checkpoints pipeline");
+    assert!(checkpoints_rows.is_empty());
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_supports_files_glob_filter() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+    store
+        .execute(&format!(
+            "INSERT INTO artefacts (artefact_id, repo_id, blob_sha, path, language, canonical_kind, start_line, end_line, content_hash) VALUES ('{}', '{}', 'blobA', 'src/main.rs', 'rust', 'file', 1, 10, 'hashA')",
+            esc_pg("glob-1"),
+            esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert artefact");
+
+    let parsed = parse_devql_query(r#"files(path:"src/*")->artefacts(kind:"file")->limit(10)"#)
+        .expect("parse files glob query");
+    let rows = execute_relational_pipeline(&cfg, &parsed, store.as_ref())
+        .await
+        .expect("execute relational pipeline");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["path"], "src/main.rs");
+}
+
+#[tokio::test]
+async fn attach_chat_history_to_artefacts_handles_non_object_rows_and_missing_keys() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+
+    let input = vec![
+        Value::String("raw".to_string()),
+        serde_json::json!({"path":"","blob_sha":"","canonical_kind":"file"}),
+    ];
+    let output = attach_chat_history_to_artefacts(&cfg, store.as_ref(), &cfg.repo.repo_id, input)
+        .await
+        .expect("attach chat history");
+
+    assert_eq!(output.len(), 2);
+    assert_eq!(output[0], Value::String("raw".to_string()));
+    assert_eq!(output[1]["chat_history"], Value::Array(vec![]));
+}
+
+#[tokio::test]
+async fn commit_shas_for_artefact_blob_filters_blank_values() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+
+    store
+        .execute(&format!(
+            "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}','sha1','src/main.rs','blob1'), ('{}',' ','./src/main.rs','blob1'), ('{}','sha2','src/main.rs','blob1')",
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert file_state rows");
+
+    let commit_shas =
+        commit_shas_for_artefact_blob(store.as_ref(), &cfg.repo.repo_id, "src/main.rs", "blob1")
+            .await
+            .expect("query commit shas");
+    assert_eq!(commit_shas, vec!["sha1".to_string(), "sha2".to_string()]);
+}
+
+#[tokio::test]
+async fn checkpoint_events_for_commits_short_circuits_on_empty_input() {
+    let cfg = test_cfg();
+    let rows = checkpoint_events_for_commits(&cfg, "repo-x", "src/main.rs", &[])
+        .await
+        .expect("empty commit list should short-circuit");
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn upsert_language_artefacts_inserts_function_rows_for_typescript() {
+    let repo = init_temp_git_repo();
+    write_repo_file(
+        repo.path(),
+        "src/main.ts",
+        "export function one() {\n  return 1;\n}\n",
+    );
+    commit_all(repo.path(), "ts file", None);
+    let blob_sha =
+        run_git(repo.path(), &["rev-parse", "HEAD:src/main.ts"]).expect("resolve blob sha");
+
+    let db_path = repo.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        repo.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+
+    let file_artefact = upsert_file_artefact_row(&cfg, store.as_ref(), "src/main.ts", &blob_sha)
+        .await
+        .expect("upsert file artefact");
+    upsert_language_artefacts(
+        &cfg,
+        store.as_ref(),
+        "src/main.ts",
+        &blob_sha,
+        &file_artefact,
+    )
+    .await
+    .expect("upsert language artefacts");
+
+    let rows = store
+        .query_rows(&format!(
+            "SELECT canonical_kind, symbol_fqn, parent_artefact_id FROM artefacts WHERE repo_id = '{}' AND canonical_kind = 'function'",
+            esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("query function artefacts");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["canonical_kind"], "function");
+    assert_eq!(rows[0]["symbol_fqn"], "src/main.ts::one");
+    assert_eq!(rows[0]["parent_artefact_id"], file_artefact.artefact_id);
+}
+
+#[tokio::test]
+async fn upsert_language_artefacts_skips_non_javascript_languages() {
+    let temp = TempDir::new().expect("temp dir");
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+
+    let file_artefact = FileArtefactRow {
+        artefact_id: "file-artefact-id".to_string(),
+        language: "rust".to_string(),
+    };
+    upsert_language_artefacts(
+        &cfg,
+        store.as_ref(),
+        "src/lib.rs",
+        "blob-rust",
+        &file_artefact,
+    )
+    .await
+    .expect("non-js upsert should no-op");
+
+    let rows = store
+        .query_rows("SELECT canonical_kind FROM artefacts WHERE canonical_kind = 'function'")
+        .await
+        .expect("query function rows");
+    assert!(rows.is_empty());
 }

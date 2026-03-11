@@ -208,4 +208,148 @@ mod tests {
             (RelationalProvider::Postgres, EventsProvider::ClickHouse)
         );
     }
+
+    #[tokio::test]
+    async fn fake_relational_methods_are_callable() {
+        let relational = FakeRelational {
+            provider: RelationalProvider::Sqlite,
+        };
+
+        assert_eq!(relational.provider(), RelationalProvider::Sqlite);
+        assert_eq!(relational.ping().await.expect("ping"), 1);
+        relational
+            .init_schema()
+            .await
+            .expect("init schema should succeed");
+        relational
+            .execute("SELECT 1")
+            .await
+            .expect("execute should succeed");
+        let rows = relational
+            .query_rows("SELECT 1")
+            .await
+            .expect("query rows should succeed");
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fake_events_methods_are_callable() {
+        let events = FakeEvents {
+            provider: EventsProvider::DuckDb,
+        };
+
+        assert_eq!(events.provider(), EventsProvider::DuckDb);
+        assert_eq!(events.ping().await.expect("ping"), 1);
+        events
+            .init_schema()
+            .await
+            .expect("init schema should succeed");
+
+        let existing = events
+            .existing_event_ids("repo-1".to_string())
+            .await
+            .expect("existing ids");
+        assert!(existing.is_empty());
+
+        let event = CheckpointEventWrite {
+            event_id: "evt-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            checkpoint_id: "cp-1".to_string(),
+            session_id: "session-1".to_string(),
+            commit_sha: "sha-1".to_string(),
+            commit_unix: Some(1_741_211_200),
+            branch: "main".to_string(),
+            event_type: "checkpoint_committed".to_string(),
+            agent: "claude-code".to_string(),
+            strategy: "manual-commit".to_string(),
+            files_touched: vec!["src/main.rs".to_string()],
+            created_at: Some("2026-03-01T12:00:00Z".to_string()),
+            payload: serde_json::json!({"ok": true}),
+        };
+        events
+            .insert_checkpoint_event(event)
+            .await
+            .expect("insert event should succeed");
+
+        let checkpoints = events
+            .query_checkpoints(EventsCheckpointQuery {
+                repo_id: "repo-1".to_string(),
+                agent: Some("claude-code".to_string()),
+                since: Some("2026-03-01".to_string()),
+                limit: 10,
+            })
+            .await
+            .expect("query checkpoints");
+        assert!(checkpoints.is_empty());
+
+        let telemetry = events
+            .query_telemetry(EventsTelemetryQuery {
+                repo_id: "repo-1".to_string(),
+                event_type: Some("checkpoint_committed".to_string()),
+                agent: Some("claude-code".to_string()),
+                since: Some("2026-03-01".to_string()),
+                limit: 10,
+            })
+            .await
+            .expect("query telemetry");
+        assert!(telemetry.is_empty());
+
+        let commit_shas = events
+            .query_commit_shas(EventsCommitShaQuery {
+                repo_id: "repo-1".to_string(),
+                agent: Some("claude-code".to_string()),
+                since: Some("2026-03-01".to_string()),
+                limit: 10,
+            })
+            .await
+            .expect("query commit shas");
+        assert!(commit_shas.is_empty());
+
+        let history = events
+            .query_checkpoint_events(EventsCheckpointHistoryQuery {
+                repo_id: "repo-1".to_string(),
+                commit_shas: vec!["sha-1".to_string()],
+                path_candidates: vec!["src/main.rs".to_string()],
+                limit: 10,
+            })
+            .await
+            .expect("query checkpoint events");
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn query_payload_structs_are_cloneable_and_equatable() {
+        let checkpoints = EventsCheckpointQuery {
+            repo_id: "repo-1".to_string(),
+            agent: Some("claude-code".to_string()),
+            since: Some("2026-03-01".to_string()),
+            limit: 25,
+        };
+        assert_eq!(checkpoints, checkpoints.clone());
+
+        let telemetry = EventsTelemetryQuery {
+            repo_id: "repo-1".to_string(),
+            event_type: Some("checkpoint_committed".to_string()),
+            agent: None,
+            since: None,
+            limit: 50,
+        };
+        assert_eq!(telemetry, telemetry.clone());
+
+        let commit_shas = EventsCommitShaQuery {
+            repo_id: "repo-1".to_string(),
+            agent: None,
+            since: Some("2026-01-01".to_string()),
+            limit: 100,
+        };
+        assert_eq!(commit_shas, commit_shas.clone());
+
+        let history = EventsCheckpointHistoryQuery {
+            repo_id: "repo-1".to_string(),
+            commit_shas: vec!["sha-1".to_string(), "sha-2".to_string()],
+            path_candidates: vec!["src/main.rs".to_string()],
+            limit: 200,
+        };
+        assert_eq!(history, history.clone());
+    }
 }
