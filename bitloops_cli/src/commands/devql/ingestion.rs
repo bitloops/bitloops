@@ -88,30 +88,8 @@ fn parse_owner_name_path(path: &str) -> Option<(String, String)> {
     Some((org, name))
 }
 
-async fn init_clickhouse_schema(cfg: &DevqlConfig) -> Result<()> {
-    let sql = r#"
-CREATE TABLE IF NOT EXISTS checkpoint_events (
-    event_id String,
-    event_time DateTime64(3, 'UTC'),
-    repo_id String,
-    checkpoint_id String,
-    session_id String,
-    commit_sha String,
-    branch String,
-    event_type String,
-    agent String,
-    strategy String,
-    files_touched Array(String),
-    payload String
-)
-ENGINE = ReplacingMergeTree(event_time)
-ORDER BY (repo_id, event_time, event_id)
-"#;
-
-    clickhouse_exec(cfg, sql)
-        .await
-        .context("creating ClickHouse checkpoint_events table")?;
-    Ok(())
+async fn init_events_schema(cfg: &DevqlConfig) -> Result<()> {
+    events_store_init_schema(cfg).await
 }
 
 async fn init_postgres_schema(
@@ -266,21 +244,7 @@ fn collect_checkpoint_commit_map(
 }
 
 async fn fetch_existing_checkpoint_event_ids(cfg: &DevqlConfig) -> Result<HashSet<String>> {
-    let sql = format!(
-        "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}' FORMAT JSON",
-        esc_ch(&cfg.repo.repo_id)
-    );
-
-    let mut out = HashSet::new();
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    if let Some(rows) = data.as_array() {
-        for row in rows {
-            if let Some(id) = row.get("event_id").and_then(Value::as_str) {
-                out.insert(id.to_string());
-            }
-        }
-    }
-    Ok(out)
+    events_store_existing_event_ids(cfg, &cfg.repo.repo_id).await
 }
 
 async fn insert_checkpoint_event(
@@ -289,45 +253,31 @@ async fn insert_checkpoint_event(
     event_id: &str,
     commit_info: Option<&CheckpointCommitInfo>,
 ) -> Result<()> {
-    let event_time_expr = if !cp.created_at.trim().is_empty() {
-        format!(
-            "coalesce(parseDateTime64BestEffortOrNull('{}'), now64(3))",
-            esc_ch(cp.created_at.trim())
-        )
-    } else if let Some(info) = commit_info {
-        format!("toDateTime64({}, 3, 'UTC')", info.commit_unix)
-    } else {
-        "now64(3)".to_string()
-    };
-
-    let commit_sha = commit_info
-        .map(|info| info.commit_sha.as_str())
-        .unwrap_or_default();
-
     let payload = json!({
         "checkpoints_count": cp.checkpoints_count,
         "session_count": cp.session_count,
         "token_usage": cp.token_usage,
     });
 
-    let files_touched = format_ch_array(&cp.files_touched);
-    let sql = format!(
-        "INSERT INTO checkpoint_events (event_id, event_time, repo_id, checkpoint_id, session_id, commit_sha, branch, event_type, agent, strategy, files_touched, payload) \
-VALUES ('{}', {}, '{}', '{}', '{}', '{}', '{}', 'checkpoint_committed', '{}', '{}', {}, '{}')",
-        esc_ch(event_id),
-        event_time_expr,
-        esc_ch(&cfg.repo.repo_id),
-        esc_ch(&cp.checkpoint_id),
-        esc_ch(&cp.session_id),
-        esc_ch(commit_sha),
-        esc_ch(&cp.branch),
-        esc_ch(&cp.agent),
-        esc_ch(&cp.strategy),
-        files_touched,
-        esc_ch(&serde_json::to_string(&payload)?),
-    );
+    let event = store_contracts::CheckpointEventWrite {
+        event_id: event_id.to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        checkpoint_id: cp.checkpoint_id.clone(),
+        session_id: cp.session_id.clone(),
+        commit_sha: commit_info
+            .map(|info| info.commit_sha.clone())
+            .unwrap_or_default(),
+        commit_unix: commit_info.map(|info| info.commit_unix),
+        branch: cp.branch.clone(),
+        event_type: "checkpoint_committed".to_string(),
+        agent: cp.agent.clone(),
+        strategy: cp.strategy.clone(),
+        files_touched: cp.files_touched.clone(),
+        created_at: Some(cp.created_at.trim().to_string()).filter(|value| !value.is_empty()),
+        payload,
+    };
 
-    clickhouse_exec(cfg, &sql).await.map(|_| ())
+    events_store_insert_checkpoint_event(cfg, event).await
 }
 
 async fn upsert_commit_row(
@@ -622,4 +572,3 @@ struct TelemetryFilter {
     agent: Option<String>,
     since: Option<String>,
 }
-

@@ -9,7 +9,7 @@ DevQL backend configuration is now split into logical providers:
 - `devql.relational.provider`: `sqlite` | `postgres`
 - `devql.events.provider`: `duckdb` | `clickhouse`
 
-Current runtime adapters are `postgres` + `clickhouse`. `sqlite`/`duckdb` are contract-level providers reserved for follow-up implementation tasks.
+Current runtime adapters are `postgres` + `duckdb` (default events backend). `clickhouse` remains available as an explicit events provider. `sqlite` is still a provider contract placeholder for follow-up implementation tasks.
 
 Config precedence is:
 
@@ -22,7 +22,7 @@ Legacy keys remain supported for backward compatibility:
 - `postgres_dsn`, `clickhouse_url`, `clickhouse_user`, `clickhouse_password`, `clickhouse_database`
 - `BITLOOPS_DEVQL_PG_DSN`, `BITLOOPS_DEVQL_CH_*`
 
-## 0) Run Postgres and ClickHouse with docker (current adapters)
+## 0) Run Postgres with docker (required for current relational adapter)
 
 ```bash
 docker run -d --name mypostgres -p 5432:5432 \
@@ -31,16 +31,6 @@ docker run -d --name mypostgres -p 5432:5432 \
   -e POSTGRES_DB=bitloops \
   postgres
 ```
-
-```bash
-docker run -d --name bitloops-clickhouse \
-  -p 8123:8123 -p 9000:9000 \
-  -e CLICKHOUSE_USER=bitloops \
-  -e CLICKHOUSE_PASSWORD=bitloops \
-  -e CLICKHOUSE_DB=bitloops \
-  clickhouse/clickhouse-server
-```
-
 
 ## 1) Configure database connections
 
@@ -54,20 +44,29 @@ Create `~/.bitloops/config.json`:
       "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops"
     },
     "events": {
-      "provider": "clickhouse",
-      "clickhouse_url": "http://localhost:8123",
-      "clickhouse_database": "bitloops",
-      "clickhouse_user": "bitloops",
-      "clickhouse_password": "bitloops"
+      "provider": "duckdb",
+      "duckdb_path": "~/.bitloops/devql/events.duckdb"
     }
   }
 }
 ```
 
 What this does:
-- Tells DevQL to use `postgres` for relational data and `clickhouse` for events.
+- Tells DevQL to use `postgres` for relational data and `duckdb` for events.
 - These can be overridden by `BITLOOPS_DEVQL_RELATIONAL_PROVIDER`, `BITLOOPS_DEVQL_EVENTS_PROVIDER`, and legacy/new `BITLOOPS_DEVQL_*` backend settings.
 - Postgres is used via `psql` with a 10s connect timeout and 30s statement timeout for health checks and queries; you can override with `PGCONNECT_TIMEOUT` and `PGOPTIONS` if needed.
+
+To use ClickHouse for events instead, set:
+
+```json
+"events": {
+  "provider": "clickhouse",
+  "clickhouse_url": "http://localhost:8123",
+  "clickhouse_database": "bitloops",
+  "clickhouse_user": "bitloops",
+  "clickhouse_password": "bitloops"
+}
+```
 
 ## 2) Check backend connectivity
 
@@ -111,7 +110,7 @@ cargo run -- devql init
 ```
 
 What this does:
-- Creates required tables in the currently supported adapters (`clickhouse` + `postgres`).
+- Creates required tables in the currently supported adapters (`duckdb`/`clickhouse` events + `postgres` relational).
 
 ## 4) Ingest checkpoint + artefact data
 
@@ -121,7 +120,7 @@ cargo run -- devql ingest
 
 What this does:
 - Reads committed checkpoints from the repo.
-- Writes checkpoint events to the events backend (`clickhouse`).
+- Writes checkpoint events to the events backend (`duckdb` by default, or `clickhouse` if configured).
 - Writes repository/commit/file/artefact rows to the relational backend (`postgres`).
 
 Optional flags:
@@ -173,7 +172,7 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 
 What this does:
 - Parses the DevQL pipeline.
-- Routes checkpoint/telemetry stages to the events backend (`clickhouse`).
+- Routes checkpoint/telemetry stages to the configured events backend (`duckdb` or `clickhouse`).
 - Routes artefact stages to the relational backend (`postgres`).
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
 - Prints JSON output.
@@ -187,7 +186,7 @@ cargo run -- dashboard --no-open
 What this does:
 - On startup, checks DB health for configured backends.
 - Uses the same `DB Status` table/status semantics as `--connection-status`.
-- Keeps pooled clients for currently supported adapters (`postgres` + `clickhouse`) while dashboard runs.
+- Keeps backend clients for configured adapters (`postgres` plus `duckdb` or `clickhouse`) while dashboard runs.
 - Exposes live health at:
 
 ```text

@@ -248,66 +248,43 @@ async fn execute_devql_query(
     }
 
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
-        return execute_clickhouse_pipeline(cfg, parsed).await;
+        return execute_events_pipeline(cfg, parsed).await;
     }
 
     let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
     execute_postgres_pipeline(cfg, parsed, pg_client).await
 }
 
-async fn execute_clickhouse_pipeline(
+async fn execute_events_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
 ) -> Result<Vec<Value>> {
     let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
 
     if parsed.has_checkpoints_stage {
-        let mut conditions = vec![
-            format!("repo_id = '{}'", esc_ch(&repo_id)),
-            "event_type = 'checkpoint_committed'".to_string(),
-        ];
-        if let Some(agent) = parsed.checkpoints.agent.as_deref() {
-            conditions.push(format!("agent = '{}'", esc_ch(agent)));
-        }
-        if let Some(since) = parsed.checkpoints.since.as_deref() {
-            conditions.push(format!(
-                "event_time >= parseDateTime64BestEffortOrZero('{}')",
-                esc_ch(since)
-            ));
-        }
-
-        let sql = format!(
-            "SELECT checkpoint_id, max(event_time) AS created_at, anyLast(agent) AS agent, anyLast(commit_sha) AS commit_sha, anyLast(branch) AS branch, anyLast(strategy) AS strategy, anyLast(files_touched) AS files_touched FROM checkpoint_events WHERE {} GROUP BY checkpoint_id ORDER BY created_at DESC LIMIT {} FORMAT JSON",
-            conditions.join(" AND "),
-            parsed.limit.max(1)
-        );
-
-        let data = clickhouse_query_data(cfg, &sql).await?;
-        return Ok(data.as_array().cloned().unwrap_or_default());
+        return events_store_query_checkpoints(
+            cfg,
+            store_contracts::EventsCheckpointQuery {
+                repo_id,
+                agent: parsed.checkpoints.agent.clone(),
+                since: parsed.checkpoints.since.clone(),
+                limit: parsed.limit.max(1),
+            },
+        )
+        .await;
     }
 
-    let mut conditions = vec![format!("repo_id = '{}'", esc_ch(&repo_id))];
-    if let Some(event_type) = parsed.telemetry.event_type.as_deref() {
-        conditions.push(format!("event_type = '{}'", esc_ch(event_type)));
-    }
-    if let Some(agent) = parsed.telemetry.agent.as_deref() {
-        conditions.push(format!("agent = '{}'", esc_ch(agent)));
-    }
-    if let Some(since) = parsed.telemetry.since.as_deref() {
-        conditions.push(format!(
-            "event_time >= parseDateTime64BestEffortOrZero('{}')",
-            esc_ch(since)
-        ));
-    }
-
-    let sql = format!(
-        "SELECT event_time, event_type, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT {} FORMAT JSON",
-        conditions.join(" AND "),
-        parsed.limit.max(1)
-    );
-
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    Ok(data.as_array().cloned().unwrap_or_default())
+    events_store_query_telemetry(
+        cfg,
+        store_contracts::EventsTelemetryQuery {
+            repo_id,
+            event_type: parsed.telemetry.event_type.clone(),
+            agent: parsed.telemetry.agent.clone(),
+            since: parsed.telemetry.since.clone(),
+            limit: parsed.limit.max(1),
+        },
+    )
+    .await
 }
 
 async fn execute_postgres_pipeline(
@@ -415,40 +392,16 @@ async fn blob_shas_changed_in_events(
     agent: Option<&str>,
     since: Option<&str>,
 ) -> Result<Vec<String>> {
-    let mut conditions = vec![
-        format!("repo_id = '{}'", esc_ch(repo_id)),
-        "event_type = 'checkpoint_committed'".to_string(),
-        "commit_sha != ''".to_string(),
-    ];
-
-    if let Some(agent) = agent {
-        conditions.push(format!("agent = '{}'", esc_ch(agent)));
-    }
-    if let Some(since) = since {
-        conditions.push(format!(
-            "event_time >= parseDateTime64BestEffortOrZero('{}')",
-            esc_ch(since)
-        ));
-    }
-
-    let sql = format!(
-        "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000 FORMAT JSON",
-        conditions.join(" AND ")
-    );
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    let commit_shas = data
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| {
-            row.get("commit_sha")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .collect::<Vec<_>>();
+    let commit_shas = events_store_query_commit_shas(
+        cfg,
+        store_contracts::EventsCommitShaQuery {
+            repo_id: repo_id.to_string(),
+            agent: agent.map(str::to_string),
+            since: since.map(str::to_string),
+            limit: 20_000,
+        },
+    )
+    .await?;
 
     if commit_shas.is_empty() {
         return Ok(vec![]);
@@ -588,33 +541,16 @@ async fn checkpoint_events_for_commits(
     }
 
     let path_candidates = build_path_candidates(path);
-    let path_has_clause = if path_candidates.is_empty() {
-        None
-    } else {
-        Some(
-            path_candidates
-                .iter()
-                .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
-                .collect::<Vec<_>>()
-                .join(" OR "),
-        )
-    };
-
-    let mut conditions = vec![
-        format!("repo_id = '{}'", esc_ch(repo_id)),
-        "event_type = 'checkpoint_committed'".to_string(),
-        format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
-    ];
-    if let Some(path_has_clause) = path_has_clause {
-        conditions.push(format!("({path_has_clause})"));
-    }
-
-    let sql = format!(
-        "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
-        conditions.join(" AND ")
-    );
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    Ok(data.as_array().cloned().unwrap_or_default())
+    events_store_query_checkpoint_events(
+        cfg,
+        store_contracts::EventsCheckpointHistoryQuery {
+            repo_id: repo_id.to_string(),
+            commit_shas: commit_shas.to_vec(),
+            path_candidates,
+            limit: 200,
+        },
+    )
+    .await
 }
 
 fn session_chat_payload(
@@ -847,4 +783,3 @@ fn lookup_nested_field<'a>(obj: &'a Map<String, Value>, field: &str) -> Option<&
     }
     current
 }
-

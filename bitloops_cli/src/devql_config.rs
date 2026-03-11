@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 /// Relative path from user home to the DevQL config file (e.g. `~/.bitloops/config.json`).
 pub const DEVQL_CONFIG_RELATIVE_PATH: &str = ".bitloops/config.json";
+pub const DEVQL_DUCKDB_DEFAULT_PATH: &str = "~/.bitloops/devql/events.duckdb";
 
 const ENV_RELATIONAL_PROVIDER: &str = "BITLOOPS_DEVQL_RELATIONAL_PROVIDER";
 const ENV_EVENTS_PROVIDER: &str = "BITLOOPS_DEVQL_EVENTS_PROVIDER";
@@ -85,6 +86,14 @@ impl EventsBackendConfig {
             .unwrap_or_else(|| "default".to_string());
         let base = base.trim_end_matches('/');
         format!("{base}/?database={database}")
+    }
+
+    pub fn duckdb_path_or_default(&self) -> PathBuf {
+        expand_tilde_path(
+            self.duckdb_path
+                .as_deref()
+                .unwrap_or(DEVQL_DUCKDB_DEFAULT_PATH),
+        )
     }
 }
 
@@ -288,6 +297,26 @@ where
     })
 }
 
+fn expand_tilde_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        return env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(trimmed));
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+        && let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
+    {
+        return PathBuf::from(home).join(rest);
+    }
+
+    PathBuf::from(trimmed)
+}
+
 fn parse_relational_provider(raw: &str) -> Result<RelationalProvider> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "sqlite" => Ok(RelationalProvider::Sqlite),
@@ -412,5 +441,41 @@ mod tests {
 
         let message = err.to_string();
         assert!(message.contains("unsupported devql"));
+    }
+
+    #[test]
+    fn events_backend_duckdb_path_defaults_under_bitloops_directory() {
+        let events = EventsBackendConfig {
+            provider: EventsProvider::DuckDb,
+            duckdb_path: None,
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+
+        let resolved = events.duckdb_path_or_default();
+        let rendered = resolved.to_string_lossy();
+        assert!(
+            rendered.ends_with(".bitloops/devql/events.duckdb")
+                || rendered.ends_with(".bitloops\\devql\\events.duckdb")
+        );
+    }
+
+    #[test]
+    fn events_backend_duckdb_path_preserves_explicit_path() {
+        let events = EventsBackendConfig {
+            provider: EventsProvider::DuckDb,
+            duckdb_path: Some("/tmp/custom-events.duckdb".to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+
+        assert_eq!(
+            events.duckdb_path_or_default(),
+            PathBuf::from("/tmp/custom-events.duckdb")
+        );
     }
 }

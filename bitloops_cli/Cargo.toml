@@ -31,6 +31,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 semver = "1"
 tar = "0.4"
 zstd = "0.13"
+duckdb = { version = "1", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

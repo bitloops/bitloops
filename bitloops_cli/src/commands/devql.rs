@@ -146,22 +146,9 @@ async fn check_relational_connection_status(
 }
 
 async fn check_events_connection_status(cfg: &DevqlConnectionConfig) -> DatabaseConnectionStatus {
-    match cfg.backends.events.provider {
-        EventsProvider::DuckDb => DatabaseConnectionStatus::NotConfigured,
-        EventsProvider::ClickHouse => {
-            let clickhouse_endpoint = cfg.backends.events.clickhouse_endpoint();
-            match run_clickhouse_sql_http(
-                &clickhouse_endpoint,
-                cfg.backends.events.clickhouse_user.as_deref(),
-                cfg.backends.events.clickhouse_password.as_deref(),
-                "SELECT 1 FORMAT TabSeparated",
-            )
-            .await
-            {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
+    match events_store_ping(cfg).await {
+        Ok(_) => DatabaseConnectionStatus::Connected,
+        Err(err) => classify_connection_error(&err.to_string()),
     }
 }
 
@@ -225,12 +212,11 @@ impl DevqlConfig {
         Ok(())
     }
 
-    fn ensure_clickhouse_events_provider(&self) -> Result<()> {
-        if self.events_provider() != EventsProvider::ClickHouse {
-            bail!(
-                "events provider `{}` is not implemented yet in this build (tracked by CLI-1329); use `clickhouse` for now",
-                self.events_provider().as_str()
-            );
+    fn ensure_supported_events_provider(&self) -> Result<()> {
+        match self.events_provider() {
+            EventsProvider::DuckDb | EventsProvider::ClickHouse => {
+                // Both providers are currently supported in the events-store abstraction.
+            }
         }
         Ok(())
     }
@@ -243,24 +229,11 @@ impl DevqlConfig {
             )
         })
     }
-
-    fn clickhouse_endpoint(&self) -> Result<String> {
-        self.ensure_clickhouse_events_provider()?;
-        Ok(self.backends.events.clickhouse_endpoint())
-    }
-
-    fn clickhouse_user(&self) -> Option<&str> {
-        self.backends.events.clickhouse_user.as_deref()
-    }
-
-    fn clickhouse_password(&self) -> Option<&str> {
-        self.backends.events.clickhouse_password.as_deref()
-    }
 }
 
 async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
-    init_clickhouse_schema(cfg).await?;
+    init_events_schema(cfg).await?;
     init_postgres_schema(cfg, &pg_client).await?;
 
     println!(
@@ -273,7 +246,7 @@ async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if args.init {
-        init_clickhouse_schema(cfg).await?;
+        init_events_schema(cfg).await?;
         init_postgres_schema(cfg, &pg_client).await?;
     }
 
@@ -402,7 +375,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
         cfg.ensure_postgres_relational_provider()?;
     }
     if backend_usage.uses_events {
-        cfg.ensure_clickhouse_events_provider()?;
+        cfg.ensure_supported_events_provider()?;
     }
 
     let pg_client = if backend_usage.uses_relational {

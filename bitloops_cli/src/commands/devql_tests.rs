@@ -219,6 +219,156 @@ fn classify_connection_error_unknown() {
 }
 
 #[test]
+fn events_store_resolver_supports_duckdb_provider() {
+    let backends = crate::devql_config::DevqlBackendConfig {
+        relational: crate::devql_config::RelationalBackendConfig {
+            provider: crate::devql_config::RelationalProvider::Postgres,
+            sqlite_path: None,
+            postgres_dsn: Some("postgres://user:pass@localhost:5432/bitloops".to_string()),
+        },
+        events: crate::devql_config::EventsBackendConfig {
+            provider: crate::devql_config::EventsProvider::DuckDb,
+            duckdb_path: Some("/tmp/devql-events.duckdb".to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        },
+    };
+
+    let store = resolve_events_store_from_backends(&backends).expect("duckdb events store");
+    assert_eq!(
+        store.provider(),
+        crate::devql_config::EventsProvider::DuckDb
+    );
+}
+
+#[tokio::test]
+async fn check_events_connection_status_duckdb_reports_connected() {
+    let cfg = DevqlConnectionConfig {
+        backends: crate::devql_config::DevqlBackendConfig {
+            relational: crate::devql_config::RelationalBackendConfig {
+                provider: crate::devql_config::RelationalProvider::Sqlite,
+                sqlite_path: Some("/tmp/devql-relational.sqlite".to_string()),
+                postgres_dsn: None,
+            },
+            events: crate::devql_config::EventsBackendConfig {
+                provider: crate::devql_config::EventsProvider::DuckDb,
+                duckdb_path: Some("/tmp/devql-events.duckdb".to_string()),
+                clickhouse_url: None,
+                clickhouse_user: None,
+                clickhouse_password: None,
+                clickhouse_database: None,
+            },
+        },
+    };
+
+    let status = check_events_connection_status(&cfg).await;
+    assert_eq!(status, DatabaseConnectionStatus::Connected);
+}
+
+#[tokio::test]
+async fn duckdb_events_store_roundtrip_supports_core_queries() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let duckdb_path = temp.path().join("events.duckdb");
+
+    let backends = crate::devql_config::DevqlBackendConfig {
+        relational: crate::devql_config::RelationalBackendConfig {
+            provider: crate::devql_config::RelationalProvider::Postgres,
+            sqlite_path: None,
+            postgres_dsn: Some("postgres://user:pass@localhost:5432/bitloops".to_string()),
+        },
+        events: crate::devql_config::EventsBackendConfig {
+            provider: crate::devql_config::EventsProvider::DuckDb,
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        },
+    };
+
+    let store = resolve_events_store_from_backends(&backends).expect("duckdb events store");
+    store.init_schema().await.expect("init duckdb schema");
+
+    let event = store_contracts::CheckpointEventWrite {
+        event_id: "evt-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        checkpoint_id: "cp-1".to_string(),
+        session_id: "session-1".to_string(),
+        commit_sha: "commit-sha-1".to_string(),
+        commit_unix: Some(1_741_211_200),
+        branch: "main".to_string(),
+        event_type: "checkpoint_committed".to_string(),
+        agent: "claude-code".to_string(),
+        strategy: "manual-commit".to_string(),
+        files_touched: vec!["src/main.rs".to_string()],
+        created_at: Some("2026-03-01T12:00:00Z".to_string()),
+        payload: serde_json::json!({"checkpoints_count": 1}),
+    };
+    store
+        .insert_checkpoint_event(event)
+        .await
+        .expect("insert duckdb event");
+
+    let existing = store
+        .existing_event_ids("repo-1".to_string())
+        .await
+        .expect("existing ids");
+    assert!(existing.contains("evt-1"));
+
+    let checkpoints = store
+        .query_checkpoints(store_contracts::EventsCheckpointQuery {
+            repo_id: "repo-1".to_string(),
+            agent: Some("claude-code".to_string()),
+            since: None,
+            limit: 10,
+        })
+        .await
+        .expect("query checkpoints");
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints[0]["checkpoint_id"], "cp-1");
+    assert_eq!(checkpoints[0]["files_touched"][0], "src/main.rs");
+
+    let telemetry = store
+        .query_telemetry(store_contracts::EventsTelemetryQuery {
+            repo_id: "repo-1".to_string(),
+            event_type: Some("checkpoint_committed".to_string()),
+            agent: Some("claude-code".to_string()),
+            since: None,
+            limit: 10,
+        })
+        .await
+        .expect("query telemetry");
+    assert_eq!(telemetry.len(), 1);
+    assert_eq!(telemetry[0]["event_type"], "checkpoint_committed");
+    assert_eq!(telemetry[0]["payload"], "{\"checkpoints_count\":1}");
+
+    let commit_shas = store
+        .query_commit_shas(store_contracts::EventsCommitShaQuery {
+            repo_id: "repo-1".to_string(),
+            agent: Some("claude-code".to_string()),
+            since: None,
+            limit: 10,
+        })
+        .await
+        .expect("query commit shas");
+    assert_eq!(commit_shas, vec!["commit-sha-1".to_string()]);
+
+    let history = store
+        .query_checkpoint_events(store_contracts::EventsCheckpointHistoryQuery {
+            repo_id: "repo-1".to_string(),
+            commit_shas: vec!["commit-sha-1".to_string()],
+            path_candidates: vec!["src/main.rs".to_string()],
+            limit: 10,
+        })
+        .await
+        .expect("query checkpoint events");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["checkpoint_id"], "cp-1");
+}
+
+#[test]
 fn normalize_repo_path_removes_dot_prefix() {
     assert_eq!(normalize_repo_path("./index.ts"), "index.ts");
     assert_eq!(normalize_repo_path("index.ts"), "index.ts");

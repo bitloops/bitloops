@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -20,14 +21,73 @@ pub(crate) trait RelationalStore {
     fn query_rows<'a>(&'a self, sql: &'a str) -> StoreFuture<'a, Vec<Value>>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CheckpointEventWrite {
+    pub event_id: String,
+    pub repo_id: String,
+    pub checkpoint_id: String,
+    pub session_id: String,
+    pub commit_sha: String,
+    pub commit_unix: Option<i64>,
+    pub branch: String,
+    pub event_type: String,
+    pub agent: String,
+    pub strategy: String,
+    pub files_touched: Vec<String>,
+    pub created_at: Option<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventsCheckpointQuery {
+    pub repo_id: String,
+    pub agent: Option<String>,
+    pub since: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventsTelemetryQuery {
+    pub repo_id: String,
+    pub event_type: Option<String>,
+    pub agent: Option<String>,
+    pub since: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventsCommitShaQuery {
+    pub repo_id: String,
+    pub agent: Option<String>,
+    pub since: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventsCheckpointHistoryQuery {
+    pub repo_id: String,
+    pub commit_shas: Vec<String>,
+    pub path_candidates: Vec<String>,
+    pub limit: usize,
+}
+
 /// Shared events contract for provider implementations.
-/// The current runtime still uses ClickHouse directly; this trait is the stable
-/// integration boundary for provider-specific tasks.
+/// This is the stable integration boundary for provider-specific tasks.
 pub(crate) trait EventsStore {
     fn provider(&self) -> EventsProvider;
+    fn ping<'a>(&'a self) -> StoreFuture<'a, i32>;
     fn init_schema<'a>(&'a self) -> StoreFuture<'a, ()>;
-    fn execute<'a>(&'a self, sql: &'a str) -> StoreFuture<'a, String>;
-    fn query_rows<'a>(&'a self, sql: &'a str) -> StoreFuture<'a, Vec<Value>>;
+    fn existing_event_ids<'a>(&'a self, repo_id: String) -> StoreFuture<'a, HashSet<String>>;
+    fn insert_checkpoint_event<'a>(&'a self, event: CheckpointEventWrite) -> StoreFuture<'a, ()>;
+    fn query_checkpoints<'a>(&'a self, query: EventsCheckpointQuery)
+    -> StoreFuture<'a, Vec<Value>>;
+    fn query_telemetry<'a>(&'a self, query: EventsTelemetryQuery) -> StoreFuture<'a, Vec<Value>>;
+    fn query_commit_shas<'a>(&'a self, query: EventsCommitShaQuery)
+    -> StoreFuture<'a, Vec<String>>;
+    fn query_checkpoint_events<'a>(
+        &'a self,
+        query: EventsCheckpointHistoryQuery,
+    ) -> StoreFuture<'a, Vec<Value>>;
 }
 
 /// Reusable provider-contract harness shape for backend implementations.
@@ -77,15 +137,50 @@ mod tests {
             self.provider
         }
 
+        fn ping<'a>(&'a self) -> StoreFuture<'a, i32> {
+            Box::pin(async { Ok(1) })
+        }
+
         fn init_schema<'a>(&'a self) -> StoreFuture<'a, ()> {
             Box::pin(async { Ok(()) })
         }
 
-        fn execute<'a>(&'a self, _sql: &'a str) -> StoreFuture<'a, String> {
-            Box::pin(async { Ok(String::new()) })
+        fn existing_event_ids<'a>(&'a self, _repo_id: String) -> StoreFuture<'a, HashSet<String>> {
+            Box::pin(async { Ok(HashSet::new()) })
         }
 
-        fn query_rows<'a>(&'a self, _sql: &'a str) -> StoreFuture<'a, Vec<Value>> {
+        fn insert_checkpoint_event<'a>(
+            &'a self,
+            _event: CheckpointEventWrite,
+        ) -> StoreFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query_checkpoints<'a>(
+            &'a self,
+            _query: EventsCheckpointQuery,
+        ) -> StoreFuture<'a, Vec<Value>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn query_telemetry<'a>(
+            &'a self,
+            _query: EventsTelemetryQuery,
+        ) -> StoreFuture<'a, Vec<Value>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn query_commit_shas<'a>(
+            &'a self,
+            _query: EventsCommitShaQuery,
+        ) -> StoreFuture<'a, Vec<String>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+
+        fn query_checkpoint_events<'a>(
+            &'a self,
+            _query: EventsCheckpointHistoryQuery,
+        ) -> StoreFuture<'a, Vec<Value>> {
             Box::pin(async { Ok(vec![]) })
         }
     }

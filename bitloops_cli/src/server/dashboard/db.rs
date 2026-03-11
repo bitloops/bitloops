@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::Url;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
@@ -116,6 +117,7 @@ pub(in crate::server) struct DashboardDbPools {
     pub(super) events_provider: EventsProvider,
     pub(super) postgres: Option<PostgresPool>,
     pub(super) clickhouse: Option<ClickHousePool>,
+    pub(super) duckdb: Option<DuckDbPool>,
 }
 
 impl Default for DashboardDbPools {
@@ -125,6 +127,7 @@ impl Default for DashboardDbPools {
             events_provider: EventsProvider::DuckDb,
             postgres: None,
             clickhouse: None,
+            duckdb: None,
         }
     }
 }
@@ -136,6 +139,7 @@ impl fmt::Debug for DashboardDbPools {
             .field("events_provider", &self.events_provider.as_str())
             .field("postgres_enabled", &self.postgres.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
+            .field("duckdb_enabled", &self.duckdb.is_some())
             .finish()
     }
 }
@@ -144,6 +148,7 @@ impl DashboardDbPools {
     pub(super) async fn health_check(&self) -> DashboardDbHealth {
         let postgres_pool = self.postgres.as_ref();
         let clickhouse_pool = self.clickhouse.as_ref();
+        let duckdb_pool = self.duckdb.as_ref();
 
         let postgres_fut = async move {
             match postgres_pool {
@@ -165,15 +170,25 @@ impl DashboardDbPools {
                 None => BackendHealth::skip("not configured"),
             }
         };
+        let duckdb_fut = async move {
+            match duckdb_pool {
+                Some(pool) => match timeout(HEALTH_CHECK_TIMEOUT, pool.ping()).await {
+                    Ok(Ok(value)) => BackendHealth::ok(format!("SELECT 1 => {value}")),
+                    Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
+                    Err(_) => BackendHealth::fail("health check timed out".to_string()),
+                },
+                None => BackendHealth::skip("not configured"),
+            }
+        };
 
-        let (postgres, clickhouse) = tokio::join!(postgres_fut, clickhouse_fut);
+        let (postgres, clickhouse, duckdb) = tokio::join!(postgres_fut, clickhouse_fut, duckdb_fut);
         let relational = match self.relational_provider {
             RelationalProvider::Postgres => postgres.clone(),
             RelationalProvider::Sqlite => BackendHealth::skip("provider sqlite is not wired yet"),
         };
         let events = match self.events_provider {
             EventsProvider::ClickHouse => clickhouse.clone(),
-            EventsProvider::DuckDb => BackendHealth::skip("provider duckdb is not wired yet"),
+            EventsProvider::DuckDb => duckdb.clone(),
         };
 
         DashboardDbHealth::with_compat_fields(
@@ -320,6 +335,55 @@ impl ClickHousePool {
     }
 }
 
+#[derive(Clone)]
+pub(super) struct DuckDbPool {
+    path: PathBuf,
+}
+
+impl fmt::Debug for DuckDbPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DuckDbPool")
+            .field("path", &self.path.display().to_string())
+            .finish()
+    }
+}
+
+impl DuckDbPool {
+    fn connect(path: PathBuf) -> Result<Self> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
+        }
+
+        let conn = duckdb::Connection::open(&path)
+            .with_context(|| format!("opening DuckDB events database at {}", path.display()))?;
+        conn.execute_batch("SELECT 1")
+            .context("running initial DuckDB connectivity check")?;
+        Ok(Self { path })
+    }
+
+    async fn ping(&self) -> Result<i32> {
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB events database for health check at {}",
+                self.path.display()
+            )
+        })?;
+        let mut stmt = conn
+            .prepare("SELECT 1")
+            .context("preparing DuckDB health query")?;
+        let mut rows = stmt.query([]).context("executing DuckDB health query")?;
+        let row = rows
+            .next()
+            .context("iterating DuckDB health query rows")?
+            .ok_or_else(|| anyhow!("DuckDB health query returned no rows"))?;
+        let value: i32 = row.get(0).context("reading DuckDB health query result")?;
+        Ok(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ClickHouseConfig {
     url: String,
@@ -370,6 +434,10 @@ impl DashboardDbConfig {
             password: self.backends.events.clickhouse_password.clone(),
         }
     }
+
+    fn duckdb_path(&self) -> PathBuf {
+        self.backends.events.duckdb_path_or_default()
+    }
 }
 
 pub(super) async fn init_dashboard_db() -> DashboardDbInit {
@@ -394,6 +462,7 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
         events_provider: cfg.backends.events.provider,
         postgres: None,
         clickhouse: None,
+        duckdb: None,
     };
     let mut relational_health = match pools.relational_provider {
         RelationalProvider::Postgres => BackendHealth::skip("not configured"),
@@ -401,7 +470,7 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
     };
     let mut events_health = match pools.events_provider {
         EventsProvider::ClickHouse => BackendHealth::skip("not configured"),
-        EventsProvider::DuckDb => BackendHealth::skip("provider duckdb is not wired yet"),
+        EventsProvider::DuckDb => BackendHealth::skip("not configured"),
     };
 
     if pools.relational_provider == RelationalProvider::Postgres {
@@ -431,6 +500,22 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
             Ok(pool) => match pool.ping().await {
                 Ok(value) => {
                     pools.clickhouse = Some(pool);
+                    events_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
+                }
+                Err(err) => {
+                    events_health = BackendHealth::fail(format!("{err:#}"));
+                }
+            },
+            Err(err) => {
+                events_health = BackendHealth::fail(format!("{err:#}"));
+            }
+        }
+    } else if pools.events_provider == EventsProvider::DuckDb {
+        let duckdb_path = cfg.duckdb_path();
+        match DuckDbPool::connect(duckdb_path) {
+            Ok(pool) => match pool.ping().await {
+                Ok(value) => {
+                    pools.duckdb = Some(pool);
                     events_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
                 }
                 Err(err) => {
