@@ -302,7 +302,7 @@ impl semantic::SemanticSummaryProvider for MockSemanticSummaryProvider {
     }
 
     fn prompt_version(&self) -> String {
-        "semantic-summary-v4::provider=mock::model=test".to_string()
+        "semantic-summary-v5::provider=mock::model=test".to_string()
     }
 }
 
@@ -533,21 +533,20 @@ fn semantic_features_build_inputs_from_mock_prestage_rows() {
 }
 
 #[test]
-fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
+fn semantic_features_synthesize_template_and_doc_comment_when_llm_missing() {
     let input = semantic_feature_input_named("getById");
     let output = build_semantic_feature_rows(&input, &semantic::NoopSemanticSummaryProvider);
 
-    assert_eq!(output.semantics.summary, "Fetch a user record by its id.");
+    assert_eq!(
+        output.semantics.summary,
+        "Method get by id. Fetch a user record by its id."
+    );
     assert_eq!(
         output.semantics.doc_comment_summary.as_deref(),
         Some("Fetch a user record by its id.")
     );
     assert_eq!(output.semantics.llm_summary, None);
     assert_eq!(output.semantics.template_summary, "Method get by id.");
-    assert_eq!(
-        output.semantics.summary_source,
-        semantic::SemanticSummarySource::DocComment
-    );
     assert_eq!(output.features.normalized_name, "get_by_id");
     assert!(
         output
@@ -558,7 +557,7 @@ fn semantic_features_prefer_doc_comment_summary_for_mock_method() {
 }
 
 #[test]
-fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
+fn semantic_features_synthesize_template_and_llm_when_doc_comment_missing() {
     let input = semantic_feature_input_named("normalizeEmail");
     let output = build_semantic_feature_rows(
         &input,
@@ -573,7 +572,7 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
 
     assert_eq!(
         output.semantics.summary,
-        "Normalizes email addresses before storage."
+        "Function normalize email. Normalizes email addresses before storage."
     );
     assert_eq!(output.semantics.doc_comment_summary, None);
     assert_eq!(
@@ -584,15 +583,11 @@ fn semantic_features_use_mock_llm_summary_when_doc_comment_missing() {
         output.semantics.template_summary,
         "Function normalize email."
     );
-    assert_eq!(
-        output.semantics.summary_source,
-        semantic::SemanticSummarySource::Llm
-    );
     assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
 }
 
 #[test]
-fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
+fn semantic_features_fall_back_to_template_when_no_detail_summary_is_usable() {
     let input = semantic_feature_input_named("normalizeEmail");
     let output = build_semantic_feature_rows(
         &input,
@@ -612,14 +607,10 @@ fn semantic_features_fall_back_to_template_when_mock_llm_summary_is_invalid() {
         output.semantics.template_summary,
         "Function normalize email."
     );
-    assert_eq!(
-        output.semantics.summary_source,
-        semantic::SemanticSummarySource::TemplateFallback
-    );
 }
 
 #[test]
-fn semantic_features_store_doc_comment_and_llm_candidates_together() {
+fn semantic_features_synthesize_template_and_llm_while_persisting_all_candidates() {
     let input = semantic_feature_input_named("getById");
     let output = build_semantic_feature_rows(
         &input,
@@ -643,13 +634,35 @@ fn semantic_features_store_doc_comment_and_llm_candidates_together() {
     assert_eq!(output.semantics.template_summary, "Method get by id.");
     assert_eq!(
         output.semantics.summary,
-        "Loads a user entity by id from storage."
-    );
-    assert_eq!(
-        output.semantics.summary_source,
-        semantic::SemanticSummarySource::Llm
+        "Method get by id. Loads a user entity by id from storage."
     );
     assert_eq!(output.semantics.source_model.as_deref(), Some("mock-llm"));
+}
+
+#[test]
+fn semantic_features_use_doc_comment_detail_when_llm_summary_is_invalid() {
+    let input = semantic_feature_input_named("getById");
+    let output = build_semantic_feature_rows(
+        &input,
+        &MockSemanticSummaryProvider {
+            candidate: Some(semantic::SemanticSummaryCandidate {
+                summary: "bad".to_string(),
+                confidence: 0.8,
+                source_model: Some("mock-llm".to_string()),
+            }),
+        },
+    );
+
+    assert_eq!(
+        output.semantics.summary,
+        "Method get by id. Fetch a user record by its id."
+    );
+    assert_eq!(
+        output.semantics.doc_comment_summary.as_deref(),
+        Some("Fetch a user record by its id.")
+    );
+    assert_eq!(output.semantics.llm_summary.as_deref(), Some("bad"));
+    assert_eq!(output.semantics.template_summary, "Method get by id.");
 }
 
 #[test]

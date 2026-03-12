@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Result, anyhow};
 
 use crate::engine::providers::llm::{LlmProvider, build_llm_provider};
@@ -187,25 +189,8 @@ impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SemanticSummarySource {
-    DocComment,
-    Llm,
-    TemplateFallback,
-}
-
-impl SemanticSummarySource {
-    pub(super) fn as_str(&self) -> &'static str {
-        match self {
-            Self::DocComment => "doc_comment",
-            Self::Llm => "llm",
-            Self::TemplateFallback => "template_fallback",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-// Stores all semantic summary candidates plus the currently preferred summary.
+// Stores all semantic summary candidates plus the synthesized summary used downstream.
 pub struct SymbolSemanticsRow {
     pub artefact_id: String,
     pub repo_id: String,
@@ -216,7 +201,6 @@ pub struct SymbolSemanticsRow {
     pub template_summary: String,
     pub summary: String,
     pub confidence: f32,
-    pub summary_source: SemanticSummarySource,
     pub source_model: Option<String>,
 }
 pub(super) fn build_semantics_row(
@@ -229,36 +213,28 @@ pub(super) fn build_semantics_row(
         .as_ref()
         .map(|candidate| normalize_summary_text(&candidate.summary))
         .filter(|summary| !summary.is_empty());
-    let llm_summary_valid = llm_summary
+    let valid_llm_summary = llm_summary
         .as_deref()
-        .map(is_valid_summary)
-        .unwrap_or(false);
+        .filter(|summary| is_valid_summary(summary))
+        .map(ensure_terminal_period);
     let template_summary = build_template_summary(input);
+    let llm_confidence = llm_candidate
+        .as_ref()
+        .map(|candidate| candidate.confidence.clamp(0.0, 1.0));
 
-    // Always persist all available summary candidates. The effective summary keeps a single
-    // semantic string for downstream consumers such as embeddings and clone reranking.
-    let (summary, confidence, summary_source) = if llm_summary_valid {
-        (
-            ensure_terminal_period(llm_summary.as_deref().unwrap_or_default()),
-            llm_candidate
-                .as_ref()
-                .map(|candidate| candidate.confidence.clamp(0.0, 1.0))
-                .unwrap_or(0.75_f32),
-            SemanticSummarySource::Llm,
-        )
-    } else if let Some(doc_summary) = doc_comment_summary.as_ref() {
-        (
-            doc_summary.clone(),
-            0.98_f32,
-            SemanticSummarySource::DocComment,
-        )
-    } else {
-        (
-            template_summary.clone(),
-            0.35_f32,
-            SemanticSummarySource::TemplateFallback,
-        )
-    };
+    // Persist every candidate, then synthesize a single canonical summary for Stage 3 and
+    // other downstream consumers. Template stays as stable scaffolding, LLM adds the current
+    // behavioral description when available, and doc comments remain a fallback/supporting hint.
+    let summary = synthesize_summary(
+        &template_summary,
+        doc_comment_summary.as_deref(),
+        valid_llm_summary.as_deref(),
+    );
+    let confidence = synthesize_summary_confidence(
+        doc_comment_summary.as_deref(),
+        valid_llm_summary.as_deref(),
+        llm_confidence,
+    );
 
     SymbolSemanticsRow {
         artefact_id: input.artefact_id.clone(),
@@ -270,7 +246,6 @@ pub(super) fn build_semantics_row(
         template_summary,
         summary,
         confidence,
-        summary_source,
         source_model: llm_candidate.and_then(|candidate| candidate.source_model),
     }
 }
@@ -296,6 +271,45 @@ fn extract_summary_from_doc_comment(comment: Option<&str>) -> Option<String> {
 
 pub(super) fn normalize_summary_text(summary: &str) -> String {
     summary.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn synthesize_summary(
+    template_summary: &str,
+    doc_comment_summary: Option<&str>,
+    llm_summary: Option<&str>,
+) -> String {
+    let detail_summary = llm_summary.or(doc_comment_summary);
+    let Some(detail_summary) = detail_summary else {
+        return template_summary.to_string();
+    };
+
+    if summaries_equivalent(template_summary, detail_summary) {
+        return ensure_terminal_period(detail_summary);
+    }
+
+    let template_sentence = ensure_terminal_period(template_summary);
+    let detail_sentence = ensure_terminal_period(detail_summary);
+    format!("{template_sentence} {detail_sentence}")
+}
+
+fn synthesize_summary_confidence(
+    doc_comment_summary: Option<&str>,
+    llm_summary: Option<&str>,
+    llm_confidence: Option<f32>,
+) -> f32 {
+    match llm_summary {
+        Some(llm_summary) => {
+            let mut confidence = llm_confidence.unwrap_or(0.75_f32).clamp(0.0, 1.0);
+            if let Some(doc_comment_summary) = doc_comment_summary
+                && summaries_have_meaningful_overlap(doc_comment_summary, llm_summary)
+            {
+                confidence = (confidence + 0.08_f32).min(0.95_f32);
+            }
+            confidence
+        }
+        None if doc_comment_summary.is_some() => 0.68_f32,
+        None => 0.35_f32,
+    }
 }
 
 fn build_template_summary(input: &SemanticFeatureInput) -> String {
@@ -339,6 +353,59 @@ fn is_valid_summary(summary: &str) -> bool {
         && trimmed.len() >= 12
         && trimmed.len() <= 200
         && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+fn summaries_equivalent(left: &str, right: &str) -> bool {
+    summary_identity(left) == summary_identity(right)
+}
+
+fn summary_identity(summary: &str) -> String {
+    normalize_summary_text(summary)
+        .trim_end_matches(['.', '!', '?'])
+        .to_ascii_lowercase()
+}
+
+fn summaries_have_meaningful_overlap(left: &str, right: &str) -> bool {
+    let left_tokens = summary_token_set(left);
+    let right_tokens = summary_token_set(right);
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return false;
+    }
+
+    let overlap = left_tokens.intersection(&right_tokens).count();
+    overlap * 2 >= left_tokens.len().min(right_tokens.len())
+}
+
+fn summary_token_set(summary: &str) -> BTreeSet<String> {
+    summary
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter_map(|token| {
+            let token = token.trim().to_ascii_lowercase();
+            if token.len() < 3 || is_summary_stop_word(&token) {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect()
+}
+
+fn is_summary_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "and"
+            | "before"
+            | "by"
+            | "for"
+            | "from"
+            | "its"
+            | "of"
+            | "the"
+            | "this"
+            | "to"
+            | "with"
+    )
 }
 
 fn summary_subject(input: &SemanticFeatureInput) -> String {
@@ -390,7 +457,7 @@ mod tests {
         .expect("disabled provider should build");
         assert_eq!(
             disabled.prompt_version(),
-            "semantic-summary-v4::provider=noop"
+            "semantic-summary-v5::provider=noop"
         );
 
         let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
@@ -457,6 +524,56 @@ mod tests {
         let input = sample_input("method", "getById");
 
         assert_eq!(build_template_summary(&input), "Method get by id.");
+    }
+
+    #[test]
+    fn semantic_features_synthesize_summary_combines_template_with_detail_sentence() {
+        let summary = synthesize_summary(
+            "Method get by id.",
+            Some("Fetch a user record by its id."),
+            Some("Loads a user entity by id from storage."),
+        );
+
+        assert_eq!(
+            summary,
+            "Method get by id. Loads a user entity by id from storage."
+        );
+    }
+
+    #[test]
+    fn semantic_features_synthesize_summary_uses_doc_comment_when_llm_missing() {
+        let summary = synthesize_summary(
+            "Function normalize email.",
+            Some("Normalize email addresses before persistence."),
+            None,
+        );
+
+        assert_eq!(
+            summary,
+            "Function normalize email. Normalize email addresses before persistence."
+        );
+    }
+
+    #[test]
+    fn semantic_features_synthesize_summary_avoids_duplicate_template_and_detail() {
+        let summary = synthesize_summary(
+            "Function normalize email.",
+            Some("Function normalize email."),
+            None,
+        );
+
+        assert_eq!(summary, "Function normalize email.");
+    }
+
+    #[test]
+    fn semantic_features_synthesize_summary_confidence_boosts_when_doc_and_llm_align() {
+        let confidence = synthesize_summary_confidence(
+            Some("Loads a user record by id from storage."),
+            Some("Loads a user entity by id from storage."),
+            Some(0.80),
+        );
+
+        assert_eq!(confidence, 0.88);
     }
 
     #[test]

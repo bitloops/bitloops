@@ -18,13 +18,13 @@ use self::common::{build_body_tokens, normalize_name, normalize_repo_path, norma
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
-    SemanticSummaryProviderConfig, SemanticSummarySource, build_semantic_summary_provider,
+    SemanticSummaryProviderConfig, build_semantic_summary_provider,
     resolve_semantic_summary_endpoint,
 };
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
 const SYMBOL_FEATURES_PROMPT_VERSION: &str = "symbol-features-v2";
-const SEMANTIC_SUMMARY_PROMPT_VERSION: &str = "semantic-summary-v4";
+const SEMANTIC_SUMMARY_PROMPT_VERSION: &str = "semantic-summary-v5";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -124,6 +124,7 @@ pub fn build_semantic_feature_inputs_from_artefacts(
 
     artefacts
         .iter()
+        .filter(|row| row.canonical_kind != "import")
         .map(|row| {
             build_semantic_feature_input_from_artefact(row, blob_content, &by_id, &child_kinds)
         })

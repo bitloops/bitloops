@@ -132,9 +132,9 @@ fn build_persist_rows_sql(rows: &SemanticFeatureRows) -> Result<String> {
     );
 
     Ok(format!(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, summary_source, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, '{summary_source}', {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, summary_source = EXCLUDED.summary_source, source_model = EXCLUDED.source_model, generated_at = now(); \
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now(); \
 INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, local_relationships, context_tokens) \
 VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {local_relationships}, {context_tokens}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
@@ -148,7 +148,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         template_summary = esc_pg(&semantics.template_summary),
         summary = esc_pg(&semantics.summary),
         confidence = semantics.confidence,
-        summary_source = semantics.summary_source.as_str(),
         source_model = source_model_expr,
         features_artefact_id = esc_pg(&features.artefact_id),
         features_repo_id = esc_pg(&features.repo_id),
@@ -172,7 +171,7 @@ mod tests {
     use serde_json::json;
 
     use super::super::features::SymbolFeaturesRow;
-    use super::super::semantic::{SemanticSummarySource, SymbolSemanticsRow};
+    use super::super::semantic::SymbolSemanticsRow;
 
     fn sample_rows() -> SemanticFeatureRows {
         SemanticFeatureRows {
@@ -180,13 +179,12 @@ mod tests {
                 artefact_id: "artefact'1".to_string(),
                 repo_id: "repo-1".to_string(),
                 blob_sha: "blob-1".to_string(),
-                prompt_version: "semantic-summary-v4::provider=noop".to_string(),
+                prompt_version: "semantic-summary-v5::provider=noop".to_string(),
                 doc_comment_summary: Some("Fetches O'Brien by id.".to_string()),
                 llm_summary: Some("Loads a user by id".to_string()),
                 template_summary: "Method get by id.".to_string(),
-                summary: "Loads a user by id.".to_string(),
+                summary: "Method get by id. Loads a user by id.".to_string(),
                 confidence: 0.82,
-                summary_source: SemanticSummarySource::Llm,
                 source_model: Some("mock:model".to_string()),
             },
             features: SymbolFeaturesRow {
@@ -242,7 +240,6 @@ mod tests {
         assert!(sql.contains("doc_comment_summary"));
         assert!(sql.contains("Fetches O''Brien by id."));
         assert!(sql.contains("'[\"get\",\"id\"]'::jsonb"));
-        assert!(sql.contains("summary_source"));
     }
 
     #[test]

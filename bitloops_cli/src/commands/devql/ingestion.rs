@@ -198,7 +198,6 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
     confidence DOUBLE PRECISION NOT NULL,
-    summary_source TEXT NOT NULL,
     source_model TEXT,
     generated_at TIMESTAMPTZ DEFAULT now()
 );
