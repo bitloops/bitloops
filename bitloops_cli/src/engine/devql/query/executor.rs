@@ -230,8 +230,8 @@ async fn build_postgres_artefacts_query(
     }
 
     let sql = format!(
-        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.modifiers, a.docstring, a.blob_sha, a.symbol_fqn, a.content_hash, a.created_at \
-FROM artefacts a \
+        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language_kind, a.language, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.blob_sha, a.symbol_fqn, a.content_hash, {} \
+FROM {} a \
 WHERE {} \
 ORDER BY a.path, a.start_line \
 LIMIT {}",

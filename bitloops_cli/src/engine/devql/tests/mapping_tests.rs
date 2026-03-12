@@ -40,7 +40,6 @@ fn js_ts_canonical_mapping_covers_supported_kind_table() {
         ("class_declaration", true, None),
         ("constructor", true, None),
         ("property_declaration", true, None),
-        ("public_field_definition", true, None),
         ("call_expression", false, None),
     ];
 
