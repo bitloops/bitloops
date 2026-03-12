@@ -1,5 +1,6 @@
 pub mod chunking;
 pub mod claude_code;
+pub mod codex;
 pub mod cursor;
 pub mod gemini_cli;
 pub mod open_code;

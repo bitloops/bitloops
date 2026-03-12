@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::agent::claude_code::transcript as claude_transcript;
 use crate::engine::agent::{
-    AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE, TokenUsage,
+    AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE, TokenUsage,
     canonical_agent_key,
 };
 use crate::engine::paths;

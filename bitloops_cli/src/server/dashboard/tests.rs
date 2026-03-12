@@ -565,6 +565,7 @@ fn dashboard_user_falls_back_to_name_key_when_email_missing() {
 #[test]
 fn canonical_agent_key_normalizes_to_kebab_case() {
     assert_eq!(canonical_agent_key("Claude Code"), "claude-code");
+    assert_eq!(canonical_agent_key("Codex"), "codex");
     assert_eq!(canonical_agent_key(" Gemini CLI "), "gemini-cli");
     assert_eq!(canonical_agent_key("cursor"), "cursor");
     assert_eq!(canonical_agent_key(""), "");

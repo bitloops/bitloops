@@ -347,15 +347,6 @@ fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
-fn normalize_session_id(session_id: &str) -> String {
-    let trimmed = session_id.trim();
-    if trimmed.is_empty() {
-        UNKNOWN_SESSION_ID.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 /// Returns current time formatted as RFC 3339 (e.g. `2024-01-15T10:30:00Z`).
 fn now_rfc3339() -> String {
     // Use std::time to avoid adding a chrono dependency for now.
@@ -478,4 +469,3 @@ fn calculate_stop_token_usage(
     let subagents_dir = subagents_dir_for_session(transcript_path, session_id);
     claude_transcript::calculate_total_token_usage(transcript_path, start_line, &subagents_dir).ok()
 }
-
