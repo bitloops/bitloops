@@ -19,6 +19,12 @@ ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_s
     postgres_exec(pg_client, &sql).await
 }
 
+fn sql_nullable_text(value: Option<&str>) -> String {
+    value
+        .map(|text| format!("'{}'", esc_pg(text)))
+        .unwrap_or_else(|| "NULL".to_string())
+}
+
 async fn upsert_file_artefact_row(
     cfg: &DevqlConfig,
     pg_client: &tokio_postgres::Client,
@@ -98,7 +104,12 @@ async fn upsert_language_artefacts(
         let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let content_hash = deterministic_uuid(&format!(
             "{}|{}|{}|{}|{}|{}",
-            blob_sha, path, item.canonical_kind, item.name, item.start_line, item.end_line
+            blob_sha,
+            path,
+            item.canonical_kind.as_deref().unwrap_or("<null>"),
+            item.name,
+            item.start_line,
+            item.end_line
         ));
         let parent_artefact_id = item
             .parent_symbol_fqn
@@ -107,9 +118,10 @@ async fn upsert_language_artefacts(
             .cloned()
             .unwrap_or_else(|| file_artefact.artefact_id.clone());
 
+        let canonical_kind_sql = sql_nullable_text(item.canonical_kind.as_deref());
         let sql = format!(
             "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, {}, '{}', '{}') \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', {}, {}, {}, {}, '{}', '{}') \
 ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
             esc_pg(&artefact_id),
             esc_pg(&symbol_id),
@@ -117,7 +129,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
             esc_pg(blob_sha),
             esc_pg(path),
             esc_pg(&file_artefact.language),
-            esc_pg(&item.canonical_kind),
+            canonical_kind_sql,
             esc_pg(&item.language_kind),
             esc_pg(&item.symbol_fqn),
             esc_pg(&parent_artefact_id),

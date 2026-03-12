@@ -35,7 +35,7 @@ fn semantic_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option
     deterministic_uuid(&format!(
         "{}|{}|{}|{}|{}|{}",
         source_path_from_symbol_fqn(&item.symbol_fqn),
-        item.canonical_kind,
+        item.canonical_kind.as_deref().unwrap_or("<null>"),
         item.language_kind,
         parent_symbol_id.unwrap_or(""),
         semantic_name_for_artefact(item),

@@ -96,36 +96,37 @@ class Service extends BaseService {
     let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
 
     assert!(artefacts.iter().any(|artefact| {
-        artefact.language_kind == "import_statement" && artefact.canonical_kind == "import"
+        artefact.language_kind == "import_statement"
+            && artefact.canonical_kind.as_deref() == Some("import")
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "interface_declaration"
-            && artefact.canonical_kind == "interface"
+            && artefact.canonical_kind.as_deref() == Some("interface")
             && artefact.name == "User"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "type_alias_declaration"
-            && artefact.canonical_kind == "type"
+            && artefact.canonical_kind.as_deref() == Some("type")
             && artefact.name == "UserId"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "class_declaration"
-            && artefact.canonical_kind == "language_only"
+            && artefact.canonical_kind.is_none()
             && artefact.name == "Service"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "constructor"
-            && artefact.canonical_kind == "language_only"
+            && artefact.canonical_kind.is_none()
             && artefact.name == "constructor"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "method_definition"
-            && artefact.canonical_kind == "method"
+            && artefact.canonical_kind.as_deref() == Some("method")
             && artefact.name == "run"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "function_declaration"
-            && artefact.canonical_kind == "function"
+            && artefact.canonical_kind.as_deref() == Some("function")
             && artefact.name == "normalizeId"
     }));
     assert!(edges.iter().any(|edge| {
@@ -228,29 +229,30 @@ pub use self::helper;
     let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
 
     assert!(artefacts.iter().any(|artefact| {
-        artefact.language_kind == "use_declaration" && artefact.canonical_kind == "import"
+        artefact.language_kind == "use_declaration"
+            && artefact.canonical_kind.as_deref() == Some("import")
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "struct_item"
-            && artefact.canonical_kind == "language_only"
+            && artefact.canonical_kind.is_none()
             && artefact.name == "PgRepository"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "trait_item"
-            && artefact.canonical_kind == "interface"
+            && artefact.canonical_kind.as_deref() == Some("interface")
             && artefact.name == "Repository"
     }));
     assert!(artefacts.iter().any(|artefact| {
-        artefact.language_kind == "impl_item" && artefact.canonical_kind == "language_only"
+        artefact.language_kind == "impl_item" && artefact.canonical_kind.is_none()
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "function_item"
-            && artefact.canonical_kind == "function"
+            && artefact.canonical_kind.as_deref() == Some("function")
             && artefact.name == "helper"
     }));
     assert!(artefacts.iter().any(|artefact| {
         artefact.language_kind == "function_item"
-            && artefact.canonical_kind == "method"
+            && artefact.canonical_kind.as_deref() == Some("method")
             && artefact.name == "load"
     }));
     assert!(edges.iter().any(|edge| {

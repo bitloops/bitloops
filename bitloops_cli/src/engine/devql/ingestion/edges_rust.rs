@@ -18,7 +18,7 @@ fn extract_rust_dependency_edges(
     let mut edges = Vec::new();
     let rust_callables = artefacts
         .iter()
-        .filter(|a| a.canonical_kind == "function" || a.canonical_kind == "method")
+        .filter(|a| matches!(a.canonical_kind.as_deref(), Some("function") | Some("method")))
         .cloned()
         .collect::<Vec<_>>();
     let mut name_to_fqn = HashMap::new();

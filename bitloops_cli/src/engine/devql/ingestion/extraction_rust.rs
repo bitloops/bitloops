@@ -49,14 +49,14 @@ fn collect_rust_nodes_recursive(
         if name.is_empty() {
             return;
         }
-        let Some(canonical_kind) = rust_canonical_kind(language_kind, inside_impl) else {
+        if !rust_supports_language_kind(language_kind) {
             return;
-        };
+        }
         if !seen.insert((language_kind.to_string(), name.clone(), start_line)) {
             return;
         }
         out.push(JsTsArtefact {
-            canonical_kind: canonical_kind.to_string(),
+            canonical_kind: rust_canonical_kind(language_kind, inside_impl).map(str::to_string),
             language_kind: language_kind.to_string(),
             name,
             symbol_fqn,

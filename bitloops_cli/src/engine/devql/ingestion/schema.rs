@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS artefacts (
     blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
     language TEXT NOT NULL,
-    canonical_kind TEXT NOT NULL,
+    canonical_kind TEXT,
     language_kind TEXT,
     symbol_fqn TEXT,
     parent_artefact_id TEXT,
@@ -172,6 +172,7 @@ ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS signature TEXT;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS symbol_id TEXT;
+ALTER TABLE artefacts ALTER COLUMN canonical_kind DROP NOT NULL;
 UPDATE artefacts
 SET start_byte = 0
 WHERE start_byte IS NULL;

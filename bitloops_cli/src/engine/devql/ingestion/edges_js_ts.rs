@@ -19,7 +19,7 @@ fn extract_js_ts_dependency_edges(
 
     let callables = artefacts
         .iter()
-        .filter(|a| a.canonical_kind == "function" || a.canonical_kind == "method")
+        .filter(|a| matches!(a.canonical_kind.as_deref(), Some("function") | Some("method")))
         .cloned()
         .collect::<Vec<_>>();
     let mut callable_name_to_fqn: HashMap<String, String> = HashMap::new();
@@ -144,7 +144,7 @@ fn extract_js_ts_dependency_edges(
     let js_lang: tree_sitter::Language = tree_sitter_javascript::language();
     let callables = artefacts
         .iter()
-        .filter(|a| a.canonical_kind == "function" || a.canonical_kind == "method")
+        .filter(|a| matches!(a.canonical_kind.as_deref(), Some("function") | Some("method")))
         .cloned()
         .collect::<Vec<_>>();
     let (type_targets, value_targets) = js_ts_reference_target_maps(artefacts);

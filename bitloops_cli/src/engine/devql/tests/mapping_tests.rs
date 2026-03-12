@@ -1,6 +1,8 @@
 use super::*;
 
-const LANGUAGE_ONLY_CANONICAL_KIND: &str = "language_only";
+fn canonical_kind(artefact: &JsTsArtefact) -> Option<&str> {
+    artefact.canonical_kind.as_deref()
+}
 
 fn artefact_by_language_kind<'a>(
     artefacts: &'a [JsTsArtefact],
@@ -26,22 +28,23 @@ fn artefact_by_name_and_language_kind<'a>(
 #[test]
 fn js_ts_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        ("function_declaration", Some("function")),
-        ("method_definition", Some("method")),
-        ("interface_declaration", Some("interface")),
-        ("type_alias_declaration", Some("type")),
-        ("enum_declaration", Some("enum")),
-        ("variable_declarator", Some("variable")),
-        ("import_statement", Some("import")),
-        ("module_declaration", Some("module")),
-        ("internal_module", Some("module")),
-        ("class_declaration", Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        ("constructor", Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        ("property_declaration", Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        ("call_expression", None),
+        ("function_declaration", true, Some("function")),
+        ("method_definition", true, Some("method")),
+        ("interface_declaration", true, Some("interface")),
+        ("type_alias_declaration", true, Some("type")),
+        ("enum_declaration", true, Some("enum")),
+        ("variable_declarator", true, Some("variable")),
+        ("import_statement", true, Some("import")),
+        ("module_declaration", true, Some("module")),
+        ("internal_module", true, Some("module")),
+        ("class_declaration", true, None),
+        ("constructor", true, None),
+        ("property_declaration", true, None),
+        ("call_expression", false, None),
     ];
 
-    for (language_kind, canonical_kind) in expected {
+    for (language_kind, supported, canonical_kind) in expected {
+        assert_eq!(js_ts_supports_language_kind(language_kind), supported);
         assert_eq!(js_ts_canonical_kind(language_kind), canonical_kind);
     }
 }
@@ -72,55 +75,53 @@ export function helper() {
     let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
 
     let import = artefact_by_language_kind(&artefacts, "import_statement");
-    assert_eq!(import.canonical_kind, "import");
+    assert_eq!(canonical_kind(import), Some("import"));
 
     let interface =
         artefact_by_name_and_language_kind(&artefacts, "interface_declaration", "Contract");
-    assert_eq!(interface.canonical_kind, "interface");
+    assert_eq!(canonical_kind(interface), Some("interface"));
 
     let type_alias =
         artefact_by_name_and_language_kind(&artefacts, "type_alias_declaration", "Identifier");
-    assert_eq!(type_alias.canonical_kind, "type");
+    assert_eq!(canonical_kind(type_alias), Some("type"));
 
     let variable = artefact_by_name_and_language_kind(&artefacts, "variable_declarator", "API_URL");
-    assert_eq!(variable.canonical_kind, "variable");
+    assert_eq!(canonical_kind(variable), Some("variable"));
 
     let function = artefact_by_name_and_language_kind(&artefacts, "function_declaration", "helper");
-    assert_eq!(function.canonical_kind, "function");
+    assert_eq!(canonical_kind(function), Some("function"));
 
     let constructor = artefact_by_name_and_language_kind(&artefacts, "constructor", "constructor");
-    assert_eq!(constructor.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(constructor), None);
 
     let method = artefact_by_name_and_language_kind(&artefacts, "method_definition", "run");
-    assert_eq!(method.canonical_kind, "method");
+    assert_eq!(canonical_kind(method), Some("method"));
 
     let class = artefact_by_name_and_language_kind(&artefacts, "class_declaration", "Service");
-    assert_eq!(class.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(class), None);
 }
 
 #[test]
 fn rust_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        (("function_item", false), Some("function")),
-        (("function_item", true), Some("method")),
-        (("trait_item", false), Some("interface")),
-        (("type_item", false), Some("type")),
-        (("enum_item", false), Some("enum")),
-        (("use_declaration", false), Some("import")),
-        (("mod_item", false), Some("module")),
-        (("let_declaration", false), Some("variable")),
-        (("impl_item", false), Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        (("struct_item", false), Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        (("const_item", false), Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        (("static_item", false), Some(LANGUAGE_ONLY_CANONICAL_KIND)),
-        (
-            ("macro_definition", false),
-            Some(LANGUAGE_ONLY_CANONICAL_KIND),
-        ),
-        (("call_expression", false), None),
+        (("function_item", false), true, Some("function")),
+        (("function_item", true), true, Some("method")),
+        (("trait_item", false), true, Some("interface")),
+        (("type_item", false), true, Some("type")),
+        (("enum_item", false), true, Some("enum")),
+        (("use_declaration", false), true, Some("import")),
+        (("mod_item", false), true, Some("module")),
+        (("let_declaration", false), true, Some("variable")),
+        (("impl_item", false), true, None),
+        (("struct_item", false), true, None),
+        (("const_item", false), true, None),
+        (("static_item", false), true, None),
+        (("macro_definition", false), true, None),
+        (("call_expression", false), false, None),
     ];
 
-    for ((language_kind, inside_impl), canonical_kind) in expected {
+    for ((language_kind, inside_impl), supported, canonical_kind) in expected {
+        assert_eq!(rust_supports_language_kind(language_kind), supported);
         assert_eq!(
             rust_canonical_kind(language_kind, inside_impl),
             canonical_kind
@@ -157,19 +158,19 @@ fn run() {}
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
 
     let import = artefact_by_language_kind(&artefacts, "use_declaration");
-    assert_eq!(import.canonical_kind, "import");
+    assert_eq!(canonical_kind(import), Some("import"));
 
     let module = artefact_by_name_and_language_kind(&artefacts, "mod_item", "api");
-    assert_eq!(module.canonical_kind, "module");
+    assert_eq!(canonical_kind(module), Some("module"));
 
     let type_item = artefact_by_name_and_language_kind(&artefacts, "type_item", "UserId");
-    assert_eq!(type_item.canonical_kind, "type");
+    assert_eq!(canonical_kind(type_item), Some("type"));
 
     let enum_item = artefact_by_name_and_language_kind(&artefacts, "enum_item", "Role");
-    assert_eq!(enum_item.canonical_kind, "enum");
+    assert_eq!(canonical_kind(enum_item), Some("enum"));
 
     let trait_item = artefact_by_name_and_language_kind(&artefacts, "trait_item", "Repository");
-    assert_eq!(trait_item.canonical_kind, "interface");
+    assert_eq!(canonical_kind(trait_item), Some("interface"));
 
     let free_function = artefacts
         .iter()
@@ -179,19 +180,19 @@ fn run() {}
                 && artefact.parent_symbol_fqn.is_none()
         })
         .expect("missing free function artefact");
-    assert_eq!(free_function.canonical_kind, "function");
+    assert_eq!(canonical_kind(free_function), Some("function"));
 
     let struct_item = artefact_by_name_and_language_kind(&artefacts, "struct_item", "User");
-    assert_eq!(struct_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(struct_item), None);
 
     let impl_item = artefact_by_language_kind(&artefacts, "impl_item");
-    assert_eq!(impl_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(impl_item), None);
 
     let const_item = artefact_by_name_and_language_kind(&artefacts, "const_item", "LIMIT");
-    assert_eq!(const_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(const_item), None);
 
     let static_item = artefact_by_name_and_language_kind(&artefacts, "static_item", "NAME");
-    assert_eq!(static_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(canonical_kind(static_item), None);
 }
 
 #[test]
@@ -210,13 +211,16 @@ impl Repository for User {
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
 
     let trait_item = artefact_by_name_and_language_kind(&artefacts, "trait_item", "Repository");
-    assert_eq!(trait_item.canonical_kind, "interface");
+    assert_eq!(canonical_kind(trait_item), Some("interface"));
 
     let save_callables = artefacts
         .iter()
         .filter(|artefact| {
             artefact.name == "save"
-                && (artefact.canonical_kind == "function" || artefact.canonical_kind == "method")
+                && matches!(
+                    artefact.canonical_kind.as_deref(),
+                    Some("function") | Some("method")
+                )
         })
         .collect::<Vec<_>>();
 
@@ -225,7 +229,7 @@ impl Repository for User {
         1,
         "trait signatures should not be emitted as standalone callable artefacts"
     );
-    assert_eq!(save_callables[0].canonical_kind, "method");
+    assert_eq!(canonical_kind(save_callables[0]), Some("method"));
     assert!(
         save_callables[0]
             .parent_symbol_fqn

@@ -1,5 +1,3 @@
-const LANGUAGE_ONLY_CANONICAL_KIND: &str = "language_only";
-
 fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
     match language_kind {
         "function_declaration" => Some("function"),
@@ -10,11 +8,26 @@ fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
         "variable_declarator" => Some("variable"),
         "import_statement" => Some("import"),
         "module_declaration" | "internal_module" => Some("module"),
-        "class_declaration" | "constructor" | "property_declaration" => {
-            Some(LANGUAGE_ONLY_CANONICAL_KIND)
-        }
         _ => None,
     }
+}
+
+fn js_ts_supports_language_kind(language_kind: &str) -> bool {
+    matches!(
+        language_kind,
+        "function_declaration"
+            | "method_definition"
+            | "interface_declaration"
+            | "type_alias_declaration"
+            | "enum_declaration"
+            | "variable_declarator"
+            | "import_statement"
+            | "module_declaration"
+            | "internal_module"
+            | "class_declaration"
+            | "constructor"
+            | "property_declaration"
+    )
 }
 
 fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'static str> {
@@ -26,9 +39,24 @@ fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'stati
         "use_declaration" => Some("import"),
         "mod_item" => Some("module"),
         "let_declaration" => Some("variable"),
-        "impl_item" | "struct_item" | "const_item" | "static_item" | "macro_definition" => {
-            Some(LANGUAGE_ONLY_CANONICAL_KIND)
-        }
         _ => None,
     }
+}
+
+fn rust_supports_language_kind(language_kind: &str) -> bool {
+    matches!(
+        language_kind,
+        "function_item"
+            | "trait_item"
+            | "type_item"
+            | "enum_item"
+            | "use_declaration"
+            | "mod_item"
+            | "let_declaration"
+            | "impl_item"
+            | "struct_item"
+            | "const_item"
+            | "static_item"
+            | "macro_definition"
+    )
 }

@@ -353,26 +353,26 @@ export function greet(name: string) {
     let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
     let kinds = artefacts
         .iter()
-        .map(|a| a.canonical_kind.as_str())
+        .map(|a| a.canonical_kind.as_deref())
         .collect::<Vec<_>>();
 
-    assert!(kinds.contains(&"import"));
-    assert!(kinds.contains(&"interface"));
-    assert!(kinds.contains(&"type"));
-    assert!(kinds.contains(&LANGUAGE_ONLY_CANONICAL_KIND));
-    assert!(kinds.contains(&"method"));
-    assert!(kinds.contains(&"variable"));
-    assert!(kinds.contains(&"function"));
+    assert!(kinds.contains(&Some("import")));
+    assert!(kinds.contains(&Some("interface")));
+    assert!(kinds.contains(&Some("type")));
+    assert!(kinds.contains(&None));
+    assert!(kinds.contains(&Some("method")));
+    assert!(kinds.contains(&Some("variable")));
+    assert!(kinds.contains(&Some("function")));
 
     let class = artefacts
         .iter()
         .find(|a| a.language_kind == "class_declaration" && a.name == "Service")
         .expect("expected class artefact");
-    assert_eq!(class.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(class.canonical_kind, None);
 
     let method = artefacts
         .iter()
-        .find(|a| a.canonical_kind == "method" && a.name == "run")
+        .find(|a| a.canonical_kind.as_deref() == Some("method") && a.name == "run")
         .expect("expected class method artefact");
     assert_eq!(
         method.parent_symbol_fqn.as_deref(),
@@ -410,7 +410,7 @@ function boot() {
         .iter()
         .find(|a| a.language_kind == "constructor" && a.name == "constructor")
         .expect("expected constructor artefact");
-    assert_eq!(constructor.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(constructor.canonical_kind, None);
     assert_eq!(
         constructor.parent_symbol_fqn.as_deref(),
         Some("src/sample.ts::Service")
@@ -751,31 +751,31 @@ fn run() {
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
     let kinds = artefacts
         .iter()
-        .map(|a| a.canonical_kind.as_str())
+        .map(|a| a.canonical_kind.as_deref())
         .collect::<Vec<_>>();
-    assert!(kinds.contains(&"import"));
-    assert!(kinds.contains(&LANGUAGE_ONLY_CANONICAL_KIND));
-    assert!(kinds.contains(&"interface"));
-    assert!(kinds.contains(&"method"));
-    assert!(kinds.contains(&"function"));
+    assert!(kinds.contains(&Some("import")));
+    assert!(kinds.contains(&None));
+    assert!(kinds.contains(&Some("interface")));
+    assert!(kinds.contains(&Some("method")));
+    assert!(kinds.contains(&Some("function")));
 
     let trait_item = artefacts
         .iter()
         .find(|a| a.language_kind == "trait_item" && a.name == "DoThing")
         .expect("expected trait artefact");
-    assert_eq!(trait_item.canonical_kind, "interface");
+    assert_eq!(trait_item.canonical_kind.as_deref(), Some("interface"));
 
     let struct_item = artefacts
         .iter()
         .find(|a| a.language_kind == "struct_item" && a.name == "User")
         .expect("expected struct artefact");
-    assert_eq!(struct_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(struct_item.canonical_kind, None);
 
     let impl_item = artefacts
         .iter()
         .find(|a| a.language_kind == "impl_item")
         .expect("expected impl artefact");
-    assert_eq!(impl_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(impl_item.canonical_kind, None);
 }
 
 #[test]
@@ -1066,7 +1066,7 @@ fn extract_rust_dependency_edges_emit_macro_calls_with_macro_metadata() {
 #[test]
 fn semantic_symbol_id_is_stable_for_positional_impl_names() {
     let original = JsTsArtefact {
-        canonical_kind: LANGUAGE_ONLY_CANONICAL_KIND.to_string(),
+        canonical_kind: None,
         language_kind: "impl_item".to_string(),
         name: "impl@12".to_string(),
         symbol_fqn: "src/lib.rs::impl@12".to_string(),
@@ -1172,11 +1172,15 @@ impl Service for Repo {
 
     let original_method = original_artefacts
         .iter()
-        .find(|artefact| artefact.canonical_kind == "method" && artefact.name == "run")
+        .find(|artefact| {
+            artefact.canonical_kind.as_deref() == Some("method") && artefact.name == "run"
+        })
         .expect("expected run method in original ingest");
     let moved_method = moved_artefacts
         .iter()
-        .find(|artefact| artefact.canonical_kind == "method" && artefact.name == "run")
+        .find(|artefact| {
+            artefact.canonical_kind.as_deref() == Some("method") && artefact.name == "run"
+        })
         .expect("expected run method in moved ingest");
 
     let original_method_symbol_id =

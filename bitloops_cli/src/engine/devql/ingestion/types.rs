@@ -37,7 +37,7 @@ struct FunctionArtefact {
 
 #[derive(Debug, Clone)]
 struct JsTsArtefact {
-    canonical_kind: String,
+    canonical_kind: Option<String>,
     language_kind: String,
     name: String,
     symbol_fqn: String,

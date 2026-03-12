@@ -60,14 +60,14 @@ fn collect_js_ts_nodes_recursive(
         if name.is_empty() {
             return;
         }
-        let Some(canonical_kind) = js_ts_canonical_kind(language_kind) else {
+        if !js_ts_supports_language_kind(language_kind) {
             return;
-        };
+        }
         if !seen.insert((language_kind.to_string(), name.clone(), start_line)) {
             return;
         }
         out.push(JsTsArtefact {
-            canonical_kind: canonical_kind.to_string(),
+            canonical_kind: js_ts_canonical_kind(language_kind).map(str::to_string),
             language_kind: language_kind.to_string(),
             name,
             symbol_fqn,
@@ -119,9 +119,7 @@ fn collect_js_ts_nodes_recursive(
                                         } else {
                                             "method_definition"
                                         };
-                                        if let Some(canonical_kind) =
-                                            js_ts_canonical_kind(language_kind)
-                                        {
+                                        if js_ts_supports_language_kind(language_kind) {
                                             if !seen.insert((
                                                 language_kind.to_string(),
                                                 method_name.to_string(),
@@ -130,7 +128,8 @@ fn collect_js_ts_nodes_recursive(
                                                 continue;
                                             }
                                             out.push(JsTsArtefact {
-                                                canonical_kind: canonical_kind.to_string(),
+                                                canonical_kind: js_ts_canonical_kind(language_kind)
+                                                    .map(str::to_string),
                                                 language_kind: language_kind.to_string(),
                                                 name: method_name.to_string(),
                                                 symbol_fqn: format!("{class_fqn}::{method_name}"),
