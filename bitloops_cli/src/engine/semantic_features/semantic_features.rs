@@ -124,15 +124,10 @@ pub fn build_semantic_feature_inputs_from_artefacts(
 
     artefacts
         .iter()
-        .filter(|row| artefact_supports_semantic_enrichment(row))
         .map(|row| {
             build_semantic_feature_input_from_artefact(row, blob_content, &by_id, &child_kinds)
         })
         .collect()
-}
-
-fn artefact_supports_semantic_enrichment(row: &PreStageArtefactRow) -> bool {
-    row.canonical_kind != "import" && row.language_kind != "import"
 }
 
 fn build_child_kind_index(artefacts: &[PreStageArtefactRow]) -> HashMap<String, Vec<String>> {
