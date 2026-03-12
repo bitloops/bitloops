@@ -18,14 +18,14 @@ async fn upsert_semantic_feature_rows(
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
 
     for input in inputs {
-        let rows = semantic::build_semantic_feature_rows(input, summary_provider);
+        let next_input_hash = semantic::build_semantic_feature_input_hash(input, summary_provider);
         let state = load_semantic_index_state(relational_store, &input.artefact_id).await?;
-        if !semantic::semantic_features_require_reindex(&state, &rows.semantic_features_input_hash)
-        {
+        if !semantic::semantic_features_require_reindex(&state, &next_input_hash) {
             stats.skipped += 1;
             continue;
         }
 
+        let rows = semantic::build_semantic_feature_rows(input, summary_provider);
         persist_semantic_feature_rows(relational_store, &rows).await?;
         stats.upserted += 1;
     }
@@ -104,38 +104,14 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     let semantics = &rows.semantics;
     let features = &rows.features;
 
-    let doc_comment_summary_expr = match semantics.doc_comment_summary.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let llm_summary_expr = match semantics.llm_summary.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let source_model_expr = match semantics.source_model.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let normalized_signature_expr = match features.normalized_signature.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let parent_kind_expr = match features.parent_kind.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
-    let identifier_tokens_expr = format!(
-        "'{}'",
-        esc_pg(&serde_json::to_string(&features.identifier_tokens)?)
-    );
-    let body_tokens_expr = format!(
-        "'{}'",
-        esc_pg(&serde_json::to_string(&features.normalized_body_tokens)?)
-    );
-    let context_tokens_expr = format!(
-        "'{}'",
-        esc_pg(&serde_json::to_string(&features.context_tokens)?)
-    );
+    let doc_comment_summary_expr = sql_optional_string(semantics.doc_comment_summary.as_deref());
+    let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
+    let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
+    let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
+    let identifier_tokens_expr = sql_json_string(&features.identifier_tokens)?;
+    let body_tokens_expr = sql_json_string(&features.normalized_body_tokens)?;
+    let context_tokens_expr = sql_json_string(&features.context_tokens)?;
 
     Ok(format!(
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
@@ -165,6 +141,18 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         parent_kind = parent_kind_expr,
         context_tokens = context_tokens_expr,
     ))
+}
+
+fn sql_string(value: &str) -> String {
+    format!("'{}'", esc_pg(value))
+}
+
+fn sql_optional_string(value: Option<&str>) -> String {
+    value.map(sql_string).unwrap_or_else(|| "NULL".to_string())
+}
+
+fn sql_json_string<T: serde::Serialize>(value: &T) -> Result<String> {
+    Ok(sql_string(&serde_json::to_string(value)?))
 }
 
 #[cfg(test)]

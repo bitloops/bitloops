@@ -20,6 +20,7 @@ pub use self::semantic::{
 };
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
+const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v1";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -191,7 +192,7 @@ pub fn build_semantic_feature_rows(
 ) -> SemanticFeatureRows {
     let semantics = build_semantics_row(input, summary_provider);
     let features = build_features_row(input);
-    let semantic_features_input_hash = build_semantic_features_input_hash(input);
+    let semantic_features_input_hash = build_semantic_feature_input_hash(input, summary_provider);
     SemanticFeatureRows {
         semantics,
         features,
@@ -199,9 +200,14 @@ pub fn build_semantic_feature_rows(
     }
 }
 
-fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
+pub fn build_semantic_feature_input_hash(
+    input: &SemanticFeatureInput,
+    summary_provider: &dyn SemanticSummaryProvider,
+) -> String {
     sha256_hex(
         &json!({
+            "fingerprint_version": SEMANTIC_FEATURES_FINGERPRINT_VERSION,
+            "summary_provider": summary_provider.cache_key(),
             "artefact_id": &input.artefact_id,
             "symbol_id": &input.symbol_id,
             "repo_id": &input.repo_id,
@@ -226,7 +232,8 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
     )
 }
 
-// Incremental indexing rule: recompute enrichment only when symbol inputs or prompt versions change.
+// Incremental indexing rule: recompute enrichment when the persisted fingerprint no longer matches
+// the current symbol inputs, pipeline versions, or summary provider configuration.
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
@@ -309,8 +316,48 @@ mod tests {
         changed.doc_comment = Some("Normalizes email for storage.".to_string());
 
         assert_ne!(
-            build_semantic_features_input_hash(&base),
-            build_semantic_features_input_hash(&changed)
+            build_semantic_feature_input_hash(&base, &semantic::NoopSemanticSummaryProvider),
+            build_semantic_feature_input_hash(&changed, &semantic::NoopSemanticSummaryProvider)
+        );
+    }
+
+    struct HashTestProvider {
+        key: &'static str,
+    }
+
+    impl SemanticSummaryProvider for HashTestProvider {
+        fn cache_key(&self) -> String {
+            self.key.to_string()
+        }
+
+        fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+            None
+        }
+    }
+
+    #[test]
+    fn semantic_features_input_hash_changes_when_summary_provider_changes() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            body: "return email.trim().toLowerCase();".to_string(),
+            doc_comment: Some("Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            content_hash: Some("hash-1".to_string()),
+        };
+
+        assert_ne!(
+            build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=a" }),
+            build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=b" })
         );
     }
 }

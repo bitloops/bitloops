@@ -12,8 +12,7 @@ use crate::devql_config::{EventsProvider, RelationalProvider};
 pub(crate) type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 /// Shared relational contract for provider implementations.
-/// The current runtime still uses Postgres directly; this trait is the stable
-/// integration boundary for provider-specific tasks.
+/// This trait is the stable integration boundary for provider-specific tasks.
 pub(crate) trait RelationalStore {
     fn provider(&self) -> RelationalProvider;
     fn ping<'a>(&'a self) -> StoreFuture<'a, i32>;

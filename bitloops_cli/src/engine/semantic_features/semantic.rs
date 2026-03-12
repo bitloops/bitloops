@@ -20,12 +20,17 @@ pub struct SemanticSummaryCandidate {
 }
 
 pub trait SemanticSummaryProvider {
+    fn cache_key(&self) -> String;
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
 }
 
 pub struct NoopSemanticSummaryProvider;
 
 impl SemanticSummaryProvider for NoopSemanticSummaryProvider {
+    fn cache_key(&self) -> String {
+        "provider=noop".to_string()
+    }
+
     fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
         None
     }
@@ -163,6 +168,10 @@ struct LlmSemanticSummaryProvider {
 }
 
 impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
+    fn cache_key(&self) -> String {
+        format!("provider={}", self.llm_provider.descriptor())
+    }
+
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
         let content = self.llm_provider.complete(
             "You summarize code symbols. Return only JSON with keys summary and confidence.",

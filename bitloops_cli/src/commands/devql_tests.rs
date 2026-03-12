@@ -8,6 +8,10 @@ use crate::engine::semantic_features::{
 use clap::Parser;
 use std::fs;
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tempfile::TempDir;
 
 fn test_cfg() -> DevqlConfig {
@@ -1005,11 +1009,34 @@ struct MockSemanticSummaryProvider {
 }
 
 impl semantic::SemanticSummaryProvider for MockSemanticSummaryProvider {
+    fn cache_key(&self) -> String {
+        "provider=mock".to_string()
+    }
+
     fn generate(
         &self,
         _input: &SemanticFeatureInput,
     ) -> Option<semantic::SemanticSummaryCandidate> {
         self.candidate.clone()
+    }
+}
+
+#[derive(Clone)]
+struct CountingSemanticSummaryProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+impl semantic::SemanticSummaryProvider for CountingSemanticSummaryProvider {
+    fn cache_key(&self) -> String {
+        "provider=noop".to_string()
+    }
+
+    fn generate(
+        &self,
+        _input: &SemanticFeatureInput,
+    ) -> Option<semantic::SemanticSummaryCandidate> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        None
     }
 }
 
@@ -1501,15 +1528,19 @@ export function normalizeEmail(email: string): string {
     assert_eq!(first_stats.upserted, inputs.len());
     assert_eq!(first_stats.skipped, 0);
 
+    let summary_calls = Arc::new(AtomicUsize::new(0));
     let second_stats = upsert_semantic_feature_rows(
         store.as_ref(),
         &inputs,
-        &semantic::NoopSemanticSummaryProvider,
+        &CountingSemanticSummaryProvider {
+            calls: summary_calls.clone(),
+        },
     )
     .await
     .expect("skip unchanged semantic rows");
     assert_eq!(second_stats.upserted, 0);
     assert_eq!(second_stats.skipped, inputs.len());
+    assert_eq!(summary_calls.load(Ordering::SeqCst), 0);
 
     let semantic_rows = store
         .query_rows(
