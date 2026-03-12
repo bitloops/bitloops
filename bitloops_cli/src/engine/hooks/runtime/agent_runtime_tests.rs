@@ -46,11 +46,7 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = git_command()
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    let out = git_command().args(args).current_dir(dir).output().unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
 }
 

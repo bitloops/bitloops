@@ -6,10 +6,10 @@ use crate::engine::paths;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::strategy::manual_commit::run_git;
-use crate::test_support::process_state::git_command;
 use crate::engine::trailers::{
     METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
 };
+use crate::test_support::process_state::git_command;
 
 use super::*;
 

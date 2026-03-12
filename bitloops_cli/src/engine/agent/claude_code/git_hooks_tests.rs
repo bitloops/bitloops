@@ -28,11 +28,7 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git_checked(cwd: &Path, args: &[&str]) -> String {
-    let out = git_command()
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .unwrap();
+    let out = git_command().args(args).current_dir(cwd).output().unwrap();
     assert!(
         out.status.success(),
         "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
