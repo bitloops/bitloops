@@ -50,6 +50,8 @@ fn run_git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
