@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS repositories (
     organization TEXT NOT NULL,
     name TEXT NOT NULL,
     default_branch TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS commits (
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS commits (
     author_name TEXT,
     author_email TEXT,
     commit_message TEXT,
-    committed_at TIMESTAMPTZ
+    committed_at DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS file_state (
@@ -144,13 +144,8 @@ CREATE TABLE IF NOT EXISTS artefacts (
     end_byte INTEGER,
     signature TEXT,
     content_hash TEXT,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
-ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS symbol_id TEXT;
-ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
-ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
-ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS signature TEXT;
 
 CREATE INDEX IF NOT EXISTS artefacts_blob_idx
 ON artefacts (repo_id, blob_sha);
@@ -171,44 +166,10 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    confidence DOUBLE PRECISION NOT NULL,
+    confidence REAL NOT NULL,
     source_model TEXT,
-    generated_at TIMESTAMPTZ DEFAULT now()
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'symbol_semantics' AND column_name = 'stage1_input_hash'
-    ) AND NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'symbol_semantics' AND column_name = 'semantic_features_input_hash'
-    ) THEN
-        ALTER TABLE symbol_semantics RENAME COLUMN stage1_input_hash TO semantic_features_input_hash;
-    END IF;
-END $$;
-
-ALTER TABLE symbol_semantics
-ADD COLUMN IF NOT EXISTS semantic_features_input_hash TEXT;
-
-ALTER TABLE symbol_semantics
-ADD COLUMN IF NOT EXISTS doc_comment_summary TEXT;
-
-ALTER TABLE symbol_semantics
-ADD COLUMN IF NOT EXISTS llm_summary TEXT;
-
-ALTER TABLE symbol_semantics
-ADD COLUMN IF NOT EXISTS template_summary TEXT;
-
-ALTER TABLE symbol_semantics
-DROP COLUMN IF EXISTS role_tag;
-
-UPDATE symbol_semantics
-SET template_summary = summary
-WHERE template_summary IS NULL;
 
 CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
 ON symbol_semantics (repo_id, blob_sha);
@@ -221,32 +182,17 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     prompt_version TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     normalized_signature TEXT,
-    identifier_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
-    normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
     parent_kind TEXT,
     parent_symbol TEXT,
-    local_relationships JSONB NOT NULL DEFAULT '[]'::jsonb,
-    context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
-    generated_at TIMESTAMPTZ DEFAULT now()
+    parameter_count INTEGER,
+    return_shape_hint TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    local_relationships TEXT NOT NULL DEFAULT '[]',
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'symbol_features' AND column_name = 'stage1_input_hash'
-    ) AND NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'symbol_features' AND column_name = 'semantic_features_input_hash'
-    ) THEN
-        ALTER TABLE symbol_features RENAME COLUMN stage1_input_hash TO semantic_features_input_hash;
-    END IF;
-END $$;
-
-ALTER TABLE symbol_features
-ADD COLUMN IF NOT EXISTS semantic_features_input_hash TEXT;
 
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
 ON symbol_features (repo_id, blob_sha);
