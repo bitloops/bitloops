@@ -60,15 +60,19 @@ What this does:
 - If `sqlite_path` is omitted, DevQL defaults to `~/.bitloops/devql/relational.db`.
 - Postgres remains available with `relational.provider=postgres` plus `postgres_dsn`.
 
-To use ClickHouse for events instead, set:
+To use ClickHouse for events instead, set `devql.events` in your config:
 
 ```json
-"events": {
-  "provider": "clickhouse",
-  "clickhouse_url": "http://localhost:8123",
-  "clickhouse_database": "bitloops",
-  "clickhouse_user": "bitloops",
-  "clickhouse_password": "bitloops"
+{
+  "devql": {
+    "events": {
+      "provider": "clickhouse",
+      "clickhouse_url": "http://localhost:8123",
+      "clickhouse_database": "bitloops",
+      "clickhouse_user": "bitloops",
+      "clickhouse_password": "bitloops"
+    }
+  }
 }
 ```
 
