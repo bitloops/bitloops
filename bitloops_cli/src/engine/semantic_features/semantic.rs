@@ -117,9 +117,6 @@ name: {name}\n\
 signature: {signature}\n\
 doc_comment: {doc_comment}\n\
 parent_kind: {parent_kind}\n\
-parent_symbol: {parent_symbol}\n\
-local_relationships: {local_relationships}\n\
-context_hints: {context_hints}\n\
 body:\n{body}",
         language = input.language,
         kind = input.canonical_kind,
@@ -130,9 +127,6 @@ body:\n{body}",
         signature = input.signature.as_deref().unwrap_or(""),
         doc_comment = input.doc_comment.as_deref().unwrap_or(""),
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
-        parent_symbol = input.parent_symbol.as_deref().unwrap_or(""),
-        local_relationships = input.local_relationships.join(", "),
-        context_hints = input.context_hints.join(", "),
         body = body,
     )
 }
@@ -430,9 +424,6 @@ mod tests {
             body: "return value;".to_string(),
             doc_comment: None,
             parent_kind: Some("module".to_string()),
-            parent_symbol: Some("src/services/user.ts".to_string()),
-            local_relationships: vec![],
-            context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
     }
@@ -462,14 +453,10 @@ mod tests {
     fn semantic_features_prompt_includes_context_and_truncates_body() {
         let mut input = sample_input("function", "normalizeEmail");
         input.doc_comment = Some("// Normalizes email.".to_string());
-        input.local_relationships = vec!["contains:validation".to_string()];
-        input.context_hints = vec!["src/services/user.ts".to_string()];
         input.body = "x".repeat(MAX_SUMMARY_BODY_CHARS + 50);
 
         let prompt = build_semantic_summary_prompt(&input);
         assert!(prompt.contains("doc_comment: // Normalizes email."));
-        assert!(prompt.contains("local_relationships: contains:validation"));
-        assert!(prompt.contains("context_hints: src/services/user.ts"));
         let body_section = prompt
             .split("body:\n")
             .nth(1)

@@ -11,7 +11,7 @@ mod features;
 #[path = "semantic.rs"]
 mod semantic;
 
-use self::common::{build_body_tokens, normalize_name, normalize_repo_path, normalize_string_list};
+use self::common::{build_body_tokens, normalize_name, normalize_repo_path};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
@@ -71,9 +71,6 @@ pub struct SemanticFeatureInput {
     pub body: String,
     pub doc_comment: Option<String>,
     pub parent_kind: Option<String>,
-    pub parent_symbol: Option<String>,
-    pub local_relationships: Vec<String>,
-    pub context_hints: Vec<String>,
     pub content_hash: Option<String>,
 }
 
@@ -104,35 +101,18 @@ pub fn build_semantic_feature_inputs_from_artefacts(
         .iter()
         .map(|row| (row.artefact_id.clone(), row))
         .collect::<HashMap<_, _>>();
-    let child_kinds = build_child_kind_index(artefacts);
 
     artefacts
         .iter()
         .filter(|row| row.canonical_kind != "import")
-        .map(|row| {
-            build_semantic_feature_input_from_artefact(row, blob_content, &by_id, &child_kinds)
-        })
+        .map(|row| build_semantic_feature_input_from_artefact(row, blob_content, &by_id))
         .collect()
-}
-
-fn build_child_kind_index(artefacts: &[PreStageArtefactRow]) -> HashMap<String, Vec<String>> {
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    for row in artefacts {
-        let Some(parent_id) = row.parent_artefact_id.as_ref() else {
-            continue;
-        };
-        out.entry(parent_id.clone())
-            .or_default()
-            .push(row.canonical_kind.clone());
-    }
-    out
 }
 
 fn build_semantic_feature_input_from_artefact(
     row: &PreStageArtefactRow,
     blob_content: &str,
     by_id: &HashMap<String, &PreStageArtefactRow>,
-    child_kinds: &HashMap<String, Vec<String>>,
 ) -> SemanticFeatureInput {
     let parent = row
         .parent_artefact_id
@@ -141,20 +121,6 @@ fn build_semantic_feature_input_from_artefact(
         .copied();
     let body = extract_symbol_body(row, blob_content);
     let name = derive_symbol_name(row);
-    let local_relationships = child_kinds
-        .get(&row.artefact_id)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|kind| format!("contains:{kind}"))
-        .collect::<Vec<_>>();
-    let mut context_hints = vec![normalize_repo_path(&row.path)];
-    context_hints.extend(
-        parent
-            .into_iter()
-            .map(|parent_row| parent_row.symbol_fqn.clone())
-            .collect::<Vec<_>>(),
-    );
 
     SemanticFeatureInput {
         artefact_id: row.artefact_id.clone(),
@@ -171,9 +137,6 @@ fn build_semantic_feature_input_from_artefact(
         body,
         doc_comment: row.doc_comment.clone(),
         parent_kind: parent.map(|parent_row| parent_row.canonical_kind.clone()),
-        parent_symbol: parent.map(|parent_row| parent_row.symbol_fqn.clone()),
-        local_relationships,
-        context_hints,
         content_hash: row.content_hash.clone(),
     }
 }
@@ -257,9 +220,6 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
                 .map(normalize_summary_text)
                 .filter(|value| !value.is_empty()),
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
-            "parent_symbol": &input.parent_symbol,
-            "local_relationships": normalize_string_list(&input.local_relationships),
-            "context_hints": normalize_string_list(&input.context_hints),
             "content_hash": &input.content_hash,
         })
         .to_string(),
@@ -343,9 +303,6 @@ mod tests {
             body: "return email.trim().toLowerCase();".to_string(),
             doc_comment: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
-            parent_symbol: Some("src/services/user.ts".to_string()),
-            local_relationships: vec![],
-            context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
         };
         let mut changed = base.clone();

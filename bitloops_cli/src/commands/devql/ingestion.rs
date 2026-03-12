@@ -183,11 +183,6 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     identifier_tokens TEXT NOT NULL DEFAULT '[]',
     normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
     parent_kind TEXT,
-    parent_symbol TEXT,
-    parameter_count INTEGER,
-    return_shape_hint TEXT,
-    modifiers TEXT NOT NULL DEFAULT '[]',
-    local_relationships TEXT NOT NULL DEFAULT '[]',
     context_tokens TEXT NOT NULL DEFAULT '[]',
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

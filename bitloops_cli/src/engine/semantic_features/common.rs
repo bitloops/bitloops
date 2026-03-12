@@ -34,10 +34,6 @@ pub(super) fn build_body_tokens(body: &str) -> Vec<String> {
     dedupe_tokens(split_identifier_tokens(body), MAX_BODY_TOKENS)
 }
 
-pub(super) fn normalize_string_list(values: &[String]) -> Vec<String> {
-    dedupe_tokens(values.to_vec(), values.len().max(1))
-}
-
 pub(super) fn dedupe_tokens(tokens: Vec<String>, limit: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();

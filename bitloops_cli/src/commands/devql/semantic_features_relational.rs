@@ -124,10 +124,6 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
         Some(value) => format!("'{}'", esc_pg(value)),
         None => "NULL".to_string(),
     };
-    let parent_symbol_expr = match features.parent_symbol.as_deref() {
-        Some(value) => format!("'{}'", esc_pg(value)),
-        None => "NULL".to_string(),
-    };
     let identifier_tokens_expr = format!(
         "'{}'",
         esc_pg(&serde_json::to_string(&features.identifier_tokens)?)
@@ -135,10 +131,6 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     let body_tokens_expr = format!(
         "'{}'",
         esc_pg(&serde_json::to_string(&features.normalized_body_tokens)?)
-    );
-    let local_relationships_expr = format!(
-        "'{}'",
-        esc_pg(&serde_json::to_string(&features.local_relationships)?)
     );
     let context_tokens_expr = format!(
         "'{}'",
@@ -149,9 +141,9 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
 VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = CURRENT_TIMESTAMP; \
-INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, local_relationships, context_tokens) \
-VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {local_relationships}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = CURRENT_TIMESTAMP",
+INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
+VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = CURRENT_TIMESTAMP",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
@@ -171,8 +163,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         identifier_tokens = identifier_tokens_expr,
         body_tokens = body_tokens_expr,
         parent_kind = parent_kind_expr,
-        parent_symbol = parent_symbol_expr,
-        local_relationships = local_relationships_expr,
         context_tokens = context_tokens_expr,
     ))
 }
@@ -198,9 +188,6 @@ mod semantic_feature_relational_tests {
                 body: "return repo.findById(id);".to_string(),
                 doc_comment: Some("Fetches O'Brien by id.".to_string()),
                 parent_kind: Some("class".to_string()),
-                parent_symbol: Some("src/services/user.ts::UserService".to_string()),
-                local_relationships: vec!["contains:method".to_string()],
-                context_hints: vec!["src/services/user.ts".to_string()],
                 content_hash: Some("hash-1".to_string()),
             },
             &semantic::NoopSemanticSummaryProvider,

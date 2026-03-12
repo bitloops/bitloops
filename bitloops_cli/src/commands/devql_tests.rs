@@ -1213,26 +1213,11 @@ fn semantic_features_build_inputs_from_mock_prestage_rows() {
     );
     assert!(inputs.iter().all(|input| input.canonical_kind != "import"));
 
-    let file = inputs
-        .iter()
-        .find(|input| input.canonical_kind == "file")
-        .expect("file input");
-    assert!(
-        file.local_relationships
-            .contains(&"contains:class".to_string()),
-        "{:?}",
-        file.local_relationships
-    );
-
     let method = inputs
         .iter()
         .find(|input| input.name == "getById")
         .expect("method input");
     assert_eq!(method.parent_kind.as_deref(), Some("class"));
-    assert_eq!(
-        method.parent_symbol.as_deref(),
-        Some("src/services/user.ts::UserService")
-    );
     assert!(
         method.body.contains("findById"),
         "expected method body to be sliced from blob content"

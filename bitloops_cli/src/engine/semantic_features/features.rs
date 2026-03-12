@@ -1,6 +1,5 @@
 use super::common::{
-    build_body_tokens, dedupe_tokens, normalize_name, normalize_repo_path, normalize_string_list,
-    split_identifier_tokens,
+    build_body_tokens, dedupe_tokens, normalize_name, normalize_repo_path, split_identifier_tokens,
 };
 use super::{MAX_CONTEXT_TOKENS, MAX_IDENTIFIER_TOKENS, SemanticFeatureInput};
 
@@ -16,8 +15,6 @@ pub struct SymbolFeaturesRow {
     pub identifier_tokens: Vec<String>,
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
-    pub parent_symbol: Option<String>,
-    pub local_relationships: Vec<String>,
     pub context_tokens: Vec<String>,
 }
 
@@ -25,7 +22,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
     let normalized_signature = input.signature.as_deref().map(normalize_signature);
     let identifier_tokens = build_identifier_tokens(input);
     let normalized_body_tokens = build_body_tokens(&input.body);
-    let local_relationships = normalize_string_list(&input.local_relationships);
     let context_tokens = build_context_tokens(input, &identifier_tokens);
 
     SymbolFeaturesRow {
@@ -40,8 +36,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
             .parent_kind
             .clone()
             .map(|value| value.to_ascii_lowercase()),
-        parent_symbol: input.parent_symbol.clone(),
-        local_relationships,
         context_tokens,
     }
 }
@@ -53,9 +47,6 @@ fn build_identifier_tokens(input: &SemanticFeatureInput) -> Vec<String> {
     if let Some(signature) = &input.signature {
         tokens.extend(split_identifier_tokens(signature));
     }
-    if let Some(parent) = &input.parent_symbol {
-        tokens.extend(split_identifier_tokens(parent));
-    }
     dedupe_tokens(tokens, MAX_IDENTIFIER_TOKENS)
 }
 
@@ -64,15 +55,6 @@ fn build_context_tokens(input: &SemanticFeatureInput, identifier_tokens: &[Strin
     tokens.extend(split_identifier_tokens(&normalize_repo_path(&input.path)));
     if let Some(parent_kind) = &input.parent_kind {
         tokens.extend(split_identifier_tokens(parent_kind));
-    }
-    if let Some(parent_symbol) = &input.parent_symbol {
-        tokens.extend(split_identifier_tokens(parent_symbol));
-    }
-    for hint in &input.context_hints {
-        tokens.extend(split_identifier_tokens(hint));
-    }
-    for relationship in &input.local_relationships {
-        tokens.extend(split_identifier_tokens(relationship));
     }
     tokens.extend(identifier_tokens.iter().cloned());
     dedupe_tokens(tokens, MAX_CONTEXT_TOKENS)
@@ -104,9 +86,6 @@ mod tests {
             body: "return db.users.findById(id);".to_string(),
             doc_comment: None,
             parent_kind: Some("class".to_string()),
-            parent_symbol: Some("src/services/user.ts::UserService".to_string()),
-            local_relationships: vec!["contains:method".to_string()],
-            context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
     }
