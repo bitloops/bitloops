@@ -317,7 +317,7 @@ fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<Stri
     let inner = node.child_by_field_name("body").and_then(|body| {
         extract_rust_inner_docstring_from_lines(
             &content.lines().collect::<Vec<_>>(),
-            body.start_position().row as usize + 1,
+            body.start_position().row + 1,
         )
     });
 
