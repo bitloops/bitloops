@@ -97,11 +97,30 @@ impl EventsBackendConfig {
     }
 
     pub fn duckdb_path_or_default(&self) -> PathBuf {
-        expand_tilde_path(
-            self.duckdb_path
-                .as_deref()
-                .unwrap_or(DEVQL_DUCKDB_DEFAULT_PATH),
-        )
+        match self.duckdb_path.as_deref() {
+            // For an explicitly configured path, preserve existing behavior:
+            // expand a leading '~' if possible, otherwise return it as-is.
+            Some(path) => expand_tilde_path(path),
+            // For the default path, avoid creating a literal '~' directory when
+            // HOME/USERPROFILE is not set by resolving the home directory
+            // explicitly and falling back to a relative path without '~'.
+            None => {
+                // DEVQL_DUCKDB_DEFAULT_PATH is "~/.bitloops/devql/events.duckdb"
+                let relative = DEVQL_DUCKDB_DEFAULT_PATH
+                    .strip_prefix("~/")
+                    .unwrap_or(DEVQL_DUCKDB_DEFAULT_PATH);
+
+                if let Some(home) =
+                    env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
+                {
+                    PathBuf::from(home).join(relative)
+                } else {
+                    // Fall back to a relative path without '~' to avoid creating
+                    // a directory literally named "~" in the current working directory.
+                    PathBuf::from(relative)
+                }
+            }
+        }
     }
 }
 
