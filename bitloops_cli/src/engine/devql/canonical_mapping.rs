@@ -27,6 +27,7 @@ fn js_ts_supports_language_kind(language_kind: &str) -> bool {
             | "class_declaration"
             | "constructor"
             | "property_declaration"
+            | "public_field_definition"
     )
 }
 

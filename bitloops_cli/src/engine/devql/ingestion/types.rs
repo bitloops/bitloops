@@ -49,6 +49,8 @@ struct JsTsArtefact {
     start_byte: i32,
     end_byte: i32,
     signature: String,
+    modifiers: Vec<String>,
+    docstring: Option<String>,
 }
 
 #[derive(Debug, Clone)]
