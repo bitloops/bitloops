@@ -92,7 +92,10 @@ mod tests {
     #[test]
     fn postgres_parse_query_rows_json_rejects_unexpected_scalar() {
         let err = parse_query_rows_json("42").expect_err("scalar payload should fail");
-        assert!(err.to_string().contains("unexpected Postgres JSON payload type"));
+        assert!(
+            err.to_string()
+                .contains("unexpected Postgres JSON payload type")
+        );
     }
 
     #[test]

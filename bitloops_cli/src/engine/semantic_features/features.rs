@@ -124,7 +124,9 @@ mod tests {
             language_kind: "method".to_string(),
             symbol_fqn: "src/services/user.ts::UserService::getById".to_string(),
             name: "getById".to_string(),
-            signature: Some("async getById(id: string, opts: Map<string, Vec<i32>>): Promise<User>".to_string()),
+            signature: Some(
+                "async getById(id: string, opts: Map<string, Vec<i32>>): Promise<User>".to_string(),
+            ),
             body: "return db.users.findById(id);".to_string(),
             doc_comment: None,
             parent_kind: Some("class".to_string()),

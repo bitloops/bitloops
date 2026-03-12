@@ -234,7 +234,10 @@ mod tests {
         })];
         let parsed = parse_index_state_rows(&rows);
         assert_eq!(parsed.semantics_hash.as_deref(), Some("hash-a"));
-        assert_eq!(parsed.features_prompt_version.as_deref(), Some("features-v1"));
+        assert_eq!(
+            parsed.features_prompt_version.as_deref(),
+            Some("features-v1")
+        );
     }
 
     #[test]

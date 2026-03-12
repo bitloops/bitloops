@@ -412,7 +412,10 @@ mod tests {
             ..SemanticSummaryProviderConfig::default()
         })
         .expect("disabled provider should build");
-        assert_eq!(disabled.prompt_version(), "semantic-summary-v1::provider=noop");
+        assert_eq!(
+            disabled.prompt_version(),
+            "semantic-summary-v1::provider=noop"
+        );
 
         let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
             semantic_provider: Some("openai".to_string()),
@@ -421,9 +424,10 @@ mod tests {
         })
         .err()
         .expect("missing API key should fail");
-        assert!(err
-            .to_string()
-            .contains("BITLOOPS_DEVQL_SEMANTIC_API_KEY is required"));
+        assert!(
+            err.to_string()
+                .contains("BITLOOPS_DEVQL_SEMANTIC_API_KEY is required")
+        );
     }
 
     #[test]

@@ -147,8 +147,11 @@ mod tests {
             "https://openrouter.ai/api/v1/chat/completions"
         );
         assert_eq!(
-            resolve_endpoint("custom", Some(" http://localhost:11434/v1/chat/completions "))
-                .expect("custom base url"),
+            resolve_endpoint(
+                "custom",
+                Some(" http://localhost:11434/v1/chat/completions ")
+            )
+            .expect("custom base url"),
             "http://localhost:11434/v1/chat/completions"
         );
         assert!(
