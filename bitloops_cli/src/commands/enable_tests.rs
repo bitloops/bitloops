@@ -1,7 +1,7 @@
 use super::*;
 use crate::commands::{Cli, Commands};
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
-use crate::test_support::process_state::{with_cwd, with_env_var, with_env_vars};
+use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
 use tempfile::TempDir;
 
@@ -18,7 +18,7 @@ fn setup_local_settings(dir: &TempDir, content: &str) {
 }
 
 fn setup_git_repo(dir: &TempDir) {
-    let status = Command::new("git")
+    let status = git_command()
         .args(["init", "-q"])
         .current_dir(dir.path())
         .status()
@@ -412,6 +412,33 @@ fn run_uninstall_force_removes_git_hooks() {
 }
 
 #[test]
+fn run_uninstall_force_removes_codex_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(&dir, r#"{"enabled":true}"#);
+
+    with_repo_cwd(dir.path(), || {
+        HookSupport::install_hooks(&CodexAgent, false, false).unwrap();
+        assert!(
+            HookSupport::are_hooks_installed(&CodexAgent),
+            "codex hooks should be installed before uninstall"
+        );
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        run_uninstall(dir.path(), &mut out, &mut err, true).unwrap();
+
+        assert!(
+            !HookSupport::are_hooks_installed(&CodexAgent),
+            "codex hooks should be removed"
+        );
+
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("Removed Codex CLI hooks"), "{output}");
+    });
+}
+
+#[test]
 fn run_uninstall_not_a_git_repo() {
     let dir = tempfile::tempdir().unwrap();
     let mut out = Vec::new();
@@ -746,6 +773,7 @@ fn run_enable_without_agent_does_not_initialize_agents() {
         .unwrap();
 
         assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(!dir.path().join(".codex/hooks.json").exists());
         assert!(!dir.path().join(".cursor/hooks.json").exists());
         assert!(!dir.path().join(".gemini/settings.json").exists());
         assert!(!dir.path().join(".opencode/plugins/bitloops.ts").exists());
@@ -768,6 +796,7 @@ fn run_enable_with_legacy_agent_flag_still_does_not_initialize_agents() {
 
         assert!(!dir.path().join(".cursor/hooks.json").exists());
         assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(!dir.path().join(".codex/hooks.json").exists());
         assert!(git_hooks::is_git_hook_installed(dir.path()));
     });
 }
@@ -789,9 +818,11 @@ fn initialized_agents_detects_claude_and_cursor() {
     with_repo_cwd(dir.path(), || {
         claude_hooks::install_hooks(dir.path(), false).unwrap();
         HookSupport::install_hooks(&CursorAgent, false, false).unwrap();
+        HookSupport::install_hooks(&CodexAgent, false, false).unwrap();
 
         let agents = initialized_agents(dir.path());
         assert!(agents.contains(&"claude-code".to_string()));
+        assert!(agents.contains(&"codex".to_string()));
         assert!(agents.contains(&"cursor".to_string()));
     });
 }

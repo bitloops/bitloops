@@ -2,6 +2,7 @@
 
 use crate::commands::explain::*;
 use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
+use crate::test_support::process_state::git_command;
 use anyhow::{Result, anyhow};
 use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
@@ -15,7 +16,7 @@ fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 fn run_git_cmd(root: &std::path::Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = git_command()
         .args(args)
         .current_dir(root)
         .output()

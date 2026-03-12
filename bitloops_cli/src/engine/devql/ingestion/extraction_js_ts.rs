@@ -9,8 +9,8 @@ fn extract_js_ts_artefacts_treesitter(
     path: &str,
 ) -> Result<Option<Vec<JsTsArtefact>>> {
     let mut parser = tree_sitter::Parser::new();
-    let ts_lang: tree_sitter::Language = tree_sitter_typescript::language_typescript();
-    let js_lang: tree_sitter::Language = tree_sitter_javascript::language();
+    let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+    let js_lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
 
     let mut out = Vec::new();
     let mut seen: HashSet<(String, String, i32)> = HashSet::new();

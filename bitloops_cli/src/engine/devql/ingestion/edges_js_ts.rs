@@ -140,8 +140,8 @@ fn extract_js_ts_dependency_edges(
     }
 
     let mut parser = tree_sitter::Parser::new();
-    let ts_lang: tree_sitter::Language = tree_sitter_typescript::language_typescript();
-    let js_lang: tree_sitter::Language = tree_sitter_javascript::language();
+    let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+    let js_lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
     let callables = artefacts
         .iter()
         .filter(|a| matches!(a.canonical_kind.as_deref(), Some("function") | Some("method")))

@@ -2,7 +2,7 @@
 
 fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
     let mut parser = tree_sitter::Parser::new();
-    let lang: tree_sitter::Language = tree_sitter_rust::language();
+    let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser
         .set_language(&lang)
         .context("setting tree-sitter rust language")?;

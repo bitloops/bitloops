@@ -53,7 +53,7 @@ To view your Checkpoints run the following command again from within the root of
 ## Supported Agents
 
 - [x] Claude Code
-- [ ] Codex (Coming as soon as OpenAI adds hooks to Codex; they are working on it)
+- [x] Codex CLI (currently supports `SessionStart` and `Stop` hooks only; richer hook parity will follow as Codex expands hook coverage)
 - [x] Cursor
 - [x] Gemini
 - [ ] GitHub Copilot (Coming soon)
@@ -77,7 +77,11 @@ You bet!
 
 ### What kind of databases do I need?
 
-Bitloops works with Clickhouse (for events) and Postgresql (for codebase intelligence). You can install these for free locally via Docker Compose or natively.
+DevQL now uses a provider model:
+- Relational backend: `sqlite` or `postgres`
+- Events backend: `duckdb` or `clickhouse`
+
+Current runtime adapters are `sqlite`/`postgres` for relational and `duckdb`/`clickhouse` for events (default relational backend: `sqlite`, default events backend: `duckdb`). Legacy `postgres_dsn` / `clickhouse_*` and `BITLOOPS_DEVQL_*` settings remain supported for backward compatibility.
 
 ### Why do you use telemetry and why should I opt-in?
 

@@ -15,6 +15,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
+#[cfg(test)]
+use crate::test_support::process_state::git_command;
+
 /// Comment embedded in every managed hook script — used as the installation marker.
 const HOOK_MARKER: &str = "# Bitloops git hooks";
 
@@ -39,10 +42,22 @@ struct HookManager {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+fn new_git_command() -> Command {
+    #[cfg(test)]
+    {
+        git_command()
+    }
+
+    #[cfg(not(test))]
+    {
+        Command::new("git")
+    }
+}
+
 /// Returns the active git hooks directory path via `git rev-parse --git-path hooks`.
 /// Respects `core.hooksPath` and linked worktrees.
 fn get_git_dir(repo_root: &Path) -> Result<PathBuf> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(["rev-parse", "--git-dir"])
         .current_dir(repo_root)
         .output()
@@ -69,7 +84,7 @@ fn get_hooks_dir(repo_root: &Path) -> Result<PathBuf> {
     // Fail in non-repo directories.
     let _ = get_git_dir(repo_root)?;
 
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(["rev-parse", "--git-path", "hooks"])
         .current_dir(repo_root)
         .output()

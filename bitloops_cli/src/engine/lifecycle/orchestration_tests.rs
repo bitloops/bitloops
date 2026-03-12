@@ -9,17 +9,22 @@ use super::{
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
-use crate::test_support::process_state::with_cwd;
-use std::process::Command;
+use crate::test_support::process_state::{git_command, with_cwd};
 
 fn setup_git_repo(dir: &tempfile::TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .unwrap();
-        assert!(out.status.success(), "git {:?} failed", args);
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);

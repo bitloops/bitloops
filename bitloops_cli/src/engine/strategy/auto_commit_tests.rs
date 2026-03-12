@@ -1,5 +1,4 @@
 use std::fs;
-use std::process::Command;
 
 use tempfile::TempDir;
 
@@ -10,17 +9,24 @@ use crate::engine::strategy::manual_commit::run_git;
 use crate::engine::trailers::{
     METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
 };
+use crate::test_support::process_state::git_command;
 
 use super::*;
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .expect("git command failed to start");
-        assert!(out.status.success(), "git {:?} failed", args);
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "test@test.com"]);
