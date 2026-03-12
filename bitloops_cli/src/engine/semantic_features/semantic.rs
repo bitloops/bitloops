@@ -367,11 +367,7 @@ fn summary_token_set(summary: &str) -> BTreeSet<String> {
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter_map(|token| {
             let token = token.trim().to_ascii_lowercase();
-            if token.len() < 3 {
-                None
-            } else {
-                Some(token)
-            }
+            if token.len() < 3 { None } else { Some(token) }
         })
         .collect()
 }
