@@ -110,9 +110,7 @@ impl EventsBackendConfig {
                     .strip_prefix("~/")
                     .unwrap_or(DEVQL_DUCKDB_DEFAULT_PATH);
 
-                if let Some(home) =
-                    env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
-                {
+                if let Some(home) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
                     PathBuf::from(home).join(relative)
                 } else {
                     // Fall back to a relative path without '~' to avoid creating
