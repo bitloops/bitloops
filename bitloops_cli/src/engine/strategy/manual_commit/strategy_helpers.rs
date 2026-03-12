@@ -272,7 +272,7 @@ impl ManualCommitStrategy {
                 let summarize_agent = match state.agent_type.as_str() {
                     s if s == AGENT_TYPE_GEMINI => crate::engine::summarize::AgentType::Gemini,
                     s if s == AGENT_TYPE_OPEN_CODE => crate::engine::summarize::AgentType::OpenCode,
-                    s if s == AGENT_TYPE_CLAUDE_CODE => {
+                    s if s == AGENT_TYPE_CLAUDE_CODE || s == AGENT_TYPE_CODEX => {
                         crate::engine::summarize::AgentType::ClaudeCode
                     }
                     _ => crate::engine::summarize::AgentType::Unknown,
@@ -407,4 +407,3 @@ impl ManualCommitStrategy {
         Ok(())
     }
 }
-

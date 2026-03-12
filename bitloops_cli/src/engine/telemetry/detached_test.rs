@@ -198,6 +198,7 @@ fn TestLoadDispatchContextDetectsAgents() {
     setup_git_repo(temp.path());
     write_settings_with_telemetry(temp.path(), Some(true));
     std::fs::create_dir_all(temp.path().join(".claude")).expect("create .claude");
+    std::fs::create_dir_all(temp.path().join(".codex")).expect("create .codex");
     std::fs::create_dir_all(temp.path().join(".gemini")).expect("create .gemini");
     std::fs::create_dir_all(temp.path().join(".cursor")).expect("create .cursor");
     std::fs::create_dir_all(temp.path().join(".opencode")).expect("create .opencode");
@@ -206,6 +207,9 @@ fn TestLoadDispatchContextDetectsAgents() {
         let context = load_dispatch_context().expect("dispatch context");
         assert_eq!(context.strategy, "manual-commit");
         assert!(context.is_bitloops_enabled);
-        assert_eq!(context.agent, "claude-code,gemini-cli,cursor,opencode");
+        assert_eq!(
+            context.agent,
+            "claude-code,codex,gemini-cli,cursor,opencode"
+        );
     });
 }
