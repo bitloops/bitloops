@@ -269,6 +269,7 @@ pub struct Author {
 pub enum AgentType {
     #[default]
     ClaudeCode,
+    Codex,
     Cursor,
     Gemini,
     OpenCode,

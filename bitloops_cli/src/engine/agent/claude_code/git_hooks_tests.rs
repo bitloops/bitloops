@@ -1,16 +1,23 @@
 use super::*;
-use crate::test_support::process_state::with_cwd;
+use crate::test_support::process_state::{git_command, with_cwd};
 use std::collections::BTreeSet;
 use tempfile::TempDir;
 
 /// Creates an initialized git repository in `dir`.
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
@@ -21,12 +28,14 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git_checked(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {:?} failed", args);
+    let out = git_command().args(args).current_dir(cwd).output().unwrap();
+    assert!(
+        out.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 

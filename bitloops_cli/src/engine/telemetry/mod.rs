@@ -248,6 +248,9 @@ fn detect_installed_agents(repo_root: &Path) -> Vec<String> {
     if repo_root.join(".claude").is_dir() {
         installed.push("claude-code".to_string());
     }
+    if repo_root.join(".codex").is_dir() {
+        installed.push("codex".to_string());
+    }
     if repo_root.join(".gemini").is_dir() {
         installed.push("gemini-cli".to_string());
     }
@@ -266,7 +269,9 @@ fn posthog_api_key() -> String {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            option_env!("BITLOOPS_POSTHOG_API_KEY").map(String::from).filter(|v| !v.trim().is_empty())
+            option_env!("BITLOOPS_POSTHOG_API_KEY")
+                .map(String::from)
+                .filter(|v| !v.trim().is_empty())
         })
         .unwrap_or_else(|| POSTHOG_API_KEY.to_string())
 }

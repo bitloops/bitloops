@@ -4,7 +4,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use utoipa::{IntoParams, OpenApi, ToSchema};
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -90,11 +89,12 @@ pub(super) struct ApiCheckpointDto {
     pub(super) strategy: String,
     pub(super) branch: String,
     pub(super) checkpoints_count: u32,
-    pub(super) files_touched: Vec<String>,
+    pub(super) files_touched: Vec<ApiCommitFileDiffDto>,
     pub(super) session_count: usize,
     pub(super) token_usage: Option<ApiTokenUsageDto>,
     pub(super) session_id: String,
-    pub(super) agent: String,
+    pub(super) agents: Vec<String>,
+    pub(super) first_prompt_preview: String,
     pub(super) created_at: String,
     pub(super) is_task: bool,
     pub(super) tool_use_id: String,
@@ -103,6 +103,7 @@ pub(super) struct ApiCheckpointDto {
 #[derive(Debug, Clone, Serialize, ToSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct ApiCommitFileDiffDto {
+    pub(super) filepath: String,
     pub(super) additions_count: u64,
     pub(super) deletions_count: u64,
 }
@@ -115,7 +116,7 @@ pub(super) struct ApiCommitDto {
     pub(super) author_email: String,
     pub(super) timestamp: i64,
     pub(super) message: String,
-    pub(super) files_touched: HashMap<String, ApiCommitFileDiffDto>,
+    pub(super) files_touched: Vec<ApiCommitFileDiffDto>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -172,6 +173,8 @@ pub(super) struct ApiBackendHealthDto {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(super) struct ApiDbHealthResponse {
+    pub(super) relational: ApiBackendHealthDto,
+    pub(super) events: ApiBackendHealthDto,
     pub(super) postgres: ApiBackendHealthDto,
     pub(super) clickhouse: ApiBackendHealthDto,
 }
@@ -196,7 +199,7 @@ pub(super) struct ApiCheckpointDetailResponse {
     pub(super) strategy: String,
     pub(super) branch: String,
     pub(super) checkpoints_count: u32,
-    pub(super) files_touched: Vec<String>,
+    pub(super) files_touched: Vec<ApiCommitFileDiffDto>,
     pub(super) session_count: usize,
     pub(super) token_usage: Option<ApiTokenUsageDto>,
     pub(super) sessions: Vec<ApiCheckpointSessionDetailDto>,

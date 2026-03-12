@@ -5,6 +5,21 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use crate::test_support::process_state::git_command;
+
+fn new_git_command() -> Command {
+    #[cfg(test)]
+    {
+        git_command()
+    }
+
+    #[cfg(not(test))]
+    {
+        Command::new("git")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GitAuthor {
     pub name: String,
@@ -40,7 +55,7 @@ pub fn find_new_untracked_files(current: &[String], pre_existing: &[String]) -> 
 }
 
 pub fn get_git_config_value(key: &str) -> String {
-    match Command::new("git").args(["config", "--get", key]).output() {
+    match new_git_command().args(["config", "--get", key]).output() {
         Ok(output) if output.status.success() => stdout_trimmed(&output).to_string(),
         _ => String::new(),
     }
@@ -63,7 +78,7 @@ pub fn get_git_author() -> Result<GitAuthor> {
 }
 
 pub fn branch_exists_on_remote(branch_name: &str) -> Result<bool> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args([
             "show-ref",
             "--verify",
@@ -85,7 +100,7 @@ pub fn branch_exists_on_remote(branch_name: &str) -> Result<bool> {
 }
 
 pub fn branch_exists_locally(branch_name: &str) -> Result<bool> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args([
             "show-ref",
             "--verify",
@@ -104,7 +119,7 @@ pub fn branch_exists_locally(branch_name: &str) -> Result<bool> {
 }
 
 pub fn checkout_branch(reference: &str) -> Result<()> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(["checkout", reference])
         .output()
         .context("failed to execute git checkout")?;
@@ -115,7 +130,7 @@ pub fn checkout_branch(reference: &str) -> Result<()> {
 }
 
 pub fn validate_branch_name(branch_name: &str) -> Result<()> {
-    let status = Command::new("git")
+    let status = new_git_command()
         .args(["check-ref-format", "--branch", branch_name])
         .status()
         .context("failed to validate branch name")?;
@@ -141,7 +156,7 @@ pub fn fetch_and_checkout_remote_branch(branch_name: &str) -> Result<()> {
         bail!("branch '{branch_name}' not found on origin");
     }
 
-    let update_output = Command::new("git")
+    let update_output = new_git_command()
         .args([
             "update-ref",
             &format!("refs/heads/{branch_name}"),
@@ -175,7 +190,7 @@ pub fn fetch_metadata_branch() -> Result<()> {
         bail!("branch '{branch_name}' not found on origin");
     }
 
-    let update_output = Command::new("git")
+    let update_output = new_git_command()
         .args([
             "update-ref",
             &format!("refs/heads/{branch_name}"),
@@ -193,7 +208,7 @@ pub fn fetch_metadata_branch() -> Result<()> {
 }
 
 pub fn is_on_default_branch() -> Result<(bool, String)> {
-    let current = Command::new("git")
+    let current = new_git_command()
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .context("failed to get HEAD")?;
@@ -222,7 +237,7 @@ pub fn should_skip_on_default_branch() -> (bool, String) {
 }
 
 pub fn get_default_branch_name() -> String {
-    let symbolic = Command::new("git")
+    let symbolic = new_git_command()
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
         .output();
     if let Ok(output) = symbolic
@@ -235,7 +250,7 @@ pub fn get_default_branch_name() -> String {
     }
 
     for candidate in ["main", "master"] {
-        let status = Command::new("git")
+        let status = new_git_command()
             .args([
                 "show-ref",
                 "--verify",
@@ -249,7 +264,7 @@ pub fn get_default_branch_name() -> String {
     }
 
     for candidate in ["main", "master"] {
-        let status = Command::new("git")
+        let status = new_git_command()
             .args([
                 "show-ref",
                 "--verify",
@@ -268,7 +283,7 @@ pub fn get_default_branch_name() -> String {
 pub fn is_empty_repository() -> Result<bool> {
     run_git(&["rev-parse", "--git-dir"]).context("failed to open git repository")?;
 
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(["rev-parse", "--verify", "HEAD"])
         .output()
         .context("failed to check repository HEAD")?;
@@ -277,7 +292,7 @@ pub fn is_empty_repository() -> Result<bool> {
 }
 
 pub fn hard_reset_with_protection(commit_hash: &str) -> Result<String> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(["reset", "--hard", commit_hash])
         .output()
         .context("failed to execute git reset --hard")?;
@@ -290,7 +305,7 @@ pub fn hard_reset_with_protection(commit_hash: &str) -> Result<String> {
 }
 
 fn run_git(args: &[&str]) -> Result<Output> {
-    let output = Command::new("git")
+    let output = new_git_command()
         .args(args)
         .output()
         .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
@@ -305,7 +320,7 @@ fn run_git(args: &[&str]) -> Result<Output> {
 }
 
 fn run_git_with_timeout(args: &[&str], timeout: Duration) -> Result<Output> {
-    let mut child = Command::new("git")
+    let mut child = new_git_command()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

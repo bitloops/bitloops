@@ -2,7 +2,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -112,7 +112,25 @@ impl Drop for ChildGuard {
     }
 }
 
-async fn wait_until_ready(url: &str) {
+fn read_child_stderr(child: &mut Child) -> String {
+    let Some(mut stderr) = child.stderr.take() else {
+        return "<stderr unavailable>".to_string();
+    };
+
+    let mut output = String::new();
+    match stderr.read_to_string(&mut output) {
+        Ok(_) => {
+            if output.trim().is_empty() {
+                "<no stderr output>".to_string()
+            } else {
+                output
+            }
+        }
+        Err(err) => format!("<failed reading stderr: {err}>"),
+    }
+}
+
+async fn wait_until_ready(url: &str, child: &mut Child) {
     let client = reqwest::Client::new();
     for _ in 0..80 {
         if let Ok(response) = client.get(url).send().await
@@ -120,9 +138,37 @@ async fn wait_until_ready(url: &str) {
         {
             return;
         }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stderr = read_child_stderr(child);
+                panic!(
+                    "dashboard process exited before readiness check succeeded at {url}\nchild status: {status}\nchild stderr:\n{stderr}"
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                panic!("failed to inspect dashboard process status while waiting for {url}: {err}")
+            }
+        }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("dashboard server did not become ready at {url}");
+
+    let (child_status, child_stderr) = match child.try_wait() {
+        Ok(Some(status)) => (status.to_string(), read_child_stderr(child)),
+        Ok(None) => (
+            "still running".to_string(),
+            "<child still running; stderr cannot be drained without stopping it>".to_string(),
+        ),
+        Err(err) => (
+            format!("<failed to inspect status: {err}>"),
+            "<stderr unavailable>".to_string(),
+        ),
+    };
+    panic!(
+        "dashboard server did not become ready at {url}\nchild status: {child_status}\nchild stderr:\n{child_stderr}"
+    );
 }
 
 #[tokio::test]
@@ -134,6 +180,9 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
     let archive = build_bundle_archive("4.0.0");
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "4.0.0");
+    let dashboard_home = TempDir::new().expect("dashboard child home temp dir");
+    let xdg_config_home = dashboard_home.path().join("xdg");
+    fs::create_dir_all(&xdg_config_home).expect("create xdg config home");
 
     let port = pick_port();
     let base_url = format!("file://{}/", cdn.path().display());
@@ -151,13 +200,21 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         ])
         .current_dir(repo.path())
         .env("BITLOOPS_DASHBOARD_CDN_BASE_URL", &base_url)
+        .env("HOME", dashboard_home.path())
+        .env("USERPROFILE", dashboard_home.path())
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env_remove("BITLOOPS_DEVQL_PG_DSN")
+        .env_remove("BITLOOPS_DEVQL_CH_URL")
+        .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
+        .env_remove("BITLOOPS_DEVQL_CH_USER")
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("start dashboard process");
-    let _guard = ChildGuard { child };
+    let mut guard = ChildGuard { child };
 
-    wait_until_ready(&format!("http://127.0.0.1:{port}/api")).await;
+    wait_until_ready(&format!("http://127.0.0.1:{port}/api"), &mut guard.child).await;
 
     let client = reqwest::Client::new();
 

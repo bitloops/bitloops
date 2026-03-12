@@ -16,9 +16,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::engine::agent::{
-    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CURSOR,
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE,
+    AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
 use crate::engine::git_operations;
+use crate::engine::history::devql_prefetch;
 #[cfg(test)]
 use crate::engine::logging;
 use crate::engine::paths;
@@ -54,7 +56,10 @@ pub const CURSOR_HOOK_AGENT_PROFILE: HookAgentProfile = HookAgentProfile {
     agent_type: AGENT_TYPE_CURSOR,
 };
 
-const UNKNOWN_SESSION_ID: &str = "unknown";
+pub const CODEX_HOOK_AGENT_PROFILE: HookAgentProfile = HookAgentProfile {
+    agent_name: AGENT_NAME_CODEX,
+    agent_type: AGENT_TYPE_CODEX,
+};
 
 // ── Stdin JSON input types ────────────────────────────────────────────────────
 
@@ -77,7 +82,6 @@ pub struct UserPromptSubmitInput {
 
 /// Used by pre-task.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct TaskHookInput {
     #[serde(default)]
@@ -92,7 +96,6 @@ pub struct TaskHookInput {
 
 /// Used by post-task.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct PostTaskInput {
     #[serde(default)]
@@ -115,7 +118,6 @@ pub struct TaskToolResponse {
 
 /// Used by post-todo.
 ///
-#[allow(dead_code)] // fields reserved for future transcript handling
 #[derive(Debug, Deserialize)]
 pub struct PostTodoInput {
     #[serde(default)]
@@ -165,10 +167,16 @@ pub fn handle_session_start(
     backend: &dyn SessionBackend,
     repo_root: Option<&std::path::Path>,
 ) -> Result<()> {
+    let session_id = crate::engine::lifecycle::apply_session_id_policy(
+        &input.session_id,
+        crate::engine::lifecycle::SessionIdPolicy::Strict,
+    )
+    .context("session-start requires non-empty session_id")?;
+
     let mut state = backend
-        .load_session(&input.session_id)?
+        .load_session(&session_id)?
         .unwrap_or_else(|| SessionState {
-            session_id: input.session_id.clone(),
+            session_id: session_id.clone(),
             ..Default::default()
         });
 
@@ -219,6 +227,12 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
 ) -> Result<()> {
+    let session_id = crate::engine::lifecycle::apply_session_id_policy(
+        &input.session_id,
+        crate::engine::lifecycle::SessionIdPolicy::Strict,
+    )
+    .context("turn-start requires non-empty session_id")?;
+
     if let Some(root) = repo_root {
         let _ = ensure_hook_setup(root);
     }
@@ -226,8 +240,8 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     // Capture pre-prompt state for use by `stop`.
     let transcript_position = get_transcript_position(&input.transcript_path).unwrap_or_default();
     let prompt_trunc = truncate_prompt_for_storage(&input.prompt);
-    let pre_prompt = PrePromptState {
-        session_id: input.session_id.clone(),
+    let mut pre_prompt = PrePromptState {
+        session_id: session_id.clone(),
         timestamp: now_rfc3339(),
         source: String::new(),
         prompt: prompt_trunc,
@@ -238,12 +252,13 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
         start_message_index: 0,
         step_transcript_start: 0,
         last_transcript_line_count: 0,
+        devql_prefetch: None,
     };
     backend.save_pre_prompt(&pre_prompt)?;
 
     // InitializeSession is best-effort (warn, do not block hook).
     if let Err(err) = strategy.initialize_session(
-        &input.session_id,
+        &session_id,
         profile.agent_type,
         &input.transcript_path,
         &input.prompt,
@@ -252,9 +267,9 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     }
 
     let mut state = backend
-        .load_session(&input.session_id)?
+        .load_session(&session_id)?
         .unwrap_or_else(|| SessionState {
-            session_id: input.session_id.clone(),
+            session_id: session_id.clone(),
             started_at: now_rfc3339(),
             ..Default::default()
         });
@@ -273,6 +288,24 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     state.turn_checkpoint_ids.clear();
     if state.agent_type.trim().is_empty() {
         state.agent_type = profile.agent_type.to_string();
+    }
+
+    if let Some(root) = repo_root {
+        match devql_prefetch::prefetch_for_prompt(root, &session_id, &state.turn_id, &input.prompt)
+        {
+            Ok(Some(prefetch)) => {
+                pre_prompt.devql_prefetch = Some(prefetch);
+                if let Err(err) = backend.save_pre_prompt(&pre_prompt) {
+                    eprintln!(
+                        "[bitloops] Warning: failed to persist pre-hook DevQL prefetch: {err:#}"
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("[bitloops] Warning: pre-hook DevQL history prefetch failed: {err:#}");
+            }
+        }
     }
 
     backend.save_session(&state)
@@ -325,7 +358,10 @@ pub fn handle_stop_with_profile(
     profile: HookAgentProfile,
 ) -> Result<()> {
     // stop should remain tolerant when pre-turn/session state is missing.
-    let session_id = normalize_session_id(&input.session_id);
+    let session_id = crate::engine::lifecycle::apply_session_id_policy(
+        &input.session_id,
+        crate::engine::lifecycle::SessionIdPolicy::FallbackUnknown,
+    )?;
     let mut state = backend.load_session(&session_id)?;
 
     let pre_prompt = backend.load_pre_prompt(&session_id)?;

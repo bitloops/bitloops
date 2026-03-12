@@ -214,12 +214,12 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
 fn print_dashboard_db_health(health: &db::DashboardDbHealth) {
     let rows = [
         DatabaseStatusRow {
-            db: "Postgres",
-            status: map_backend_health_status(&health.postgres),
+            db: "Relational",
+            status: map_backend_health_status(&health.relational),
         },
         DatabaseStatusRow {
-            db: "ClickHouse",
-            status: map_backend_health_status(&health.clickhouse),
+            db: "Events",
+            status: map_backend_health_status(&health.events),
         },
     ];
     print_db_status_table(&rows);
@@ -343,6 +343,14 @@ fn agent_matches_filter(info: &CommittedInfo, agent_filter: Option<&str>) -> boo
     let normalized = canonical_agent_key(filter);
     if normalized.is_empty() {
         return true;
+    }
+
+    if !info.agents.is_empty() {
+        return info
+            .agents
+            .iter()
+            .map(|agent| canonical_agent_key(agent))
+            .any(|agent| agent == normalized);
     }
 
     canonical_agent_key(&info.agent) == normalized

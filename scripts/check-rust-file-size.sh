@@ -5,20 +5,22 @@ set -euo pipefail
 # - default max applies to non-test files
 # - known legacy outliers can use a per-file budget
 # - test files are ignored by default (set INCLUDE_TESTS=1 to include)
+# - gitignored files are skipped
 
 ROOT="${1:-bitloops_cli}"
 WARN_LINES="${RUST_FILE_WARN_LINES:-500}"
 MAX_LINES="${RUST_FILE_MAX_LINES:-1000}"
 INCLUDE_TESTS="${INCLUDE_TESTS:-0}"
+GIT_TOPLEVEL="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
 
 declare -A LEGACY_MAX_LINES=()
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "error: ripgrep (rg) is required"
-  exit 2
+if command -v rg >/dev/null 2>&1; then
+  mapfile -t rust_files < <(rg --files "$ROOT" -g '*.rs')
+else
+  echo "warning: ripgrep (rg) not found; falling back to find"
+  mapfile -t rust_files < <(find "$ROOT" -type f -name '*.rs' | sort)
 fi
-
-mapfile -t rust_files < <(rg --files "$ROOT" -g '*.rs')
 if [[ "${#rust_files[@]}" -eq 0 ]]; then
   echo "No Rust files found under $ROOT"
   exit 0
@@ -32,6 +34,12 @@ declare -a size_index=()
 is_test_file() {
   local path="$1"
   [[ "$path" == */tests/* || "$path" == *_test.rs || "$path" == *tests.rs || "$path" == *_tests.rs ]]
+}
+
+is_gitignored_file() {
+  local path="$1"
+  [[ -z "$GIT_TOPLEVEL" ]] && return 1
+  git -C "$GIT_TOPLEVEL" check-ignore -q -- "$path"
 }
 
 resolve_legacy_max_for_file() {
@@ -57,6 +65,10 @@ resolve_legacy_max_for_file() {
 
 for file in "${rust_files[@]}"; do
   if [[ "$INCLUDE_TESTS" != "1" ]] && is_test_file "$file"; then
+    continue
+  fi
+
+  if is_gitignored_file "$file"; then
     continue
   fi
 

@@ -1,6 +1,6 @@
 [package]
 name = "bitloops_cli"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2024"
 
 [lib]
@@ -28,9 +28,11 @@ uuid = { version = "1", features = ["v4"] }
 terminal_size = "0.2"
 tokio-postgres = "0.7"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 semver = "1"
 tar = "0.4"
 zstd = "0.13"
+duckdb = { version = "1", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

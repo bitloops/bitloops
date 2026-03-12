@@ -61,6 +61,7 @@ pub fn is_protected_path(path: &str) -> bool {
         ".worktrees",
         BITLOOPS_DIR,
         ".claude",
+        ".codex",
         ".cursor",
         ".gemini",
     ]
@@ -677,6 +678,8 @@ mod tests {
             (".bitloops/metadata/session.json", true),
             (".claude", true),
             (".claude/settings.json", true),
+            (".codex", true),
+            (".codex/hooks.json", true),
             (".cursor", true),
             (".cursor/hooks.json", true),
             (".gemini", true),

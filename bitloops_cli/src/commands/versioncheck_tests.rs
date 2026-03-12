@@ -1,29 +1,29 @@
 use super::*;
+use crate::test_support::process_state::with_env_vars;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
-fn test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn take_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    test_lock().lock().unwrap_or_else(|e| e.into_inner())
-}
-
-struct TestOverrideReset;
-
-impl Drop for TestOverrideReset {
-    fn drop(&mut self) {
-        set_config_dir_override_for_tests(None);
-        set_github_api_url_for_tests(None);
-    }
+fn with_test_overrides<T>(
+    config_dir: Option<&Path>,
+    server_url: Option<&str>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let config_dir_str = config_dir.map(|path| path.to_string_lossy().into_owned());
+    with_env_vars(
+        &[
+            (CONFIG_DIR_OVERRIDE_ENV, config_dir_str.as_deref()),
+            (GITHUB_API_URL_OVERRIDE_ENV, server_url),
+        ],
+        f,
+    )
 }
 
 fn now_secs() -> u64 {
@@ -122,16 +122,13 @@ impl Drop for MockServer {
     }
 }
 
-fn configure_test_paths(tmp_home: &TempDir, server_url: &str) -> TestOverrideReset {
-    set_config_dir_override_for_tests(Some(tmp_home.path().join(GLOBAL_CONFIG_DIR_NAME)));
-    set_github_api_url_for_tests(Some(server_url.to_string()));
-    TestOverrideReset
+fn with_test_paths<T>(tmp_home: &TempDir, server_url: &str, f: impl FnOnce() -> T) -> T {
+    let config_dir = tmp_home.path().join(GLOBAL_CONFIG_DIR_NAME);
+    with_test_overrides(Some(&config_dir), Some(server_url), f)
 }
 
 #[test]
 fn test_is_outdated() {
-    let _guard = take_test_lock();
-
     struct TestCase {
         current: &'static str,
         latest: &'static str,
@@ -220,120 +217,103 @@ fn test_is_outdated() {
 
 #[test]
 fn test_cache_read_write() {
-    let _guard = take_test_lock();
-
     let tmp_home = tempfile::tempdir().expect("create temp dir");
     let config_dir = tmp_home.path().join(GLOBAL_CONFIG_DIR_NAME);
-    set_config_dir_override_for_tests(Some(config_dir.clone()));
-    let _reset = TestOverrideReset;
+    with_test_overrides(Some(&config_dir), None, || {
+        fs::create_dir_all(&config_dir).expect("create config dir");
 
-    fs::create_dir_all(&config_dir).expect("create config dir");
+        let original_cache = VersionCache {
+            last_check_time_secs: now_secs(),
+        };
 
-    let original_cache = VersionCache {
-        last_check_time_secs: now_secs(),
-    };
+        save_cache(&original_cache).expect("save cache");
+        let loaded = load_cache().expect("load cache");
 
-    save_cache(&original_cache).expect("save cache");
-    let loaded = load_cache().expect("load cache");
+        let file_path = cache_file_path().expect("resolve cache file path");
 
-    let file_path = cache_file_path().expect("resolve cache file path");
-
-    let diff = loaded
-        .last_check_time_secs
-        .abs_diff(original_cache.last_check_time_secs);
-    assert!(
-        diff <= 1,
-        "last_check_time_secs mismatch: got {}, want {}",
-        loaded.last_check_time_secs,
-        original_cache.last_check_time_secs
-    );
-    assert!(file_path.exists(), "cache file should exist");
+        let diff = loaded
+            .last_check_time_secs
+            .abs_diff(original_cache.last_check_time_secs);
+        assert!(
+            diff <= 1,
+            "last_check_time_secs mismatch: got {}, want {}",
+            loaded.last_check_time_secs,
+            original_cache.last_check_time_secs
+        );
+        assert!(file_path.exists(), "cache file should exist");
+    });
 }
 
 #[test]
 fn test_ensure_global_config_dir() {
-    let _guard = take_test_lock();
-
     let tmp_dir = tempfile::tempdir().expect("create temp dir");
     let config_dir = tmp_dir.path().join(GLOBAL_CONFIG_DIR_NAME);
-    set_config_dir_override_for_tests(Some(config_dir.clone()));
-    let _reset = TestOverrideReset;
+    with_test_overrides(Some(&config_dir), None, || {
+        assert!(!config_dir.exists(), "directory already exists before test");
 
-    assert!(!config_dir.exists(), "directory already exists before test");
+        ensure_global_config_dir().expect("ensure_global_config_dir should not error");
 
-    ensure_global_config_dir().expect("ensure_global_config_dir should not error");
+        let metadata = fs::metadata(&config_dir).expect("config directory should be created");
+        assert!(metadata.is_dir(), "path should be a directory");
 
-    let metadata = fs::metadata(&config_dir).expect("config directory should be created");
-    assert!(metadata.is_dir(), "path should be a directory");
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode();
-        assert!(
-            mode & 0o700 == 0o700,
-            "directory permissions {mode:o} should include owner rwx"
-        );
-    }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = metadata.permissions().mode();
+            assert!(
+                mode & 0o700 == 0o700,
+                "directory permissions {mode:o} should include owner rwx"
+            );
+        }
+    });
 }
 
 #[test]
 fn test_fetch_latest_version() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v1.2.3","prerelease":false}"#);
-    set_github_api_url_for_tests(Some(server.url.clone()));
-    let _reset = TestOverrideReset;
+    with_test_overrides(None, Some(server.url.as_str()), || {
+        let got = fetch_latest_version().expect("fetch_latest_version should succeed");
 
-    let got = fetch_latest_version().expect("fetch_latest_version should succeed");
-
-    assert!(server.hits() > 0, "expected HTTP request to be made");
-    let req = server.request_text();
-    assert!(
-        req.contains("Accept: application/vnd.github+json"),
-        "missing Accept header in request: {req}"
-    );
-    assert!(
-        req.contains("User-Agent: bitloops-cli"),
-        "missing User-Agent header in request: {req}"
-    );
-    assert_eq!(got, "v1.2.3");
+        assert!(server.hits() > 0, "expected HTTP request to be made");
+        let req = server.request_text();
+        assert!(
+            req.contains("Accept: application/vnd.github+json"),
+            "missing Accept header in request: {req}"
+        );
+        assert!(
+            req.contains("User-Agent: bitloops-cli"),
+            "missing User-Agent header in request: {req}"
+        );
+        assert_eq!(got, "v1.2.3");
+    });
 }
 
 #[test]
 fn test_fetch_latest_version_prerelease() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v2.0.0-rc1","prerelease":true}"#);
-    set_github_api_url_for_tests(Some(server.url.clone()));
-    let _reset = TestOverrideReset;
-
-    let result = fetch_latest_version();
-    assert!(
-        result.is_err(),
-        "expected error for prerelease response, got {result:?}"
-    );
+    with_test_overrides(None, Some(server.url.as_str()), || {
+        let result = fetch_latest_version();
+        assert!(
+            result.is_err(),
+            "expected error for prerelease response, got {result:?}"
+        );
+    });
 }
 
 #[test]
 fn test_fetch_latest_version_server_error() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(500, "");
-    set_github_api_url_for_tests(Some(server.url.clone()));
-    let _reset = TestOverrideReset;
-
-    let result = fetch_latest_version();
-    assert!(
-        result.is_err(),
-        "expected error for 500 response, got {result:?}"
-    );
+    with_test_overrides(None, Some(server.url.as_str()), || {
+        let result = fetch_latest_version();
+        assert!(
+            result.is_err(),
+            "expected error for 500 response, got {result:?}"
+        );
+    });
 }
 
 #[test]
 fn test_parse_github_release() {
-    let _guard = take_test_lock();
-
     struct TestCase {
         name: &'static str,
         body: &'static str,
@@ -395,8 +375,6 @@ fn test_parse_github_release() {
 
 #[test]
 fn test_update_command() {
-    let _guard = take_test_lock();
-
     let cmd = update_command();
     let valid = [
         "brew upgrade bitloops",
@@ -410,123 +388,111 @@ fn test_update_command() {
 
 #[test]
 fn test_check_and_notify_skips_dev_version() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
-
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "dev");
-    assert!(
-        buf.is_empty(),
-        "expected no output for dev version, got: {}",
-        String::from_utf8_lossy(&buf)
-    );
+    with_test_paths(&tmp_home, &server.url, || {
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "dev");
+        assert!(
+            buf.is_empty(),
+            "expected no output for dev version, got: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    });
 }
 
 #[test]
 fn test_check_and_notify_skips_empty_version() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
-
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "");
-    assert!(
-        buf.is_empty(),
-        "expected no output for empty version, got: {}",
-        String::from_utf8_lossy(&buf)
-    );
+    with_test_paths(&tmp_home, &server.url, || {
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "");
+        assert!(
+            buf.is_empty(),
+            "expected no output for empty version, got: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    });
 }
 
 #[test]
 fn test_check_and_notify_skips_when_cache_is_fresh() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
+    with_test_paths(&tmp_home, &server.url, || {
+        let config_dir = global_config_dir_path().expect("resolve config path");
+        fs::create_dir_all(&config_dir).expect("create config dir");
+        let cache = VersionCache {
+            last_check_time_secs: now_secs(),
+        };
+        save_cache(&cache).expect("save cache");
 
-    let config_dir = global_config_dir_path().expect("resolve config path");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    let cache = VersionCache {
-        last_check_time_secs: now_secs(),
-    };
-    save_cache(&cache).expect("save cache");
-
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "1.0.0");
-    assert!(
-        buf.is_empty(),
-        "expected no output when cache is fresh, got: {}",
-        String::from_utf8_lossy(&buf)
-    );
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "1.0.0");
+        assert!(
+            buf.is_empty(),
+            "expected no output when cache is fresh, got: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    });
 }
 
 #[test]
 fn test_check_and_notify_prints_notification_when_outdated() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v2.0.0","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
+    with_test_paths(&tmp_home, &server.url, || {
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "1.0.0");
 
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "1.0.0");
-
-    let output = String::from_utf8_lossy(&buf).to_string();
-    assert!(
-        output.contains("v2.0.0"),
-        "expected output to include latest version, got: {output}"
-    );
-    assert!(
-        output.contains("1.0.0"),
-        "expected output to include current version, got: {output}"
-    );
+        let output = String::from_utf8_lossy(&buf).to_string();
+        assert!(
+            output.contains("v2.0.0"),
+            "expected output to include latest version, got: {output}"
+        );
+        assert!(
+            output.contains("1.0.0"),
+            "expected output to include current version, got: {output}"
+        );
+    });
 }
 
 #[test]
 fn test_check_and_notify_no_notification_when_up_to_date() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(200, r#"{"tag_name":"v1.0.0","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
+    with_test_paths(&tmp_home, &server.url, || {
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "1.0.0");
 
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "1.0.0");
-
-    assert!(
-        buf.is_empty(),
-        "expected no output when up to date, got: {}",
-        String::from_utf8_lossy(&buf)
-    );
+        assert!(
+            buf.is_empty(),
+            "expected no output when up to date, got: {}",
+            String::from_utf8_lossy(&buf)
+        );
+    });
 }
 
 #[test]
 fn test_check_and_notify_fetch_failure_updates_cache_to_prevent_retry() {
-    let _guard = take_test_lock();
-
     let server = MockServer::start(500, "");
     let tmp_home = tempfile::tempdir().expect("create temp dir");
-    let _reset = configure_test_paths(&tmp_home, &server.url);
+    with_test_paths(&tmp_home, &server.url, || {
+        let mut buf = Vec::new();
+        check_and_notify(&mut buf, "1.0.0");
 
-    let mut buf = Vec::new();
-    check_and_notify(&mut buf, "1.0.0");
+        assert!(
+            buf.is_empty(),
+            "expected no output on fetch failure, got: {}",
+            String::from_utf8_lossy(&buf)
+        );
 
-    assert!(
-        buf.is_empty(),
-        "expected no output on fetch failure, got: {}",
-        String::from_utf8_lossy(&buf)
-    );
-
-    let cache = load_cache().expect("cache should be readable after fetch failure");
-    let age_secs = now_secs().saturating_sub(cache.last_check_time_secs);
-    assert!(
-        age_secs <= 60,
-        "expected cache timestamp to be updated recently, age_secs={age_secs}"
-    );
+        let cache = load_cache().expect("cache should be readable after fetch failure");
+        let age_secs = now_secs().saturating_sub(cache.last_check_time_secs);
+        assert!(
+            age_secs <= 60,
+            "expected cache timestamp to be updated recently, age_secs={age_secs}"
+        );
+    });
 }

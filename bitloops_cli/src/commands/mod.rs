@@ -26,7 +26,7 @@ pub mod versioncheck;
     disable_help_subcommand = true
 )]
 pub struct Cli {
-    /// Check backend connectivity for Postgres and ClickHouse.
+    /// Check backend connectivity for configured relational/events providers.
     #[arg(long = "connection-status", global = true, default_value_t = false)]
     pub connection_status: bool,
 

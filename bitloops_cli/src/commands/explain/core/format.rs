@@ -335,7 +335,7 @@ pub fn scope_transcript_for_checkpoint(
         )
         .unwrap_or_else(|| full_transcript.to_vec()),
         // Claude Code and OpenCode use JSONL; offset is a line number.
-        AgentType::ClaudeCode | AgentType::Cursor | AgentType::OpenCode => {
+        AgentType::Codex | AgentType::ClaudeCode | AgentType::Cursor | AgentType::OpenCode => {
             crate::engine::transcript::parse::slice_from_line(full_transcript, start_offset)
         }
     }

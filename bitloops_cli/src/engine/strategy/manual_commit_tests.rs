@@ -8,11 +8,18 @@ const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA
 /// Creates a real git repository with an initial commit for testing.
 fn setup_git_repo(dir: &TempDir) -> String {
     let run = |args: &[&str]| {
-        git_command()
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
@@ -26,17 +33,30 @@ fn setup_git_repo(dir: &TempDir) -> String {
         .current_dir(dir.path())
         .output()
         .unwrap();
+    assert!(
+        out.status.success(),
+        "git [\"rev-parse\", \"HEAD\"] failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// Creates a git repo with no commits.
 fn setup_empty_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        git_command()
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
@@ -2642,6 +2662,7 @@ fn list_committed_multi_session_info() {
 
     let mut one = idle_state("list-session-1", &head, vec!["file0.rs".to_string()], 1);
     let mut two = idle_state("list-session-2", &head, vec!["file1.rs".to_string()], 2);
+    two.agent_type = "gemini-cli".to_string();
     condense_with_transcript(&strategy, &mut one, checkpoint_id, &head, r#"{"i": 0}"#);
     condense_with_transcript(&strategy, &mut two, checkpoint_id, &head, r#"{"i": 1}"#);
 
@@ -2657,8 +2678,13 @@ fn list_committed_multi_session_info() {
         "latest session id should be exposed"
     );
     assert_eq!(
-        found.agent, AGENT_TYPE_CLAUDE_CODE,
+        found.agent, "gemini-cli",
         "agent should come from latest session metadata"
+    );
+    assert_eq!(
+        found.agents,
+        vec![AGENT_TYPE_CLAUDE_CODE.to_string(), "gemini-cli".to_string()],
+        "agents should include all unique session agents in order"
     );
 }
 
