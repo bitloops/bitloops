@@ -248,7 +248,12 @@ fn detect_installed_agents(repo_root: &Path) -> Vec<String> {
     if repo_root.join(".claude").is_dir() {
         installed.push("claude-code".to_string());
     }
-    if repo_root.join(".github").join("hooks").join("bitloops.json").is_file() {
+    if repo_root
+        .join(".github")
+        .join("hooks")
+        .join("bitloops.json")
+        .is_file()
+    {
         installed.push("copilot".to_string());
     }
     if repo_root.join(".gemini").is_dir() {

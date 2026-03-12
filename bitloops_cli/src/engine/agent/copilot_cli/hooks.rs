@@ -112,7 +112,9 @@ fn parse_top_level_map(data: &[u8]) -> Result<Map<String, Value>> {
     let value: Value = serde_json::from_slice(data)
         .map_err(|err| anyhow!("failed to parse {HOOKS_FILE_NAME}: {err}"))?;
     let Some(map) = value.as_object() else {
-        return Err(anyhow!("failed to parse {HOOKS_FILE_NAME}: expected JSON object"));
+        return Err(anyhow!(
+            "failed to parse {HOOKS_FILE_NAME}: expected JSON object"
+        ));
     };
     Ok(map.clone())
 }
@@ -234,8 +236,7 @@ pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     raw_file.insert("hooks".to_string(), Value::Object(raw_hooks));
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| anyhow!("failed to create {HOOKS_DIR}: {err}"))?;
+        fs::create_dir_all(parent).map_err(|err| anyhow!("failed to create {HOOKS_DIR}: {err}"))?;
     }
 
     let mut output = serde_json::to_string_pretty(&Value::Object(raw_file))
@@ -372,7 +373,8 @@ mod tests {
             let value: Value = serde_json::from_str(&content).expect("json");
             assert!(value.get("customField").is_some());
             assert!(
-                value.get("hooks")
+                value
+                    .get("hooks")
                     .and_then(Value::as_object)
                     .and_then(|hooks| hooks.get("customHook"))
                     .is_some()

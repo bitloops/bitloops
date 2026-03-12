@@ -97,7 +97,10 @@ struct ModelUsage {
     cache_write_tokens: i32,
 }
 
-pub fn parse_events_from_offset(data: &[u8], start_offset: usize) -> Result<(Vec<CopilotEvent>, usize)> {
+pub fn parse_events_from_offset(
+    data: &[u8],
+    start_offset: usize,
+) -> Result<(Vec<CopilotEvent>, usize)> {
     let mut events = Vec::new();
     let mut line_count = 0usize;
     let reader = BufReader::new(Cursor::new(data));
@@ -167,7 +170,8 @@ pub fn extract_modified_files_from_events(events: &[CopilotEvent]) -> Vec<String
             continue;
         }
 
-        let Ok(data) = serde_json::from_value::<ToolExecutionCompleteData>(event.data.clone()) else {
+        let Ok(data) = serde_json::from_value::<ToolExecutionCompleteData>(event.data.clone())
+        else {
             continue;
         };
 
@@ -210,7 +214,8 @@ pub fn extract_model_from_events(events: &[CopilotEvent]) -> String {
             continue;
         }
 
-        let Ok(data) = serde_json::from_value::<ToolExecutionCompleteData>(event.data.clone()) else {
+        let Ok(data) = serde_json::from_value::<ToolExecutionCompleteData>(event.data.clone())
+        else {
             continue;
         };
         if !data.model.is_empty() {
@@ -293,7 +298,10 @@ not-json
     #[test]
     fn extract_prompts_reads_user_messages() {
         let (events, _) = parse_events_from_offset(&sample_data(), 0).expect("parse");
-        assert_eq!(extract_prompts_from_events(&events), vec!["Create hello.txt"]);
+        assert_eq!(
+            extract_prompts_from_events(&events),
+            vec!["Create hello.txt"]
+        );
     }
 
     #[test]
@@ -305,7 +313,10 @@ not-json
     #[test]
     fn extract_modified_files_reads_file_paths() {
         let (events, _) = parse_events_from_offset(&sample_data(), 0).expect("parse");
-        assert_eq!(extract_modified_files_from_events(&events), vec!["hello.txt"]);
+        assert_eq!(
+            extract_modified_files_from_events(&events),
+            vec!["hello.txt"]
+        );
     }
 
     #[test]

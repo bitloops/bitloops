@@ -934,9 +934,8 @@ fn test_parse_hook_event_turn_start_copilot() {
 #[test]
 fn test_parse_hook_event_turn_end_copilot() {
     let adapter = CopilotCliLifecycleAdapter;
-    let mut stdin = Cursor::new(
-        r#"{"sessionId":"copilot-session-3","transcriptPath":"/tmp/copilot.jsonl"}"#,
-    );
+    let mut stdin =
+        Cursor::new(r#"{"sessionId":"copilot-session-3","transcriptPath":"/tmp/copilot.jsonl"}"#);
     let event = adapter
         .parse_hook_event(COPILOT_HOOK_AGENT_STOP, &mut stdin)
         .unwrap()

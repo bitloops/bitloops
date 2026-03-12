@@ -11,8 +11,9 @@ use crate::engine::agent::{
 use super::hooks;
 use super::lifecycle;
 use super::transcript::{
-    calculate_token_usage_from_events, extract_modified_files_from_events, extract_prompts_from_events,
-    extract_summary_from_events, get_transcript_position_from_bytes, parse_events_from_offset,
+    calculate_token_usage_from_events, extract_modified_files_from_events,
+    extract_prompts_from_events, extract_summary_from_events, get_transcript_position_from_bytes,
+    parse_events_from_offset,
 };
 
 #[derive(Debug, Default, Clone, Copy)]

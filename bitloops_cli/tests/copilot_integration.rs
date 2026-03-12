@@ -131,7 +131,12 @@ fn copilot_basic_workflow() {
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
-    let init_out = run_cmd_with_home(dir.path(), home.path(), &["init", "--agent", "copilot"], None);
+    let init_out = run_cmd_with_home(
+        dir.path(),
+        home.path(),
+        &["init", "--agent", "copilot"],
+        None,
+    );
     assert_success(&init_out, "bitloops init --agent copilot");
 
     let enable_out = run_cmd_with_home(dir.path(), home.path(), &["enable"], None);
