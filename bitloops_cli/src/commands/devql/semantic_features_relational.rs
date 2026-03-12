@@ -20,12 +20,8 @@ async fn upsert_semantic_feature_rows(
     for input in inputs {
         let rows = semantic::build_semantic_feature_rows(input, summary_provider);
         let state = load_semantic_index_state(relational_store, &input.artefact_id).await?;
-        if !semantic::semantic_features_require_reindex(
-            &state,
-            &rows.semantic_features_input_hash,
-            &rows.semantics.prompt_version,
-            &rows.features.prompt_version,
-        ) {
+        if !semantic::semantic_features_require_reindex(&state, &rows.semantic_features_input_hash)
+        {
             stats.skipped += 1;
             continue;
         }
@@ -82,9 +78,7 @@ fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     format!(
         "SELECT \
             (SELECT semantic_features_input_hash FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_hash, \
-            (SELECT prompt_version FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_prompt_version, \
-            (SELECT semantic_features_input_hash FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_hash, \
-            (SELECT prompt_version FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_prompt_version",
+            (SELECT semantic_features_input_hash FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_hash",
         artefact_id = esc_pg(artefact_id),
     )
 }
@@ -99,16 +93,8 @@ fn parse_semantic_index_state_rows(rows: &[Value]) -> semantic::SemanticFeatureI
             .get("semantics_hash")
             .and_then(Value::as_str)
             .map(str::to_string),
-        semantics_prompt_version: row
-            .get("semantics_prompt_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
         features_hash: row
             .get("features_hash")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        features_prompt_version: row
-            .get("features_prompt_version")
             .and_then(Value::as_str)
             .map(str::to_string),
     }
@@ -160,17 +146,16 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     );
 
     Ok(format!(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = CURRENT_TIMESTAMP; \
-INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, local_relationships, context_tokens) \
-VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {local_relationships}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = CURRENT_TIMESTAMP",
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = CURRENT_TIMESTAMP; \
+INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, local_relationships, context_tokens) \
+VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {local_relationships}, {context_tokens}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = CURRENT_TIMESTAMP",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
         input_hash = esc_pg(&rows.semantic_features_input_hash),
-        prompt_version = esc_pg(&semantics.prompt_version),
         doc_comment_summary = doc_comment_summary_expr,
         llm_summary = llm_summary_expr,
         template_summary = esc_pg(&semantics.template_summary),
@@ -181,7 +166,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         features_repo_id = esc_pg(&features.repo_id),
         features_blob_sha = esc_pg(&features.blob_sha),
         features_input_hash = esc_pg(&rows.semantic_features_input_hash),
-        features_prompt_version = esc_pg(&features.prompt_version),
         normalized_name = esc_pg(&features.normalized_name),
         normalized_signature = normalized_signature_expr,
         identifier_tokens = identifier_tokens_expr,
@@ -238,21 +222,11 @@ mod semantic_feature_relational_tests {
 
         let rows = vec![json!({
             "semantics_hash": "hash-a",
-            "semantics_prompt_version": "semantic-summary-v5::provider=noop",
             "features_hash": "hash-b",
-            "features_prompt_version": "symbol-features-v2"
         })];
         let parsed = parse_semantic_index_state_rows(&rows);
         assert_eq!(parsed.semantics_hash.as_deref(), Some("hash-a"));
-        assert_eq!(
-            parsed.semantics_prompt_version.as_deref(),
-            Some("semantic-summary-v5::provider=noop")
-        );
         assert_eq!(parsed.features_hash.as_deref(), Some("hash-b"));
-        assert_eq!(
-            parsed.features_prompt_version.as_deref(),
-            Some("symbol-features-v2")
-        );
     }
 
     #[test]

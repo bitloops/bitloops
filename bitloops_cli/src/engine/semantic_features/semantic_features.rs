@@ -20,8 +20,6 @@ pub use self::semantic::{
 };
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
-const SYMBOL_FEATURES_PROMPT_VERSION: &str = "symbol-features-v2";
-const SEMANTIC_SUMMARY_PROMPT_VERSION: &str = "semantic-summary-v5";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -89,9 +87,7 @@ pub struct SemanticFeatureRows {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SemanticFeatureIndexState {
     pub semantics_hash: Option<String>,
-    pub semantics_prompt_version: Option<String>,
     pub features_hash: Option<String>,
-    pub features_prompt_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -274,13 +270,9 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
-    semantics_prompt_version: &str,
-    features_prompt_version: &str,
 ) -> bool {
     state.semantics_hash.as_deref() != Some(next_input_hash)
         || state.features_hash.as_deref() != Some(next_input_hash)
-        || state.semantics_prompt_version.as_deref() != Some(semantics_prompt_version)
-        || state.features_prompt_version.as_deref() != Some(features_prompt_version)
 }
 
 fn sha256_hex(input: &str) -> String {

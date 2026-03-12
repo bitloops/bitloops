@@ -161,7 +161,6 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     repo_id TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
     semantic_features_input_hash TEXT NOT NULL,
-    prompt_version TEXT NOT NULL,
     doc_comment_summary TEXT,
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
@@ -179,7 +178,6 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     repo_id TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
     semantic_features_input_hash TEXT NOT NULL,
-    prompt_version TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     normalized_signature TEXT,
     identifier_tokens TEXT NOT NULL DEFAULT '[]',
@@ -198,7 +196,9 @@ CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
 ON symbol_features (repo_id, blob_sha);
 "#;
 
-async fn init_relational_schema(relational_store: &dyn store_contracts::RelationalStore) -> Result<()> {
+async fn init_relational_schema(
+    relational_store: &dyn store_contracts::RelationalStore,
+) -> Result<()> {
     relational_store.init_schema().await
 }
 

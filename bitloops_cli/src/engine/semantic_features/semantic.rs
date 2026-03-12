@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use crate::engine::providers::llm::{LlmProvider, build_llm_provider};
 
 use super::common::{normalize_repo_path, split_identifier_tokens};
-use super::{MAX_SUMMARY_BODY_CHARS, SEMANTIC_SUMMARY_PROMPT_VERSION, SemanticFeatureInput};
+use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 pub use crate::engine::providers::llm::resolve_semantic_summary_endpoint;
 
@@ -18,10 +18,6 @@ pub struct SemanticSummaryCandidate {
 
 pub trait SemanticSummaryProvider {
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
-
-    fn prompt_version(&self) -> String {
-        format!("{SEMANTIC_SUMMARY_PROMPT_VERSION}::provider=noop")
-    }
 }
 
 pub struct NoopSemanticSummaryProvider;
@@ -182,11 +178,6 @@ impl SemanticSummaryProvider for LlmSemanticSummaryProvider {
             source_model: Some(self.llm_provider.descriptor()),
         })
     }
-
-    fn prompt_version(&self) -> String {
-        self.llm_provider
-            .prompt_version(SEMANTIC_SUMMARY_PROMPT_VERSION)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,7 +186,6 @@ pub struct SymbolSemanticsRow {
     pub artefact_id: String,
     pub repo_id: String,
     pub blob_sha: String,
-    pub prompt_version: String,
     pub doc_comment_summary: Option<String>,
     pub llm_summary: Option<String>,
     pub template_summary: String,
@@ -240,7 +230,6 @@ pub(super) fn build_semantics_row(
         artefact_id: input.artefact_id.clone(),
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
-        prompt_version: summary_provider.prompt_version(),
         doc_comment_summary,
         llm_summary,
         template_summary,
@@ -450,15 +439,11 @@ mod tests {
 
     #[test]
     fn semantic_features_build_provider_supports_disabled_and_requires_api_key() {
-        let disabled = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
+        let _disabled = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
             semantic_provider: Some("disabled".to_string()),
             ..SemanticSummaryProviderConfig::default()
         })
         .expect("disabled provider should build");
-        assert_eq!(
-            disabled.prompt_version(),
-            "semantic-summary-v5::provider=noop"
-        );
 
         let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
             semantic_provider: Some("openai".to_string()),

@@ -1011,10 +1011,6 @@ impl semantic::SemanticSummaryProvider for MockSemanticSummaryProvider {
     ) -> Option<semantic::SemanticSummaryCandidate> {
         self.candidate.clone()
     }
-
-    fn prompt_version(&self) -> String {
-        "semantic-summary-v5::provider=mock::model=test".to_string()
-    }
 }
 
 fn mock_semantic_feature_blob_content() -> &'static str {
@@ -1377,45 +1373,22 @@ fn semantic_features_use_doc_comment_detail_when_llm_summary_is_invalid() {
 }
 
 #[test]
-fn semantic_features_reindex_when_hash_or_prompt_version_changes() {
+fn semantic_features_reindex_when_hash_changes() {
     let input = semantic_feature_input_named("normalizeEmail");
     let output = build_semantic_feature_rows(&input, &semantic::NoopSemanticSummaryProvider);
     let hash = output.semantic_features_input_hash.clone();
 
     let unchanged = SemanticFeatureIndexState {
         semantics_hash: Some(hash.clone()),
-        semantics_prompt_version: Some(output.semantics.prompt_version.clone()),
         features_hash: Some(hash.clone()),
-        features_prompt_version: Some(output.features.prompt_version.clone()),
     };
-    assert!(!semantic_features_require_reindex(
-        &unchanged,
-        &hash,
-        &output.semantics.prompt_version,
-        &output.features.prompt_version,
-    ));
-
-    let stale_prompt = SemanticFeatureIndexState {
-        semantics_prompt_version: Some("semantic-summary-v0::provider=noop".to_string()),
-        ..unchanged.clone()
-    };
-    assert!(semantic_features_require_reindex(
-        &stale_prompt,
-        &hash,
-        &output.semantics.prompt_version,
-        &output.features.prompt_version,
-    ));
+    assert!(!semantic_features_require_reindex(&unchanged, &hash,));
 
     let stale_hash = SemanticFeatureIndexState {
         features_hash: Some("different-hash".to_string()),
         ..unchanged
     };
-    assert!(semantic_features_require_reindex(
-        &stale_hash,
-        &hash,
-        &output.semantics.prompt_version,
-        &output.features.prompt_version,
-    ));
+    assert!(semantic_features_require_reindex(&stale_hash, &hash,));
 }
 
 #[tokio::test]

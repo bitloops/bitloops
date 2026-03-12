@@ -5,7 +5,6 @@ use anyhow::Result;
 pub trait LlmProvider {
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Option<String>;
     fn descriptor(&self) -> String;
-    fn prompt_version(&self, base_prompt_version: &str) -> String;
 }
 
 pub fn build_llm_provider(

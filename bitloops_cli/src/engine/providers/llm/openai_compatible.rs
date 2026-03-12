@@ -82,13 +82,6 @@ impl LlmProvider for OpenAiCompatibleLlmProvider {
     fn descriptor(&self) -> String {
         format!("{}:{}", self.provider, self.model)
     }
-
-    fn prompt_version(&self, base_prompt_version: &str) -> String {
-        format!(
-            "{base_prompt_version}::provider={}::model={}",
-            self.provider, self.model
-        )
-    }
 }
 
 fn build_chat_completion_payload(model: &str, system_prompt: &str, user_prompt: &str) -> Value {
@@ -201,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_llm_provider_build_exposes_descriptor_and_prompt_version() {
+    fn semantic_llm_provider_build_exposes_descriptor() {
         let provider = build(
             "openai",
             "gpt-test".to_string(),
@@ -210,10 +203,6 @@ mod tests {
         )
         .expect("provider should build");
         assert_eq!(provider.descriptor(), "openai:gpt-test");
-        assert_eq!(
-            provider.prompt_version("semantic-summary-v1"),
-            "semantic-summary-v1::provider=openai::model=gpt-test"
-        );
     }
 
     #[test]
