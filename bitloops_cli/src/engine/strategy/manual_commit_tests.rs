@@ -11,6 +11,8 @@ fn setup_git_repo(dir: &TempDir) -> String {
         let out = git_command()
             .args(args)
             .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(
@@ -31,6 +33,8 @@ fn setup_git_repo(dir: &TempDir) -> String {
     let out = git_command()
         .args(["rev-parse", "HEAD"])
         .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .unwrap();
     assert!(
