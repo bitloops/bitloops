@@ -30,6 +30,19 @@ fn extract_js_ts_artefacts_treesitter(content: &str, path: &str) -> Result<Optio
         }
     }
 
+    crate::engine::logging::warn(
+        &crate::engine::logging::with_component(crate::engine::logging::background(), "devql"),
+        "devql parse failure fallback",
+        &[
+            crate::engine::logging::string_attr("path", path),
+            crate::engine::logging::string_attr(
+                "language_candidates",
+                "typescript,javascript",
+            ),
+            crate::engine::logging::string_attr("failure_kind", "parse_error"),
+        ],
+    );
+
     Ok(None)
 }
 

@@ -28,6 +28,7 @@ enum AsOfSelector {
 #[derive(Debug, Clone, Default)]
 struct ArtefactFilter {
     kind: Option<String>,
+    symbol_fqn: Option<String>,
     lines: Option<(i32, i32)>,
     agent: Option<String>,
     since: Option<String>,
@@ -127,6 +128,7 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             let args = parse_named_args(inner)?;
             parsed.has_artefacts_stage = true;
             parsed.artefacts.kind = args.get("kind").cloned();
+            parsed.artefacts.symbol_fqn = args.get("symbol_fqn").cloned();
             parsed.artefacts.agent = args.get("agent").cloned();
             parsed.artefacts.since = args.get("since").cloned();
             if let Some(lines) = args.get("lines") {

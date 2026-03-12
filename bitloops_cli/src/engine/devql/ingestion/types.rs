@@ -22,6 +22,8 @@ struct FileArtefactRow {
     artefact_id: String,
     symbol_id: String,
     language: String,
+    end_line: i32,
+    end_byte: i32,
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ tar = "0.4"
 zstd = "0.13"
 
 [dev-dependencies]
+cucumber = "0.22.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 

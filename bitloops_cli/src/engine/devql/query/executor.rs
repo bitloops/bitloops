@@ -6,21 +6,41 @@ async fn execute_devql_query(
     if (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
         && (parsed.file.is_some() || parsed.files_path.is_some() || parsed.has_artefacts_stage)
     {
+        log_devql_validation_failure(
+            parsed,
+            "telemetry_or_checkpoints_with_artefacts",
+            "MVP limitation: telemetry/checkpoints stages cannot be combined with artefact traversal in one query",
+        );
         bail!(
             "MVP limitation: telemetry/checkpoints stages cannot be combined with artefact traversal in one query"
         )
     }
 
     if parsed.has_chat_history_stage && !parsed.has_artefacts_stage {
+        log_devql_validation_failure(
+            parsed,
+            "chat_history_requires_artefacts",
+            "chatHistory() requires an artefacts() stage in the query",
+        );
         bail!("chatHistory() requires an artefacts() stage in the query");
     }
 
     if parsed.has_deps_stage && parsed.has_chat_history_stage {
+        log_devql_validation_failure(
+            parsed,
+            "deps_with_chat_history",
+            "deps() cannot be combined with chatHistory() stage",
+        );
         bail!("deps() cannot be combined with chatHistory() stage");
     }
 
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
     {
+        log_devql_validation_failure(
+            parsed,
+            "chat_history_with_telemetry_or_checkpoints",
+            "chatHistory() cannot be combined with checkpoints()/telemetry() stages",
+        );
         bail!("chatHistory() cannot be combined with checkpoints()/telemetry() stages");
     }
 
@@ -30,6 +50,27 @@ async fn execute_devql_query(
 
     let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
     execute_postgres_pipeline(cfg, parsed, pg_client).await
+}
+
+fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
+    crate::engine::logging::warn(
+        &crate::engine::logging::with_component(crate::engine::logging::background(), "devql"),
+        "devql query validation failed",
+        &[
+            crate::engine::logging::string_attr("rule", rule),
+            crate::engine::logging::string_attr("reason", reason),
+            crate::engine::logging::bool_attr("has_deps_stage", parsed.has_deps_stage),
+            crate::engine::logging::bool_attr(
+                "has_chat_history_stage",
+                parsed.has_chat_history_stage,
+            ),
+            crate::engine::logging::bool_attr(
+                "has_checkpoints_stage",
+                parsed.has_checkpoints_stage,
+            ),
+            crate::engine::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
+        ],
+    );
 }
 
 async fn execute_clickhouse_pipeline(
@@ -99,10 +140,39 @@ async fn execute_postgres_pipeline(
         return execute_postgres_deps_pipeline(cfg, parsed, pg_client, &repo_id).await;
     }
 
-    let mut where_clauses = vec![format!("a.repo_id = '{}'", esc_pg(&repo_id))];
+    let sql = build_postgres_artefacts_query(cfg, parsed, Some(pg_client), &repo_id).await?;
+    let rows = pg_query_rows(pg_client, &sql).await?;
+    if parsed.has_chat_history_stage {
+        return attach_chat_history_to_artefacts(cfg, pg_client, &repo_id, rows).await;
+    }
+    Ok(rows)
+}
+
+async fn build_postgres_artefacts_query(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    pg_client: Option<&tokio_postgres::Client>,
+    repo_id: &str,
+) -> Result<String> {
+    let use_historical_tables = parsed.as_of.is_some();
+    let artefacts_table = if use_historical_tables {
+        "artefacts"
+    } else {
+        "artefacts_current"
+    };
+    let created_at_select = if use_historical_tables {
+        "a.created_at"
+    } else {
+        "a.updated_at AS created_at"
+    };
+
+    let mut where_clauses = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
 
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         where_clauses.push(format!("a.canonical_kind = '{}'", esc_pg(kind)));
+    }
+    if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
+        where_clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
     }
 
     if let Some((start, end)) = parsed.artefacts.lines {
@@ -121,7 +191,7 @@ async fn execute_postgres_pipeline(
             } else {
                 where_clauses.push(format!(
                     "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",
-                    esc_pg(&repo_id),
+                    esc_pg(repo_id),
                     esc_pg(&commit_sha),
                     sql_path_candidates_clause("path", &path_candidates),
                 ));
@@ -140,38 +210,38 @@ async fn execute_postgres_pipeline(
     }
 
     if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
+        let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
         let blob_shas = blob_shas_changed_in_events(
             cfg,
             pg_client,
-            &repo_id,
+            repo_id,
             parsed.artefacts.agent.as_deref(),
             parsed.artefacts.since.as_deref(),
         )
         .await?;
         if blob_shas.is_empty() {
-            return Ok(vec![]);
+            where_clauses.push("1 = 0".to_string());
+        } else {
+            where_clauses.push(format!(
+                "a.blob_sha IN ({})",
+                sql_string_list_pg(&blob_shas)
+            ));
         }
-        where_clauses.push(format!(
-            "a.blob_sha IN ({})",
-            sql_string_list_pg(&blob_shas)
-        ));
     }
 
     let sql = format!(
-        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.blob_sha, a.symbol_fqn, a.content_hash, a.created_at \
-FROM artefacts a \
+        "SELECT a.artefact_id, a.path, a.canonical_kind, a.language_kind, a.language, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.blob_sha, a.symbol_fqn, a.content_hash, {} \
+FROM {} a \
 WHERE {} \
 ORDER BY a.path, a.start_line \
 LIMIT {}",
+        created_at_select,
+        artefacts_table,
         where_clauses.join(" AND "),
         parsed.limit.max(1)
     );
 
-    let rows = pg_query_rows(pg_client, &sql).await?;
-    if parsed.has_chat_history_stage {
-        return attach_chat_history_to_artefacts(cfg, pg_client, &repo_id, rows).await;
-    }
-    Ok(rows)
+    Ok(sql)
 }
 
 async fn execute_postgres_deps_pipeline(

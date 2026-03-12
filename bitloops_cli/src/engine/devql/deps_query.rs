@@ -19,10 +19,24 @@ fn build_postgres_deps_query(
     repo_id: &str,
 ) -> Result<String> {
     validate_deps_filter(&parsed.deps)?;
+    let use_historical_tables = parsed.as_of.is_some();
+    let artefacts_table = if use_historical_tables {
+        "artefacts"
+    } else {
+        "artefacts_current"
+    };
+    let edges_table = if use_historical_tables {
+        "artefact_edges"
+    } else {
+        "artefact_edges_current"
+    };
 
     let mut source_filters = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         source_filters.push(format!("a.canonical_kind = '{}'", esc_pg(kind)));
+    }
+    if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
+        source_filters.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
     }
     if let Some((start, end)) = parsed.artefacts.lines {
         source_filters.push(format!("a.start_line <= {end} AND a.end_line >= {start}"));
@@ -71,12 +85,15 @@ fn build_postgres_deps_query(
         format!(
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
-FROM artefact_edges e \
-JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
-JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
+FROM {} e \
+JOIN {} at ON at.artefact_id = e.to_artefact_id \
+JOIN {} af ON af.artefact_id = e.from_artefact_id \
 WHERE {} AND {} \
 ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
 LIMIT {}",
+            edges_table,
+            artefacts_table,
+            artefacts_table,
             edge_filters.join(" AND "),
             source_filters
                 .iter()
@@ -89,38 +106,51 @@ LIMIT {}",
         format!(
             "WITH out_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
-FROM artefact_edges e JOIN artefacts a ON a.artefact_id = e.from_artefact_id \
+FROM {} e JOIN {} a ON a.artefact_id = e.from_artefact_id \
 WHERE {} AND {} \
 ), in_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
-FROM artefact_edges e JOIN artefacts a ON a.artefact_id = e.to_artefact_id \
+FROM {} e JOIN {} a ON a.artefact_id = e.to_artefact_id \
 WHERE {} AND {} \
 ) \
 SELECT DISTINCT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
 FROM (SELECT * FROM out_edges UNION ALL SELECT * FROM in_edges) e \
-JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
-LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
+JOIN {} af ON af.artefact_id = e.from_artefact_id \
+LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
 ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
 LIMIT {}",
+            edges_table,
+            artefacts_table,
             edge_filters.join(" AND "),
             source_filters.join(" AND "),
+            edges_table,
+            artefacts_table,
             edge_filters.join(" AND "),
             source_filters.join(" AND "),
+            artefacts_table,
+            artefacts_table,
             parsed.limit.max(1)
         )
     } else {
         format!(
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
-FROM artefact_edges e \
-JOIN artefacts af ON af.artefact_id = e.from_artefact_id \
-LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id \
+FROM {} e \
+JOIN {} af ON af.artefact_id = e.from_artefact_id \
+LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
 WHERE {} AND {} \
 ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
 LIMIT {}",
+            edges_table,
+            artefacts_table,
+            artefacts_table,
             edge_filters.join(" AND "),
-            source_filters.join(" AND "),
+            source_filters
+                .iter()
+                .map(|f| f.replace("a.", "af."))
+                .collect::<Vec<_>>()
+                .join(" AND "),
             parsed.limit.max(1)
         )
     };

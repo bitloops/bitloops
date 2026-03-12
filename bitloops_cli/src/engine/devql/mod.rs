@@ -266,8 +266,20 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 .await?;
             let file_artefact =
                 upsert_file_artefact_row(cfg, &pg_client, &normalized_path, &blob_sha).await?;
-            upsert_language_artefacts(cfg, &pg_client, &normalized_path, &blob_sha, &file_artefact)
-                .await?;
+            upsert_language_artefacts(
+                cfg,
+                &pg_client,
+                &FileRevision {
+                    commit_sha: &commit_sha,
+                    commit_unix: commit_info
+                        .expect("commit_info exists when sha exists")
+                        .commit_unix,
+                    path: &normalized_path,
+                    blob_sha: &blob_sha,
+                },
+                &file_artefact,
+            )
+            .await?;
             counters.artefacts_upserted += 1;
         }
 
@@ -373,5 +385,13 @@ mod identity_tests;
 mod mapping_tests;
 
 #[cfg(test)]
-#[path = "tests/bdd_tests.rs"]
-mod bdd_tests;
+#[path = "tests/cucumber_world.rs"]
+mod cucumber_world;
+
+#[cfg(test)]
+#[path = "tests/cucumber_steps.rs"]
+mod cucumber_steps;
+
+#[cfg(test)]
+#[path = "tests/cucumber_bdd.rs"]
+mod cucumber_bdd;

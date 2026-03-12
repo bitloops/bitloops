@@ -22,6 +22,12 @@ struct ReferenceCtx<'a> {
     imported_symbol_refs: &'a HashMap<String, String>,
 }
 
+struct CallCtx<'a> {
+    callables: &'a [JsTsArtefact],
+    callable_name_to_fqn: &'a HashMap<String, String>,
+    imported_symbol_refs: &'a HashMap<String, String>,
+}
+
 fn smallest_enclosing_callable(line_no: i32, callables: &[JsTsArtefact]) -> Option<JsTsArtefact> {
     callables
         .iter()

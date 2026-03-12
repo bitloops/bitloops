@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::devql::DevqlCommand;
 use clap::Parser;
+use serde_json::json;
 use std::env;
 
 fn test_cfg() -> DevqlConfig {
@@ -21,6 +22,86 @@ fn test_cfg() -> DevqlConfig {
     }
 }
 
+fn test_cfg_with_repo_id(repo_suffix: &str, dsn: &str) -> DevqlConfig {
+    let mut cfg = test_cfg();
+    cfg.pg_dsn = Some(dsn.to_string());
+    cfg.repo.repo_id = deterministic_uuid(&format!("repo://{repo_suffix}"));
+    cfg
+}
+
+fn test_file_row(
+    cfg: &DevqlConfig,
+    path: &str,
+    blob_sha: &str,
+    end_line: i32,
+    end_byte: i32,
+) -> FileArtefactRow {
+    let symbol_id = file_symbol_id(path);
+    FileArtefactRow {
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id),
+        symbol_id,
+        language: "typescript".to_string(),
+        end_line,
+        end_byte,
+    }
+}
+
+fn test_symbol_record(
+    cfg: &DevqlConfig,
+    path: &str,
+    blob_sha: &str,
+    symbol_id: &str,
+    name: &str,
+    start_line: i32,
+    end_line: i32,
+) -> PersistedArtefactRecord {
+    let file_symbol_id = file_symbol_id(path);
+    let file_artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &file_symbol_id);
+    PersistedArtefactRecord {
+        symbol_id: symbol_id.to_string(),
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_sha, symbol_id),
+        canonical_kind: Some("function".to_string()),
+        language_kind: "function_declaration".to_string(),
+        symbol_fqn: format!("{path}::{name}"),
+        parent_symbol_id: Some(file_symbol_id),
+        parent_artefact_id: Some(file_artefact_id),
+        start_line,
+        end_line,
+        start_byte: (start_line - 1) * 10,
+        end_byte: (end_line * 10) + 5,
+        signature: Some(format!("export function {name}() {{")),
+        content_hash: format!("hash-{blob_sha}-{name}"),
+    }
+}
+
+fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> JsTsDependencyEdge {
+    JsTsDependencyEdge {
+        edge_kind: "calls".to_string(),
+        from_symbol_fqn: from_symbol_fqn.to_string(),
+        to_target_symbol_fqn: Some(target_symbol_fqn.to_string()),
+        to_symbol_ref: Some(target_symbol_fqn.to_string()),
+        start_line: Some(line),
+        end_line: Some(line),
+        metadata: json!({ "resolution": "local" }),
+    }
+}
+
+fn test_unresolved_call_edge(
+    from_symbol_fqn: &str,
+    symbol_ref: &str,
+    line: i32,
+) -> JsTsDependencyEdge {
+    JsTsDependencyEdge {
+        edge_kind: "calls".to_string(),
+        from_symbol_fqn: from_symbol_fqn.to_string(),
+        to_target_symbol_fqn: None,
+        to_symbol_ref: Some(symbol_ref.to_string()),
+        start_line: Some(line),
+        end_line: Some(line),
+        metadata: json!({ "resolution": "unresolved" }),
+    }
+}
+
 #[test]
 fn parse_devql_pipeline_basic() {
     let parsed = parse_devql_query(
@@ -37,6 +118,20 @@ fn parse_devql_pipeline_basic() {
     assert_eq!(parsed.artefacts.since.as_deref(), Some("2026-03-01"));
     assert_eq!(parsed.limit, 10);
     assert_eq!(parsed.select_fields, vec!["path", "canonical_kind"]);
+}
+
+#[test]
+fn parse_devql_artefacts_symbol_fqn_filter() {
+    let parsed = parse_devql_query(
+        r#"repo("rust-example")->artefacts(kind:"method",symbol_fqn:"hello_rust/src/main.rs::impl@1::handle_factorial")->limit(5)"#,
+    )
+    .unwrap();
+
+    assert_eq!(parsed.artefacts.kind.as_deref(), Some("method"));
+    assert_eq!(
+        parsed.artefacts.symbol_fqn.as_deref(),
+        Some("hello_rust/src/main.rs::impl@1::handle_factorial")
+    );
 }
 
 #[test]
@@ -130,16 +225,67 @@ fn build_postgres_deps_query_respects_direction_and_unresolved_filters() {
 
     assert!(out_sql.contains("e.edge_kind = 'calls'"));
     assert!(out_sql.contains("e.to_artefact_id IS NOT NULL"));
-    assert!(out_sql.contains("LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
+    assert!(
+        out_sql.contains("LEFT JOIN artefacts_current at ON at.artefact_id = e.to_artefact_id")
+    );
+    assert!(!out_sql.contains(" a."));
 
     assert!(in_sql.contains("e.edge_kind = 'references'"));
-    assert!(in_sql.contains("JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
+    assert!(in_sql.contains("JOIN artefacts_current at ON at.artefact_id = e.to_artefact_id"));
     assert!(!in_sql.contains("WITH out_edges AS"));
 
     assert!(both_sql.contains("e.edge_kind = 'exports'"));
+    assert!(both_sql.contains("FROM artefact_edges_current e JOIN artefacts_current a"));
     assert!(both_sql.contains("WITH out_edges AS"));
     assert!(both_sql.contains("UNION ALL"));
     assert!(both_sql.contains("SELECT DISTINCT"));
+}
+
+#[test]
+fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->asOf(commit:"abc123")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls")->limit(5)"#,
+    )
+    .unwrap();
+
+    let sql = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap();
+
+    assert!(sql.contains("FROM artefact_edges e"));
+    assert!(sql.contains("JOIN artefacts af ON af.artefact_id = e.from_artefact_id"));
+    assert!(sql.contains("LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
+    assert!(!sql.contains("artefact_edges_current"));
+    assert!(!sql.contains("artefacts_current"));
+}
+
+#[tokio::test]
+async fn build_postgres_artefacts_query_includes_language_kind_and_symbol_fqn_filter() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->file("hello_rust/src/main.rs")->artefacts(kind:"method",symbol_fqn:"hello_rust/src/main.rs::impl@1::handle_factorial")->limit(10)"#,
+    )
+    .unwrap();
+
+    let sql = build_postgres_artefacts_query(&cfg, &parsed, None, &cfg.repo.repo_id)
+        .await
+        .unwrap();
+
+    assert!(sql.contains("a.language_kind"));
+    assert!(sql.contains("a.symbol_fqn = 'hello_rust/src/main.rs::impl@1::handle_factorial'"));
+    assert!(sql.contains("FROM artefacts_current a"));
+}
+
+#[test]
+fn build_postgres_deps_query_supports_symbol_fqn_filter() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("rust-example")->artefacts(kind:"method",symbol_fqn:"hello_rust/src/main.rs::impl@1::handle_factorial")->deps(kind:"calls",direction:"out")->limit(20)"#,
+    )
+    .unwrap();
+
+    let sql = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap();
+
+    assert!(sql.contains("af.symbol_fqn = 'hello_rust/src/main.rs::impl@1::handle_factorial'"));
 }
 
 #[test]
@@ -854,7 +1000,6 @@ impl DoThing for User {
             "imports|src/lib.rs|-|crate::math::sum|1|use|-".to_string(),
             "implements|src/lib.rs::impl@5|-|DoThing|5|-|-".to_string(),
             "calls|src/lib.rs::impl@5::do_it|src/lib.rs::sum|-|7|-|local".to_string(),
-            "calls|src/lib.rs::impl@5::do_it|-|src/lib.rs::missing|8|-|unresolved".to_string(),
         ]
     );
     assert_eq!(edge_snapshot, repeated_snapshot);
@@ -904,6 +1049,44 @@ fn project(user: User) -> User {
             .and_then(|value| value.as_str()),
         Some("value")
     );
+}
+
+#[test]
+fn extract_rust_artefacts_preserve_expected_method_and_function_line_ranges() {
+    let content = r##"impl AppServer {
+    fn handle_factorial(&self, input: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+        match input.parse::<u64>() {
+            Ok(n) if n <= 20 => {
+                let result = factorial(n);
+                Response::from_string(format!("{}! = {}\n", n, result))
+            }
+            Ok(_) => Response::from_string("Error: n must be <= 20\n")
+                .with_status_code(400),
+            Err(_) => Response::from_string("Error: invalid number\n")
+                .with_status_code(400),
+        }
+    }
+}
+
+fn factorial(n: u64) -> u64 {
+    (1..=n).product()
+}
+"##;
+
+    let artefacts = extract_rust_artefacts(content, "src/main.rs").unwrap();
+    let method = artefacts
+        .iter()
+        .find(|artefact| artefact.symbol_fqn == "src/main.rs::impl@1::handle_factorial")
+        .expect("expected handle_factorial method artefact");
+    assert_eq!(method.start_line, 2);
+    assert_eq!(method.end_line, 13);
+
+    let function = artefacts
+        .iter()
+        .find(|artefact| artefact.symbol_fqn == "src/main.rs::factorial")
+        .expect("expected factorial function artefact");
+    assert_eq!(function.start_line, 16);
+    assert_eq!(function.end_line, 18);
 }
 
 #[test]
@@ -1030,7 +1213,7 @@ pub use crate::support::Thing as RenamedThing;
 }
 
 #[test]
-fn extract_rust_dependency_edges_emit_macro_calls_with_macro_metadata() {
+fn extract_rust_dependency_edges_drop_unresolved_macro_calls_under_import_local_policy() {
     let content = r#"fn project() {
     println!("hi");
 }
@@ -1038,28 +1221,124 @@ fn extract_rust_dependency_edges_emit_macro_calls_with_macro_metadata() {
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
     let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
 
-    let macro_call = edges
+    assert!(
+        !edges.iter().any(|edge| {
+            edge.edge_kind == "calls" && edge.from_symbol_fqn == "src/lib.rs::project"
+        }),
+        "unresolved macro calls should be dropped under the import+local policy"
+    );
+}
+
+#[test]
+fn extract_rust_dependency_edges_keep_imported_helper_calls() {
+    let content = r#"use crate::utils::slugify;
+
+fn project(value: &str) {
+    slugify(value);
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    let imported_call = edges
         .iter()
         .find(|edge| {
             edge.edge_kind == "calls"
                 && edge.from_symbol_fqn == "src/lib.rs::project"
-                && edge.to_symbol_ref.as_deref() == Some("src/lib.rs::println")
+                && edge.to_symbol_ref.as_deref() == Some("crate::utils::slugify")
         })
-        .expect("expected macro invocation to become a calls edge");
+        .expect("expected imported helper call edge");
 
     assert_eq!(
-        macro_call
+        imported_call
             .metadata
             .get("call_form")
             .and_then(|value| value.as_str()),
-        Some("macro")
+        Some("function")
     );
     assert_eq!(
-        macro_call
+        imported_call
             .metadata
             .get("resolution")
             .and_then(|value| value.as_str()),
-        Some("unresolved")
+        Some("import")
+    );
+    assert_eq!(imported_call.start_line, Some(4));
+    assert_eq!(imported_call.end_line, Some(4));
+}
+
+#[test]
+fn extract_rust_dependency_edges_keep_local_call_and_drop_external_noise_in_method() {
+    let content = r##"impl AppServer {
+    fn handle_factorial(&self, input: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+        match input.parse::<u64>() {
+            Ok(n) if n <= 20 => {
+                let result = factorial(n);
+                Response::from_string(format!("{}! = {}\n", n, result))
+            }
+            Ok(_) => Response::from_string("Error: n must be <= 20\n")
+                .with_status_code(400),
+            Err(_) => Response::from_string("Error: invalid number\n")
+                .with_status_code(400),
+        }
+    }
+}
+
+fn factorial(n: u64) -> u64 {
+    (1..=n).product()
+}
+"##;
+    let artefacts = extract_rust_artefacts(content, "src/main.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/main.rs", &artefacts).unwrap();
+
+    let local_factorial_call = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "calls"
+                && edge.from_symbol_fqn == "src/main.rs::impl@1::handle_factorial"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/main.rs::factorial")
+        })
+        .expect("expected local factorial call edge");
+
+    assert_eq!(
+        local_factorial_call
+            .metadata
+            .get("call_form")
+            .and_then(|value| value.as_str()),
+        Some("function")
+    );
+    assert_eq!(
+        local_factorial_call
+            .metadata
+            .get("resolution")
+            .and_then(|value| value.as_str()),
+        Some("local")
+    );
+    assert_eq!(local_factorial_call.start_line, Some(5));
+    assert_eq!(local_factorial_call.end_line, Some(5));
+
+    assert!(
+        !edges.iter().any(|edge| {
+            edge.edge_kind == "calls"
+                && edge.to_symbol_ref.as_deref().is_some_and(|target| {
+                    target.contains("::<u64>")
+                        || target.contains("from_string(\"")
+                        || target.contains(".with_status_code")
+                })
+        }),
+        "rust call edges should not contain generic fragments or chained receiver text"
+    );
+
+    assert!(
+        !edges.iter().any(|edge| {
+            edge.edge_kind == "calls"
+                && edge
+                    .metadata
+                    .get("resolution")
+                    .and_then(|value| value.as_str())
+                    == Some("unresolved")
+        }),
+        "unresolved rust call edges should be filtered out under the import+local policy"
     );
 }
 
@@ -1200,12 +1479,19 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     let sql = postgres_schema_sql();
     assert!(sql.contains("symbol_id TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, symbol_id)"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
     assert!(sql.contains("metadata JSONB DEFAULT '{}'::jsonb"));
     assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_current_target_chk"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_current_line_range_chk"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
 }
 
 #[test]
@@ -1215,6 +1501,42 @@ fn artefact_edges_hardening_sql_includes_constraints_and_indexes() {
     assert!(sql.contains("ADD CONSTRAINT artefact_edges_line_range_chk"));
     assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
+}
+
+#[test]
+fn current_state_hardening_sql_includes_current_state_constraints_and_indexes() {
+    let sql = current_state_hardening_sql();
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
+    assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS commit_sha TEXT"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_symbol_fqn_idx"));
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_target_chk"));
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_line_range_chk"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
+}
+
+#[test]
+fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
+    assert!(incoming_revision_is_newer(None, "commit-b", 200));
+    assert!(incoming_revision_is_newer(
+        Some(("commit-a".to_string(), 100)),
+        "commit-b",
+        200
+    ));
+    assert!(incoming_revision_is_newer(
+        Some(("commit-a".to_string(), 100)),
+        "commit-b",
+        100
+    ));
+    assert!(!incoming_revision_is_newer(
+        Some(("commit-b".to_string(), 200)),
+        "commit-a",
+        100
+    ));
+    assert!(!incoming_revision_is_newer(
+        Some(("commit-z".to_string(), 200)),
+        "commit-a",
+        200
+    ));
 }
 
 #[test]
@@ -1378,6 +1700,610 @@ VALUES ('{}', '{}', '{}', 'blob-b', 'src/a.ts', 'typescript', 'function', 'funct
     assert_eq!(
         count, 2,
         "expected both revisions to share the same symbol_id"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_history_is_preserved() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let mut cfg = test_cfg();
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://devql-current-snapshot-move");
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let path = "src/current_snapshot_move.ts";
+    let commit_old = "commit-old";
+    let commit_new = "commit-new";
+    let blob_old = "blob-old";
+    let blob_new = "blob-new";
+    let file_symbol_id = file_symbol_id(path);
+    let function_symbol_id = deterministic_uuid("stable-greet-symbol");
+
+    let file_old = FileArtefactRow {
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_old, &file_symbol_id),
+        symbol_id: file_symbol_id.clone(),
+        language: "typescript".to_string(),
+        end_line: 4,
+        end_byte: 48,
+    };
+    let file_new = FileArtefactRow {
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_new, &file_symbol_id),
+        symbol_id: file_symbol_id.clone(),
+        language: "typescript".to_string(),
+        end_line: 9,
+        end_byte: 112,
+    };
+
+    let old_record = PersistedArtefactRecord {
+        symbol_id: function_symbol_id.clone(),
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_old, &function_symbol_id),
+        canonical_kind: Some("function".to_string()),
+        language_kind: "function_declaration".to_string(),
+        symbol_fqn: format!("{path}::greet"),
+        parent_symbol_id: Some(file_symbol_id.clone()),
+        parent_artefact_id: Some(file_old.artefact_id.clone()),
+        start_line: 1,
+        end_line: 3,
+        start_byte: 0,
+        end_byte: 35,
+        signature: Some("export function greet(name: string) {".to_string()),
+        content_hash: "hash-old".to_string(),
+    };
+    let new_record = PersistedArtefactRecord {
+        symbol_id: function_symbol_id.clone(),
+        artefact_id: revision_artefact_id(&cfg.repo.repo_id, blob_new, &function_symbol_id),
+        canonical_kind: Some("function".to_string()),
+        language_kind: "function_declaration".to_string(),
+        symbol_fqn: format!("{path}::greet"),
+        parent_symbol_id: Some(file_symbol_id.clone()),
+        parent_artefact_id: Some(file_new.artefact_id.clone()),
+        start_line: 6,
+        end_line: 9,
+        start_byte: 58,
+        end_byte: 111,
+        signature: Some("export function greet(name: string) {".to_string()),
+        content_hash: "hash-new".to_string(),
+    };
+
+    upsert_file_state_row(&cfg, &client, commit_old, path, blob_old)
+        .await
+        .unwrap();
+    upsert_file_state_row(&cfg, &client, commit_new, path, blob_new)
+        .await
+        .unwrap();
+    persist_historical_artefact(
+        &cfg,
+        &client,
+        path,
+        blob_old,
+        &file_old.language,
+        &old_record,
+    )
+    .await
+    .unwrap();
+    persist_historical_artefact(
+        &cfg,
+        &client,
+        path,
+        blob_new,
+        &file_new.language,
+        &new_record,
+    )
+    .await
+    .unwrap();
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: commit_old,
+            commit_unix: 100,
+            path,
+            blob_sha: blob_old,
+        },
+        &file_old,
+        std::slice::from_ref(&old_record),
+        vec![],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: commit_new,
+            commit_unix: 200,
+            path,
+            blob_sha: blob_new,
+        },
+        &file_new,
+        std::slice::from_ref(&new_record),
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    let current_row = client
+        .query_one(
+            "SELECT artefact_id, start_line, end_line, start_byte, end_byte FROM artefacts_current WHERE repo_id = $1 AND symbol_id = $2",
+            &[&cfg.repo.repo_id, &function_symbol_id],
+        )
+        .await
+        .unwrap();
+    let current_artefact_id: String = current_row.get(0);
+    let current_start_line: i32 = current_row.get(1);
+    let current_end_line: i32 = current_row.get(2);
+    let current_start_byte: i32 = current_row.get(3);
+    let current_end_byte: i32 = current_row.get(4);
+    assert_eq!(current_artefact_id, new_record.artefact_id);
+    assert_eq!(current_start_line, 6);
+    assert_eq!(current_end_line, 9);
+    assert_eq!(current_start_byte, 58);
+    assert_eq!(current_end_byte, 111);
+
+    let historical_count = client
+        .query_one(
+            "SELECT COUNT(*) FROM artefacts WHERE repo_id = $1 AND symbol_id = $2",
+            &[&cfg.repo.repo_id, &function_symbol_id],
+        )
+        .await
+        .unwrap();
+    let historical_count: i64 = historical_count.get(0);
+    assert_eq!(historical_count, 2);
+    assert_ne!(old_record.artefact_id, new_record.artefact_id);
+
+    let current_parsed = parse_devql_query(&format!(
+        r#"repo("temp2")->file("{path}")->artefacts(kind:"function")->limit(10)"#
+    ))
+    .unwrap();
+    let current_rows = execute_postgres_pipeline(&cfg, &current_parsed, &client)
+        .await
+        .unwrap();
+    assert_eq!(current_rows.len(), 1);
+    assert_eq!(
+        current_rows[0]["artefact_id"],
+        Value::String(new_record.artefact_id.clone())
+    );
+    assert_eq!(current_rows[0]["start_line"], Value::from(6));
+    assert_eq!(current_rows[0]["end_line"], Value::from(9));
+    assert_eq!(current_rows[0]["start_byte"], Value::from(58));
+    assert_eq!(current_rows[0]["end_byte"], Value::from(111));
+
+    let historical_parsed = parse_devql_query(&format!(
+        r#"repo("temp2")->asOf(commit:"{commit_old}")->file("{path}")->artefacts(kind:"function")->limit(10)"#
+    ))
+    .unwrap();
+    let historical_rows = execute_postgres_pipeline(&cfg, &historical_parsed, &client)
+        .await
+        .unwrap();
+    assert_eq!(historical_rows.len(), 1);
+    assert_eq!(
+        historical_rows[0]["artefact_id"],
+        Value::String(old_record.artefact_id.clone())
+    );
+    assert_eq!(historical_rows[0]["start_line"], Value::from(1));
+    assert_eq!(historical_rows[0]["end_line"], Value::from(3));
+    assert_eq!(historical_rows[0]["start_byte"], Value::from(0));
+    assert_eq!(historical_rows[0]["end_byte"], Value::from(35));
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn older_current_refresh_does_not_clobber_newer_snapshot_for_the_same_path() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg_with_repo_id("devql-current-snapshot-recency-guard", &dsn);
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let path = "src/recency_guard.ts";
+    let symbol_id = deterministic_uuid("recency-guard-symbol");
+    let old_blob = "blob-old";
+    let new_blob = "blob-new";
+    let old_file = test_file_row(&cfg, path, old_blob, 4, 48);
+    let new_file = test_file_row(&cfg, path, new_blob, 8, 96);
+    let old_record = test_symbol_record(&cfg, path, old_blob, &symbol_id, "greet", 1, 3);
+    let new_record = test_symbol_record(&cfg, path, new_blob, &symbol_id, "greet", 5, 8);
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-new",
+            commit_unix: 200,
+            path,
+            blob_sha: new_blob,
+        },
+        &new_file,
+        std::slice::from_ref(&new_record),
+        vec![],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-old",
+            commit_unix: 100,
+            path,
+            blob_sha: old_blob,
+        },
+        &old_file,
+        &[old_record],
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT commit_sha, blob_sha, artefact_id, start_line, end_line FROM artefacts_current WHERE repo_id = $1 AND symbol_id = $2",
+            &[&cfg.repo.repo_id, &symbol_id],
+        )
+        .await
+        .unwrap();
+    let commit_sha: String = row.get(0);
+    let blob_sha: String = row.get(1);
+    let artefact_id: String = row.get(2);
+    let start_line: i32 = row.get(3);
+    let end_line: i32 = row.get(4);
+
+    assert_eq!(commit_sha, "commit-new");
+    assert_eq!(blob_sha, new_blob);
+    assert_eq!(artefact_id, new_record.artefact_id);
+    assert_eq!(start_line, 5);
+    assert_eq!(end_line, 8);
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn refreshing_a_path_rebuilds_current_outgoing_edges_instead_of_accumulating_stale_ones() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg_with_repo_id("devql-current-outgoing-edge-refresh", &dsn);
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let path = "src/caller.ts";
+    let symbol_id = deterministic_uuid("caller-symbol");
+    let old_blob = "blob-caller-old";
+    let new_blob = "blob-caller-new";
+    let old_file = test_file_row(&cfg, path, old_blob, 5, 60);
+    let new_file = test_file_row(&cfg, path, new_blob, 5, 60);
+    let old_record = test_symbol_record(&cfg, path, old_blob, &symbol_id, "caller", 1, 4);
+    let new_record = test_symbol_record(&cfg, path, new_blob, &symbol_id, "caller", 1, 4);
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-1",
+            commit_unix: 100,
+            path,
+            blob_sha: old_blob,
+        },
+        &old_file,
+        std::slice::from_ref(&old_record),
+        vec![test_unresolved_call_edge(
+            &old_record.symbol_fqn,
+            "src/lib.ts::old_target",
+            2,
+        )],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-2",
+            commit_unix: 200,
+            path,
+            blob_sha: new_blob,
+        },
+        &new_file,
+        std::slice::from_ref(&new_record),
+        vec![test_unresolved_call_edge(
+            &new_record.symbol_fqn,
+            "src/lib.ts::new_target",
+            3,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let rows = client
+        .query(
+            "SELECT to_symbol_ref, start_line FROM artefact_edges_current WHERE repo_id = $1 AND path = $2 ORDER BY start_line",
+            &[&cfg.repo.repo_id, &path],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    let to_symbol_ref: Option<String> = rows[0].get(0);
+    let start_line: Option<i32> = rows[0].get(1);
+    assert_eq!(to_symbol_ref.as_deref(), Some("src/lib.ts::new_target"));
+    assert_eq!(start_line, Some(3));
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_target_ids() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg_with_repo_id("devql-current-delete-target", &dsn);
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let target_path = "src/target.ts";
+    let caller_path = "src/caller.ts";
+    let target_symbol_id = deterministic_uuid("delete-target-symbol");
+    let caller_symbol_id = deterministic_uuid("delete-caller-symbol");
+    let target_blob = "blob-target-present";
+    let target_deleted_blob = "blob-target-deleted";
+    let caller_blob = "blob-caller";
+    let target_file = test_file_row(&cfg, target_path, target_blob, 4, 48);
+    let target_deleted_file = test_file_row(&cfg, target_path, target_deleted_blob, 1, 12);
+    let caller_file = test_file_row(&cfg, caller_path, caller_blob, 5, 60);
+    let target_record = test_symbol_record(
+        &cfg,
+        target_path,
+        target_blob,
+        &target_symbol_id,
+        "target",
+        1,
+        3,
+    );
+    let caller_record = test_symbol_record(
+        &cfg,
+        caller_path,
+        caller_blob,
+        &caller_symbol_id,
+        "caller",
+        1,
+        4,
+    );
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-target-1",
+            commit_unix: 100,
+            path: target_path,
+            blob_sha: target_blob,
+        },
+        &target_file,
+        std::slice::from_ref(&target_record),
+        vec![],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-caller-1",
+            commit_unix: 110,
+            path: caller_path,
+            blob_sha: caller_blob,
+        },
+        &caller_file,
+        std::slice::from_ref(&caller_record),
+        vec![test_call_edge(
+            &caller_record.symbol_fqn,
+            &target_record.symbol_fqn,
+            2,
+        )],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-target-2",
+            commit_unix: 200,
+            path: target_path,
+            blob_sha: target_deleted_blob,
+        },
+        &target_deleted_file,
+        &[],
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    let target_count = client
+        .query_one(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = $1 AND symbol_id = $2",
+            &[&cfg.repo.repo_id, &target_symbol_id],
+        )
+        .await
+        .unwrap();
+    let target_count: i64 = target_count.get(0);
+    assert_eq!(target_count, 0);
+
+    let edge = client
+        .query_one(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref FROM artefact_edges_current WHERE repo_id = $1 AND path = $2",
+            &[&cfg.repo.repo_id, &caller_path],
+        )
+        .await
+        .unwrap();
+    let to_symbol_id: Option<String> = edge.get(0);
+    let to_artefact_id: Option<String> = edge.get(1);
+    let to_symbol_ref: Option<String> = edge.get(2);
+    assert!(to_symbol_id.is_none());
+    assert!(to_artefact_id.is_none());
+    assert_eq!(
+        to_symbol_ref.as_deref(),
+        Some(target_record.symbol_fqn.as_str())
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refresh() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg_with_repo_id("devql-current-cross-file-resolution", &dsn);
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let target_path = "src/lib.ts";
+    let caller_path = "src/app.ts";
+    let target_symbol_id = deterministic_uuid("cross-file-target-symbol");
+    let caller_symbol_id = deterministic_uuid("cross-file-caller-symbol");
+    let target_blob_v1 = "blob-lib-v1";
+    let target_blob_v2 = "blob-lib-v2";
+    let caller_blob = "blob-app-v1";
+    let target_file_v1 = test_file_row(&cfg, target_path, target_blob_v1, 4, 48);
+    let target_file_v2 = test_file_row(&cfg, target_path, target_blob_v2, 6, 72);
+    let caller_file = test_file_row(&cfg, caller_path, caller_blob, 5, 60);
+    let target_record_v1 = test_symbol_record(
+        &cfg,
+        target_path,
+        target_blob_v1,
+        &target_symbol_id,
+        "helper",
+        1,
+        3,
+    );
+    let target_record_v2 = test_symbol_record(
+        &cfg,
+        target_path,
+        target_blob_v2,
+        &target_symbol_id,
+        "helper",
+        3,
+        6,
+    );
+    let caller_record = test_symbol_record(
+        &cfg,
+        caller_path,
+        caller_blob,
+        &caller_symbol_id,
+        "caller",
+        1,
+        4,
+    );
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-lib-1",
+            commit_unix: 100,
+            path: target_path,
+            blob_sha: target_blob_v1,
+        },
+        &target_file_v1,
+        std::slice::from_ref(&target_record_v1),
+        vec![],
+    )
+    .await
+    .unwrap();
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-app-1",
+            commit_unix: 110,
+            path: caller_path,
+            blob_sha: caller_blob,
+        },
+        &caller_file,
+        std::slice::from_ref(&caller_record),
+        vec![test_call_edge(
+            &caller_record.symbol_fqn,
+            &target_record_v1.symbol_fqn,
+            2,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let initial_edge = client
+        .query_one(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref FROM artefact_edges_current WHERE repo_id = $1 AND path = $2",
+            &[&cfg.repo.repo_id, &caller_path],
+        )
+        .await
+        .unwrap();
+    let initial_to_symbol_id: Option<String> = initial_edge.get(0);
+    let initial_to_artefact_id: Option<String> = initial_edge.get(1);
+    let initial_to_symbol_ref: Option<String> = initial_edge.get(2);
+    assert_eq!(
+        initial_to_symbol_id.as_deref(),
+        Some(target_symbol_id.as_str())
+    );
+    assert_eq!(
+        initial_to_artefact_id.as_deref(),
+        Some(target_record_v1.artefact_id.as_str())
+    );
+    assert_eq!(
+        initial_to_symbol_ref.as_deref(),
+        Some(target_record_v1.symbol_fqn.as_str())
+    );
+
+    refresh_current_state_for_path(
+        &cfg,
+        &client,
+        &FileRevision {
+            commit_sha: "commit-lib-2",
+            commit_unix: 200,
+            path: target_path,
+            blob_sha: target_blob_v2,
+        },
+        &target_file_v2,
+        std::slice::from_ref(&target_record_v2),
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    let refreshed_edge = client
+        .query_one(
+            "SELECT to_symbol_id, to_artefact_id, to_symbol_ref FROM artefact_edges_current WHERE repo_id = $1 AND path = $2",
+            &[&cfg.repo.repo_id, &caller_path],
+        )
+        .await
+        .unwrap();
+    let refreshed_to_symbol_id: Option<String> = refreshed_edge.get(0);
+    let refreshed_to_artefact_id: Option<String> = refreshed_edge.get(1);
+    let refreshed_to_symbol_ref: Option<String> = refreshed_edge.get(2);
+    assert_eq!(
+        refreshed_to_symbol_id.as_deref(),
+        Some(target_symbol_id.as_str())
+    );
+    assert_eq!(
+        refreshed_to_artefact_id.as_deref(),
+        Some(target_record_v2.artefact_id.as_str())
+    );
+    assert_eq!(
+        refreshed_to_symbol_ref.as_deref(),
+        Some(target_record_v2.symbol_fqn.as_str())
     );
 }
 
