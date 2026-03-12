@@ -214,12 +214,12 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
 fn print_dashboard_db_health(health: &db::DashboardDbHealth) {
     let rows = [
         DatabaseStatusRow {
-            db: "Postgres",
-            status: map_backend_health_status(&health.postgres),
+            db: "Relational",
+            status: map_backend_health_status(&health.relational),
         },
         DatabaseStatusRow {
-            db: "ClickHouse",
-            status: map_backend_health_status(&health.clickhouse),
+            db: "Events",
+            status: map_backend_health_status(&health.events),
         },
     ];
     print_db_status_table(&rows);

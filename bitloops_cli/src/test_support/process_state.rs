@@ -1,11 +1,9 @@
 use std::env;
 use std::ffi::OsString;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
-#[allow(dead_code)]
 pub(crate) const GIT_ENV_KEYS: [&str; 6] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -20,14 +18,12 @@ fn process_state_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-#[allow(dead_code)]
 pub(crate) fn strip_inherited_git_env(cmd: &mut Command) {
     for key in GIT_ENV_KEYS {
         cmd.env_remove(key);
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn git_command() -> Command {
     let mut cmd = Command::new("git");
     strip_inherited_git_env(&mut cmd);
@@ -70,12 +66,31 @@ fn fallback_cwd() -> PathBuf {
     env::current_dir().unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-pub(crate) fn with_process_state<T>(
+// Shared test helper for process-global cwd/env mutation.
+pub(crate) struct ProcessStateGuard {
+    _lock_guard: MutexGuard<'static, ()>,
+    previous_env: Vec<(String, Option<OsString>)>,
+    original_cwd: Option<PathBuf>,
+}
+
+impl Drop for ProcessStateGuard {
+    fn drop(&mut self) {
+        if let Some(old) = &self.original_cwd {
+            if env::set_current_dir(old).is_err() {
+                let _ = env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
+            }
+            crate::engine::paths::clear_repo_root_cache();
+        }
+
+        restore_env_vars(&self.previous_env);
+    }
+}
+
+pub(crate) fn enter_process_state(
     cwd: Option<&Path>,
     env_vars: &[(&str, Option<&str>)],
-    f: impl FnOnce() -> T,
-) -> T {
-    let _guard = process_state_lock()
+) -> ProcessStateGuard {
+    let lock_guard = process_state_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -87,28 +102,30 @@ pub(crate) fn with_process_state<T>(
         crate::engine::paths::clear_repo_root_cache();
     }
 
-    let result = catch_unwind(AssertUnwindSafe(f));
-
-    if let Some(old) = original_cwd {
-        if env::set_current_dir(&old).is_err() {
-            let _ = env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
-        }
-        crate::engine::paths::clear_repo_root_cache();
+    ProcessStateGuard {
+        _lock_guard: lock_guard,
+        previous_env,
+        original_cwd,
     }
+}
 
-    restore_env_vars(&previous_env);
+pub(crate) fn enter_env_vars(env_vars: &[(&str, Option<&str>)]) -> ProcessStateGuard {
+    enter_process_state(None, env_vars)
+}
 
-    match result {
-        Ok(value) => value,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+pub(crate) fn with_process_state<T>(
+    cwd: Option<&Path>,
+    env_vars: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let _guard = enter_process_state(cwd, env_vars);
+    f()
 }
 
 pub(crate) fn with_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     with_process_state(Some(path), &[], f)
 }
 
-#[allow(dead_code)]
 pub(crate) fn with_env_var<T>(key: &str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
     with_process_state(None, &[(key, value)], f)
 }
@@ -117,7 +134,6 @@ pub(crate) fn with_env_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -
     with_process_state(None, vars, f)
 }
 
-#[allow(dead_code)]
 pub(crate) fn with_git_env_cleared<T>(f: impl FnOnce() -> T) -> T {
     let mut updates = Vec::with_capacity(GIT_ENV_KEYS.len());
     for key in GIT_ENV_KEYS {
@@ -129,6 +145,8 @@ pub(crate) fn with_git_env_cleared<T>(f: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn strip_inherited_git_env_removes_poisoned_git_dir_from_child() {
@@ -153,5 +171,20 @@ mod tests {
             "expected sanitized child git command to succeed"
         );
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), ".git");
+    }
+
+    #[test]
+    fn git_command_sets_program_to_git() {
+        let cmd = git_command();
+        assert_eq!(cmd.get_program(), OsStr::new("git"));
+    }
+
+    #[test]
+    fn with_git_env_cleared_runs_closure() {
+        let called = AtomicBool::new(false);
+        with_git_env_cleared(|| {
+            called.store(true, Ordering::SeqCst);
+        });
+        assert!(called.load(Ordering::SeqCst));
     }
 }

@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Dashboard `/api/commits` now includes `checkpoint.first_prompt_preview` with the first 160 characters from the first prompt of the first checkpoint session, after stripping leading `<tag>...</tag>` blocks and trimming leading whitespace.
 - Dashboard agent filtering/aggregation now evaluates all session agents per checkpoint, so `/api/commits` agent filters, `/api/agents`, and KPI agent counts reflect multi-session checkpoints correctly.
 - Dashboard `files_touched` payloads in `/api/commits` (`commit.files_touched` and `checkpoint.files_touched`) and `/api/checkpoints/{checkpoint_id}` now return arrays of objects (`[{ filepath, additionsCount, deletionsCount }]`) instead of path-keyed maps or plain path arrays.
+- DevQL database support has been extended with provider-based backends: relational storage now supports `sqlite` (default) or `postgres`, and events storage now supports `duckdb` (default) or `clickhouse`.
+- Local DevQL setup now works out of the box with file-based defaults (`~/.bitloops/devql/relational.db` and `~/.bitloops/devql/events.duckdb`), reducing external database dependencies for local development.
+- Existing PostgreSQL/ClickHouse configurations remain backward compatible via legacy `postgres_dsn` / `clickhouse_*` config keys and `BITLOOPS_DEVQL_*` environment variables.
 
 ## [0.0.9] - 2026-03-09
 
