@@ -387,8 +387,10 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
                 &normalized_path,
             )
             .await?;
-            let semantic_feature_inputs =
-                semantic::build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
+            let semantic_feature_inputs = semantic::build_semantic_feature_inputs_from_artefacts(
+                &pre_stage_artefacts,
+                &content,
+            );
             let semantic_feature_stats = upsert_semantic_feature_rows(
                 relational_store.as_ref(),
                 &semantic_feature_inputs,

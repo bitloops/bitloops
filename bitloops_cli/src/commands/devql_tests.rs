@@ -1512,8 +1512,8 @@ export function normalizeEmail(email: string): string {
         .await
         .expect("ensure repository row");
 
-    let blob_sha =
-        git_blob_sha_at_commit(temp.path(), &commit_sha, path).expect("blob sha for committed file");
+    let blob_sha = git_blob_sha_at_commit(temp.path(), &commit_sha, path)
+        .expect("blob sha for committed file");
     let file_artefact = upsert_file_artefact_row(&cfg, store.as_ref(), path, &blob_sha)
         .await
         .expect("upsert file artefact");
@@ -1527,19 +1527,29 @@ export function normalizeEmail(email: string): string {
             .expect("load pre-stage artefacts");
     let content = git_blob_content(temp.path(), &blob_sha).expect("blob content");
     let inputs = build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
-    assert_eq!(inputs.len(), 2, "expected file and function semantic inputs");
+    assert_eq!(
+        inputs.len(),
+        2,
+        "expected file and function semantic inputs"
+    );
 
-    let first_stats =
-        upsert_semantic_feature_rows(store.as_ref(), &inputs, &semantic::NoopSemanticSummaryProvider)
-            .await
-            .expect("persist semantic rows");
+    let first_stats = upsert_semantic_feature_rows(
+        store.as_ref(),
+        &inputs,
+        &semantic::NoopSemanticSummaryProvider,
+    )
+    .await
+    .expect("persist semantic rows");
     assert_eq!(first_stats.upserted, inputs.len());
     assert_eq!(first_stats.skipped, 0);
 
-    let second_stats =
-        upsert_semantic_feature_rows(store.as_ref(), &inputs, &semantic::NoopSemanticSummaryProvider)
-            .await
-            .expect("skip unchanged semantic rows");
+    let second_stats = upsert_semantic_feature_rows(
+        store.as_ref(),
+        &inputs,
+        &semantic::NoopSemanticSummaryProvider,
+    )
+    .await
+    .expect("skip unchanged semantic rows");
     assert_eq!(second_stats.upserted, 0);
     assert_eq!(second_stats.skipped, inputs.len());
 
@@ -1565,7 +1575,8 @@ export function normalizeEmail(email: string): string {
     assert_eq!(feature_rows.len(), inputs.len());
     assert!(feature_rows.iter().any(|row| {
         row["normalized_name"] == "normalize_email"
-            && row["normalized_signature"] == "export function normalizeEmail(email: string): string"
+            && row["normalized_signature"]
+                == "export function normalizeEmail(email: string): string"
     }));
 }
 
