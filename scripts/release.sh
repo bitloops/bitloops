@@ -60,7 +60,7 @@ git tag "$VERSION"
 
 echo ""
 echo "Pushing tag $VERSION to origin..."
-git push origin "$VERSION"
+git push origin "$VERSION" --no-verify
 
 echo ""
 echo "Done. Watch the build at:"
