@@ -102,7 +102,7 @@ What this does:
 Example output:
 
 ```text
-DB Status
+
 +------------+-----------------------+
 | DB         | Status                |
 +------------+-----------------------+

@@ -2,6 +2,8 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+use time::{OffsetDateTime, macros::format_description};
 
 const DASHBOARD_CONFIG_PATH: &str = "config/dashboard_urls.json";
 const EXAMPLE_CONFIG_PATH: &str = "config/dashboard_urls.template.json";
@@ -29,9 +31,63 @@ fn validate_url(name: &str, value: &str) {
     }
 }
 
+fn read_non_empty_env(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn git_short_commit() -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn today_utc_iso_date() -> String {
+    let format = format_description!("[year]-[month]-[day]");
+    OffsetDateTime::now_utc()
+        .format(&format)
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn emit_build_metadata() {
+    if let Some(version) = read_non_empty_env("BITLOOPS_BUILD_VERSION") {
+        println!("cargo:rustc-env=BITLOOPS_BUILD_VERSION={version}");
+    }
+
+    let commit = read_non_empty_env("BITLOOPS_BUILD_COMMIT")
+        .or_else(git_short_commit)
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=BITLOOPS_BUILD_COMMIT={commit}");
+
+    let target = read_non_empty_env("BITLOOPS_BUILD_TARGET")
+        .or_else(|| read_non_empty_env("TARGET"))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=BITLOOPS_BUILD_TARGET={target}");
+
+    let build_date = read_non_empty_env("BITLOOPS_BUILD_DATE").unwrap_or_else(today_utc_iso_date);
+    println!("cargo:rustc-env=BITLOOPS_BUILD_DATE={build_date}");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed={DASHBOARD_CONFIG_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_VERSION");
+    println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_TARGET");
+    println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_DATE");
+
+    emit_build_metadata();
 
     let raw = fs::read_to_string(DASHBOARD_CONFIG_PATH).unwrap_or_else(|err| {
         panic!(

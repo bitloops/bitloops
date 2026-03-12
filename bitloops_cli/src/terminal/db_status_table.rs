@@ -3,44 +3,54 @@ use std::env;
 use crate::engine::db_status::{DatabaseConnectionStatus, DatabaseStatusRow};
 
 pub fn print_db_status_table(rows: &[DatabaseStatusRow]) {
-    const DB_WIDTH: usize = 10;
-    const STATUS_WIDTH: usize = 23;
+    let db_width = rows
+        .iter()
+        .map(|row| row.db.len())
+        .max()
+        .unwrap_or(2)
+        .max("DB".len());
+    let status_width = rows
+        .iter()
+        .map(|row| row.status.label().len())
+        .max()
+        .unwrap_or(6)
+        .max("Status".len());
 
-    println!("DB Status");
+    println!();
     println!(
         "+-{:-<db_width$}-+-{:-<status_width$}-+",
         "",
         "",
-        db_width = DB_WIDTH,
-        status_width = STATUS_WIDTH
+        db_width = db_width,
+        status_width = status_width
     );
     println!(
         "| {:<db_width$} | {:<status_width$} |",
         "DB",
         "Status",
-        db_width = DB_WIDTH,
-        status_width = STATUS_WIDTH
+        db_width = db_width,
+        status_width = status_width
     );
     println!(
         "+-{:-<db_width$}-+-{:-<status_width$}-+",
         "",
         "",
-        db_width = DB_WIDTH,
-        status_width = STATUS_WIDTH
+        db_width = db_width,
+        status_width = status_width
     );
 
     for row in rows {
         let raw_status = format!(
             "{:<status_width$}",
             row.status.label(),
-            status_width = STATUS_WIDTH
+            status_width = status_width
         );
         let colored_status = colorize_status_label(row.status, &raw_status);
         println!(
             "| {:<db_width$} | {} |",
             row.db,
             colored_status,
-            db_width = DB_WIDTH
+            db_width = db_width
         );
     }
 
@@ -48,8 +58,8 @@ pub fn print_db_status_table(rows: &[DatabaseStatusRow]) {
         "+-{:-<db_width$}-+-{:-<status_width$}-+",
         "",
         "",
-        db_width = DB_WIDTH,
-        status_width = STATUS_WIDTH
+        db_width = db_width,
+        status_width = status_width
     );
 }
 

@@ -22,6 +22,8 @@ const ENV_CLICKHOUSE_URL: &str = "BITLOOPS_DEVQL_CH_URL";
 const ENV_CLICKHOUSE_USER: &str = "BITLOOPS_DEVQL_CH_USER";
 const ENV_CLICKHOUSE_PASSWORD: &str = "BITLOOPS_DEVQL_CH_PASSWORD";
 const ENV_CLICKHOUSE_DATABASE: &str = "BITLOOPS_DEVQL_CH_DATABASE";
+const DASHBOARD_CONFIG_KEY: &str = "dashboard";
+const DASHBOARD_USE_BITLOOPS_LOCAL_KEY: &str = "use_bitloops_local";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationalProvider {
@@ -83,19 +85,6 @@ pub struct EventsBackendConfig {
 }
 
 impl EventsBackendConfig {
-    pub fn clickhouse_endpoint(&self) -> String {
-        let base = self
-            .clickhouse_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost:8123".to_string());
-        let database = self
-            .clickhouse_database
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let base = base.trim_end_matches('/');
-        format!("{base}/?database={database}")
-    }
-
     pub fn duckdb_path_or_default(&self) -> PathBuf {
         match self.duckdb_path.as_deref() {
             // For an explicitly configured path, preserve existing behavior:
@@ -133,6 +122,11 @@ pub struct DevqlFileConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DashboardFileConfig {
+    pub use_bitloops_local: Option<bool>,
 }
 
 impl DevqlFileConfig {
@@ -218,6 +212,44 @@ impl DevqlFileConfig {
             }),
         }
     }
+}
+
+impl DashboardFileConfig {
+    /// Load dashboard config from `$HOME/.bitloops/config.json` (or `$USERPROFILE` on Windows).
+    /// Returns default if the file is missing or invalid.
+    pub fn load() -> Self {
+        let Some(path) = user_home_config_path() else {
+            return Self::default();
+        };
+
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(_) => return Self::default(),
+        };
+        let value: Value = match serde_json::from_slice(&data) {
+            Ok(value) => value,
+            Err(_) => return Self::default(),
+        };
+        Self::from_json_value(&value)
+    }
+
+    /// Parse dashboard config from a JSON value.
+    /// Reads the nested `"dashboard"` object.
+    pub fn from_json_value(value: &Value) -> Self {
+        let Some(root) = value.get(DASHBOARD_CONFIG_KEY).and_then(Value::as_object) else {
+            return Self::default();
+        };
+
+        Self {
+            use_bitloops_local: read_any_bool(root, &[DASHBOARD_USE_BITLOOPS_LOCAL_KEY]),
+        }
+    }
+}
+
+pub fn dashboard_use_bitloops_local() -> bool {
+    DashboardFileConfig::load()
+        .use_bitloops_local
+        .unwrap_or(false)
 }
 
 pub fn resolve_devql_backend_config() -> Result<DevqlBackendConfig> {
@@ -358,6 +390,25 @@ fn read_any_string(root: &Map<String, Value>, keys: &[&str]) -> Option<String> {
 
 fn read_any_string_opt(root: Option<&Map<String, Value>>, keys: &[&str]) -> Option<String> {
     root.and_then(|map| read_any_string(map, keys))
+}
+
+fn read_any_bool(root: &Map<String, Value>, keys: &[&str]) -> Option<bool> {
+    for key in keys {
+        let Some(value) = root.get(*key) else {
+            continue;
+        };
+        if let Some(boolean) = value.as_bool() {
+            return Some(boolean);
+        }
+        if let Some(raw) = value.as_str() {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => return Some(true),
+                "false" | "0" | "no" | "off" => return Some(false),
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 fn read_non_empty_env<F>(env_lookup: &F, key: &str) -> Option<String>
@@ -586,5 +637,41 @@ mod tests {
             PathBuf::from(expanded),
             windows_home.join(r".bitloops\devql\relational.db")
         );
+    }
+
+    #[test]
+    fn dashboard_file_config_reads_use_bitloops_local_flag() {
+        let value = serde_json::json!({
+            "dashboard": {
+                "use_bitloops_local": true
+            }
+        });
+
+        let cfg = DashboardFileConfig::from_json_value(&value);
+        assert_eq!(cfg.use_bitloops_local, Some(true));
+    }
+
+    #[test]
+    fn dashboard_file_config_defaults_when_dashboard_block_missing() {
+        let value = serde_json::json!({
+            "devql": {
+                "relational_provider": "sqlite"
+            }
+        });
+
+        let cfg = DashboardFileConfig::from_json_value(&value);
+        assert_eq!(cfg, DashboardFileConfig::default());
+    }
+
+    #[test]
+    fn dashboard_file_config_accepts_boolean_like_strings() {
+        let value = serde_json::json!({
+            "dashboard": {
+                "use_bitloops_local": "yes"
+            }
+        });
+
+        let cfg = DashboardFileConfig::from_json_value(&value);
+        assert_eq!(cfg.use_bitloops_local, Some(true));
     }
 }

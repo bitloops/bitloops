@@ -5,17 +5,14 @@ mod dto;
 mod handlers;
 mod router;
 
-use crate::engine::db_status::{
-    DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
-};
+use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
+use crate::devql_config::dashboard_use_bitloops_local;
 use crate::engine::paths;
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_committed_info, run_git,
 };
 use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
-use crate::terminal::db_status_table::print_db_status_table;
 use anyhow::{Context, Result, anyhow, bail};
-use figlet_rs::FIGfont;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
@@ -132,14 +129,16 @@ fn is_dev_mode() -> bool {
 
 pub async fn run(config: DashboardServerConfig) -> Result<()> {
     let db_init = db::init_dashboard_db().await;
-    print_dashboard_db_health(&db_init.startup_health);
     if db_init.startup_health.has_failures() {
-        bail!("dashboard database startup health check failed");
+        bail!(
+            "dashboard database startup health check failed; run `bitloops --connection-status` for details"
+        );
     }
 
-    let selected_host = select_host_with_probe(config.host.as_deref(), |candidate| {
-        host_resolves_to_loopback(candidate, config.port)
-    });
+    let selected_host = select_host_with_dashboard_preference(
+        config.host.as_deref(),
+        dashboard_use_bitloops_local(),
+    );
     let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
 
     let listener = TcpListener::bind(bind_addr).await.with_context(|| {
@@ -166,16 +165,12 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     let url = format_dashboard_url(&browser_host, local_addr.port());
 
     println!();
-    if let Some(banner) = figlet_banner("bitloops") {
-        println!("{}", color_hex(banner.trim_end(), "#7404e4"));
-    } else {
-        println!("{}", color_hex(&squared_capital("Bitloops"), "#7404e4"));
-    }
+    println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
     println!();
     print!("📊 Dashboard ");
     print!("{}", color_hex("ready ", "#22c55e"));
     print!("at ");
-    println!("{}", color_hex(&clickable_url(&url), "#7404e4"));
+    println!("{}", color_hex(&clickable_url(&url), BITLOOPS_PURPLE_HEX));
     match &serve_mode {
         ServeMode::HelloWorld => {
             println!(
@@ -211,28 +206,6 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     .await
 }
 
-fn print_dashboard_db_health(health: &db::DashboardDbHealth) {
-    let rows = [
-        DatabaseStatusRow {
-            db: "Relational",
-            status: map_backend_health_status(&health.relational),
-        },
-        DatabaseStatusRow {
-            db: "Events",
-            status: map_backend_health_status(&health.events),
-        },
-    ];
-    print_db_status_table(&rows);
-}
-
-fn map_backend_health_status(health: &db::BackendHealth) -> DatabaseConnectionStatus {
-    match health.kind {
-        db::BackendHealthKind::Ok => DatabaseConnectionStatus::Connected,
-        db::BackendHealthKind::Skip => DatabaseConnectionStatus::NotConfigured,
-        db::BackendHealthKind::Fail => classify_connection_error(&health.detail),
-    }
-}
-
 async fn serve_until_ctrl_c(listener: TcpListener, state: DashboardState) -> Result<()> {
     let app = router::build_dashboard_router(state);
 
@@ -247,32 +220,8 @@ async fn serve_until_ctrl_c(listener: TcpListener, state: DashboardState) -> Res
     Ok(())
 }
 
-fn figlet_banner(s: &str) -> Option<String> {
-    let font = FIGfont::standard().ok()?;
-    let figure = font.convert(s)?;
-    Some(figure.to_string())
-}
-
 fn clickable_url(url: &str) -> String {
     format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
-}
-
-fn squared_capital(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' => char::from_u32(0x1F170 + (c as u32 - 'A' as u32)).unwrap_or(c),
-            'a'..='z' => char::from_u32(0x1F170 + (c as u32 - 'a' as u32)).unwrap_or(c),
-            _ => c,
-        })
-        .collect()
-}
-
-fn color_hex(text: &str, hex: &str) -> String {
-    let hex = hex.trim_start_matches('#');
-    let r = u8::from_str_radix(hex.get(0..2).unwrap_or("00"), 16).unwrap_or(0);
-    let g = u8::from_str_radix(hex.get(2..4).unwrap_or("00"), 16).unwrap_or(0);
-    let b = u8::from_str_radix(hex.get(4..6).unwrap_or("00"), 16).unwrap_or(0);
-    format!("\x1b[38;2;{r};{g};{b}m{text}\x1b[0m")
 }
 
 fn canonical_user_key(name: &str, email: &str) -> String {
@@ -716,15 +665,15 @@ pub(super) fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBu
     path.to_path_buf()
 }
 
-pub(super) fn select_host_with_probe<F>(explicit_host: Option<&str>, probe: F) -> String
-where
-    F: Fn(&str) -> bool,
-{
+pub(super) fn select_host_with_dashboard_preference(
+    explicit_host: Option<&str>,
+    use_bitloops_local: bool,
+) -> String {
     if let Some(host) = explicit_host.and_then(normalized_host) {
         return host.to_string();
     }
 
-    if probe(PREFERRED_LOCAL_HOST) {
+    if use_bitloops_local {
         PREFERRED_LOCAL_HOST.to_string()
     } else {
         FALLBACK_LOCAL_HOST.to_string()
@@ -734,13 +683,6 @@ where
 fn normalized_host(input: &str) -> Option<&str> {
     let host = input.trim();
     if host.is_empty() { None } else { Some(host) }
-}
-
-fn host_resolves_to_loopback(host: &str, port: u16) -> bool {
-    let Ok(addrs) = (host, port).to_socket_addrs() else {
-        return false;
-    };
-    addrs.into_iter().any(|addr| addr.ip().is_loopback())
 }
 
 fn resolve_bind_addr(host: &str, port: u16) -> Result<SocketAddr> {
