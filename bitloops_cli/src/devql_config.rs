@@ -232,22 +232,10 @@ impl DevqlFileConfig {
                     ],
                 )
             }),
-            semantic_provider: read_any_string(
-                root,
-                &["semantic_provider", ENV_SEMANTIC_PROVIDER],
-            ),
-            semantic_model: read_any_string(
-                root,
-                &["semantic_model", ENV_SEMANTIC_MODEL],
-            ),
-            semantic_api_key: read_any_string(
-                root,
-                &["semantic_api_key", ENV_SEMANTIC_API_KEY],
-            ),
-            semantic_base_url: read_any_string(
-                root,
-                &["semantic_base_url", ENV_SEMANTIC_BASE_URL],
-            ),
+            semantic_provider: read_any_string(root, &["semantic_provider", ENV_SEMANTIC_PROVIDER]),
+            semantic_model: read_any_string(root, &["semantic_model", ENV_SEMANTIC_MODEL]),
+            semantic_api_key: read_any_string(root, &["semantic_api_key", ENV_SEMANTIC_API_KEY]),
+            semantic_base_url: read_any_string(root, &["semantic_base_url", ENV_SEMANTIC_BASE_URL]),
         }
     }
 }
@@ -336,7 +324,10 @@ where
     })
 }
 
-fn resolve_devql_semantic_config_with<F>(file_cfg: DevqlFileConfig, env_lookup: F) -> DevqlSemanticConfig
+fn resolve_devql_semantic_config_with<F>(
+    file_cfg: DevqlFileConfig,
+    env_lookup: F,
+) -> DevqlSemanticConfig
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -625,7 +616,10 @@ mod tests {
             (ENV_SEMANTIC_PROVIDER, "openai_compatible"),
             (ENV_SEMANTIC_MODEL, "qwen2.5-coder"),
             (ENV_SEMANTIC_API_KEY, "env-key"),
-            (ENV_SEMANTIC_BASE_URL, "http://localhost:11434/v1/chat/completions"),
+            (
+                ENV_SEMANTIC_BASE_URL,
+                "http://localhost:11434/v1/chat/completions",
+            ),
         ];
 
         let cfg = resolve_devql_semantic_config_for_tests(file_cfg, &env);
