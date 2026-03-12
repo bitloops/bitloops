@@ -294,7 +294,7 @@ async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
-    let summary_provider =
+    let _summary_provider =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
     let relational_store = connect_relational_store(cfg).await?;
     if args.init {
@@ -355,7 +355,7 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
             let Some(blob_sha) = blob_sha else {
                 continue;
             };
-            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+            let _content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
             upsert_file_state_row(
                 cfg,

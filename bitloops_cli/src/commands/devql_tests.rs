@@ -1,9 +1,10 @@
 use super::*;
+use crate::devql_config::DevqlFileConfig;
 use crate::engine::semantic_features::{
     PreStageArtefactRow, SemanticFeatureIndexState, SemanticFeatureInput,
-    build_semantic_feature_rows, semantic_features_require_reindex,
+    build_semantic_feature_inputs_from_artefacts, build_semantic_feature_rows,
+    semantic_features_require_reindex,
 };
-use crate::devql_config::DevqlFileConfig;
 use clap::Parser;
 use std::fs;
 use std::path::Path;
@@ -67,6 +68,10 @@ fn sqlite_test_cfg(repo_root: PathBuf, sqlite_path: String) -> DevqlConfig {
                 clickhouse_database: None,
             },
         },
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
     }
 }
 
@@ -1411,6 +1416,8 @@ fn semantic_features_reindex_when_hash_or_prompt_version_changes() {
         &output.semantics.prompt_version,
         &output.features.prompt_version,
     ));
+}
+
 #[tokio::test]
 async fn sqlite_relational_store_supports_init_execute_and_query() {
     let temp = TempDir::new().expect("tempdir");
@@ -1540,6 +1547,10 @@ async fn execute_events_pipeline_returns_empty_rows_for_fresh_events_store() {
                 clickhouse_database: None,
             },
         },
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
     };
 
     init_events_schema(&cfg).await.expect("init events schema");

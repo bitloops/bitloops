@@ -133,10 +133,10 @@ pub struct DevqlFileConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: Option<String>,
-    pub(crate) semantic_provider: Option<String>,
-    pub(crate) semantic_model: Option<String>,
-    pub(crate) semantic_api_key: Option<String>,
-    pub(crate) semantic_base_url: Option<String>,
+    pub(crate) _semantic_provider: Option<String>,
+    pub(crate) _semantic_model: Option<String>,
+    pub(crate) _semantic_api_key: Option<String>,
+    pub(crate) _semantic_base_url: Option<String>,
 }
 
 impl DevqlFileConfig {
@@ -220,19 +220,19 @@ impl DevqlFileConfig {
                     ],
                 )
             }),
-            semantic_provider: read_any_string(
+            _semantic_provider: read_any_string(
                 root,
                 &["semantic_provider", "BITLOOPS_DEVQL_SEMANTIC_PROVIDER"],
             ),
-            semantic_model: read_any_string(
+            _semantic_model: read_any_string(
                 root,
                 &["semantic_model", "BITLOOPS_DEVQL_SEMANTIC_MODEL"],
             ),
-            semantic_api_key: read_any_string(
+            _semantic_api_key: read_any_string(
                 root,
                 &["semantic_api_key", "BITLOOPS_DEVQL_SEMANTIC_API_KEY"],
             ),
-            semantic_base_url: read_any_string(
+            _semantic_base_url: read_any_string(
                 root,
                 &["semantic_base_url", "BITLOOPS_DEVQL_SEMANTIC_BASE_URL"],
             ),
