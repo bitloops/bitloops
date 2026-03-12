@@ -21,6 +21,8 @@ struct PersistedArtefactRecord {
     start_byte: i32,
     end_byte: i32,
     signature: Option<String>,
+    modifiers: Vec<String>,
+    docstring: Option<String>,
     content_hash: String,
 }
 
@@ -64,6 +66,13 @@ fn sql_nullable_text(value: Option<&str>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
+fn sql_jsonb_text_array(values: &[String]) -> String {
+    format!(
+        "'{}'::jsonb",
+        esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()))
+    )
+}
+
 fn is_supported_symbol_language(language: &str) -> bool {
     matches!(language, "typescript" | "javascript" | "rust")
 }
@@ -80,15 +89,26 @@ async fn upsert_file_artefact_row(
     let line_count = git_blob_line_count(&cfg.repo_root, blob_sha)
         .unwrap_or(1)
         .max(1);
-    let byte_count = git_blob_content(&cfg.repo_root, blob_sha)
+    let blob_content = git_blob_content(&cfg.repo_root, blob_sha);
+    let byte_count = blob_content
+        .as_ref()
         .map(|content| content.len() as i32)
         .unwrap_or(0)
         .max(0);
+    let modifiers_sql = "'[]'::jsonb".to_string();
+    let file_docstring = if language == "rust" {
+        blob_content
+            .as_deref()
+            .and_then(extract_rust_file_docstring)
+    } else {
+        None
+    };
+    let docstring_sql = sql_nullable_text(file_docstring.as_deref());
 
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, 0, {}, NULL, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, 0, {}, NULL, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&artefact_id),
         esc_pg(&symbol_id),
         esc_pg(&cfg.repo.repo_id),
@@ -98,6 +118,8 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
         esc_pg(path),
         line_count,
         byte_count,
+        modifiers_sql,
+        docstring_sql,
         esc_pg(blob_sha),
     );
 
@@ -111,7 +133,12 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
     })
 }
 
-fn build_file_current_record(path: &str, blob_sha: &str, file_artefact: &FileArtefactRow) -> PersistedArtefactRecord {
+fn build_file_current_record(
+    path: &str,
+    blob_sha: &str,
+    file_artefact: &FileArtefactRow,
+    docstring: Option<String>,
+) -> PersistedArtefactRecord {
     PersistedArtefactRecord {
         symbol_id: file_artefact.symbol_id.clone(),
         artefact_id: file_artefact.artefact_id.clone(),
@@ -125,6 +152,8 @@ fn build_file_current_record(path: &str, blob_sha: &str, file_artefact: &FileArt
         start_byte: 0,
         end_byte: file_artefact.end_byte,
         signature: None,
+        modifiers: vec![],
+        docstring,
         content_hash: blob_sha.to_string(),
     }
 }
@@ -185,6 +214,8 @@ fn build_symbol_records(
             start_byte: item.start_byte,
             end_byte: item.end_byte,
             signature: Some(item.signature.clone()),
+            modifiers: item.modifiers.clone(),
+            docstring: item.docstring.clone(),
             content_hash,
         });
 
@@ -206,10 +237,12 @@ async fn persist_historical_artefact(
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
     let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
+    let modifiers_sql = sql_jsonb_text_array(&record.modifiers);
+    let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     let sql = format!(
-        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, '{}') \
-ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash",
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, '{}') \
+ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&record.artefact_id),
         esc_pg(&record.symbol_id),
         esc_pg(&cfg.repo.repo_id),
@@ -225,6 +258,8 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
         record.start_byte,
         record.end_byte,
         signature_sql,
+        modifiers_sql,
+        docstring_sql,
         esc_pg(&record.content_hash),
     );
 
@@ -242,10 +277,12 @@ async fn upsert_current_artefact(
     let parent_symbol_sql = sql_nullable_text(record.parent_symbol_id.as_deref());
     let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
+    let modifiers_sql = sql_jsonb_text_array(&record.modifiers);
+    let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     let sql = format!(
-        "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, '{}', now()) \
-ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, content_hash = EXCLUDED.content_hash, updated_at = now()",
+        "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', now()) \
+ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = now()",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(&record.symbol_id),
         esc_pg(&record.artefact_id),
@@ -263,6 +300,8 @@ ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_i
         record.start_byte,
         record.end_byte,
         signature_sql,
+        modifiers_sql,
+        docstring_sql,
         esc_pg(&record.content_hash),
     );
 
@@ -659,6 +698,7 @@ async fn refresh_current_state_for_path(
     pg_client: &tokio_postgres::Client,
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
+    file_docstring: Option<String>,
     symbol_records: &[PersistedArtefactRecord],
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
@@ -671,7 +711,12 @@ async fn refresh_current_state_for_path(
     upsert_current_file_state(cfg, pg_client, rev).await?;
 
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
-    all_records.push(build_file_current_record(rev.path, rev.blob_sha, file_artefact));
+    all_records.push(build_file_current_record(
+        rev.path,
+        rev.blob_sha,
+        file_artefact,
+        file_docstring,
+    ));
     all_records.extend(symbol_records.iter().cloned());
 
     let mut current_by_fqn = HashMap::new();
@@ -721,7 +766,7 @@ async fn upsert_language_artefacts(
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
 ) -> Result<()> {
-    let (items, dependency_edges) = if is_supported_symbol_language(&file_artefact.language) {
+    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(&file_artefact.language) {
         let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
             return Ok(());
         };
@@ -735,9 +780,14 @@ async fn upsert_language_artefacts(
         } else {
             extract_js_ts_dependency_edges(&content, rev.path, &items)?
         };
-        (items, edges)
+        let file_docstring = if file_artefact.language == "rust" {
+            extract_rust_file_docstring(&content)
+        } else {
+            None
+        };
+        (items, edges, file_docstring)
     } else {
-        (Vec::new(), Vec::new())
+        (Vec::new(), Vec::new(), None)
     };
 
     let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items);
@@ -754,7 +804,15 @@ async fn upsert_language_artefacts(
     }
 
     let mut historical_lookup = HashMap::new();
-    historical_lookup.insert(rev.path.to_string(), build_file_current_record(rev.path, rev.blob_sha, file_artefact));
+    historical_lookup.insert(
+        rev.path.to_string(),
+        build_file_current_record(
+            rev.path,
+            rev.blob_sha,
+            file_artefact,
+            file_docstring.clone(),
+        ),
+    );
     for record in &symbol_records {
         historical_lookup.insert(record.symbol_fqn.clone(), record.clone());
     }
@@ -769,7 +827,16 @@ async fn upsert_language_artefacts(
         persist_historical_edge(cfg, pg_client, rev.blob_sha, record).await?;
     }
 
-    refresh_current_state_for_path(cfg, pg_client, rev, file_artefact, &symbol_records, dependency_edges).await?;
+    refresh_current_state_for_path(
+        cfg,
+        pg_client,
+        rev,
+        file_artefact,
+        file_docstring,
+        &symbol_records,
+        dependency_edges,
+    )
+    .await?;
 
     Ok(())
 }

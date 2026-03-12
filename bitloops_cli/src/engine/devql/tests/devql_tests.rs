@@ -70,6 +70,8 @@ fn test_symbol_record(
         start_byte: (start_line - 1) * 10,
         end_byte: (end_line * 10) + 5,
         signature: Some(format!("export function {name}() {{")),
+        modifiers: vec![],
+        docstring: None,
         content_hash: format!("hash-{blob_sha}-{name}"),
     }
 }
@@ -271,6 +273,8 @@ async fn build_postgres_artefacts_query_includes_language_kind_and_symbol_fqn_fi
         .unwrap();
 
     assert!(sql.contains("a.language_kind"));
+    assert!(sql.contains("a.modifiers"));
+    assert!(sql.contains("a.docstring"));
     assert!(sql.contains("a.symbol_fqn = 'hello_rust/src/main.rs::impl@1::handle_factorial'"));
     assert!(sql.contains("FROM artefacts_current a"));
 }
@@ -591,6 +595,101 @@ fn extract_js_ts_artefacts_returns_no_symbols_when_treesitter_parse_fails() {
     let artefacts = extract_js_ts_artefacts(content, "src/broken.ts").unwrap();
 
     assert!(artefacts.is_empty());
+}
+
+#[test]
+fn extract_js_ts_artefacts_collect_modifiers_for_methods_fields_and_variables() {
+    let content = r#"/* class summary */
+class Service {
+  // field summary
+  public static readonly value: string = "ok";
+
+  // method summary
+  public static async run() {
+    return Promise.resolve();
+  }
+}
+
+// variable summary
+export const FLAG = "demo";
+"#;
+
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+
+    let class = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.language_kind == "class_declaration" && artefact.name == "Service"
+        })
+        .expect("expected class artefact");
+    assert!(class.modifiers.is_empty());
+    assert_eq!(class.docstring.as_deref(), Some("class summary"));
+
+    let field = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.language_kind == "public_field_definition" && artefact.name == "value"
+        })
+        .expect("expected field artefact");
+    assert_eq!(
+        field.modifiers,
+        vec![
+            "public".to_string(),
+            "static".to_string(),
+            "readonly".to_string()
+        ]
+    );
+    assert_eq!(field.docstring.as_deref(), Some("field summary"));
+
+    let method = artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "method_definition" && artefact.name == "run")
+        .expect("expected method artefact");
+    assert_eq!(
+        method.modifiers,
+        vec![
+            "public".to_string(),
+            "static".to_string(),
+            "async".to_string()
+        ]
+    );
+    assert_eq!(method.docstring.as_deref(), Some("method summary"));
+
+    let variable = artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "variable_declarator" && artefact.name == "FLAG")
+        .expect("expected variable artefact");
+    assert_eq!(variable.modifiers, vec!["export".to_string()]);
+    assert_eq!(variable.docstring.as_deref(), Some("variable summary"));
+}
+
+#[test]
+fn extract_js_ts_artefacts_merge_mixed_docstring_comment_blocks() {
+    let content = r#"// first line
+// second line
+/* block detail */
+/** final detail */
+export async function greet(name: string) {
+  return name;
+}
+"#;
+
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let function = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.language_kind == "function_declaration" && artefact.name == "greet"
+        })
+        .expect("expected function artefact");
+
+    assert_eq!(
+        function.modifiers,
+        vec!["export".to_string(), "async".to_string()]
+    );
+    assert_eq!(
+        function.docstring.as_deref(),
+        Some("first line\nsecond line\n\nblock detail\n\nfinal detail")
+    );
 }
 
 #[test]
@@ -1090,6 +1189,82 @@ fn factorial(n: u64) -> u64 {
 }
 
 #[test]
+fn extract_rust_artefacts_collect_modifiers_and_outer_docstrings() {
+    let content = r#"/// repository contract
+pub(crate) trait Repository {
+    fn save(&self);
+}
+
+/** stores the cache */
+pub(crate) static CACHE: &str = "demo";
+
+/// runs the worker
+pub async unsafe fn run() {}
+"#;
+
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+
+    let trait_item = artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "trait_item" && artefact.name == "Repository")
+        .expect("expected trait artefact");
+    assert_eq!(trait_item.modifiers, vec!["pub(crate)".to_string()]);
+    assert_eq!(trait_item.docstring.as_deref(), Some("repository contract"));
+
+    let static_item = artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "static_item" && artefact.name == "CACHE")
+        .expect("expected static artefact");
+    assert_eq!(
+        static_item.modifiers,
+        vec!["pub(crate)".to_string(), "static".to_string()]
+    );
+    assert_eq!(static_item.docstring.as_deref(), Some("stores the cache"));
+
+    let function = artefacts
+        .iter()
+        .find(|artefact| {
+            artefact.language_kind == "function_item"
+                && artefact.name == "run"
+                && artefact.parent_symbol_fqn.is_none()
+        })
+        .expect("expected free function artefact");
+    assert_eq!(
+        function.modifiers,
+        vec!["pub".to_string(), "async".to_string(), "unsafe".to_string()]
+    );
+    assert_eq!(function.docstring.as_deref(), Some("runs the worker"));
+}
+
+#[test]
+fn extract_rust_inner_doc_comments_attach_to_file_and_module() {
+    let content = r#"//! crate level docs
+/*! more crate docs */
+mod api {
+    //! module docs
+    /*! more module docs */
+    pub fn call() {}
+}
+"#;
+
+    assert_eq!(
+        extract_rust_file_docstring(content).as_deref(),
+        Some("crate level docs\n\nmore crate docs")
+    );
+
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let module = artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "mod_item" && artefact.name == "api")
+        .expect("expected module artefact");
+
+    assert_eq!(
+        module.docstring.as_deref(),
+        Some("module docs\n\nmore module docs")
+    );
+}
+
+#[test]
 fn extract_rust_dependency_edges_emit_inherits_for_supertraits() {
     let content = r#"trait Reader {}
 trait Writer {}
@@ -1355,6 +1530,8 @@ fn semantic_symbol_id_is_stable_for_positional_impl_names() {
         start_byte: 0,
         end_byte: 0,
         signature: "impl Repo for PgRepo {".to_string(),
+        modifiers: vec![],
+        docstring: None,
     };
     let moved = JsTsArtefact {
         name: "impl@30".to_string(),
@@ -1478,6 +1655,8 @@ impl Service for Repo {
 fn postgres_schema_sql_includes_artefact_edges_hardening() {
     let sql = postgres_schema_sql();
     assert!(sql.contains("symbol_id TEXT"));
+    assert!(sql.contains("modifiers JSONB NOT NULL DEFAULT '[]'::jsonb"));
+    assert!(sql.contains("docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
@@ -1508,10 +1687,21 @@ fn current_state_hardening_sql_includes_current_state_constraints_and_indexes() 
     let sql = current_state_hardening_sql();
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS commit_sha TEXT"));
+    assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB"));
+    assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_symbol_fqn_idx"));
     assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_target_chk"));
     assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_line_range_chk"));
     assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
+}
+
+#[test]
+fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
+    let sql = artefacts_upgrade_sql();
+    assert!(sql.contains("ADD COLUMN IF NOT EXISTS modifiers JSONB"));
+    assert!(sql.contains("ADD COLUMN IF NOT EXISTS docstring TEXT"));
+    assert!(sql.contains("SET modifiers = '[]'::jsonb"));
+    assert!(sql.contains("ALTER COLUMN modifiers SET NOT NULL"));
 }
 
 #[test]
@@ -1753,6 +1943,8 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         start_byte: 0,
         end_byte: 35,
         signature: Some("export function greet(name: string) {".to_string()),
+        modifiers: vec![],
+        docstring: None,
         content_hash: "hash-old".to_string(),
     };
     let new_record = PersistedArtefactRecord {
@@ -1768,6 +1960,8 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         start_byte: 58,
         end_byte: 111,
         signature: Some("export function greet(name: string) {".to_string()),
+        modifiers: vec![],
+        docstring: None,
         content_hash: "hash-new".to_string(),
     };
 
@@ -1808,6 +2002,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
             blob_sha: blob_old,
         },
         &file_old,
+        None,
         std::slice::from_ref(&old_record),
         vec![],
     )
@@ -1823,6 +2018,7 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
             blob_sha: blob_new,
         },
         &file_new,
+        None,
         std::slice::from_ref(&new_record),
         vec![],
     )
@@ -1924,6 +2120,7 @@ async fn older_current_refresh_does_not_clobber_newer_snapshot_for_the_same_path
             blob_sha: new_blob,
         },
         &new_file,
+        None,
         std::slice::from_ref(&new_record),
         vec![],
     )
@@ -1939,6 +2136,7 @@ async fn older_current_refresh_does_not_clobber_newer_snapshot_for_the_same_path
             blob_sha: old_blob,
         },
         &old_file,
+        None,
         &[old_record],
         vec![],
     )
@@ -1996,6 +2194,7 @@ async fn refreshing_a_path_rebuilds_current_outgoing_edges_instead_of_accumulati
             blob_sha: old_blob,
         },
         &old_file,
+        None,
         std::slice::from_ref(&old_record),
         vec![test_unresolved_call_edge(
             &old_record.symbol_fqn,
@@ -2015,6 +2214,7 @@ async fn refreshing_a_path_rebuilds_current_outgoing_edges_instead_of_accumulati
             blob_sha: new_blob,
         },
         &new_file,
+        None,
         std::slice::from_ref(&new_record),
         vec![test_unresolved_call_edge(
             &new_record.symbol_fqn,
@@ -2091,6 +2291,7 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
             blob_sha: target_blob,
         },
         &target_file,
+        None,
         std::slice::from_ref(&target_record),
         vec![],
     )
@@ -2106,6 +2307,7 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
             blob_sha: caller_blob,
         },
         &caller_file,
+        None,
         std::slice::from_ref(&caller_record),
         vec![test_call_edge(
             &caller_record.symbol_fqn,
@@ -2125,6 +2327,7 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
             blob_sha: target_deleted_blob,
         },
         &target_deleted_file,
+        None,
         &[],
         vec![],
     )
@@ -2219,6 +2422,7 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
             blob_sha: target_blob_v1,
         },
         &target_file_v1,
+        None,
         std::slice::from_ref(&target_record_v1),
         vec![],
     )
@@ -2234,6 +2438,7 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
             blob_sha: caller_blob,
         },
         &caller_file,
+        None,
         std::slice::from_ref(&caller_record),
         vec![test_call_edge(
             &caller_record.symbol_fqn,
@@ -2277,6 +2482,7 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
             blob_sha: target_blob_v2,
         },
         &target_file_v2,
+        None,
         std::slice::from_ref(&target_record_v2),
         vec![],
     )

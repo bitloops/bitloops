@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS artefacts (
     start_byte INTEGER NOT NULL,
     end_byte INTEGER NOT NULL,
     signature TEXT,
+    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    docstring TEXT,
     content_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -147,6 +149,8 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     start_byte INTEGER NOT NULL,
     end_byte INTEGER NOT NULL,
     signature TEXT,
+    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    docstring TEXT,
     content_hash TEXT,
     updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, symbol_id)
@@ -276,6 +280,8 @@ ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS signature TEXT;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS symbol_id TEXT;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS modifiers JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS docstring TEXT;
 ALTER TABLE artefacts ALTER COLUMN canonical_kind DROP NOT NULL;
 UPDATE artefacts
 SET start_byte = 0
@@ -283,8 +289,12 @@ WHERE start_byte IS NULL;
 UPDATE artefacts
 SET end_byte = 0
 WHERE end_byte IS NULL;
+UPDATE artefacts
+SET modifiers = '[]'::jsonb
+WHERE modifiers IS NULL;
 ALTER TABLE artefacts ALTER COLUMN start_byte SET NOT NULL;
 ALTER TABLE artefacts ALTER COLUMN end_byte SET NOT NULL;
+ALTER TABLE artefacts ALTER COLUMN modifiers SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS artefacts_symbol_idx
 ON artefacts (repo_id, symbol_id)
@@ -410,9 +420,15 @@ ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS end_line INTEGER;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS start_byte INTEGER;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS end_byte INTEGER;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS signature TEXT;
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS content_hash TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE artefacts_current ALTER COLUMN canonical_kind DROP NOT NULL;
+UPDATE artefacts_current
+SET modifiers = '[]'::jsonb
+WHERE modifiers IS NULL;
+ALTER TABLE artefacts_current ALTER COLUMN modifiers SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
 ON artefacts_current (repo_id, path);

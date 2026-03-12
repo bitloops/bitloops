@@ -25,10 +25,29 @@ fn source_path_from_symbol_fqn(symbol_fqn: &str) -> &str {
 
 fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
     if has_positional_identity_name(&item.name) {
-        normalize_identity_fragment(&item.signature)
+        normalize_identity_fragment(&identity_signature_for_artefact(item))
     } else {
         normalize_identity_fragment(&item.name)
     }
+}
+
+fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
+    let mut signature = item.signature.clone();
+    let mut modifiers = item
+        .modifiers
+        .iter()
+        .filter(|modifier| !matches!(modifier.as_str(), "get" | "set"))
+        .collect::<Vec<_>>();
+    modifiers.sort_by_key(|modifier| std::cmp::Reverse(modifier.len()));
+
+    for modifier in modifiers {
+        let escaped = regex::escape(modifier);
+        let pattern = Regex::new(&format!(r"(^|[\s(]){}($|[\s(])", escaped))
+            .expect("modifier regex should compile");
+        signature = pattern.replace_all(&signature, "$1$2").to_string();
+    }
+
+    signature
 }
 
 fn semantic_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option<&str>) -> String {
@@ -39,7 +58,7 @@ fn semantic_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option
         item.language_kind,
         parent_symbol_id.unwrap_or(""),
         semantic_name_for_artefact(item),
-        normalize_identity_fragment(&item.signature)
+        normalize_identity_fragment(&identity_signature_for_artefact(item))
     ))
 }
 

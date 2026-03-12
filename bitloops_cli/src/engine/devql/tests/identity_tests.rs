@@ -66,3 +66,51 @@ fn symbol_id_stays_stable_across_formatting_only_edits() {
         symbol_id_for_artefact(reformatted_function)
     );
 }
+
+#[test]
+fn symbol_id_stays_stable_when_only_docstring_changes() {
+    let original = r#"export function greet(name: string) {
+  return name.trim();
+}
+"#;
+    let documented = r#"// greet a user
+/* trims surrounding whitespace */
+export function greet(name: string) {
+  return name.trim();
+}
+"#;
+
+    let original_artefacts = extract_js_ts_artefacts(original, "src/sample.ts").unwrap();
+    let documented_artefacts = extract_js_ts_artefacts(documented, "src/sample.ts").unwrap();
+
+    let original_function = artefact_by_symbol_fqn(&original_artefacts, "src/sample.ts::greet");
+    let documented_function = artefact_by_symbol_fqn(&documented_artefacts, "src/sample.ts::greet");
+
+    assert_eq!(
+        symbol_id_for_artefact(original_function),
+        symbol_id_for_artefact(documented_function)
+    );
+}
+
+#[test]
+fn symbol_id_stays_stable_when_only_modifiers_change() {
+    let original = r#"export function greet(name: string) {
+  return name.trim();
+}
+"#;
+    let modified = r#"export async function greet(name: string) {
+  return name.trim();
+}
+"#;
+
+    let original_artefacts = extract_js_ts_artefacts(original, "src/sample.ts").unwrap();
+    let modified_artefacts = extract_js_ts_artefacts(modified, "src/sample.ts").unwrap();
+
+    let original_function = artefact_by_symbol_fqn(&original_artefacts, "src/sample.ts::greet");
+    let modified_function = artefact_by_symbol_fqn(&modified_artefacts, "src/sample.ts::greet");
+
+    assert_eq!(
+        symbol_id_for_artefact(original_function),
+        symbol_id_for_artefact(modified_function)
+    );
+}
