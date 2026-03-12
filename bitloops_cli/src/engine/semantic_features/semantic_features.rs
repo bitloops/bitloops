@@ -80,7 +80,6 @@ pub struct SemanticFeatureInput {
     pub parent_symbol: Option<String>,
     pub parameter_count: Option<i32>,
     pub return_shape_hint: Option<String>,
-    pub modifiers: Vec<String>,
     pub local_relationships: Vec<String>,
     pub context_hints: Vec<String>,
     pub content_hash: Option<String>,
@@ -207,7 +206,6 @@ fn build_semantic_feature_input_from_artefact(
             .as_deref()
             .and_then(count_parameters_from_signature),
         return_shape_hint,
-        modifiers: extract_modifiers_from_signature(row.signature.as_deref()),
         local_relationships,
         context_hints,
         content_hash: row.content_hash.clone(),
@@ -355,29 +353,6 @@ fn extract_file_header_comment(content: &str) -> Option<String> {
     }
 }
 
-fn extract_modifiers_from_signature(signature: Option<&str>) -> Vec<String> {
-    let Some(signature) = signature else {
-        return Vec::new();
-    };
-    let lowered = signature.to_ascii_lowercase();
-    let mut modifiers = Vec::new();
-    for modifier in [
-        "export",
-        "default",
-        "async",
-        "pub",
-        "static",
-        "private",
-        "protected",
-        "readonly",
-    ] {
-        if lowered.contains(modifier) {
-            modifiers.push(modifier.to_string());
-        }
-    }
-    modifiers
-}
-
 pub async fn upsert_semantic_feature_rows(
     pg_client: &tokio_postgres::Client,
     inputs: &[SemanticFeatureInput],
@@ -446,7 +421,6 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
                 .return_shape_hint
                 .as_deref()
                 .map(|value| value.to_ascii_lowercase()),
-            "modifiers": normalize_string_list(&input.modifiers),
             "local_relationships": normalize_string_list(&input.local_relationships),
             "context_hints": normalize_string_list(&input.context_hints),
             "content_hash": &input.content_hash,

@@ -20,7 +20,6 @@ pub struct SymbolFeaturesRow {
     pub parent_symbol: Option<String>,
     pub parameter_count: Option<i32>,
     pub return_shape_hint: Option<String>,
-    pub modifiers: Vec<String>,
     pub local_relationships: Vec<String>,
     pub context_tokens: Vec<String>,
 }
@@ -29,7 +28,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
     let normalized_signature = input.signature.as_deref().map(normalize_signature);
     let identifier_tokens = build_identifier_tokens(input);
     let normalized_body_tokens = build_body_tokens(&input.body);
-    let modifiers = normalize_string_list(&input.modifiers);
     let local_relationships = normalize_string_list(&input.local_relationships);
     let context_tokens = build_context_tokens(input, &identifier_tokens);
 
@@ -49,7 +47,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
         parent_symbol: input.parent_symbol.clone(),
         parameter_count: input.parameter_count,
         return_shape_hint: input.return_shape_hint.clone(),
-        modifiers,
         local_relationships,
         context_tokens,
     }

@@ -114,10 +114,6 @@ pub(super) async fn persist_rows(
         "'{}'::jsonb",
         esc_pg(&serde_json::to_string(&features.normalized_body_tokens)?)
     );
-    let modifiers = format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(&features.modifiers)?)
-    );
     let local_relationships = format!(
         "'{}'::jsonb",
         esc_pg(&serde_json::to_string(&features.local_relationships)?)
@@ -131,9 +127,9 @@ pub(super) async fn persist_rows(
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, summary_source, source_model) \
 VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, '{summary_source}', {source_model}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, summary_source = EXCLUDED.summary_source, source_model = EXCLUDED.source_model, generated_at = now(); \
-INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, parameter_count, return_shape_hint, modifiers, local_relationships, context_tokens) \
-VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {parameter_count}, {return_shape_hint}, {modifiers}, {local_relationships}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, parameter_count = EXCLUDED.parameter_count, return_shape_hint = EXCLUDED.return_shape_hint, modifiers = EXCLUDED.modifiers, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
+INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, parameter_count, return_shape_hint, local_relationships, context_tokens) \
+VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {parameter_count}, {return_shape_hint}, {local_relationships}, {context_tokens}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, parameter_count = EXCLUDED.parameter_count, return_shape_hint = EXCLUDED.return_shape_hint, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
@@ -159,7 +155,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         parent_symbol = parent_symbol_expr,
         parameter_count = parameter_count_expr,
         return_shape_hint = return_shape_expr,
-        modifiers = modifiers,
         local_relationships = local_relationships,
         context_tokens = context_tokens,
     );
