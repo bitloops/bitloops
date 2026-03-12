@@ -1,35 +1,23 @@
 use super::*;
 use crate::engine::settings::{self, BitloopsSettings};
-use crate::test_support::process_state::{with_env_var, with_process_state};
+use crate::test_support::process_state::{
+    GIT_ENV_KEYS, git_command, with_env_var, with_process_state,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 fn setup_git_repo(path: &Path) {
-    let status = Command::new("git")
+    let status = git_command()
         .args(["init", "-q"])
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_COMMON_DIR")
         .current_dir(path)
         .status()
         .expect("git init");
     assert!(status.success(), "git init should succeed");
 }
 
-fn cleared_git_env() -> [(&'static str, Option<&'static str>); 6] {
-    [
-        ("GIT_DIR", None),
-        ("GIT_WORK_TREE", None),
-        ("GIT_INDEX_FILE", None),
-        ("GIT_OBJECT_DIRECTORY", None),
-        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", None),
-        ("GIT_COMMON_DIR", None),
-    ]
+fn cleared_git_env() -> Vec<(&'static str, Option<&'static str>)> {
+    GIT_ENV_KEYS.iter().map(|key| (*key, None)).collect()
 }
 
 fn write_settings_with_telemetry(repo_root: &Path, telemetry: Option<bool>) {

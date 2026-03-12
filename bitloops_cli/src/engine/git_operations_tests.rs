@@ -1,11 +1,11 @@
 use super::*;
-use crate::test_support::process_state::{with_cwd, with_process_state};
+use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn run_git_output(repo: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    git_command()
         .args(args)
         .current_dir(repo)
         .output()

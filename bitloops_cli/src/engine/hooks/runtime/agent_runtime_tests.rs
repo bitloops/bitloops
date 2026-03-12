@@ -14,11 +14,10 @@ use crate::engine::strategy::noop::NoOpStrategy;
 use crate::engine::strategy::registry;
 use crate::engine::strategy::{StepContext, TaskStepContext};
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{with_cwd, with_process_state};
+use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
@@ -31,7 +30,7 @@ fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
@@ -47,7 +46,7 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_command()
         .args(args)
         .current_dir(dir)
         .output()
@@ -1348,7 +1347,7 @@ fn post_todo_saves_incremental_with_completed_todo() {
     setup_git_repo(&dir);
 
     with_cwd(dir.path(), || {
-        let checkout = Command::new("git")
+        let checkout = git_command()
             .args(["checkout", "-b", "feature/test-post-todo"])
             .current_dir(dir.path())
             .output()
@@ -2090,13 +2089,13 @@ fn detect_file_changes_new_and_deleted_files() {
     setup_git_repo(&dir);
 
     fs::write(dir.path().join("tracked2.txt"), "content2\n").unwrap();
-    let out = Command::new("git")
+    let out = git_command()
         .args(["add", "tracked2.txt"])
         .current_dir(dir.path())
         .output()
         .unwrap();
     assert!(out.status.success(), "git add tracked2.txt failed");
-    let out = Command::new("git")
+    let out = git_command()
         .args(["commit", "-m", "add tracked2"])
         .current_dir(dir.path())
         .output()
