@@ -28,12 +28,18 @@ impl TestWorkspace {
 }
 
 fn run_cmd(dir: &Path, name: &str, args: &[&str]) {
-    let output = Command::new(name)
-        .args(args)
+    let mut cmd = Command::new(name);
+    cmd.args(args)
         .current_dir(dir)
-        .stdin(Stdio::null())
-        .output()
-        .expect("execute command");
+        .stdin(Stdio::null());
+    
+    // For git commands, avoid reading system/global config files
+    if name == "git" {
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    }
+    
+    let output = cmd.output().expect("execute command");
     assert!(
         output.status.success(),
         "command failed: {} {:?}\nstdout: {}\nstderr: {}",
