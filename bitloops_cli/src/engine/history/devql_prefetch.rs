@@ -214,7 +214,7 @@ fn build_devql_history_query(target: &HistoryTarget) -> String {
 fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         return task::block_in_place(|| {
-            handle.block_on(crate::commands::devql::execute_query_json_for_repo_root(
+            handle.block_on(crate::engine::devql::execute_query_json_for_repo_root(
                 repo_root, query,
             ))
         });
@@ -224,7 +224,7 @@ fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
         .enable_all()
         .build()
         .context("building tokio runtime for pre-hook DevQL query")?;
-    runtime.block_on(crate::commands::devql::execute_query_json_for_repo_root(
+    runtime.block_on(crate::engine::devql::execute_query_json_for_repo_root(
         repo_root, query,
     ))
 }

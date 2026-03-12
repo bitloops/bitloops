@@ -1,0 +1,1456 @@
+use super::*;
+use crate::commands::devql::DevqlCommand;
+use clap::Parser;
+use std::env;
+
+fn test_cfg() -> DevqlConfig {
+    DevqlConfig {
+        repo_root: PathBuf::from("/tmp/repo"),
+        repo: RepoIdentity {
+            provider: "github".to_string(),
+            organization: "bitloops".to_string(),
+            name: "temp2".to_string(),
+            identity: "github/bitloops/temp2".to_string(),
+            repo_id: deterministic_uuid("repo://github/bitloops/temp2"),
+        },
+        pg_dsn: None,
+        clickhouse_url: "http://localhost:8123".to_string(),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: "default".to_string(),
+    }
+}
+
+#[test]
+fn parse_devql_pipeline_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->asOf(ref:"main")->file("src/main.rs")->artefacts(lines:1..50,kind:"file",agent:"claude-code",since:"2026-03-01")->select(path,canonical_kind)->limit(10)"#,
+    )
+    .unwrap();
+
+    assert_eq!(parsed.repo.as_deref(), Some("bitloops-cli"));
+    assert!(matches!(parsed.as_of, Some(AsOfSelector::Ref(ref v)) if v == "main"));
+    assert_eq!(parsed.file.as_deref(), Some("src/main.rs"));
+    assert_eq!(parsed.artefacts.kind.as_deref(), Some("file"));
+    assert_eq!(parsed.artefacts.lines, Some((1, 50)));
+    assert_eq!(parsed.artefacts.agent.as_deref(), Some("claude-code"));
+    assert_eq!(parsed.artefacts.since.as_deref(), Some("2026-03-01"));
+    assert_eq!(parsed.limit, 10);
+    assert_eq!(parsed.select_fields, vec!["path", "canonical_kind"]);
+}
+
+#[test]
+fn parse_devql_checkpoints_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->checkpoints(agent:"claude-code",since:"2026-03-01")->select(checkpoint_id,created_at)->limit(5)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_checkpoints_stage);
+    assert_eq!(parsed.checkpoints.agent.as_deref(), Some("claude-code"));
+    assert_eq!(parsed.checkpoints.since.as_deref(), Some("2026-03-01"));
+    assert_eq!(parsed.limit, 5);
+}
+
+#[test]
+fn parse_devql_chat_history_stage_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("index.ts")->artefacts(lines:1..10)->chatHistory()->limit(3)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_artefacts_stage);
+    assert!(parsed.has_chat_history_stage);
+    assert_eq!(parsed.limit, 3);
+}
+
+#[test]
+fn parse_devql_deps_stage_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"both",include_unresolved:false)->limit(25)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_deps_stage);
+    assert_eq!(parsed.deps.kind.as_deref(), Some("calls"));
+    assert_eq!(parsed.deps.direction, "both");
+    assert!(!parsed.deps.include_unresolved);
+    assert_eq!(parsed.limit, 25);
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_combining_deps_and_checkpoints_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->checkpoints()->artefacts()->deps()"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("MVP limitation: telemetry/checkpoints stages cannot be combined")
+    );
+}
+
+#[test]
+fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
+    for kind in [
+        "imports",
+        "calls",
+        "references",
+        "inherits",
+        "implements",
+        "exports",
+    ] {
+        let parsed = parse_devql_query(&format!(
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"{kind}")->limit(5)"#
+        ))
+        .unwrap();
+
+        assert_eq!(parsed.deps.kind.as_deref(), Some(kind));
+    }
+}
+
+#[test]
+fn build_postgres_deps_query_respects_direction_and_unresolved_filters() {
+    let cfg = test_cfg();
+    let out = parse_devql_query(
+        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out",include_unresolved:false)->limit(5)"#,
+    )
+    .unwrap();
+    let in_query = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"interface")->deps(kind:"references",direction:"in")->limit(5)"#,
+    )
+    .unwrap();
+    let both = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->deps(kind:"exports",direction:"both")->limit(5)"#,
+    )
+    .unwrap();
+
+    let out_sql = build_postgres_deps_query(&cfg, &out, &cfg.repo.repo_id).unwrap();
+    let in_sql = build_postgres_deps_query(&cfg, &in_query, &cfg.repo.repo_id).unwrap();
+    let both_sql = build_postgres_deps_query(&cfg, &both, &cfg.repo.repo_id).unwrap();
+
+    assert!(out_sql.contains("e.edge_kind = 'calls'"));
+    assert!(out_sql.contains("e.to_artefact_id IS NOT NULL"));
+    assert!(out_sql.contains("LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
+
+    assert!(in_sql.contains("e.edge_kind = 'references'"));
+    assert!(in_sql.contains("JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
+    assert!(!in_sql.contains("WITH out_edges AS"));
+
+    assert!(both_sql.contains("e.edge_kind = 'exports'"));
+    assert!(both_sql.contains("WITH out_edges AS"));
+    assert!(both_sql.contains("UNION ALL"));
+    assert!(both_sql.contains("SELECT DISTINCT"));
+}
+
+#[test]
+fn build_postgres_deps_query_rejects_invalid_direction() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->deps(kind:"calls",direction:"sideways")->limit(5)"#,
+    )
+    .unwrap();
+
+    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("deps(direction:...) must be one of: out, in, both")
+    );
+}
+
+#[test]
+fn build_postgres_deps_query_rejects_invalid_kind() {
+    let cfg = test_cfg();
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps(kind:"surprise")->limit(5)"#)
+            .unwrap();
+
+    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+    assert!(err.to_string().contains(
+        "deps(kind:...) must be one of: imports, calls, references, inherits, implements, exports"
+    ));
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_chat_history_without_artefacts_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->chatHistory()->limit(1)"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("chatHistory() requires an artefacts() stage")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_combining_checkpoints_and_artefacts_stage() {
+    let cfg = test_cfg();
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->checkpoints()->artefacts(agent:"claude-code")"#)
+            .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("MVP limitation: telemetry/checkpoints stages cannot be combined")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->chatHistory()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("deps() cannot be combined with chatHistory()")
+    );
+}
+
+#[test]
+fn extract_chat_messages_from_transcript_parses_jsonl() {
+    let transcript = r#"{"type":"user","message":{"content":"Fix index.ts"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done"},{"type":"tool_use","name":"Edit"}]}}
+{"type":"assistant","content":"Added tests"}"#;
+
+    let messages = extract_chat_messages_from_transcript(transcript);
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["text"], "Fix index.ts");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["text"], "Done");
+    assert_eq!(messages[2]["text"], "Added tests");
+}
+
+#[test]
+fn deterministic_uuid_is_stable() {
+    let a = deterministic_uuid("same-input");
+    let b = deterministic_uuid("same-input");
+    let c = deterministic_uuid("different-input");
+
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+    assert_eq!(a.len(), 36);
+}
+
+#[test]
+fn devql_file_config_parses_nested_block() {
+    let value = serde_json::json!({
+        "devql": {
+            "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops",
+            "clickhouse_url": "http://localhost:8123",
+            "clickhouse_database": "default"
+        }
+    });
+
+    let cfg = DevqlFileConfig::from_json_value(&value);
+    assert_eq!(
+        cfg.pg_dsn.as_deref(),
+        Some("postgres://user:pass@localhost:5432/bitloops")
+    );
+    assert_eq!(cfg.clickhouse_url.as_deref(), Some("http://localhost:8123"));
+    assert_eq!(cfg.clickhouse_database.as_deref(), Some("default"));
+}
+
+#[test]
+fn devql_file_config_parses_top_level_env_keys() {
+    let value = serde_json::json!({
+        "BITLOOPS_DEVQL_PG_DSN": "postgres://x/y",
+        "BITLOOPS_DEVQL_CH_URL": "http://ch:8123",
+        "BITLOOPS_DEVQL_CH_DATABASE": "analytics"
+    });
+
+    let cfg = DevqlFileConfig::from_json_value(&value);
+    assert_eq!(cfg.pg_dsn.as_deref(), Some("postgres://x/y"));
+    assert_eq!(cfg.clickhouse_url.as_deref(), Some("http://ch:8123"));
+    assert_eq!(cfg.clickhouse_database.as_deref(), Some("analytics"));
+}
+
+#[test]
+fn classify_connection_error_authentication() {
+    let status = classify_connection_error("psql failed: FATAL: password authentication failed");
+    assert_eq!(status, DatabaseConnectionStatus::CouldNotAuthenticate);
+}
+
+#[test]
+fn classify_connection_error_reachability() {
+    let status =
+        classify_connection_error("ClickHouse request failed: curl: (7) Failed to connect");
+    assert_eq!(status, DatabaseConnectionStatus::CouldNotReachDb);
+}
+
+#[test]
+fn classify_connection_error_unknown() {
+    let status = classify_connection_error("unexpected database failure");
+    assert_eq!(status, DatabaseConnectionStatus::Error);
+}
+
+#[test]
+fn normalize_repo_path_removes_dot_prefix() {
+    assert_eq!(normalize_repo_path("./index.ts"), "index.ts");
+    assert_eq!(normalize_repo_path("index.ts"), "index.ts");
+    assert_eq!(normalize_repo_path(".\\src\\index.ts"), "src/index.ts");
+}
+
+#[test]
+fn build_path_candidates_includes_variants() {
+    let candidates = build_path_candidates("./index.ts");
+    assert!(candidates.contains(&"./index.ts".to_string()));
+    assert!(candidates.contains(&"index.ts".to_string()));
+}
+
+#[test]
+fn extract_js_ts_functions_detects_basic_function() {
+    let content = r#"export function hello() {
+  return "Hello World";
+}
+"#;
+    let functions = extract_js_ts_functions(content).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "hello");
+    assert_eq!(functions[0].start_line, 1);
+    assert_eq!(functions[0].end_line, 3);
+    assert_eq!(functions[0].start_byte, 0);
+    assert_eq!(functions[0].end_byte as usize, content.len());
+    assert_eq!(functions[0].signature, "export function hello() {");
+}
+
+#[test]
+fn extract_js_ts_functions_detects_arrow_function_assignment() {
+    let content = r#"export const hello = () => {
+  return "Hello World";
+}
+"#;
+    let functions = extract_js_ts_functions(content).unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0].name, "hello");
+    assert_eq!(functions[0].start_line, 1);
+    assert_eq!(functions[0].end_line, 3);
+    assert_eq!(functions[0].start_byte, 0);
+    assert_eq!(functions[0].end_byte as usize, content.len());
+    assert_eq!(functions[0].signature, "export const hello = () => {");
+}
+
+#[test]
+fn extract_js_ts_artefacts_covers_phase1_kinds() {
+    let content = r#"import { helper } from "./helper";
+export interface User {
+  id: string;
+}
+export type UserId = string;
+export class Service {
+  run(input: string) {
+    return input;
+  }
+}
+export const answer = 42;
+export function greet(name: string) {
+  return helper(name);
+}
+"#;
+
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let kinds = artefacts
+        .iter()
+        .map(|a| a.canonical_kind.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(kinds.contains(&"import"));
+    assert!(kinds.contains(&"interface"));
+    assert!(kinds.contains(&"type"));
+    assert!(kinds.contains(&LANGUAGE_ONLY_CANONICAL_KIND));
+    assert!(kinds.contains(&"method"));
+    assert!(kinds.contains(&"variable"));
+    assert!(kinds.contains(&"function"));
+
+    let class = artefacts
+        .iter()
+        .find(|a| a.language_kind == "class_declaration" && a.name == "Service")
+        .expect("expected class artefact");
+    assert_eq!(class.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+
+    let method = artefacts
+        .iter()
+        .find(|a| a.canonical_kind == "method" && a.name == "run")
+        .expect("expected class method artefact");
+    assert_eq!(
+        method.parent_symbol_fqn.as_deref(),
+        Some("src/sample.ts::Service")
+    );
+    assert_eq!(method.symbol_fqn, "src/sample.ts::Service::run");
+}
+
+#[test]
+fn extract_js_ts_artefacts_emits_constructor_and_only_top_level_variables() {
+    let content = r#"import { helper } from "./helper";
+const cacheKey = "demo";
+export const API_URL = "/v1";
+interface User {
+  id: string;
+}
+type UserId = string;
+class Service {
+  constructor(private readonly value: string) {}
+
+  run() {
+    const localOnly = this.value;
+    return helper(localOnly);
+  }
+}
+function boot() {
+  const nestedOnly = 1;
+  return nestedOnly;
+}
+"#;
+
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+
+    let constructor = artefacts
+        .iter()
+        .find(|a| a.language_kind == "constructor" && a.name == "constructor")
+        .expect("expected constructor artefact");
+    assert_eq!(constructor.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+    assert_eq!(
+        constructor.parent_symbol_fqn.as_deref(),
+        Some("src/sample.ts::Service")
+    );
+
+    assert!(
+        artefacts
+            .iter()
+            .any(|a| a.language_kind == "variable_declarator" && a.name == "cacheKey")
+    );
+    assert!(
+        artefacts
+            .iter()
+            .any(|a| a.language_kind == "variable_declarator" && a.name == "API_URL")
+    );
+    assert!(
+        !artefacts
+            .iter()
+            .any(|a| a.language_kind == "variable_declarator" && a.name == "localOnly")
+    );
+    assert!(
+        !artefacts
+            .iter()
+            .any(|a| a.language_kind == "variable_declarator" && a.name == "nestedOnly")
+    );
+}
+
+#[test]
+fn extract_js_ts_artefacts_returns_no_symbols_when_treesitter_parse_fails() {
+    let content = "export function broken( {";
+
+    let artefacts = extract_js_ts_artefacts(content, "src/broken.ts").unwrap();
+
+    assert!(artefacts.is_empty());
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_resolves_imports_and_calls() {
+    let content = r#"import { helper as extHelper } from "./utils";
+function local() {
+  return 1;
+}
+function caller() {
+  local();
+  extHelper();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "imports"
+            && e.from_symbol_fqn == "src/sample.ts"
+            && e.to_symbol_ref.as_deref() == Some("./utils")
+    }));
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::local")
+    }));
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_symbol_ref.as_deref() == Some("./utils::helper")
+    }));
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_emits_unresolved_call_fallback() {
+    let content = r#"function caller() {
+  mystery();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "calls"
+            && e.from_symbol_fqn == "src/sample.ts::caller"
+            && e.to_symbol_ref.as_deref() == Some("src/sample.ts::mystery")
+    }));
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_are_ordered_and_resolve_local_before_imports() {
+    let content = r#"import defaultHelper, { helper as extHelper } from "./utils";
+import "./setup";
+function extHelper() {
+  return 1;
+}
+function caller() {
+  extHelper();
+  defaultHelper();
+  mystery();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let snapshot = |edges: &[JsTsDependencyEdge]| {
+        edges
+            .iter()
+            .map(|edge| {
+                let metadata = |field: &str| {
+                    edge.metadata
+                        .get(field)
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("-")
+                };
+                format!(
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    edge.edge_kind,
+                    edge.from_symbol_fqn,
+                    edge.to_target_symbol_fqn.as_deref().unwrap_or("-"),
+                    edge.to_symbol_ref.as_deref().unwrap_or("-"),
+                    edge.start_line.unwrap_or_default(),
+                    metadata("import_form"),
+                    metadata("resolution"),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+    let edge_snapshot = snapshot(&edges);
+    let repeated_snapshot =
+        snapshot(&extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap());
+
+    assert_eq!(
+        edge_snapshot,
+        vec![
+            "imports|src/sample.ts|-|./utils|1|module|-".to_string(),
+            "imports|src/sample.ts|-|./setup|2|side_effect|-".to_string(),
+            "calls|src/sample.ts::caller|src/sample.ts::extHelper|-|7|-|local".to_string(),
+            "calls|src/sample.ts::caller|-|./utils::default|8|-|import".to_string(),
+            "calls|src/sample.ts::caller|-|src/sample.ts::mystery|9|-|unresolved".to_string(),
+        ]
+    );
+    assert_eq!(edge_snapshot, repeated_snapshot);
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_emit_type_and_value_references_with_ref_kind() {
+    let content = r#"interface User {
+  id: string;
+}
+const DEFAULT_USER: User = { id: "1" };
+function project(user: User): User {
+  const current: User = DEFAULT_USER;
+  return current;
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    let type_reference = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "references"
+                && edge.from_symbol_fqn == "src/sample.ts::project"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::User")
+        })
+        .expect("expected local type reference edge for User");
+    assert_eq!(
+        type_reference
+            .metadata
+            .get("ref_kind")
+            .and_then(|value| value.as_str()),
+        Some("type")
+    );
+
+    let value_reference = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "references"
+                && edge.from_symbol_fqn == "src/sample.ts::project"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::DEFAULT_USER")
+        })
+        .expect("expected local value reference edge for DEFAULT_USER");
+    assert_eq!(
+        value_reference
+            .metadata
+            .get("ref_kind")
+            .and_then(|value| value.as_str()),
+        Some("value")
+    );
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_emit_inherits_for_extends_clauses() {
+    let content = r#"class BaseService {}
+class UserService extends BaseService {}
+
+interface UserShape {
+  id: string;
+}
+
+interface AdminShape extends UserShape {
+  role: string;
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == "inherits"
+            && edge.from_symbol_fqn == "src/sample.ts::UserService"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::BaseService")
+    }));
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == "inherits"
+            && edge.from_symbol_fqn == "src/sample.ts::AdminShape"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::UserShape")
+    }));
+}
+
+#[test]
+fn extract_js_ts_dependency_edges_emit_exports_with_alias_distinct_dedup() {
+    let content = r#"function helper() {
+  return 1;
+}
+
+export { helper };
+export { helper };
+export { helper as helperAlias };
+export { remoteFoo } from "./remote";
+export { remoteFoo } from "./remote";
+export { remoteFoo as remoteAlias } from "./remote";
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+    let export_edges = edges
+        .iter()
+        .filter(|edge| edge.edge_kind == "exports")
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        export_edges.len(),
+        4,
+        "expected duplicate export/re-export edges to collapse while alias-distinct exports stay separate"
+    );
+
+    assert_eq!(
+        export_edges
+            .iter()
+            .filter(|edge| {
+                edge.from_symbol_fqn == "src/sample.ts"
+                    && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::helper")
+                    && edge
+                        .metadata
+                        .get("export_name")
+                        .and_then(|value| value.as_str())
+                        == Some("helper")
+            })
+            .count(),
+        1,
+        "duplicate local exports for the same alias should dedupe"
+    );
+
+    let local_alias = export_edges
+        .iter()
+        .find(|edge| {
+            edge.from_symbol_fqn == "src/sample.ts"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::helper")
+                && edge
+                    .metadata
+                    .get("export_name")
+                    .and_then(|value| value.as_str())
+                    == Some("helperAlias")
+        })
+        .expect("expected aliased local export edge for helperAlias");
+    assert_eq!(
+        local_alias
+            .metadata
+            .get("export_form")
+            .and_then(|value| value.as_str()),
+        Some("named")
+    );
+
+    assert_eq!(
+        export_edges
+            .iter()
+            .filter(|edge| {
+                edge.from_symbol_fqn == "src/sample.ts"
+                    && edge.to_symbol_ref.as_deref() == Some("./remote::remoteFoo")
+                    && edge
+                        .metadata
+                        .get("export_name")
+                        .and_then(|value| value.as_str())
+                        == Some("remoteFoo")
+            })
+            .count(),
+        1,
+        "duplicate re-exports for the same alias should dedupe"
+    );
+
+    let re_export_alias = export_edges
+        .iter()
+        .find(|edge| {
+            edge.from_symbol_fqn == "src/sample.ts"
+                && edge.to_symbol_ref.as_deref() == Some("./remote::remoteFoo")
+                && edge
+                    .metadata
+                    .get("export_name")
+                    .and_then(|value| value.as_str())
+                    == Some("remoteAlias")
+        })
+        .expect("expected aliased re-export edge for remoteAlias");
+    assert_eq!(
+        re_export_alias
+            .metadata
+            .get("export_form")
+            .and_then(|value| value.as_str()),
+        Some("re_export")
+    );
+}
+
+#[test]
+fn extract_rust_artefacts_covers_phase1_kinds() {
+    let content = r#"use std::fmt::Debug;
+
+struct User {
+    id: u64,
+}
+
+trait DoThing {
+    fn do_it(&self);
+}
+
+impl DoThing for User {
+    fn do_it(&self) {}
+}
+
+fn run() {
+    println!("ok");
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let kinds = artefacts
+        .iter()
+        .map(|a| a.canonical_kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"import"));
+    assert!(kinds.contains(&LANGUAGE_ONLY_CANONICAL_KIND));
+    assert!(kinds.contains(&"interface"));
+    assert!(kinds.contains(&"method"));
+    assert!(kinds.contains(&"function"));
+
+    let trait_item = artefacts
+        .iter()
+        .find(|a| a.language_kind == "trait_item" && a.name == "DoThing")
+        .expect("expected trait artefact");
+    assert_eq!(trait_item.canonical_kind, "interface");
+
+    let struct_item = artefacts
+        .iter()
+        .find(|a| a.language_kind == "struct_item" && a.name == "User")
+        .expect("expected struct artefact");
+    assert_eq!(struct_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+
+    let impl_item = artefacts
+        .iter()
+        .find(|a| a.language_kind == "impl_item")
+        .expect("expected impl artefact");
+    assert_eq!(impl_item.canonical_kind, LANGUAGE_ONLY_CANONICAL_KIND);
+}
+
+#[test]
+fn extract_rust_dependency_edges_emits_import_calls_and_implements() {
+    let content = r#"use crate::math::sum;
+
+trait DoThing { fn do_it(&self); }
+struct User;
+
+impl DoThing for User {
+    fn do_it(&self) {
+        sum(1, 2);
+    }
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|e| {
+        e.edge_kind == "imports" && e.to_symbol_ref.as_deref() == Some("crate::math::sum")
+    }));
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.edge_kind == "implements" && e.to_symbol_ref.as_deref() == Some("DoThing"))
+    );
+    assert!(edges.iter().any(|e| e.edge_kind == "calls"));
+}
+
+#[test]
+fn extract_rust_dependency_edges_are_ordered_and_keep_local_resolution_stable() {
+    let content = r#"use crate::math::sum;
+fn sum() {}
+trait DoThing { fn do_it(&self); }
+struct User;
+impl DoThing for User {
+    fn do_it(&self) {
+        sum();
+        missing();
+    }
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let snapshot = |edges: &[JsTsDependencyEdge]| {
+        edges
+            .iter()
+            .map(|edge| {
+                let metadata = |field: &str| {
+                    edge.metadata
+                        .get(field)
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("-")
+                };
+                format!(
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    edge.edge_kind,
+                    edge.from_symbol_fqn,
+                    edge.to_target_symbol_fqn.as_deref().unwrap_or("-"),
+                    edge.to_symbol_ref.as_deref().unwrap_or("-"),
+                    edge.start_line.unwrap_or_default(),
+                    metadata("import_form"),
+                    metadata("resolution"),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+    let edge_snapshot = snapshot(&edges);
+    let repeated_snapshot =
+        snapshot(&extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap());
+
+    assert_eq!(
+        edge_snapshot,
+        vec![
+            "imports|src/lib.rs|-|crate::math::sum|1|use|-".to_string(),
+            "implements|src/lib.rs::impl@5|-|DoThing|5|-|-".to_string(),
+            "calls|src/lib.rs::impl@5::do_it|src/lib.rs::sum|-|7|-|local".to_string(),
+            "calls|src/lib.rs::impl@5::do_it|-|src/lib.rs::missing|8|-|unresolved".to_string(),
+        ]
+    );
+    assert_eq!(edge_snapshot, repeated_snapshot);
+}
+
+#[test]
+fn extract_rust_dependency_edges_emit_type_and_value_references_with_ref_kind() {
+    let content = r#"struct User;
+const DEFAULT_USER: User = User;
+
+fn project(user: User) -> User {
+    let current: User = DEFAULT_USER;
+    current
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    let type_reference = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "references"
+                && edge.from_symbol_fqn == "src/lib.rs::project"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::User")
+        })
+        .expect("expected local type reference edge for User");
+    assert_eq!(
+        type_reference
+            .metadata
+            .get("ref_kind")
+            .and_then(|value| value.as_str()),
+        Some("type")
+    );
+
+    let value_reference = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "references"
+                && edge.from_symbol_fqn == "src/lib.rs::project"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::DEFAULT_USER")
+        })
+        .expect("expected local value reference edge for DEFAULT_USER");
+    assert_eq!(
+        value_reference
+            .metadata
+            .get("ref_kind")
+            .and_then(|value| value.as_str()),
+        Some("value")
+    );
+}
+
+#[test]
+fn extract_rust_dependency_edges_emit_inherits_for_supertraits() {
+    let content = r#"trait Reader {}
+trait Writer {}
+
+trait Repository: Reader + Writer {
+    fn load(&self);
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == "inherits"
+            && edge.from_symbol_fqn == "src/lib.rs::Repository"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::Reader")
+    }));
+    assert!(edges.iter().any(|edge| {
+        edge.edge_kind == "inherits"
+            && edge.from_symbol_fqn == "src/lib.rs::Repository"
+            && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::Writer")
+    }));
+}
+
+#[test]
+fn extract_rust_dependency_edges_emit_pub_use_exports_with_alias_distinct_dedup() {
+    let content = r#"pub fn helper() {}
+
+pub use self::helper;
+pub use self::helper;
+pub use self::helper as helper_alias;
+pub use crate::support::Thing;
+pub use crate::support::Thing;
+pub use crate::support::Thing as RenamedThing;
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+    let export_edges = edges
+        .iter()
+        .filter(|edge| edge.edge_kind == "exports")
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        export_edges.len(),
+        4,
+        "expected duplicate pub use exports to collapse while alias-distinct exports stay separate"
+    );
+
+    assert_eq!(
+        export_edges
+            .iter()
+            .filter(|edge| {
+                edge.from_symbol_fqn == "src/lib.rs"
+                    && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::helper")
+                    && edge
+                        .metadata
+                        .get("export_name")
+                        .and_then(|value| value.as_str())
+                        == Some("helper")
+            })
+            .count(),
+        1,
+        "duplicate local pub use edges for the same alias should dedupe"
+    );
+
+    let local_alias = export_edges
+        .iter()
+        .find(|edge| {
+            edge.from_symbol_fqn == "src/lib.rs"
+                && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::helper")
+                && edge
+                    .metadata
+                    .get("export_name")
+                    .and_then(|value| value.as_str())
+                    == Some("helper_alias")
+        })
+        .expect("expected aliased local pub use edge for helper_alias");
+    assert_eq!(
+        local_alias
+            .metadata
+            .get("export_form")
+            .and_then(|value| value.as_str()),
+        Some("pub_use")
+    );
+
+    assert_eq!(
+        export_edges
+            .iter()
+            .filter(|edge| {
+                edge.from_symbol_fqn == "src/lib.rs"
+                    && edge.to_symbol_ref.as_deref() == Some("crate::support::Thing")
+                    && edge
+                        .metadata
+                        .get("export_name")
+                        .and_then(|value| value.as_str())
+                        == Some("Thing")
+            })
+            .count(),
+        1,
+        "duplicate external pub use edges for the same alias should dedupe"
+    );
+
+    let external_alias = export_edges
+        .iter()
+        .find(|edge| {
+            edge.from_symbol_fqn == "src/lib.rs"
+                && edge.to_symbol_ref.as_deref() == Some("crate::support::Thing")
+                && edge
+                    .metadata
+                    .get("export_name")
+                    .and_then(|value| value.as_str())
+                    == Some("RenamedThing")
+        })
+        .expect("expected aliased external pub use edge for RenamedThing");
+    assert_eq!(
+        external_alias
+            .metadata
+            .get("export_form")
+            .and_then(|value| value.as_str()),
+        Some("pub_use")
+    );
+}
+
+#[test]
+fn extract_rust_dependency_edges_emit_macro_calls_with_macro_metadata() {
+    let content = r#"fn project() {
+    println!("hi");
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    let macro_call = edges
+        .iter()
+        .find(|edge| {
+            edge.edge_kind == "calls"
+                && edge.from_symbol_fqn == "src/lib.rs::project"
+                && edge.to_symbol_ref.as_deref() == Some("src/lib.rs::println")
+        })
+        .expect("expected macro invocation to become a calls edge");
+
+    assert_eq!(
+        macro_call
+            .metadata
+            .get("call_form")
+            .and_then(|value| value.as_str()),
+        Some("macro")
+    );
+    assert_eq!(
+        macro_call
+            .metadata
+            .get("resolution")
+            .and_then(|value| value.as_str()),
+        Some("unresolved")
+    );
+}
+
+#[test]
+fn semantic_symbol_id_is_stable_for_positional_impl_names() {
+    let original = JsTsArtefact {
+        canonical_kind: LANGUAGE_ONLY_CANONICAL_KIND.to_string(),
+        language_kind: "impl_item".to_string(),
+        name: "impl@12".to_string(),
+        symbol_fqn: "src/lib.rs::impl@12".to_string(),
+        parent_symbol_fqn: None,
+        start_line: 12,
+        end_line: 18,
+        start_byte: 0,
+        end_byte: 0,
+        signature: "impl Repo for PgRepo {".to_string(),
+    };
+    let moved = JsTsArtefact {
+        name: "impl@30".to_string(),
+        symbol_fqn: "src/lib.rs::impl@30".to_string(),
+        start_line: 30,
+        end_line: 36,
+        ..original.clone()
+    };
+
+    assert_eq!(
+        semantic_symbol_id_for_artefact(&original, None),
+        semantic_symbol_id_for_artefact(&moved, None)
+    );
+}
+
+#[test]
+fn revision_artefact_id_changes_per_blob_for_same_symbol() {
+    let symbol_id = deterministic_uuid("stable-symbol");
+
+    assert_eq!(
+        revision_artefact_id("repo-1", "blob-a", &symbol_id),
+        revision_artefact_id("repo-1", "blob-a", &symbol_id)
+    );
+    assert_ne!(
+        revision_artefact_id("repo-1", "blob-a", &symbol_id),
+        revision_artefact_id("repo-1", "blob-b", &symbol_id)
+    );
+}
+
+#[test]
+fn reingestion_is_idempotent_for_unchanged_js_symbols() {
+    let content = r#"export function greet(name: string) {
+  return name.trim();
+}
+"#;
+    let first = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let second = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+
+    let first_fn = first
+        .iter()
+        .find(|artefact| artefact.symbol_fqn == "src/sample.ts::greet")
+        .expect("expected greet artefact in first ingest");
+    let second_fn = second
+        .iter()
+        .find(|artefact| artefact.symbol_fqn == "src/sample.ts::greet")
+        .expect("expected greet artefact in second ingest");
+
+    let first_symbol_id = symbol_id_for_artefact(first_fn);
+    let second_symbol_id = symbol_id_for_artefact(second_fn);
+    assert_eq!(first_symbol_id, second_symbol_id);
+    assert_eq!(
+        revision_artefact_id("repo-1", "blob-a", &first_symbol_id),
+        revision_artefact_id("repo-1", "blob-a", &second_symbol_id)
+    );
+}
+
+#[test]
+fn reingestion_preserves_symbol_continuity_across_rust_line_moves() {
+    let original = r#"struct Repo;
+trait Service {
+    fn run(&self);
+}
+impl Service for Repo {
+    fn run(&self) {}
+}
+"#;
+    let moved = r#"
+
+struct Repo;
+
+trait Service {
+    fn run(&self);
+}
+
+impl Service for Repo {
+    fn run(&self) {}
+}
+"#;
+
+    let original_artefacts = extract_rust_artefacts(original, "src/lib.rs").unwrap();
+    let moved_artefacts = extract_rust_artefacts(moved, "src/lib.rs").unwrap();
+
+    let original_impl = original_artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "impl_item")
+        .expect("expected impl artefact in original ingest");
+    let moved_impl = moved_artefacts
+        .iter()
+        .find(|artefact| artefact.language_kind == "impl_item")
+        .expect("expected impl artefact in moved ingest");
+    let original_impl_symbol_id = semantic_symbol_id_for_artefact(original_impl, None);
+    let moved_impl_symbol_id = semantic_symbol_id_for_artefact(moved_impl, None);
+    assert_eq!(original_impl_symbol_id, moved_impl_symbol_id);
+
+    let original_method = original_artefacts
+        .iter()
+        .find(|artefact| artefact.canonical_kind == "method" && artefact.name == "run")
+        .expect("expected run method in original ingest");
+    let moved_method = moved_artefacts
+        .iter()
+        .find(|artefact| artefact.canonical_kind == "method" && artefact.name == "run")
+        .expect("expected run method in moved ingest");
+
+    let original_method_symbol_id =
+        semantic_symbol_id_for_artefact(original_method, Some(&original_impl_symbol_id));
+    let moved_method_symbol_id =
+        semantic_symbol_id_for_artefact(moved_method, Some(&moved_impl_symbol_id));
+
+    assert_eq!(original_method_symbol_id, moved_method_symbol_id);
+    assert_ne!(
+        revision_artefact_id("repo-1", "blob-a", &original_method_symbol_id),
+        revision_artefact_id("repo-1", "blob-b", &moved_method_symbol_id)
+    );
+}
+
+#[test]
+fn postgres_schema_sql_includes_artefact_edges_hardening() {
+    let sql = postgres_schema_sql();
+    assert!(sql.contains("symbol_id TEXT"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
+    assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
+    assert!(sql.contains("metadata JSONB DEFAULT '{}'::jsonb"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
+}
+
+#[test]
+fn artefact_edges_hardening_sql_includes_constraints_and_indexes() {
+    let sql = artefact_edges_hardening_sql();
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_target_chk"));
+    assert!(sql.contains("ADD CONSTRAINT artefact_edges_line_range_chk"));
+    assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_natural_uq"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_symbol_ref_idx"));
+}
+
+#[test]
+fn devql_ingest_accepts_explicit_false_for_init() {
+    let parsed =
+        crate::commands::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
+            .expect("devql ingest should parse with explicit boolean value");
+
+    let Some(crate::commands::Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
+        panic!("expected devql ingest command");
+    };
+
+    assert!(!ingest.init);
+}
+
+#[test]
+fn resolve_repo_id_for_query_is_strict_for_unknown_repo_names() {
+    let cfg = test_cfg();
+
+    let local = resolve_repo_id_for_query(&cfg, Some("temp2"));
+    let unknown = resolve_repo_id_for_query(&cfg, Some("test2"));
+
+    assert_eq!(local, cfg.repo.repo_id);
+    assert_ne!(unknown, cfg.repo.repo_id);
+}
+
+#[test]
+fn postgres_sslmode_validation_allows_default_dsn_without_sslmode() {
+    let dsn = "postgres://user:pass@localhost:5432/bitloops";
+    let pg_cfg: tokio_postgres::Config = dsn.parse().expect("valid dsn");
+    assert!(matches!(pg_cfg.get_ssl_mode(), SslMode::Prefer));
+    validate_postgres_sslmode_for_notls(dsn, pg_cfg.get_ssl_mode()).expect("prefer is allowed");
+}
+
+#[test]
+fn postgres_sslmode_validation_rejects_require() {
+    let dsn = "postgres://user:pass@localhost:5432/bitloops?sslmode=require";
+    let pg_cfg: tokio_postgres::Config = dsn.parse().expect("valid dsn");
+    let err = validate_postgres_sslmode_for_notls(dsn, pg_cfg.get_ssl_mode()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Postgres DSN requires TLS (sslmode=Require)")
+    );
+}
+
+#[test]
+fn postgres_sslmode_validation_rejects_verify_full_dsn() {
+    let dsn = "postgres://user:pass@localhost:5432/bitloops?sslmode=verify-full";
+    let err = validate_postgres_sslmode_for_notls(dsn, SslMode::Prefer).unwrap_err();
+    assert!(err.to_string().contains("sslmode=verify-ca/verify-full"));
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn artefact_edges_constraints_and_dedup_work_in_postgres() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let artefact_id = deterministic_uuid("test-art-a");
+    let symbol_id = deterministic_uuid("test-symbol-a");
+    let upsert_artefact_sql = format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', 'blob1', 'src/a.ts', 'typescript', 'function', 'function_declaration', 'src/a.ts::a', NULL, 1, 3, 0, 10, 'function a() {{', 'h1') \
+ON CONFLICT (artefact_id) DO NOTHING",
+        esc_pg(&artefact_id),
+        esc_pg(&symbol_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+    postgres_exec(&client, &upsert_artefact_sql).await.unwrap();
+
+    let invalid_target_sql = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, edge_kind, language) \
+VALUES ('{}', '{}', 'blob1', '{}', 'calls', 'typescript')",
+        esc_pg(&deterministic_uuid("invalid-target")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &invalid_target_sql).await.is_err());
+
+    let invalid_range_sql = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'x', 'calls', 'typescript', 4, 3)",
+        esc_pg(&deterministic_uuid("invalid-range")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &invalid_range_sql).await.is_err());
+
+    let edge_id_a = deterministic_uuid("dedup-a");
+    let edge_insert_a = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'src/a.ts::x', 'calls', 'typescript', 2, 2)",
+        esc_pg(&edge_id_a),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    postgres_exec(&client, &edge_insert_a).await.unwrap();
+
+    let edge_id_b = deterministic_uuid("dedup-b");
+    let edge_insert_b = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line) \
+VALUES ('{}', '{}', 'blob1', '{}', 'src/a.ts::x', 'calls', 'typescript', 2, 2)",
+        esc_pg(&edge_id_b),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&artefact_id),
+    );
+    assert!(postgres_exec(&client, &edge_insert_b).await.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn artefact_rows_preserve_symbol_continuity_across_blobs_in_postgres() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let symbol_id = deterministic_uuid("stable-function");
+    let artefact_a = deterministic_uuid("stable-function-blob-a");
+    let artefact_b = deterministic_uuid("stable-function-blob-b");
+
+    let insert_a = format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', 'blob-a', 'src/a.ts', 'typescript', 'function', 'function_declaration', 'src/a.ts::greet', NULL, 1, 3, 0, 10, 'function greet() {{', 'h-a')",
+        esc_pg(&artefact_a),
+        esc_pg(&symbol_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+    let insert_b = format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', 'blob-b', 'src/a.ts', 'typescript', 'function', 'function_declaration', 'src/a.ts::greet', NULL, 4, 6, 11, 24, 'function greet() {{', 'h-b')",
+        esc_pg(&artefact_b),
+        esc_pg(&symbol_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+
+    postgres_exec(&client, &insert_a).await.unwrap();
+    postgres_exec(&client, &insert_b).await.unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM artefacts WHERE repo_id = $1 AND symbol_id = $2",
+            &[&cfg.repo.repo_id, &symbol_id],
+        )
+        .await
+        .unwrap();
+    let count: i64 = row.get(0);
+    assert_eq!(
+        count, 2,
+        "expected both revisions to share the same symbol_id"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn export_edges_dedupe_same_alias_but_preserve_alias_distinct_in_postgres() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let file_symbol_id = deterministic_uuid("file-symbol");
+    let file_artefact_id = deterministic_uuid("file-artefact");
+    let target_symbol_id = deterministic_uuid("target-symbol");
+    let target_artefact_id = deterministic_uuid("target-artefact");
+
+    let insert_file = format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', 'blob-exports', 'src/lib.ts', 'typescript', 'file', 'file', 'src/lib.ts', NULL, 1, 20, 0, 100, 'src/lib.ts', 'file-hash')",
+        esc_pg(&file_artefact_id),
+        esc_pg(&file_symbol_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+    let insert_target = format!(
+        "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash) \
+VALUES ('{}', '{}', '{}', 'blob-exports', 'src/lib.ts', 'typescript', 'function', 'function_declaration', 'src/lib.ts::helper', NULL, 2, 4, 10, 30, 'function helper() {{', 'target-hash')",
+        esc_pg(&target_artefact_id),
+        esc_pg(&target_symbol_id),
+        esc_pg(&cfg.repo.repo_id)
+    );
+
+    postgres_exec(&client, &insert_file).await.unwrap();
+    postgres_exec(&client, &insert_target).await.unwrap();
+
+    let export_a = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, edge_kind, language, metadata) \
+VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"export_name\":\"helper\",\"export_form\":\"named\",\"resolution\":\"local\"}}'::jsonb)",
+        esc_pg(&deterministic_uuid("export-helper-a")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&file_artefact_id),
+        esc_pg(&target_artefact_id)
+    );
+    let export_dup = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, edge_kind, language, metadata) \
+VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"export_name\":\"helper\",\"export_form\":\"named\",\"resolution\":\"local\"}}'::jsonb)",
+        esc_pg(&deterministic_uuid("export-helper-b")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&file_artefact_id),
+        esc_pg(&target_artefact_id)
+    );
+    let export_alias = format!(
+        "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, edge_kind, language, metadata) \
+VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"export_name\":\"helperAlias\",\"export_form\":\"named\",\"resolution\":\"local\"}}'::jsonb)",
+        esc_pg(&deterministic_uuid("export-helper-alias")),
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(&file_artefact_id),
+        esc_pg(&target_artefact_id)
+    );
+
+    postgres_exec(&client, &export_a).await.unwrap();
+    assert!(postgres_exec(&client, &export_dup).await.is_err());
+    postgres_exec(&client, &export_alias).await.unwrap();
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) FROM artefact_edges WHERE repo_id = $1 AND edge_kind = 'exports'",
+            &[&cfg.repo.repo_id],
+        )
+        .await
+        .unwrap();
+    let count: i64 = row.get(0);
+    assert_eq!(
+        count, 2,
+        "expected alias-distinct export edges to survive dedup"
+    );
+}
