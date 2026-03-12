@@ -10,12 +10,14 @@ use clap::Args;
 use crate::commands::enable::{find_repo_root, initialized_agents};
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
+use crate::engine::agent::codex::agent::CodexAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
 use crate::engine::settings;
 
 const AGENT_CLAUDE_CODE: &str = "claude-code";
+const AGENT_CODEX: &str = "codex";
 const AGENT_CURSOR: &str = "cursor";
 const AGENT_GEMINI_CLI: &str = "gemini-cli";
 const AGENT_OPEN_CODE: &str = "opencode";
@@ -30,7 +32,7 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|cursor|gemini-cli|opencode)
+    /// Target a specific agent setup (claude-code|codex|cursor|gemini-cli|opencode)
     #[arg(long)]
     pub agent: Option<String>,
 
@@ -95,6 +97,10 @@ fn install_agent_hooks(
             "Claude Code".to_string(),
             claude_hooks::install_hooks(repo_root, force)?,
         )),
+        AGENT_CODEX => Ok((
+            "Codex CLI".to_string(),
+            HookSupport::install_hooks(&CodexAgent, local_dev, force)?,
+        )),
         AGENT_CURSOR => Ok((
             "Cursor".to_string(),
             HookSupport::install_hooks(&CursorAgent, local_dev, force)?,
@@ -118,6 +124,7 @@ fn normalize_agent_name(value: &str) -> Result<String> {
     }
     match trimmed {
         AGENT_CLAUDE_CODE => Ok(AGENT_CLAUDE_CODE.to_string()),
+        AGENT_CODEX => Ok(AGENT_CODEX.to_string()),
         AGENT_CURSOR => Ok(AGENT_CURSOR.to_string()),
         AGENT_GEMINI_CLI | "gemini" => Ok(AGENT_GEMINI_CLI.to_string()),
         AGENT_OPEN_CODE | "open-code" => Ok(AGENT_OPEN_CODE.to_string()),
@@ -129,6 +136,9 @@ fn detect_agents(repo_root: &Path) -> Vec<String> {
     let mut detected = Vec::new();
     if repo_root.join(".claude").is_dir() {
         detected.push(AGENT_CLAUDE_CODE.to_string());
+    }
+    if repo_root.join(".codex").is_dir() {
+        detected.push(AGENT_CODEX.to_string());
     }
     if repo_root.join(".cursor").is_dir() {
         detected.push(AGENT_CURSOR.to_string());
@@ -145,6 +155,7 @@ fn detect_agents(repo_root: &Path) -> Vec<String> {
 fn available_agents() -> Vec<String> {
     vec![
         AGENT_CLAUDE_CODE.to_string(),
+        AGENT_CODEX.to_string(),
         AGENT_CURSOR.to_string(),
         AGENT_GEMINI_CLI.to_string(),
         AGENT_OPEN_CODE.to_string(),
@@ -154,6 +165,7 @@ fn available_agents() -> Vec<String> {
 fn agent_display(agent: &str) -> &'static str {
     match agent {
         AGENT_CLAUDE_CODE => "Claude Code",
+        AGENT_CODEX => "Codex CLI",
         AGENT_CURSOR => "Cursor",
         AGENT_GEMINI_CLI => "Gemini CLI",
         AGENT_OPEN_CODE => "OpenCode",
@@ -487,7 +499,7 @@ pub fn detect_or_select_agent(
     if detected.is_empty() {
         writeln!(
             out,
-            "No agent configuration detected (e.g., .claude, .cursor, .gemini, or .opencode)."
+            "No agent configuration detected (e.g., .claude, .codex, .cursor, .gemini, or .opencode)."
         )?;
         writeln!(
             out,
@@ -631,6 +643,29 @@ mod tests {
 
             let hooks = std::fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap();
             assert!(hooks.contains("bitloops hooks cursor session-start"));
+        });
+    }
+
+    #[test]
+    fn run_init_with_agent_codex_installs_codex_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        with_cwd(dir.path(), || {
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    force: false,
+                    agent: Some(AGENT_CODEX.to_string()),
+                    telemetry: true,
+                },
+                &mut out,
+                None,
+            )
+            .unwrap();
+
+            let hooks = std::fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
+            assert!(hooks.contains("bitloops hooks codex session-start"));
+            assert!(hooks.contains("bitloops hooks codex stop"));
         });
     }
 

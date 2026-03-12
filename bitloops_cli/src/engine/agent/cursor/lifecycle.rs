@@ -1,7 +1,10 @@
 use anyhow::Result;
 
 use crate::engine::agent::Agent;
-use crate::engine::lifecycle::{LifecycleEvent, LifecycleEventType, read_and_parse_hook_input};
+use crate::engine::lifecycle::{
+    LifecycleEvent, LifecycleEventType, SessionIdPolicy, apply_session_id_policy,
+    read_and_parse_hook_input,
+};
 
 use super::agent::CursorAgent;
 use super::types::{CursorBeforeSubmitPromptRaw, CursorSessionInfoRaw, CursorSubagentRaw};
@@ -41,47 +44,46 @@ pub fn parse_hook_event(
     match hook_name {
         HOOK_NAME_SESSION_START => {
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::Strict)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionStart),
-                session_id: raw.conversation_id,
+                session_id,
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 ..LifecycleEvent::default()
             }))
         }
         HOOK_NAME_BEFORE_SUBMIT_PROMPT => {
             let raw: CursorBeforeSubmitPromptRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::Strict)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnStart),
-                session_id: raw.conversation_id.clone(),
-                session_ref: resolve_transcript_ref(
-                    &raw.conversation_id,
-                    raw.transcript_path.as_deref(),
-                ),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
                 prompt: raw.prompt,
                 ..LifecycleEvent::default()
             }))
         }
         HOOK_NAME_STOP => {
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::FallbackUnknown)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::TurnEnd),
-                session_id: raw.conversation_id.clone(),
-                session_ref: resolve_transcript_ref(
-                    &raw.conversation_id,
-                    raw.transcript_path.as_deref(),
-                ),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
                 ..LifecycleEvent::default()
             }))
         }
         HOOK_NAME_SESSION_END => {
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
+            let session_id =
+                apply_session_id_policy(&raw.conversation_id, SessionIdPolicy::PreserveEmpty)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SessionEnd),
-                session_id: raw.conversation_id.clone(),
-                session_ref: resolve_transcript_ref(
-                    &raw.conversation_id,
-                    raw.transcript_path.as_deref(),
-                ),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, raw.transcript_path.as_deref()),
                 ..LifecycleEvent::default()
             }))
         }
@@ -89,7 +91,10 @@ pub fn parse_hook_event(
             let raw: CursorSessionInfoRaw = read_and_parse_hook_input(stdin)?;
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::Compaction),
-                session_id: raw.conversation_id,
+                session_id: apply_session_id_policy(
+                    &raw.conversation_id,
+                    SessionIdPolicy::PreserveEmpty,
+                )?,
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 ..LifecycleEvent::default()
             }))
@@ -101,7 +106,10 @@ pub fn parse_hook_event(
             }
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SubagentStart),
-                session_id: raw.conversation_id,
+                session_id: apply_session_id_policy(
+                    &raw.conversation_id,
+                    SessionIdPolicy::PreserveEmpty,
+                )?,
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
@@ -115,7 +123,10 @@ pub fn parse_hook_event(
             }
             Ok(Some(LifecycleEvent {
                 event_type: Some(LifecycleEventType::SubagentEnd),
-                session_id: raw.conversation_id,
+                session_id: apply_session_id_policy(
+                    &raw.conversation_id,
+                    SessionIdPolicy::PreserveEmpty,
+                )?,
                 session_ref: raw.transcript_path.unwrap_or_default(),
                 tool_use_id: raw.subagent_id.clone(),
                 subagent_id: raw.subagent_id,
@@ -150,6 +161,46 @@ mod tests {
         assert_eq!(parsed.session_id, "c1");
         assert_eq!(parsed.prompt, "hello");
         assert_eq!(parsed.session_ref, "/tmp/t.jsonl");
+    }
+
+    #[test]
+    fn parse_session_start_rejects_empty_session_id() {
+        let mut input = std::io::Cursor::new(
+            br#"{"conversation_id":"   ","transcript_path":"/tmp/t.jsonl"}"#.as_slice(),
+        );
+        let err = parse_hook_event(HOOK_NAME_SESSION_START, &mut input).expect_err("expected err");
+        assert!(
+            err.to_string().contains("session_id is required"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn parse_before_submit_prompt_rejects_empty_session_id() {
+        let mut input = std::io::Cursor::new(
+            br#"{"conversation_id":" ","transcript_path":"/tmp/t.jsonl","prompt":"hello"}"#
+                .as_slice(),
+        );
+        let err =
+            parse_hook_event(HOOK_NAME_BEFORE_SUBMIT_PROMPT, &mut input).expect_err("expected err");
+        assert!(
+            err.to_string().contains("session_id is required"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn parse_stop_defaults_empty_session_id_to_unknown() {
+        let mut input = std::io::Cursor::new(
+            br#"{"conversation_id":" ","transcript_path":"/tmp/t.jsonl"}"#.as_slice(),
+        );
+        let parsed = parse_hook_event(HOOK_NAME_STOP, &mut input)
+            .expect("parse")
+            .expect("event");
+        assert_eq!(
+            parsed.session_id,
+            crate::engine::lifecycle::UNKNOWN_SESSION_ID
+        );
     }
 
     #[test]
