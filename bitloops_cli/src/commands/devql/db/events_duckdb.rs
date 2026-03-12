@@ -355,7 +355,7 @@ LIMIT {}",
                     let encoded = serde_json::to_string(candidate)
                         .context("serializing DuckDB path candidate")?;
                     terms.push(format!(
-                        "files_touched_json LIKE '%{}%'",
+                        "instr(files_touched_json, '{}') > 0",
                         esc_duck(&encoded)
                     ));
                 }

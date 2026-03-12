@@ -423,18 +423,29 @@ impl fmt::Debug for DuckDbPool {
 }
 
 impl DuckDbPool {
-    fn connect(path: PathBuf) -> Result<Self> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
-        }
+    async fn connect(path: PathBuf) -> Result<Self> {
+        let connect_path = path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(parent) = connect_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
+            }
 
-        let conn = duckdb::Connection::open(&path)
-            .with_context(|| format!("opening DuckDB events database at {}", path.display()))?;
-        conn.execute_batch("SELECT 1")
-            .context("running initial DuckDB connectivity check")?;
+            let conn = duckdb::Connection::open(&connect_path).with_context(|| {
+                format!(
+                    "opening DuckDB events database at {}",
+                    connect_path.display()
+                )
+            })?;
+            conn.execute_batch("SELECT 1")
+                .context("running initial DuckDB connectivity check")?;
+            Ok(())
+        })
+        .await
+        .context("joining DuckDB initial connectivity task")??;
+
         Ok(Self { path })
     }
 
@@ -624,7 +635,7 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
         }
     } else if pools.events_provider == EventsProvider::DuckDb {
         let duckdb_path = cfg.duckdb_path();
-        match DuckDbPool::connect(duckdb_path) {
+        match DuckDbPool::connect(duckdb_path).await {
             Ok(pool) => match pool.ping().await {
                 Ok(value) => {
                     pools.duckdb = Some(pool);

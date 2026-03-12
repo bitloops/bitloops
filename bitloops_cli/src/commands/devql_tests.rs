@@ -694,6 +694,87 @@ async fn duckdb_events_store_roundtrip_supports_core_queries() {
     assert_eq!(history[0]["checkpoint_id"], "cp-1");
 }
 
+#[tokio::test]
+async fn duckdb_checkpoint_history_path_filter_treats_wildcards_as_literals() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let duckdb_path = temp.path().join("events.duckdb");
+
+    let backends = crate::devql_config::DevqlBackendConfig {
+        relational: crate::devql_config::RelationalBackendConfig {
+            provider: crate::devql_config::RelationalProvider::Postgres,
+            sqlite_path: None,
+            postgres_dsn: Some("postgres://user:pass@localhost:5432/bitloops".to_string()),
+        },
+        events: crate::devql_config::EventsBackendConfig {
+            provider: crate::devql_config::EventsProvider::DuckDb,
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        },
+    };
+
+    let store = resolve_events_store_from_backends(&backends).expect("duckdb events store");
+    store.init_schema().await.expect("init duckdb schema");
+
+    let expected_path = "src/100%_complete.rs";
+    let lookalike_path = "src/100abcXcomplete.rs";
+
+    let matching_event = store_contracts::CheckpointEventWrite {
+        event_id: "evt-match".to_string(),
+        repo_id: "repo-1".to_string(),
+        checkpoint_id: "cp-match".to_string(),
+        session_id: "session-1".to_string(),
+        commit_sha: "commit-sha-1".to_string(),
+        commit_unix: Some(1_741_211_200),
+        branch: "main".to_string(),
+        event_type: "checkpoint_committed".to_string(),
+        agent: "claude-code".to_string(),
+        strategy: "manual-commit".to_string(),
+        files_touched: vec![expected_path.to_string()],
+        created_at: Some("2026-03-01T12:00:00Z".to_string()),
+        payload: serde_json::json!({"id": "match"}),
+    };
+    store
+        .insert_checkpoint_event(matching_event)
+        .await
+        .expect("insert matching event");
+
+    let non_matching_event = store_contracts::CheckpointEventWrite {
+        event_id: "evt-lookalike".to_string(),
+        repo_id: "repo-1".to_string(),
+        checkpoint_id: "cp-lookalike".to_string(),
+        session_id: "session-2".to_string(),
+        commit_sha: "commit-sha-1".to_string(),
+        commit_unix: Some(1_741_211_201),
+        branch: "main".to_string(),
+        event_type: "checkpoint_committed".to_string(),
+        agent: "claude-code".to_string(),
+        strategy: "manual-commit".to_string(),
+        files_touched: vec![lookalike_path.to_string()],
+        created_at: Some("2026-03-01T12:00:01Z".to_string()),
+        payload: serde_json::json!({"id": "lookalike"}),
+    };
+    store
+        .insert_checkpoint_event(non_matching_event)
+        .await
+        .expect("insert lookalike event");
+
+    let history = store
+        .query_checkpoint_events(store_contracts::EventsCheckpointHistoryQuery {
+            repo_id: "repo-1".to_string(),
+            commit_shas: vec!["commit-sha-1".to_string()],
+            path_candidates: vec![expected_path.to_string()],
+            limit: 10,
+        })
+        .await
+        .expect("query checkpoint events");
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["checkpoint_id"], "cp-match");
+}
+
 #[test]
 fn normalize_repo_path_removes_dot_prefix() {
     assert_eq!(normalize_repo_path("./index.ts"), "index.ts");
