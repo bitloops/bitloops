@@ -1685,6 +1685,16 @@ fn cursor_hooks_cmd_has_logging_hooks() {
 }
 
 #[test]
+fn copilot_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_copilot = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "copilot");
+    assert!(has_copilot);
+}
+
+#[test]
 fn hook_command_sets_current_hook_agent_name() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

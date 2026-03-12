@@ -111,11 +111,13 @@ impl EntryType {
 }
 
 pub const AGENT_NAME_CLAUDE_CODE: &str = "claude-code";
+pub const AGENT_NAME_COPILOT: &str = "copilot";
 pub const AGENT_NAME_CURSOR: &str = "cursor";
 pub const AGENT_NAME_GEMINI: &str = "gemini";
 pub const AGENT_NAME_OPEN_CODE: &str = "opencode";
 
 pub const AGENT_TYPE_CLAUDE_CODE: &str = AGENT_NAME_CLAUDE_CODE;
+pub const AGENT_TYPE_COPILOT: &str = AGENT_NAME_COPILOT;
 pub const AGENT_TYPE_CURSOR: &str = AGENT_NAME_CURSOR;
 pub const AGENT_TYPE_GEMINI: &str = "gemini-cli";
 pub const AGENT_TYPE_OPEN_CODE: &str = AGENT_NAME_OPEN_CODE;
@@ -127,6 +129,7 @@ pub fn canonical_agent_key(agent: &str) -> String {
     let key = agent.trim().to_ascii_lowercase();
     match key.as_str() {
         AGENT_NAME_CLAUDE_CODE => AGENT_TYPE_CLAUDE_CODE.to_string(),
+        AGENT_NAME_COPILOT | "copilot-cli" | "github-copilot" => AGENT_TYPE_COPILOT.to_string(),
         AGENT_NAME_CURSOR => AGENT_TYPE_CURSOR.to_string(),
         AGENT_NAME_GEMINI | AGENT_TYPE_GEMINI => AGENT_TYPE_GEMINI.to_string(),
         AGENT_NAME_OPEN_CODE | "open-code" => AGENT_TYPE_OPEN_CODE.to_string(),
@@ -138,6 +141,7 @@ pub fn canonical_agent_key(agent: &str) -> String {
 pub fn agent_display_name(agent: &str) -> String {
     match canonical_agent_key(agent).as_str() {
         AGENT_TYPE_CLAUDE_CODE => "Claude Code".to_string(),
+        AGENT_TYPE_COPILOT => "Copilot".to_string(),
         AGENT_TYPE_CURSOR => "Cursor".to_string(),
         AGENT_TYPE_GEMINI => "Gemini CLI".to_string(),
         AGENT_TYPE_OPEN_CODE => "OpenCode".to_string(),
