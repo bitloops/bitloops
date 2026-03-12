@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- DevQL now fully indexes code artefacts (functions, methods, classes, interfaces, structs, enums, traits, modules) for Rust and JS/TS, capturing rich metadata: fully-qualified symbol names, parent hierarchy, byte-precise location, signature, modifiers (async/static/visibility), and docstrings.
+- DevQL tracks dependency edges between artefacts (exports, inheritance, references, calls) for both Rust and JS/TS, enabling cross-symbol graph queries.
+- DevQL maintains both a **current snapshot** and full **historical record** of artefacts and edges, allowing point-in-time queries over the evolution of a codebase.
+- Tree-sitter is now used as the parsing backend for all DevQL code extraction, providing accurate language-aware symbol resolution.
+- Updated DevQL Getting Started documentation with expanded field references and query examples.
+
 ### Changed
 
 ## [0.0.10] - 2026-03-12
