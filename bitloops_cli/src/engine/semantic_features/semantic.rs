@@ -9,6 +9,9 @@ use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 pub use crate::engine::providers::llm::resolve_semantic_summary_endpoint;
 
+const MINIMUM_SUMMARY_LENGTH: usize = 12;
+const MAXIMUM_SUMMARY_LENGTH: usize = 200;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
     pub summary: String,
@@ -333,8 +336,8 @@ fn is_valid_summary(summary: &str) -> bool {
     let trimmed = summary.trim();
     !trimmed.is_empty()
         && !trimmed.contains('\n')
-        && trimmed.len() >= 12
-        && trimmed.len() <= 200
+        && trimmed.len() >= MINIMUM_SUMMARY_LENGTH
+        && trimmed.len() <= MAXIMUM_SUMMARY_LENGTH
         && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
@@ -364,31 +367,13 @@ fn summary_token_set(summary: &str) -> BTreeSet<String> {
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter_map(|token| {
             let token = token.trim().to_ascii_lowercase();
-            if token.len() < 3 || is_summary_stop_word(&token) {
+            if token.len() < 3 {
                 None
             } else {
                 Some(token)
             }
         })
         .collect()
-}
-
-fn is_summary_stop_word(token: &str) -> bool {
-    matches!(
-        token,
-        "a" | "an"
-            | "and"
-            | "before"
-            | "by"
-            | "for"
-            | "from"
-            | "its"
-            | "of"
-            | "the"
-            | "this"
-            | "to"
-            | "with"
-    )
 }
 
 fn summary_subject(input: &SemanticFeatureInput) -> String {

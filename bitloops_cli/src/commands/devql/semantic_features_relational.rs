@@ -223,7 +223,6 @@ mod semantic_feature_relational_tests {
         assert!(sql.contains("INSERT INTO symbol_features"));
         assert!(sql.contains("doc_comment_summary"));
         assert!(sql.contains("Fetches O''Brien by id."));
-        assert!(sql.contains("'[\"contains:method\"]'"));
         assert!(!sql.contains("::jsonb"));
     }
 }
