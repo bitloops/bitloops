@@ -173,6 +173,8 @@ pub(super) struct ApiBackendHealthDto {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(super) struct ApiDbHealthResponse {
+    pub(super) relational: ApiBackendHealthDto,
+    pub(super) events: ApiBackendHealthDto,
     pub(super) postgres: ApiBackendHealthDto,
     pub(super) clickhouse: ApiBackendHealthDto,
 }
