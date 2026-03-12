@@ -324,15 +324,20 @@ fn normalize_sqlite_path(raw_path: &str) -> Result<PathBuf> {
 }
 
 fn expand_home_prefix(path: &str) -> Result<String> {
+    let home = user_home_dir();
+    expand_home_prefix_with(path, home.as_deref())
+}
+
+fn expand_home_prefix_with(path: &str, home: Option<&Path>) -> Result<String> {
     if path == "~" {
-        let Some(home) = user_home_dir() else {
+        let Some(home) = home else {
             bail!("unable to resolve home directory for `~` path");
         };
         return Ok(home.to_string_lossy().to_string());
     }
 
-    if let Some(rest) = path.strip_prefix("~/") {
-        let Some(home) = user_home_dir() else {
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        let Some(home) = home else {
             bail!("unable to resolve home directory for `~` path");
         };
         return Ok(home.join(rest).to_string_lossy().to_string());
@@ -569,5 +574,19 @@ mod tests {
         let resolved = resolve_sqlite_db_path(Some("~/devql.sqlite"))
             .expect("tilde sqlite path should resolve");
         assert_eq!(resolved, home.join("devql.sqlite"));
+    }
+
+    #[test]
+    fn sqlite_path_resolution_expands_windows_tilde_prefix_with_windows_home() {
+        let windows_home = Path::new(r"C:\Users\bitloops");
+
+        let expanded =
+            expand_home_prefix_with(r"~\.bitloops\devql\relational.db", Some(windows_home))
+                .expect("windows-style tilde sqlite path should resolve");
+
+        assert_eq!(
+            PathBuf::from(expanded),
+            windows_home.join(r".bitloops\devql\relational.db")
+        );
     }
 }

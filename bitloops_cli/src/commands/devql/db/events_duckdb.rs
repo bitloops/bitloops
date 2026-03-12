@@ -60,6 +60,40 @@ impl DuckDbEventsStore {
         }
         Ok(out)
     }
+
+    fn execute_batch(&self, sql: &str) -> Result<()> {
+        let conn = self.open_connection()?;
+        conn.execute_batch(sql).context("executing DuckDB statements")?;
+        Ok(())
+    }
+
+    async fn query_single_i32_blocking(&self, sql: &str) -> Result<i32> {
+        let store = self.clone();
+        let statement = sql.to_string();
+        tokio::task::spawn_blocking(move || store.query_single_i32(&statement))
+            .await
+            .context("joining DuckDB scalar query task")?
+    }
+
+    async fn query_rows_as_strings_blocking(
+        &self,
+        sql: &str,
+        column_count: usize,
+    ) -> Result<Vec<Vec<String>>> {
+        let store = self.clone();
+        let statement = sql.to_string();
+        tokio::task::spawn_blocking(move || store.query_rows_as_strings(&statement, column_count))
+            .await
+            .context("joining DuckDB query task")?
+    }
+
+    async fn execute_batch_blocking(&self, sql: &str) -> Result<()> {
+        let store = self.clone();
+        let statement = sql.to_string();
+        tokio::task::spawn_blocking(move || store.execute_batch(&statement))
+            .await
+            .context("joining DuckDB execution task")?
+    }
 }
 
 impl EventsStore for DuckDbEventsStore {
@@ -68,12 +102,11 @@ impl EventsStore for DuckDbEventsStore {
     }
 
     fn ping<'a>(&'a self) -> StoreFuture<'a, i32> {
-        Box::pin(async move { self.query_single_i32("SELECT 1") })
+        Box::pin(async move { self.query_single_i32_blocking("SELECT 1").await })
     }
 
     fn init_schema<'a>(&'a self) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            let conn = self.open_connection()?;
             let sql = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
     event_id VARCHAR,
@@ -100,7 +133,8 @@ CREATE INDEX IF NOT EXISTS checkpoint_events_repo_commit_idx
 ON checkpoint_events(repo_id, commit_sha);
 "#;
 
-            conn.execute_batch(sql)
+            self.execute_batch_blocking(sql)
+                .await
                 .context("creating DuckDB checkpoint_events schema")?;
             Ok(())
         })
@@ -112,7 +146,7 @@ ON checkpoint_events(repo_id, commit_sha);
                 "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}'",
                 esc_duck(&repo_id)
             );
-            let rows = self.query_rows_as_strings(&sql, 1)?;
+            let rows = self.query_rows_as_strings_blocking(&sql, 1).await?;
             Ok(rows
                 .into_iter()
                 .filter_map(|row| row.first().cloned())
@@ -166,8 +200,8 @@ VALUES ('{}', {}, '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}')",
                 payload_json
             );
 
-            let conn = self.open_connection()?;
-            conn.execute_batch(&sql)
+            self.execute_batch_blocking(&sql)
+                .await
                 .context("inserting checkpoint event into DuckDB")?;
             Ok(())
         })
@@ -204,7 +238,7 @@ LIMIT {}",
                 query.limit.max(1)
             );
 
-            let rows = self.query_rows_as_strings(&sql, 7)?;
+            let rows = self.query_rows_as_strings_blocking(&sql, 7).await?;
             Ok(rows
                 .into_iter()
                 .map(|row| {
@@ -247,7 +281,7 @@ LIMIT {}",
                 conditions.join(" AND "),
                 query.limit.max(1)
             );
-            let rows = self.query_rows_as_strings(&sql, 10)?;
+            let rows = self.query_rows_as_strings_blocking(&sql, 10).await?;
             Ok(rows
                 .into_iter()
                 .map(|row| {
@@ -290,7 +324,7 @@ LIMIT {}",
                 conditions.join(" AND "),
                 query.limit.max(1)
             );
-            let rows = self.query_rows_as_strings(&sql, 1)?;
+            let rows = self.query_rows_as_strings_blocking(&sql, 1).await?;
             Ok(rows
                 .into_iter()
                 .filter_map(|row| row.first().cloned())
@@ -337,7 +371,7 @@ LIMIT {}",
                 conditions.join(" AND "),
                 query.limit.max(1)
             );
-            let rows = self.query_rows_as_strings(&sql, 7)?;
+            let rows = self.query_rows_as_strings_blocking(&sql, 7).await?;
             Ok(rows
                 .into_iter()
                 .map(|row| {
@@ -355,4 +389,3 @@ LIMIT {}",
         })
     }
 }
-

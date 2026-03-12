@@ -439,22 +439,27 @@ impl DuckDbPool {
     }
 
     async fn ping(&self) -> Result<i32> {
-        let conn = duckdb::Connection::open(&self.path).with_context(|| {
-            format!(
-                "opening DuckDB events database for health check at {}",
-                self.path.display()
-            )
-        })?;
-        let mut stmt = conn
-            .prepare("SELECT 1")
-            .context("preparing DuckDB health query")?;
-        let mut rows = stmt.query([]).context("executing DuckDB health query")?;
-        let row = rows
-            .next()
-            .context("iterating DuckDB health query rows")?
-            .ok_or_else(|| anyhow!("DuckDB health query returned no rows"))?;
-        let value: i32 = row.get(0).context("reading DuckDB health query result")?;
-        Ok(value)
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || -> Result<i32> {
+            let conn = duckdb::Connection::open(&path).with_context(|| {
+                format!(
+                    "opening DuckDB events database for health check at {}",
+                    path.display()
+                )
+            })?;
+            let mut stmt = conn
+                .prepare("SELECT 1")
+                .context("preparing DuckDB health query")?;
+            let mut rows = stmt.query([]).context("executing DuckDB health query")?;
+            let row = rows
+                .next()
+                .context("iterating DuckDB health query rows")?
+                .ok_or_else(|| anyhow!("DuckDB health query returned no rows"))?;
+            let value: i32 = row.get(0).context("reading DuckDB health query result")?;
+            Ok(value)
+        })
+        .await
+        .context("joining DuckDB health query task")?
     }
 }
 
