@@ -16,7 +16,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::engine::agent::{
-    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CURSOR,
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE,
+    AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
 use crate::engine::git_operations;
 use crate::engine::history::devql_prefetch;
@@ -53,6 +54,11 @@ pub const CLAUDE_HOOK_AGENT_PROFILE: HookAgentProfile = HookAgentProfile {
 pub const CURSOR_HOOK_AGENT_PROFILE: HookAgentProfile = HookAgentProfile {
     agent_name: AGENT_NAME_CURSOR,
     agent_type: AGENT_TYPE_CURSOR,
+};
+
+pub const CODEX_HOOK_AGENT_PROFILE: HookAgentProfile = HookAgentProfile {
+    agent_name: AGENT_NAME_CODEX,
+    agent_type: AGENT_TYPE_CODEX,
 };
 
 const UNKNOWN_SESSION_ID: &str = "unknown";

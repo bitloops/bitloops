@@ -7,11 +7,14 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use crate::engine::agent::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
 use crate::engine::agent::cursor::types::{
     CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
     CursorSessionInfoRaw,
 };
-use crate::engine::agent::{AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI};
+use crate::engine::agent::{
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
+};
 use crate::engine::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, GEMINI_HOOK_AFTER_TOOL,
     GEMINI_HOOK_BEFORE_TOOL, route_hook_command_to_lifecycle,
@@ -33,6 +36,7 @@ use crate::engine::agent::claude_code::hooks_cmd::{
     handle_post_task, handle_post_todo, handle_pre_task, handle_session_end, handle_session_start,
     handle_stop, handle_user_prompt_submit_with_strategy,
 };
+use crate::engine::agent::codex::hooks_cmd::{handle_session_start_codex, handle_stop_codex};
 use crate::engine::agent::cursor::hooks_cmd::{
     handle_before_submit_prompt_cursor, handle_session_end_cursor, handle_session_start_cursor,
     handle_stop_cursor,
@@ -48,6 +52,8 @@ pub struct HooksArgs {
 pub enum HooksAgent {
     #[command(name = "claude-code")]
     ClaudeCode(ClaudeCodeHooksArgs),
+    #[command(name = "codex")]
+    Codex(CodexHooksArgs),
     #[command(name = "cursor")]
     Cursor(CursorHooksArgs),
     #[command(name = "gemini")]
@@ -79,6 +85,20 @@ pub enum ClaudeCodeHookVerb {
     PostTask,
     #[command(name = "post-todo")]
     PostTodo,
+}
+
+#[derive(Args)]
+pub struct CodexHooksArgs {
+    #[command(subcommand)]
+    pub verb: CodexHookVerb,
+}
+
+#[derive(Subcommand)]
+pub enum CodexHookVerb {
+    #[command(name = "session-start")]
+    SessionStart,
+    #[command(name = "stop")]
+    Stop,
 }
 
 #[derive(Args)]
@@ -151,6 +171,15 @@ impl ClaudeCodeHookVerb {
             Self::PreTask => "pre-task",
             Self::PostTask => "post-task",
             Self::PostTodo => "post-todo",
+        }
+    }
+}
+
+impl CodexHookVerb {
+    pub fn hook_name(&self) -> &'static str {
+        match self {
+            Self::SessionStart => crate::engine::agent::codex::lifecycle::HOOK_NAME_SESSION_START,
+            Self::Stop => crate::engine::agent::codex::lifecycle::HOOK_NAME_STOP,
         }
     }
 }
@@ -393,6 +422,36 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                 },
             )
         }
+        HooksAgent::Codex(codex) => {
+            let backend = LocalFileBackend::new(&repo_root);
+            let strategy: Box<dyn Strategy> = strategy_registry
+                .get(&strategy_name, &repo_root)
+                .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
+            let hook_name = codex.verb.hook_name();
+            let stdin = read_stdin()?;
+
+            run_agent_hook_with_logging(
+                &repo_root,
+                AGENT_NAME_CODEX,
+                hook_name,
+                &strategy_name,
+                || {
+                    let raw: CodexSessionInfoRaw = parse_codex_session_info(&stdin)?;
+                    let input = SessionInfoInput {
+                        session_id: normalize_codex_session_id(&raw.session_id),
+                        transcript_path: raw.transcript_path,
+                    };
+                    match codex.verb {
+                        CodexHookVerb::SessionStart => {
+                            handle_session_start_codex(input, &backend, Some(&repo_root))
+                        }
+                        CodexHookVerb::Stop => {
+                            handle_stop_codex(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        }
+                    }
+                },
+            )
+        }
         HooksAgent::Gemini(gemini) => {
             let hook_name = gemini.verb.hook_name();
             let stdin = read_stdin()?;
@@ -587,6 +646,15 @@ pub(crate) fn dispatch_cursor_hook(
 }
 
 fn normalize_cursor_session_id(session_id: &str) -> String {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_codex_session_id(session_id: &str) -> String {
     let trimmed = session_id.trim();
     if trimmed.is_empty() {
         "unknown".to_string()

@@ -1,5 +1,7 @@
 use super::*;
-use crate::engine::agent::{AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CURSOR};
+use crate::engine::agent::{
+    AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
+};
 use crate::engine::hooks::dispatcher::{
     CursorHookVerb, HooksAgent, current_hook_agent_name_for_tests, dispatch_cursor_hook,
     run_agent_hook_with_logging,
@@ -860,6 +862,39 @@ fn stop_without_existing_session_is_tolerant_and_saves_step_compat() {
 }
 
 #[test]
+fn stop_with_codex_profile_persists_codex_agent_type() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    fs::write(dir.path().join("tracked.txt"), "codex-change\n").unwrap();
+
+    handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "codex-stop".to_string(),
+            transcript_path: String::new(),
+        },
+        &backend,
+        &strat,
+        Some(dir.path()),
+        CODEX_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].agent_type, "codex");
+
+    let state = backend.load_session("codex-stop").unwrap().unwrap();
+    assert_eq!(state.agent_type, AGENT_TYPE_CODEX);
+    assert_eq!(state.phase, SessionPhase::Idle);
+}
+
+#[test]
 fn stop_with_empty_session_id_falls_back_to_unknown_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -1662,6 +1697,16 @@ fn claude_code_hooks_cmd_has_logging_hooks() {
         .get_subcommands()
         .any(|cmd| cmd.get_name() == "claude-code");
     assert!(has_claude_code);
+}
+
+#[test]
+fn codex_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_codex = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "codex");
+    assert!(has_codex);
 }
 
 #[test]

@@ -11,6 +11,7 @@ use clap::Args;
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
+use crate::engine::agent::codex::agent::CodexAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -166,6 +167,9 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
     if HookSupport::are_hooks_installed(&CursorAgent) {
         agents.push("cursor".to_string());
     }
+    if HookSupport::are_hooks_installed(&CodexAgent) {
+        agents.push("codex".to_string());
+    }
     if HookSupport::are_hooks_installed(&GeminiCliAgent) {
         agents.push("gemini-cli".to_string());
     }
@@ -260,6 +264,7 @@ pub fn run_uninstall(
     let shadow_branch_count = count_shadow_branches(repo_root);
     let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
     let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
+    let codex_hooks_installed = HookSupport::are_hooks_installed(&CodexAgent);
     let cursor_hooks_installed = HookSupport::are_hooks_installed(&CursorAgent);
     let gemini_hooks_installed = HookSupport::are_hooks_installed(&GeminiCliAgent);
     let opencode_hooks_installed = HookSupport::are_hooks_installed(&OpenCodeAgent);
@@ -269,6 +274,7 @@ pub fn run_uninstall(
         && session_state_count == 0
         && shadow_branch_count == 0
         && !claude_hooks_installed
+        && !codex_hooks_installed
         && !cursor_hooks_installed
         && !gemini_hooks_installed
         && !opencode_hooks_installed
@@ -303,6 +309,9 @@ pub fn run_uninstall(
         }
         if cursor_hooks_installed {
             agents.push("Cursor");
+        }
+        if codex_hooks_installed {
+            agents.push("Codex CLI");
         }
         if gemini_hooks_installed {
             agents.push("Gemini CLI");
@@ -457,6 +466,12 @@ fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
         writeln!(out, "  Removed Cursor hooks")?;
     }
 
+    let codex = CodexAgent;
+    if HookSupport::are_hooks_installed(&codex) {
+        HookSupport::uninstall_hooks(&codex)?;
+        writeln!(out, "  Removed Codex CLI hooks")?;
+    }
+
     let gemini = GeminiCliAgent;
     if HookSupport::are_hooks_installed(&gemini) {
         HookSupport::uninstall_hooks(&gemini)?;
@@ -489,8 +504,12 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         return (false, String::new(), String::new());
     }
     let claude_enabled = claude_hooks::are_hooks_installed(repo_root);
+    let codex_enabled = HookSupport::are_hooks_installed(&CodexAgent);
     let cursor_enabled = HookSupport::are_hooks_installed(&CursorAgent);
-    if !claude_enabled && !cursor_enabled {
+    let gemini_enabled = HookSupport::are_hooks_installed(&GeminiCliAgent);
+    let opencode_enabled = HookSupport::are_hooks_installed(&OpenCodeAgent);
+    if !claude_enabled && !codex_enabled && !cursor_enabled && !gemini_enabled && !opencode_enabled
+    {
         return (false, String::new(), String::new());
     }
     let config = if settings_local_path(repo_root).exists() {
@@ -500,8 +519,14 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     };
     let agent = if claude_enabled {
         "Claude Code"
-    } else {
+    } else if codex_enabled {
+        "Codex CLI"
+    } else if cursor_enabled {
         "Cursor"
+    } else if gemini_enabled {
+        "Gemini CLI"
+    } else {
+        "OpenCode"
     };
     (true, agent.to_string(), config.to_string())
 }

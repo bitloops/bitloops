@@ -44,6 +44,9 @@ pub const CURSOR_HOOK_PRE_COMPACT: &str = "pre-compact";
 pub const CURSOR_HOOK_SUBAGENT_START: &str = "subagent-start";
 pub const CURSOR_HOOK_SUBAGENT_STOP: &str = "subagent-stop";
 
+pub const CODEX_HOOK_SESSION_START: &str = "session-start";
+pub const CODEX_HOOK_STOP: &str = "stop";
+
 #[derive(Default)]
 pub struct ClaudeCodeLifecycleAdapter;
 
@@ -301,6 +304,35 @@ impl LifecycleAgentAdapter for CursorLifecycleAdapter {
     }
 }
 
+#[derive(Default)]
+pub struct CodexLifecycleAdapter;
+
+impl LifecycleAgentAdapter for CodexLifecycleAdapter {
+    fn agent_name(&self) -> &'static str {
+        crate::engine::agent::AGENT_NAME_CODEX
+    }
+
+    fn parse_hook_event(
+        &self,
+        hook_name: &str,
+        stdin: &mut dyn std::io::Read,
+    ) -> Result<Option<LifecycleEvent>> {
+        crate::engine::agent::codex::lifecycle::parse_hook_event(hook_name, stdin)
+    }
+
+    fn hook_names(&self) -> Vec<&'static str> {
+        vec![CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP]
+    }
+
+    fn format_resume_command(&self, session_id: &str) -> String {
+        if session_id.trim().is_empty() {
+            "codex".to_string()
+        } else {
+            format!("codex --resume {session_id}")
+        }
+    }
+}
+
 pub fn route_hook_command_to_lifecycle(
     agent_name: &str,
     hook_name: &str,
@@ -308,6 +340,7 @@ pub fn route_hook_command_to_lifecycle(
 ) -> Result<()> {
     let adapter: Box<dyn LifecycleAgentAdapter> = match agent_name {
         crate::engine::agent::AGENT_NAME_CLAUDE_CODE => Box::new(ClaudeCodeLifecycleAdapter),
+        crate::engine::agent::AGENT_NAME_CODEX => Box::new(CodexLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_CURSOR => Box::new(CursorLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_GEMINI => Box::new(GeminiCliLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_OPEN_CODE => Box::new(OpenCodeLifecycleAdapter),

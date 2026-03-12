@@ -53,7 +53,7 @@ To view your Checkpoints run the following command again from within the root of
 ## Supported Agents
 
 - [x] Claude Code
-- [ ] Codex (Coming as soon as OpenAI adds hooks to Codex; they are working on it)
+- [x] Codex CLI (currently supports `SessionStart` and `Stop` hooks only; richer hook parity will follow as Codex expands hook coverage)
 - [x] Cursor
 - [x] Gemini
 - [ ] GitHub Copilot (Coming soon)
