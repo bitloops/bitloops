@@ -27,7 +27,9 @@ fn table_rows(ctx: &cucumber::step::Context) -> Vec<Vec<String>> {
 
 fn table_row_maps(ctx: &cucumber::step::Context) -> Vec<std::collections::HashMap<String, String>> {
     let rows = table_rows(ctx);
-    let (header, values) = rows.split_first().expect("table should include a header row");
+    let (header, values) = rows
+        .split_first()
+        .expect("table should include a header row");
     values
         .iter()
         .map(|row| {
@@ -148,10 +150,10 @@ fn given_typescript_source(
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-    let path = ctx.matches[1].1.clone();
-    world.source_path = Some(path);
-    world.source_language = Some("typescript".to_string());
-    world.source_content = Some(doc_string(&ctx));
+        let path = ctx.matches[1].1.clone();
+        world.source_path = Some(path);
+        world.source_language = Some("typescript".to_string());
+        world.source_content = Some(doc_string(&ctx));
     })
 }
 
@@ -160,13 +162,13 @@ fn given_rust_source(
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-    let path = ctx.matches[1].1.clone();
-    if world.source_path.is_none() {
-        world.source_path = Some(path.clone());
-        world.source_language = Some("rust".to_string());
-    }
-    world.rust_source_path = Some(path);
-    world.rust_source_content = Some(doc_string(&ctx));
+        let path = ctx.matches[1].1.clone();
+        if world.source_path.is_none() {
+            world.source_path = Some(path.clone());
+            world.source_language = Some("rust".to_string());
+        }
+        world.rust_source_path = Some(path);
+        world.rust_source_content = Some(doc_string(&ctx));
     })
 }
 
@@ -510,7 +512,11 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
             regex(r"^artefacts include:$"),
             step_fn(then_artefacts_include),
         )
-        .then(None, regex(r"^edges include:$"), step_fn(then_edges_include))
+        .then(
+            None,
+            regex(r"^edges include:$"),
+            step_fn(then_edges_include),
+        )
         .then(
             None,
             regex(r"^no artefacts are emitted$"),

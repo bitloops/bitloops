@@ -92,7 +92,11 @@ impl DevqlBddWorld {
             return;
         }
         let workspace = tempfile::tempdir().expect("create temp logger workspace");
-        let log_file_path = workspace.path().join(".bitloops").join("logs").join("bitloops.log");
+        let log_file_path = workspace
+            .path()
+            .join(".bitloops")
+            .join("logs")
+            .join("bitloops.log");
         self.log_file_path = Some(log_file_path);
         self.log_workspace = Some(workspace);
     }
@@ -143,13 +147,10 @@ impl DevqlBddWorld {
             self.edges.iter().any(|edge| {
                 edge.edge_kind == expectation.edge_kind
                     && edge.from_symbol_fqn == expectation.from_symbol_fqn
-                    && edge.to_target_symbol_fqn.as_deref()
-                        == expectation.to_target_symbol_fqn
+                    && edge.to_target_symbol_fqn.as_deref() == expectation.to_target_symbol_fqn
                     && edge.to_symbol_ref.as_deref() == expectation.to_symbol_ref
                     && expectation.metadata_key.is_none_or(|key| {
-                        edge.metadata
-                            .get(key)
-                            .and_then(|value| value.as_str())
+                        edge.metadata.get(key).and_then(|value| value.as_str())
                             == expectation.metadata_value
                     })
             }),
