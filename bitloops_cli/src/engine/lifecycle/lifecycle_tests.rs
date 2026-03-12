@@ -25,11 +25,10 @@ use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
-use crate::test_support::process_state::{with_cwd, with_git_env_cleared};
+use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Cursor;
-use std::process::Command;
 
 fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
     LifecycleEvent {
@@ -56,7 +55,7 @@ fn test_apply_session_id_policy_turn_end_fallback_uses_unknown() {
 
 fn setup_git_repo(dir: &tempfile::TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
@@ -140,14 +139,8 @@ fn test_handle_lifecycle_turn_end_nonexistent_transcript() {
 fn test_handle_lifecycle_turn_end_empty_repository() {
     let dir = tempfile::tempdir().unwrap();
     with_git_env_cleared(|| {
-        let init = Command::new("git")
+        let init = git_command()
             .args(["init"])
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env_remove("GIT_COMMON_DIR")
             .current_dir(dir.path())
             .output()
             .unwrap();

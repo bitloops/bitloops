@@ -1,23 +1,12 @@
 // ── Git utilities ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-const TEST_GIT_ENV_KEYS: [&str; 6] = [
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-];
+use crate::test_support::process_state::git_command;
 
 fn new_git_command() -> Command {
     #[cfg(test)]
     {
-        let mut cmd = Command::new("git");
-        for key in TEST_GIT_ENV_KEYS {
-            cmd.env_remove(key);
-        }
-        cmd
+        git_command()
     }
 
     #[cfg(not(test))]
@@ -703,4 +692,3 @@ fn generate_context_from_prompts(prompts: &[String]) -> String {
     }
     out
 }
-

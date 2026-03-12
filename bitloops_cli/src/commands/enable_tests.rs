@@ -1,7 +1,7 @@
 use super::*;
 use crate::commands::{Cli, Commands};
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
-use crate::test_support::process_state::{with_cwd, with_env_var, with_env_vars};
+use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
 use tempfile::TempDir;
 
@@ -18,7 +18,7 @@ fn setup_local_settings(dir: &TempDir, content: &str) {
 }
 
 fn setup_git_repo(dir: &TempDir) {
-    let status = Command::new("git")
+    let status = git_command()
         .args(["init", "-q"])
         .current_dir(dir.path())
         .status()

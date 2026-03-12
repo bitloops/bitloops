@@ -6,10 +6,10 @@ use super::{
     branch_is_excluded, browser_host_for_url, build_branch_commit_log_args, canonical_agent_key,
     dashboard_user, default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url,
     has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
-    run_git, select_host_with_probe,
+    select_host_with_probe,
 };
 use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
-use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
+use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, git_command};
 use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode},
@@ -24,7 +24,19 @@ use tempfile::TempDir;
 use tower::util::ServiceExt;
 
 fn git_ok(repo_root: &Path, args: &[&str]) -> String {
-    run_git(repo_root, args).unwrap_or_else(|err| panic!("git {:?} failed: {err:#}", args))
+    let out = git_command()
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to start git {:?}: {err}", args));
+    assert!(
+        out.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn test_state(repo_root: PathBuf, mode: ServeMode, bundle_dir: PathBuf) -> DashboardState {
