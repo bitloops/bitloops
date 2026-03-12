@@ -168,13 +168,13 @@ fn token_usage_metadata_has_values(
 }
 
 /// Converts the `"agent"` string stored in committed metadata to an `AgentType`.
-/// Uses canonical agent keys ("claude-code", "gemini-cli", "opencode", "cursor").
+/// Uses canonical agent keys ("claude-code", "codex", "gemini-cli", "opencode", "cursor").
 fn agent_type_from_str(s: &str) -> AgentType {
     use crate::engine::agent::{
         AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE,
     };
     match s {
-        s if s == AGENT_TYPE_CODEX => AgentType::ClaudeCode,
+        s if s == AGENT_TYPE_CODEX => AgentType::Codex,
         s if s == AGENT_TYPE_CURSOR => AgentType::Cursor,
         s if s == AGENT_TYPE_GEMINI => AgentType::Gemini,
         s if s == AGENT_TYPE_OPEN_CODE => AgentType::OpenCode,
@@ -667,6 +667,7 @@ pub fn generate_checkpoint_summary(
 
     // Convert explain::AgentType to summarize::AgentType.
     let summarize_agent = match content.metadata.agent_type {
+        AgentType::Codex => crate::engine::summarize::AgentType::ClaudeCode,
         AgentType::Cursor => crate::engine::summarize::AgentType::Cursor,
         AgentType::Gemini => crate::engine::summarize::AgentType::Gemini,
         AgentType::OpenCode => crate::engine::summarize::AgentType::OpenCode,
@@ -764,3 +765,7 @@ pub fn format_session_info(
 
     out
 }
+
+#[cfg(test)]
+#[path = "checkpoint_tests.rs"]
+mod tests;
