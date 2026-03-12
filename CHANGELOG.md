@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- Added self-hosted runners
+
 ## [0.0.10] - 2026-03-12
 
 - Added first-class Codex CLI support (current hook parity: `SessionStart` and `Stop`), including `bitloops init --agent codex`, lifecycle/runtime dispatch wiring, and managed Codex hook installation in `.codex/hooks.json` (Codex matcher format) with idempotent install/uninstall that preserves user-defined hook entries.
