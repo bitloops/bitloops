@@ -15,9 +15,7 @@ mod semantic;
 mod store;
 
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path, normalize_string_list};
-use self::features::{
-    SymbolFeaturesRow, build_features_row, count_parameters_from_signature, normalize_signature,
-};
+use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
     SemanticSummaryProviderConfig, SemanticSummarySource, build_semantic_summary_provider,
@@ -26,7 +24,7 @@ pub use self::semantic::{
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
 const SYMBOL_FEATURES_PROMPT_VERSION: &str = "symbol-features-v2";
-const SEMANTIC_SUMMARY_PROMPT_VERSION: &str = "semantic-summary-v1";
+const SEMANTIC_SUMMARY_PROMPT_VERSION: &str = "semantic-summary-v4";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -57,6 +55,8 @@ pub struct PreStageArtefactRow {
     #[serde(default)]
     pub signature: Option<String>,
     #[serde(default)]
+    pub doc_comment: Option<String>,
+    #[serde(default)]
     pub content_hash: Option<String>,
 }
 
@@ -77,7 +77,6 @@ pub struct SemanticFeatureInput {
     pub doc_comment: Option<String>,
     pub parent_kind: Option<String>,
     pub parent_symbol: Option<String>,
-    pub parameter_count: Option<i32>,
     pub local_relationships: Vec<String>,
     pub context_hints: Vec<String>,
     pub content_hash: Option<String>,
@@ -161,11 +160,6 @@ fn build_semantic_feature_input_from_artefact(
         .and_then(|parent_id| by_id.get(parent_id))
         .copied();
     let body = extract_symbol_body(row, blob_content);
-    let doc_comment = if row.canonical_kind == "file" {
-        extract_file_header_comment(blob_content)
-    } else {
-        extract_symbol_doc_comment(blob_content, row.start_line)
-    };
     let name = derive_symbol_name(row);
     let local_relationships = child_kinds
         .get(&row.artefact_id)
@@ -195,13 +189,9 @@ fn build_semantic_feature_input_from_artefact(
         name,
         signature: row.signature.clone(),
         body,
-        doc_comment,
+        doc_comment: row.doc_comment.clone(),
         parent_kind: parent.map(|parent_row| parent_row.canonical_kind.clone()),
         parent_symbol: parent.map(|parent_row| parent_row.symbol_fqn.clone()),
-        parameter_count: row
-            .signature
-            .as_deref()
-            .and_then(count_parameters_from_signature),
         local_relationships,
         context_hints,
         content_hash: row.content_hash.clone(),
@@ -250,103 +240,6 @@ fn extract_symbol_body(row: &PreStageArtefactRow, blob_content: &str) -> String 
     }
 
     row.signature.clone().unwrap_or_default()
-}
-
-fn extract_symbol_doc_comment(blob_content: &str, start_line: Option<i32>) -> Option<String> {
-    let start_line = start_line?;
-    if start_line <= 1 {
-        return None;
-    }
-
-    let lines = blob_content.lines().collect::<Vec<_>>();
-    let start_index = (start_line - 1) as usize;
-    if start_index >= lines.len() {
-        return None;
-    }
-
-    let mut comment_lines = Vec::new();
-    let mut in_block = false;
-    for index in (0..start_index).rev() {
-        let trimmed = lines[index].trim();
-        if trimmed.is_empty() {
-            break;
-        }
-
-        if in_block {
-            comment_lines.push(trimmed.to_string());
-            if trimmed.contains("/*") {
-                break;
-            }
-            continue;
-        }
-
-        let is_comment = trimmed.starts_with("//")
-            || trimmed.starts_with("/*")
-            || trimmed.starts_with('*')
-            || trimmed.ends_with("*/");
-        if !is_comment {
-            break;
-        }
-
-        comment_lines.push(trimmed.to_string());
-        if trimmed.ends_with("*/") && !trimmed.contains("/*") {
-            in_block = true;
-        } else if trimmed.starts_with("/*") {
-            break;
-        }
-    }
-
-    if comment_lines.is_empty() {
-        None
-    } else {
-        comment_lines.reverse();
-        Some(comment_lines.join("\n"))
-    }
-}
-
-fn extract_file_header_comment(content: &str) -> Option<String> {
-    let lines = content.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
-
-    let mut collected = Vec::new();
-    let mut in_block = false;
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if collected.is_empty() {
-                continue;
-            }
-            break;
-        }
-
-        if in_block {
-            collected.push(trimmed.to_string());
-            if trimmed.contains("*/") {
-                break;
-            }
-            continue;
-        }
-
-        if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-            collected.push(trimmed.to_string());
-            if trimmed.starts_with("/*") && !trimmed.contains("*/") {
-                in_block = true;
-            } else if trimmed.starts_with("/*") {
-                break;
-            }
-            continue;
-        }
-
-        break;
-    }
-
-    if collected.is_empty() {
-        None
-    } else {
-        Some(collected.join("\n"))
-    }
 }
 
 pub async fn upsert_semantic_feature_rows(
@@ -412,7 +305,6 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
                 .filter(|value| !value.is_empty()),
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
             "parent_symbol": &input.parent_symbol,
-            "parameter_count": input.parameter_count,
             "local_relationships": normalize_string_list(&input.local_relationships),
             "context_hints": normalize_string_list(&input.context_hints),
             "content_hash": &input.content_hash,
@@ -464,39 +356,9 @@ mod tests {
             start_byte: None,
             end_byte: None,
             signature: Some("async getById(id: string): Promise<User> {".to_string()),
+            doc_comment: Some("Fetch a user by id.".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
-    }
-
-    #[test]
-    fn semantic_features_extract_symbol_doc_comment_reads_adjacent_line_comments() {
-        let content = r#"export class UserService {
-  // Fetch a user by id.
-  // Returns null when missing.
-  async getById(id: string) {
-    return null;
-  }
-}"#;
-
-        assert_eq!(
-            extract_symbol_doc_comment(content, Some(4)).as_deref(),
-            Some("// Fetch a user by id.\n// Returns null when missing.")
-        );
-    }
-
-    #[test]
-    fn semantic_features_extract_file_header_comment_stops_at_first_non_comment() {
-        let content = r#"
-// File-level summary.
-/* Extra detail. */
-
-export function run() {}
-"#;
-
-        assert_eq!(
-            extract_file_header_comment(content).as_deref(),
-            Some("// File-level summary.\n/* Extra detail. */")
-        );
     }
 
     #[test]
@@ -530,16 +392,15 @@ export function run() {}
             name: "normalizeEmail".to_string(),
             signature: Some("export function normalizeEmail(email: string): string {".to_string()),
             body: "return email.trim().toLowerCase();".to_string(),
-            doc_comment: Some("// Normalize email addresses.".to_string()),
+            doc_comment: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
             parent_symbol: Some("src/services/user.ts".to_string()),
-            parameter_count: Some(1),
             local_relationships: vec![],
             context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
         };
         let mut changed = base.clone();
-        changed.doc_comment = Some("// Normalizes email for storage.".to_string());
+        changed.doc_comment = Some("Normalizes email for storage.".to_string());
 
         assert_ne!(
             build_semantic_features_input_hash(&base),

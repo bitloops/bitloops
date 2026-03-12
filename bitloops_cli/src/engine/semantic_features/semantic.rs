@@ -120,7 +120,6 @@ signature: {signature}\n\
 doc_comment: {doc_comment}\n\
 parent_kind: {parent_kind}\n\
 parent_symbol: {parent_symbol}\n\
-parameter_count: {parameter_count}\n\
 local_relationships: {local_relationships}\n\
 context_hints: {context_hints}\n\
 body:\n{body}",
@@ -134,10 +133,6 @@ body:\n{body}",
         doc_comment = input.doc_comment.as_deref().unwrap_or(""),
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
         parent_symbol = input.parent_symbol.as_deref().unwrap_or(""),
-        parameter_count = input
-            .parameter_count
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
         local_relationships = input.local_relationships.join(", "),
         context_hints = input.context_hints.join(", "),
         body = body,
@@ -281,43 +276,22 @@ pub(super) fn build_semantics_row(
 }
 
 fn extract_summary_from_doc_comment(comment: Option<&str>) -> Option<String> {
-    let cleaned = clean_comment_text(comment?);
-    if cleaned.is_empty() {
+    let normalized = normalize_summary_text(comment?);
+    if normalized.is_empty() {
         return None;
     }
 
-    let first_sentence = cleaned
+    let first_sentence = normalized
         .split_inclusive(['.', '!', '?'])
         .next()
-        .unwrap_or(cleaned.as_str())
+        .unwrap_or(normalized.as_str())
         .trim()
         .to_string();
-    let normalized = normalize_summary_text(&first_sentence);
-    if is_valid_summary(&normalized) {
-        Some(ensure_terminal_period(&normalized))
+    if is_valid_summary(&first_sentence) {
+        Some(ensure_terminal_period(&first_sentence))
     } else {
         None
     }
-}
-
-fn clean_comment_text(comment: &str) -> String {
-    comment
-        .lines()
-        .map(|line| {
-            line.trim()
-                .trim_start_matches("///")
-                .trim_start_matches("//!")
-                .trim_start_matches("//")
-                .trim_start_matches("/**")
-                .trim_start_matches("/*")
-                .trim_start_matches('*')
-                .trim_end_matches("*/")
-                .trim()
-                .to_string()
-        })
-        .filter(|line| !line.is_empty() && !line.starts_with('@'))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub(super) fn normalize_summary_text(summary: &str) -> String {
@@ -325,10 +299,13 @@ pub(super) fn normalize_summary_text(summary: &str) -> String {
 }
 
 fn build_template_summary(input: &SemanticFeatureInput) -> String {
-    let subject = summary_subject(input);
     let summary = match input.canonical_kind.as_str() {
         "file" | "module" => format!("Defines the {} source file.", input.language),
-        _ => format!("{} {subject}.", canonical_kind_label(&input.canonical_kind)),
+        _ => format!(
+            "{} {}.",
+            canonical_kind_label(&input.canonical_kind),
+            summary_subject(input)
+        ),
     };
 
     ensure_terminal_period(&summary)
@@ -398,7 +375,6 @@ mod tests {
             doc_comment: None,
             parent_kind: Some("module".to_string()),
             parent_symbol: Some("src/services/user.ts".to_string()),
-            parameter_count: Some(0),
             local_relationships: vec![],
             context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
@@ -414,7 +390,7 @@ mod tests {
         .expect("disabled provider should build");
         assert_eq!(
             disabled.prompt_version(),
-            "semantic-summary-v1::provider=noop"
+            "semantic-summary-v4::provider=noop"
         );
 
         let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
@@ -434,14 +410,12 @@ mod tests {
     fn semantic_features_prompt_includes_context_and_truncates_body() {
         let mut input = sample_input("function", "normalizeEmail");
         input.doc_comment = Some("// Normalizes email.".to_string());
-        input.parameter_count = Some(2);
         input.local_relationships = vec!["contains:validation".to_string()];
         input.context_hints = vec!["src/services/user.ts".to_string()];
         input.body = "x".repeat(MAX_SUMMARY_BODY_CHARS + 50);
 
         let prompt = build_semantic_summary_prompt(&input);
         assert!(prompt.contains("doc_comment: // Normalizes email."));
-        assert!(prompt.contains("parameter_count: 2"));
         assert!(prompt.contains("local_relationships: contains:validation"));
         assert!(prompt.contains("context_hints: src/services/user.ts"));
         let body_section = prompt
@@ -452,12 +426,8 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_extract_summary_from_doc_comment_strips_tags_and_keeps_first_sentence() {
-        let comment = r#"
-            /// Normalize email addresses before persistence.
-            /// Keeps casing stable for downstream search.
-            /// @param email input value
-        "#;
+    fn semantic_features_extract_summary_from_doc_comment_keeps_first_sentence() {
+        let comment = "Normalize email addresses before persistence. Keeps casing stable.";
 
         let summary = extract_summary_from_doc_comment(Some(comment));
         assert_eq!(
@@ -480,6 +450,13 @@ mod tests {
             build_template_summary(&input),
             "Defines the typescript source file."
         );
+    }
+
+    #[test]
+    fn semantic_features_template_summary_without_prestage_contract() {
+        let mut input = sample_input("method", "getById");
+
+        assert_eq!(build_template_summary(&input), "Method get by id.");
     }
 
     #[test]

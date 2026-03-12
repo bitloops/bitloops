@@ -8,6 +8,8 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .args(args)
         .current_dir(repo)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .expect("failed to run git")
 }

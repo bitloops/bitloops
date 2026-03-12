@@ -18,7 +18,6 @@ pub struct SymbolFeaturesRow {
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
     pub parent_symbol: Option<String>,
-    pub parameter_count: Option<i32>,
     pub local_relationships: Vec<String>,
     pub context_tokens: Vec<String>,
 }
@@ -44,7 +43,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
             .clone()
             .map(|value| value.to_ascii_lowercase()),
         parent_symbol: input.parent_symbol.clone(),
-        parameter_count: input.parameter_count,
         local_relationships,
         context_tokens,
     }
@@ -86,28 +84,6 @@ pub(super) fn normalize_signature(signature: &str) -> String {
     signature.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(super) fn count_parameters_from_signature(signature: &str) -> Option<i32> {
-    let start = signature.find('(')?;
-    let end = signature[start..].find(')')? + start;
-    let inner = &signature[start + 1..end];
-    if inner.trim().is_empty() {
-        return Some(0);
-    }
-
-    let mut nesting = 0_i32;
-    let mut count = 1_i32;
-    for ch in inner.chars() {
-        match ch {
-            '<' | '(' | '[' | '{' => nesting += 1,
-            '>' | ')' | ']' | '}' if nesting > 0 => nesting -= 1,
-            ',' if nesting == 0 => count += 1,
-            _ => {}
-        }
-    }
-
-    Some(count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,7 +107,6 @@ mod tests {
             doc_comment: None,
             parent_kind: Some("class".to_string()),
             parent_symbol: Some("src/services/user.ts::UserService".to_string()),
-            parameter_count: Some(2),
             local_relationships: vec!["contains:method".to_string()],
             context_hints: vec!["src/services/user.ts".to_string()],
             content_hash: Some("hash-1".to_string()),
@@ -145,18 +120,10 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_count_parameters_ignores_nested_generics() {
-        let signature =
-            "fn save(id: String, payload: Result<Vec<User>, Error>, flags: Option<bool>)";
-        assert_eq!(count_parameters_from_signature(signature), Some(3));
-    }
-
-    #[test]
     fn semantic_features_build_features_row_collects_identifier_and_context_tokens() {
         let row = build_features_row(&sample_input());
 
         assert_eq!(row.normalized_name, "get_by_id");
-        assert_eq!(row.parameter_count, Some(2));
         assert!(
             row.identifier_tokens.contains(&"get".to_string())
                 && row.identifier_tokens.contains(&"user".to_string())

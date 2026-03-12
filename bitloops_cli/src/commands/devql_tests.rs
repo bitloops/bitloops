@@ -302,7 +302,7 @@ impl semantic::SemanticSummaryProvider for MockSemanticSummaryProvider {
     }
 
     fn prompt_version(&self) -> String {
-        "semantic-summary-v1::provider=mock::model=test".to_string()
+        "semantic-summary-v4::provider=mock::model=test".to_string()
     }
 }
 
@@ -421,6 +421,7 @@ fn mock_prestage_artefacts() -> Vec<PreStageArtefactRow> {
             "start_byte": null,
             "end_byte": null,
             "signature": "async getById(id: string): Promise<User | null> {",
+            "doc_comment": "Fetch a user record by its id.",
             "content_hash": "f6a7b8c9-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
         },
         {
@@ -525,7 +526,6 @@ fn semantic_features_build_inputs_from_mock_prestage_rows() {
         method.parent_symbol.as_deref(),
         Some("src/services/user.ts::UserService")
     );
-    assert_eq!(method.parameter_count, Some(1));
     assert!(
         method.body.contains("findById"),
         "expected method body to be sliced from blob content"
