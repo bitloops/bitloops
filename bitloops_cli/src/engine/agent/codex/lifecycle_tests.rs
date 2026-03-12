@@ -35,13 +35,28 @@ fn parse_stop_maps_turn_end_event() {
 }
 
 #[test]
-fn parse_session_start_defaults_empty_session_id_to_unknown() {
+fn parse_session_start_rejects_empty_session_id() {
     let mut input = std::io::Cursor::new(br#"{"transcript_path":"/tmp/codex-3.jsonl"}"#.as_slice());
-    let parsed = parse_hook_event(HOOK_NAME_SESSION_START, &mut input)
+    let err = parse_hook_event(HOOK_NAME_SESSION_START, &mut input).expect_err("expected error");
+    assert!(
+        err.to_string()
+            .contains("codex session-start requires non-empty session_id"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn parse_stop_defaults_empty_session_id_to_unknown() {
+    let mut input = std::io::Cursor::new(br#"{"transcript_path":"/tmp/codex-4.jsonl"}"#.as_slice());
+    let parsed = parse_hook_event(HOOK_NAME_STOP, &mut input)
         .expect("parse")
         .expect("event");
-    assert_eq!(parsed.session_id, "unknown");
-    assert_eq!(parsed.session_ref, "/tmp/codex-3.jsonl");
+    assert_eq!(parsed.event_type, Some(LifecycleEventType::TurnEnd));
+    assert_eq!(
+        parsed.session_id,
+        crate::engine::lifecycle::UNKNOWN_SESSION_ID
+    );
+    assert_eq!(parsed.session_ref, "/tmp/codex-4.jsonl");
 }
 
 #[test]

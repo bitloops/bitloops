@@ -15,11 +15,11 @@ use super::adapters::{
     GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
 };
 use super::{
-    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, create_context_file,
-    dispatch_lifecycle_event, handle_lifecycle_compaction, handle_lifecycle_session_end,
-    handle_lifecycle_session_start, handle_lifecycle_subagent_end, handle_lifecycle_subagent_start,
-    handle_lifecycle_turn_end, handle_lifecycle_turn_start, read_and_parse_hook_input,
-    resolve_transcript_offset,
+    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy,
+    UNKNOWN_SESSION_ID, apply_session_id_policy, create_context_file, dispatch_lifecycle_event,
+    handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_session_start,
+    handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
+    handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
@@ -40,6 +40,18 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         tool_use_id: String::from("toolu_123"),
         subagent_id: String::from("subagent-1"),
     }
+}
+
+#[test]
+fn test_apply_session_id_policy_strict_rejects_empty() {
+    let err = apply_session_id_policy("  ", SessionIdPolicy::Strict).expect_err("expected error");
+    assert!(err.to_string().contains("session_id is required"));
+}
+
+#[test]
+fn test_apply_session_id_policy_turn_end_fallback_uses_unknown() {
+    let session_id = apply_session_id_policy("", SessionIdPolicy::FallbackUnknown).expect("policy");
+    assert_eq!(session_id, UNKNOWN_SESSION_ID);
 }
 
 fn setup_git_repo(dir: &tempfile::TempDir) {

@@ -6,6 +6,7 @@ use crate::engine::hooks::dispatcher::{
     CursorHookVerb, HooksAgent, current_hook_agent_name_for_tests, dispatch_cursor_hook,
     run_agent_hook_with_logging,
 };
+use crate::engine::lifecycle::UNKNOWN_SESSION_ID;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
@@ -131,6 +132,25 @@ fn session_start_creates_session_state() {
 }
 
 #[test]
+fn session_start_rejects_empty_session_id() {
+    let (_dir, backend, _strat) = setup();
+    let err = handle_session_start(
+        SessionInfoInput {
+            session_id: "   ".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+        },
+        &backend,
+        None,
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string()
+            .contains("session-start requires non-empty session_id"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn session_start_resets_ended_session() {
     let (_dir, backend, _strat) = setup();
 
@@ -179,6 +199,26 @@ fn user_prompt_submit_transitions_to_active() {
     let pp = backend.load_pre_prompt("s3").unwrap();
     assert!(pp.is_some());
     assert_eq!(pp.unwrap().prompt, "Fix the bug");
+}
+
+#[test]
+fn user_prompt_submit_rejects_empty_session_id() {
+    let (_dir, backend, _strat) = setup();
+    let err = handle_user_prompt_submit(
+        UserPromptSubmitInput {
+            session_id: " ".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: "Fix the bug".to_string(),
+        },
+        &backend,
+        None,
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string()
+            .contains("turn-start requires non-empty session_id"),
+        "unexpected error: {err:#}"
+    );
 }
 
 #[test]
@@ -280,6 +320,24 @@ fn cursor_session_start_creates_or_updates_session_state() {
 }
 
 #[test]
+fn cursor_session_start_rejects_empty_conversation_id() {
+    let (_dir, backend, strat) = setup();
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::SessionStart,
+        r#"{"conversation_id":"  ","transcript_path":"/tmp/cursor-empty.jsonl"}"#,
+        &backend,
+        &strat,
+        Path::new("/tmp"),
+        "session-start",
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string().contains("session_id is required"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
     let (_dir, backend, strat) = setup();
 
@@ -299,6 +357,24 @@ fn cursor_before_submit_prompt_creates_pre_prompt_state() {
     let pre_prompt = backend.load_pre_prompt("cursor-s2").unwrap().unwrap();
     assert_eq!(pre_prompt.prompt, "Fix bug in parser");
     assert_eq!(pre_prompt.transcript_path, "/tmp/cursor-s2.jsonl");
+}
+
+#[test]
+fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
+    let (_dir, backend, strat) = setup();
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::BeforeSubmitPrompt,
+        r#"{"conversation_id":" ","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
+        &backend,
+        &strat,
+        Path::new("/tmp"),
+        "before-submit-prompt",
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string().contains("session_id is required"),
+        "unexpected error: {err:#}"
+    );
 }
 
 #[test]
@@ -457,6 +533,33 @@ fn cursor_stop_with_file_changes_triggers_save_step() {
         calls[0].modified_files,
         calls[0].new_files
     );
+}
+
+#[test]
+fn cursor_stop_with_empty_conversation_id_falls_back_to_unknown_session() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    fs::write(dir.path().join("tracked.txt"), "cursor-empty-stop\n").unwrap();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        r#"{"conversation_id":" ","transcript_path":""}"#,
+        &backend,
+        &strat,
+        dir.path(),
+        "stop",
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1, "expected one save_step call");
+    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
 }
 
 #[test]
@@ -923,6 +1026,56 @@ fn stop_with_empty_session_id_falls_back_to_unknown_session() {
 
     let state = backend.load_session(UNKNOWN_SESSION_ID).unwrap().unwrap();
     assert_eq!(state.phase, SessionPhase::Idle);
+}
+
+#[test]
+fn stop_with_empty_session_id_does_not_conflate_existing_session_state() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    backend
+        .save_session(&SessionState {
+            session_id: "real-session".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .unwrap();
+    backend
+        .save_pre_prompt(&PrePromptState {
+            session_id: "real-session".to_string(),
+            prompt: "real prompt".to_string(),
+            transcript_path: String::new(),
+            ..Default::default()
+        })
+        .unwrap();
+    fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
+
+    handle_stop(
+        SessionInfoInput {
+            session_id: String::new(),
+            transcript_path: String::new(),
+        },
+        &backend,
+        &strat,
+        Some(dir.path()),
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1, "expected one save_step call");
+    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
+
+    let real_state = backend.load_session("real-session").unwrap().unwrap();
+    assert_eq!(real_state.phase, SessionPhase::Active);
+    assert!(
+        backend.load_pre_prompt("real-session").unwrap().is_some(),
+        "fallback stop should not consume another session's pre-prompt state"
+    );
 }
 
 #[test]
