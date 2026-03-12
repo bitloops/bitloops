@@ -42,6 +42,9 @@ Create `~/.bitloops/config.json`:
 ```json
 {
   "devql": {
+    "semantic_provider": "openai",
+    "semantic_model": "gpt-4.1-mini",
+    "semantic_api_key": "YOUR_KEY",
     "relational": {
       "provider": "sqlite",
       "sqlite_path": "~/.bitloops/devql/relational.db"
