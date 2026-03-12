@@ -294,7 +294,7 @@ async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
-    let _summary_provider =
+    let summary_provider =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
     let relational_store = connect_relational_store(cfg).await?;
     if args.init {
@@ -355,7 +355,7 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
             let Some(blob_sha) = blob_sha else {
                 continue;
             };
-            let _content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
             upsert_file_state_row(
                 cfg,
@@ -380,27 +380,24 @@ async fn run_ingest(cfg: &DevqlConfig, args: &DevqlIngestArgs) -> Result<()> {
                 &file_artefact,
             )
             .await?;
-            // TODO: Semantic features ingestion requires PostgreSQL client
-            // This is incomplete and needs to be properly integrated with PG backend
-            // let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
-            //     &pg_client,
-            //     &cfg.repo.repo_id,
-            //     &blob_sha,
-            //     &normalized_path,
-            // )
-            // .await?;
-            // let semantic_feature_inputs =
-            //     build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
-            // let semantic_feature_stats = upsert_semantic_feature_rows(
-            //     &pg_client,
-            //     &semantic_feature_inputs,
-            //     summary_provider.as_ref(),
-            // )
-            // .await?;
-            // counters.artefacts_upserted += 1;
-            // counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
-            // counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
+            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                relational_store.as_ref(),
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs =
+                semantic::build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
+            let semantic_feature_stats = upsert_semantic_feature_rows(
+                relational_store.as_ref(),
+                &semantic_feature_inputs,
+                summary_provider.as_ref(),
+            )
+            .await?;
             counters.artefacts_upserted += 1;
+            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
         counters.checkpoints_processed += 1;

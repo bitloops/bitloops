@@ -1483,6 +1483,93 @@ async fn run_init_and_ingest_work_with_sqlite_without_events_backend() {
 }
 
 #[tokio::test]
+async fn sqlite_semantic_features_persist_and_skip_reindex_via_relational_store() {
+    let temp = init_temp_git_repo();
+    let db_path = temp.path().join("relational.sqlite");
+    let cfg = sqlite_test_cfg(
+        temp.path().to_path_buf(),
+        db_path.to_string_lossy().to_string(),
+    );
+    let path = "src/user.ts";
+    write_repo_file(
+        temp.path(),
+        path,
+        r#"
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+"#,
+    );
+    let commit_sha = commit_all(temp.path(), "Add normalize email helper", None);
+
+    let store = connect_relational_store(&cfg)
+        .await
+        .expect("connect sqlite store");
+    init_relational_schema(store.as_ref())
+        .await
+        .expect("init schema");
+    ensure_repository_row(&cfg, store.as_ref())
+        .await
+        .expect("ensure repository row");
+
+    let blob_sha =
+        git_blob_sha_at_commit(temp.path(), &commit_sha, path).expect("blob sha for committed file");
+    let file_artefact = upsert_file_artefact_row(&cfg, store.as_ref(), path, &blob_sha)
+        .await
+        .expect("upsert file artefact");
+    upsert_language_artefacts(&cfg, store.as_ref(), path, &blob_sha, &file_artefact)
+        .await
+        .expect("upsert language artefacts");
+
+    let pre_stage_artefacts =
+        load_pre_stage_artefacts_for_blob(store.as_ref(), &cfg.repo.repo_id, &blob_sha, path)
+            .await
+            .expect("load pre-stage artefacts");
+    let content = git_blob_content(temp.path(), &blob_sha).expect("blob content");
+    let inputs = build_semantic_feature_inputs_from_artefacts(&pre_stage_artefacts, &content);
+    assert_eq!(inputs.len(), 2, "expected file and function semantic inputs");
+
+    let first_stats =
+        upsert_semantic_feature_rows(store.as_ref(), &inputs, &semantic::NoopSemanticSummaryProvider)
+            .await
+            .expect("persist semantic rows");
+    assert_eq!(first_stats.upserted, inputs.len());
+    assert_eq!(first_stats.skipped, 0);
+
+    let second_stats =
+        upsert_semantic_feature_rows(store.as_ref(), &inputs, &semantic::NoopSemanticSummaryProvider)
+            .await
+            .expect("skip unchanged semantic rows");
+    assert_eq!(second_stats.upserted, 0);
+    assert_eq!(second_stats.skipped, inputs.len());
+
+    let semantic_rows = store
+        .query_rows(
+            "SELECT template_summary, summary, llm_summary FROM symbol_semantics ORDER BY template_summary",
+        )
+        .await
+        .expect("query semantic rows");
+    assert_eq!(semantic_rows.len(), inputs.len());
+    assert!(semantic_rows.iter().any(|row| {
+        row["template_summary"] == "Function normalize email."
+            && row["summary"] == "Function normalize email."
+            && row["llm_summary"].is_null()
+    }));
+
+    let feature_rows = store
+        .query_rows(
+            "SELECT normalized_name, normalized_signature FROM symbol_features ORDER BY normalized_name",
+        )
+        .await
+        .expect("query feature rows");
+    assert_eq!(feature_rows.len(), inputs.len());
+    assert!(feature_rows.iter().any(|row| {
+        row["normalized_name"] == "normalize_email"
+            && row["normalized_signature"] == "export function normalizeEmail(email: string): string"
+    }));
+}
+
+#[tokio::test]
 async fn execute_query_json_reads_from_sqlite_relational_store() {
     let temp = TempDir::new().expect("tempdir");
     let db_path = temp.path().join("relational.sqlite");

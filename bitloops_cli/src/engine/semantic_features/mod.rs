@@ -3,9 +3,9 @@ mod core;
 
 pub use core::{
     NoopSemanticSummaryProvider, PreStageArtefactRow, SemanticFeatureIndexState,
-    SemanticFeatureInput, SemanticSummaryCandidate, SemanticSummaryProvider,
-    SemanticSummaryProviderConfig, build_semantic_feature_inputs_from_artefacts,
-    build_semantic_feature_rows, build_semantic_summary_provider,
-    load_pre_stage_artefacts_for_blob, resolve_semantic_summary_endpoint,
-    semantic_features_require_reindex, upsert_semantic_feature_rows,
+    SemanticFeatureIngestionStats, SemanticFeatureInput, SemanticFeatureRows,
+    SemanticSummaryCandidate, SemanticSummaryProvider, SemanticSummaryProviderConfig,
+    build_semantic_feature_inputs_from_artefacts, build_semantic_feature_rows,
+    build_semantic_summary_provider, resolve_semantic_summary_endpoint,
+    semantic_features_require_reindex,
 };

@@ -1,36 +1,62 @@
-use anyhow::Result;
-use serde_json::Value;
-
-use crate::engine::infra::postgres::{esc_pg, pg_query_rows, postgres_exec};
-
-use super::{PreStageArtefactRow, SemanticFeatureIndexState, SemanticFeatureRows};
-
-pub(super) async fn get_artefacts(
-    pg_client: &tokio_postgres::Client,
+async fn load_pre_stage_artefacts_for_blob(
+    relational_store: &dyn store_contracts::RelationalStore,
     repo_id: &str,
     blob_sha: &str,
     path: &str,
-) -> Result<Vec<PreStageArtefactRow>> {
-    let rows = pg_query_rows(pg_client, &build_get_artefacts_sql(repo_id, blob_sha, path)).await?;
-    parse_artefact_rows(rows)
+) -> Result<Vec<semantic::PreStageArtefactRow>> {
+    let rows = relational_store
+        .query_rows(&build_semantic_get_artefacts_sql(repo_id, blob_sha, path))
+        .await?;
+    parse_semantic_artefact_rows(rows)
 }
 
-pub(super) async fn get_index_state(
-    pg_client: &tokio_postgres::Client,
+async fn upsert_semantic_feature_rows(
+    relational_store: &dyn store_contracts::RelationalStore,
+    inputs: &[semantic::SemanticFeatureInput],
+    summary_provider: &dyn semantic::SemanticSummaryProvider,
+) -> Result<semantic::SemanticFeatureIngestionStats> {
+    let mut stats = semantic::SemanticFeatureIngestionStats::default();
+
+    for input in inputs {
+        let rows = semantic::build_semantic_feature_rows(input, summary_provider);
+        let state = load_semantic_index_state(relational_store, &input.artefact_id).await?;
+        if !semantic::semantic_features_require_reindex(
+            &state,
+            &rows.semantic_features_input_hash,
+            &rows.semantics.prompt_version,
+            &rows.features.prompt_version,
+        ) {
+            stats.skipped += 1;
+            continue;
+        }
+
+        persist_semantic_feature_rows(relational_store, &rows).await?;
+        stats.upserted += 1;
+    }
+
+    Ok(stats)
+}
+
+async fn load_semantic_index_state(
+    relational_store: &dyn store_contracts::RelationalStore,
     artefact_id: &str,
-) -> Result<SemanticFeatureIndexState> {
-    let rows = pg_query_rows(pg_client, &build_get_index_state_sql(artefact_id)).await?;
-    Ok(parse_index_state_rows(&rows))
+) -> Result<semantic::SemanticFeatureIndexState> {
+    let rows = relational_store
+        .query_rows(&build_semantic_get_index_state_sql(artefact_id))
+        .await?;
+    Ok(parse_semantic_index_state_rows(&rows))
 }
 
-pub(super) async fn persist_rows(
-    pg_client: &tokio_postgres::Client,
-    rows: &SemanticFeatureRows,
+async fn persist_semantic_feature_rows(
+    relational_store: &dyn store_contracts::RelationalStore,
+    rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
-    postgres_exec(pg_client, &build_persist_rows_sql(rows)?).await
+    relational_store
+        .execute(&build_semantic_persist_rows_sql(rows)?)
+        .await
 }
 
-fn build_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
+fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
     format!(
         "SELECT artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, content_hash \
 FROM artefacts \
@@ -42,15 +68,17 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
     )
 }
 
-fn parse_artefact_rows(rows: Vec<Value>) -> Result<Vec<PreStageArtefactRow>> {
+fn parse_semantic_artefact_rows(rows: Vec<Value>) -> Result<Vec<semantic::PreStageArtefactRow>> {
     let mut artefacts = Vec::new();
     for row in rows {
-        artefacts.push(serde_json::from_value::<PreStageArtefactRow>(row)?);
+        artefacts.push(serde_json::from_value::<semantic::PreStageArtefactRow>(
+            row,
+        )?);
     }
     Ok(artefacts)
 }
 
-fn build_get_index_state_sql(artefact_id: &str) -> String {
+fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     format!(
         "SELECT \
             (SELECT semantic_features_input_hash FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_hash, \
@@ -61,12 +89,12 @@ fn build_get_index_state_sql(artefact_id: &str) -> String {
     )
 }
 
-fn parse_index_state_rows(rows: &[Value]) -> SemanticFeatureIndexState {
+fn parse_semantic_index_state_rows(rows: &[Value]) -> semantic::SemanticFeatureIndexState {
     let Some(row) = rows.first() else {
-        return SemanticFeatureIndexState::default();
+        return semantic::SemanticFeatureIndexState::default();
     };
 
-    SemanticFeatureIndexState {
+    semantic::SemanticFeatureIndexState {
         semantics_hash: row
             .get("semantics_hash")
             .and_then(Value::as_str)
@@ -86,7 +114,7 @@ fn parse_index_state_rows(rows: &[Value]) -> SemanticFeatureIndexState {
     }
 }
 
-fn build_persist_rows_sql(rows: &SemanticFeatureRows) -> Result<String> {
+fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Result<String> {
     let semantics = &rows.semantics;
     let features = &rows.features;
 
@@ -114,30 +142,30 @@ fn build_persist_rows_sql(rows: &SemanticFeatureRows) -> Result<String> {
         Some(value) => format!("'{}'", esc_pg(value)),
         None => "NULL".to_string(),
     };
-    let identifier_tokens = format!(
-        "'{}'::jsonb",
+    let identifier_tokens_expr = format!(
+        "'{}'",
         esc_pg(&serde_json::to_string(&features.identifier_tokens)?)
     );
-    let body_tokens = format!(
-        "'{}'::jsonb",
+    let body_tokens_expr = format!(
+        "'{}'",
         esc_pg(&serde_json::to_string(&features.normalized_body_tokens)?)
     );
-    let local_relationships = format!(
-        "'{}'::jsonb",
+    let local_relationships_expr = format!(
+        "'{}'",
         esc_pg(&serde_json::to_string(&features.local_relationships)?)
     );
-    let context_tokens = format!(
-        "'{}'::jsonb",
+    let context_tokens_expr = format!(
+        "'{}'",
         esc_pg(&serde_json::to_string(&features.context_tokens)?)
     );
 
     Ok(format!(
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
 VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', '{prompt_version}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now(); \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = CURRENT_TIMESTAMP; \
 INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, prompt_version, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, parent_symbol, local_relationships, context_tokens) \
 VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{features_prompt_version}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {parent_symbol}, {local_relationships}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, prompt_version = EXCLUDED.prompt_version, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, parent_symbol = EXCLUDED.parent_symbol, local_relationships = EXCLUDED.local_relationships, context_tokens = EXCLUDED.context_tokens, generated_at = CURRENT_TIMESTAMP",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
@@ -156,114 +184,85 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         features_prompt_version = esc_pg(&features.prompt_version),
         normalized_name = esc_pg(&features.normalized_name),
         normalized_signature = normalized_signature_expr,
-        identifier_tokens = identifier_tokens,
-        body_tokens = body_tokens,
+        identifier_tokens = identifier_tokens_expr,
+        body_tokens = body_tokens_expr,
         parent_kind = parent_kind_expr,
         parent_symbol = parent_symbol_expr,
-        local_relationships = local_relationships,
-        context_tokens = context_tokens,
+        local_relationships = local_relationships_expr,
+        context_tokens = context_tokens_expr,
     ))
 }
 
 #[cfg(test)]
-mod tests {
+mod semantic_feature_relational_tests {
     use super::*;
-    use serde_json::json;
 
-    use super::super::features::SymbolFeaturesRow;
-    use super::super::semantic::SymbolSemanticsRow;
-
-    fn sample_rows() -> SemanticFeatureRows {
-        SemanticFeatureRows {
-            semantics: SymbolSemanticsRow {
+    fn sample_semantic_rows() -> semantic::SemanticFeatureRows {
+        semantic::build_semantic_feature_rows(
+            &semantic::SemanticFeatureInput {
                 artefact_id: "artefact'1".to_string(),
+                symbol_id: Some("symbol-1".to_string()),
                 repo_id: "repo-1".to_string(),
                 blob_sha: "blob-1".to_string(),
-                prompt_version: "semantic-summary-v5::provider=noop".to_string(),
-                doc_comment_summary: Some("Fetches O'Brien by id.".to_string()),
-                llm_summary: Some("Loads a user by id".to_string()),
-                template_summary: "Method get by id.".to_string(),
-                summary: "Method get by id. Loads a user by id.".to_string(),
-                confidence: 0.82,
-                source_model: Some("mock:model".to_string()),
-            },
-            features: SymbolFeaturesRow {
-                artefact_id: "artefact'1".to_string(),
-                repo_id: "repo-1".to_string(),
-                blob_sha: "blob-1".to_string(),
-                prompt_version: "symbol-features-v2".to_string(),
-                normalized_name: "get_by_id".to_string(),
-                normalized_signature: Some("async getById(id: string)".to_string()),
-                identifier_tokens: vec!["get".to_string(), "id".to_string()],
-                normalized_body_tokens: vec!["return".to_string(), "find".to_string()],
+                path: "src/services/user.ts".to_string(),
+                language: "typescript".to_string(),
+                canonical_kind: "method".to_string(),
+                language_kind: "method".to_string(),
+                symbol_fqn: "src/services/user.ts::UserService::getById".to_string(),
+                name: "getById".to_string(),
+                signature: Some("async getById(id: string): Promise<User | null>".to_string()),
+                body: "return repo.findById(id);".to_string(),
+                doc_comment: Some("Fetches O'Brien by id.".to_string()),
                 parent_kind: Some("class".to_string()),
                 parent_symbol: Some("src/services/user.ts::UserService".to_string()),
                 local_relationships: vec!["contains:method".to_string()],
-                context_tokens: vec!["services".to_string(), "user".to_string()],
+                context_hints: vec!["src/services/user.ts".to_string()],
+                content_hash: Some("hash-1".to_string()),
             },
-            semantic_features_input_hash: "hash-1".to_string(),
-        }
+            &semantic::NoopSemanticSummaryProvider,
+        )
     }
 
     #[test]
-    fn semantic_features_store_builds_get_artefacts_sql_with_escaped_values() {
-        let sql = build_get_artefacts_sql("repo'1", "blob'1", "src/o'brien.ts");
+    fn semantic_feature_relational_builds_get_artefacts_sql_with_escaped_values() {
+        let sql = build_semantic_get_artefacts_sql("repo'1", "blob'1", "src/o'brien.ts");
         assert!(sql.contains("repo_id = 'repo''1'"));
         assert!(sql.contains("blob_sha = 'blob''1'"));
         assert!(sql.contains("path = 'src/o''brien.ts'"));
     }
 
     #[test]
-    fn semantic_features_store_parses_index_state_rows_and_defaults() {
-        let empty = parse_index_state_rows(&[]);
-        assert_eq!(empty, SemanticFeatureIndexState::default());
+    fn semantic_feature_relational_parses_index_state_rows_and_defaults() {
+        let empty = parse_semantic_index_state_rows(&[]);
+        assert_eq!(empty, semantic::SemanticFeatureIndexState::default());
 
         let rows = vec![json!({
             "semantics_hash": "hash-a",
-            "semantics_prompt_version": "semantic-v1",
+            "semantics_prompt_version": "semantic-summary-v5::provider=noop",
             "features_hash": "hash-b",
-            "features_prompt_version": "features-v1"
+            "features_prompt_version": "symbol-features-v2"
         })];
-        let parsed = parse_index_state_rows(&rows);
+        let parsed = parse_semantic_index_state_rows(&rows);
         assert_eq!(parsed.semantics_hash.as_deref(), Some("hash-a"));
         assert_eq!(
+            parsed.semantics_prompt_version.as_deref(),
+            Some("semantic-summary-v5::provider=noop")
+        );
+        assert_eq!(parsed.features_hash.as_deref(), Some("hash-b"));
+        assert_eq!(
             parsed.features_prompt_version.as_deref(),
-            Some("features-v1")
+            Some("symbol-features-v2")
         );
     }
 
     #[test]
-    fn semantic_features_store_builds_persist_sql_for_semantics_and_features() {
-        let sql = build_persist_rows_sql(&sample_rows()).expect("persist SQL");
+    fn semantic_feature_relational_builds_provider_neutral_persist_sql() {
+        let sql = build_semantic_persist_rows_sql(&sample_semantic_rows()).expect("persist SQL");
         assert!(sql.contains("INSERT INTO symbol_semantics"));
         assert!(sql.contains("INSERT INTO symbol_features"));
         assert!(sql.contains("doc_comment_summary"));
         assert!(sql.contains("Fetches O''Brien by id."));
-        assert!(sql.contains("'[\"get\",\"id\"]'::jsonb"));
-    }
-
-    #[test]
-    fn semantic_features_store_parses_artefact_rows() {
-        let rows = vec![json!({
-            "artefact_id": "artefact-1",
-            "symbol_id": "symbol-1",
-            "repo_id": "repo-1",
-            "blob_sha": "blob-1",
-            "path": "src/services/user.ts",
-            "language": "typescript",
-            "canonical_kind": "function",
-            "language_kind": "function",
-            "symbol_fqn": "src/services/user.ts::normalizeEmail",
-            "parent_artefact_id": null,
-            "start_line": 1,
-            "end_line": 3,
-            "start_byte": null,
-            "end_byte": null,
-            "signature": "export function normalizeEmail(email: string): string {",
-            "content_hash": "hash-1"
-        })];
-        let parsed = parse_artefact_rows(rows).expect("artefact rows should parse");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].canonical_kind, "function");
+        assert!(sql.contains("'[\"contains:method\"]'"));
+        assert!(!sql.contains("::jsonb"));
     }
 }

@@ -3,7 +3,6 @@ pub mod db_status;
 pub mod git_operations;
 pub mod history;
 pub mod hooks;
-pub mod infra;
 pub mod lifecycle;
 pub mod logging;
 pub mod paths;

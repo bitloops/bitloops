@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Result;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -11,8 +10,6 @@ mod common;
 mod features;
 #[path = "semantic.rs"]
 mod semantic;
-#[path = "store.rs"]
-mod store;
 
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path, normalize_string_list};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
@@ -101,15 +98,6 @@ pub struct SemanticFeatureIndexState {
 pub struct SemanticFeatureIngestionStats {
     pub upserted: usize,
     pub skipped: usize,
-}
-
-pub async fn load_pre_stage_artefacts_for_blob(
-    pg_client: &tokio_postgres::Client,
-    repo_id: &str,
-    blob_sha: &str,
-    path: &str,
-) -> Result<Vec<PreStageArtefactRow>> {
-    store::get_artefacts(pg_client, repo_id, blob_sha, path).await
 }
 
 pub fn build_semantic_feature_inputs_from_artefacts(
@@ -236,33 +224,6 @@ fn extract_symbol_body(row: &PreStageArtefactRow, blob_content: &str) -> String 
     }
 
     row.signature.clone().unwrap_or_default()
-}
-
-pub async fn upsert_semantic_feature_rows(
-    pg_client: &tokio_postgres::Client,
-    inputs: &[SemanticFeatureInput],
-    summary_provider: &dyn SemanticSummaryProvider,
-) -> Result<SemanticFeatureIngestionStats> {
-    let mut stats = SemanticFeatureIngestionStats::default();
-
-    for input in inputs {
-        let rows = build_semantic_feature_rows(input, summary_provider);
-        let state = store::get_index_state(pg_client, &input.artefact_id).await?;
-        if !semantic_features_require_reindex(
-            &state,
-            &rows.semantic_features_input_hash,
-            &rows.semantics.prompt_version,
-            &rows.features.prompt_version,
-        ) {
-            stats.skipped += 1;
-            continue;
-        }
-
-        store::persist_rows(pg_client, &rows).await?;
-        stats.upserted += 1;
-    }
-
-    Ok(stats)
 }
 
 pub fn build_semantic_feature_rows(
