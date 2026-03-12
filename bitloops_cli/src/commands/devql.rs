@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -13,6 +12,7 @@ use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::devql_config::{
     DevqlBackendConfig, EventsProvider, RelationalProvider, resolve_devql_backend_config,
+    resolve_devql_semantic_config,
 };
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -206,22 +206,16 @@ struct DevqlConfig {
 
 impl DevqlConfig {
     fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
+        let semantic_cfg = resolve_devql_semantic_config();
+
         Ok(Self {
             repo_root,
             repo,
             backends: resolve_devql_backend_config()?,
-            semantic_provider: env::var("BITLOOPS_DEVQL_SEMANTIC_PROVIDER")
-                .ok()
-                .filter(|s: &String| !s.trim().is_empty()),
-            semantic_model: env::var("BITLOOPS_DEVQL_SEMANTIC_MODEL")
-                .ok()
-                .filter(|s: &String| !s.trim().is_empty()),
-            semantic_api_key: env::var("BITLOOPS_DEVQL_SEMANTIC_API_KEY")
-                .ok()
-                .filter(|s: &String| !s.trim().is_empty()),
-            semantic_base_url: env::var("BITLOOPS_DEVQL_SEMANTIC_BASE_URL")
-                .ok()
-                .filter(|s: &String| !s.trim().is_empty()),
+            semantic_provider: semantic_cfg.semantic_provider,
+            semantic_model: semantic_cfg.semantic_model,
+            semantic_api_key: semantic_cfg.semantic_api_key,
+            semantic_base_url: semantic_cfg.semantic_base_url,
         })
     }
 
