@@ -19,7 +19,6 @@ pub struct SymbolFeaturesRow {
     pub parent_kind: Option<String>,
     pub parent_symbol: Option<String>,
     pub parameter_count: Option<i32>,
-    pub return_shape_hint: Option<String>,
     pub local_relationships: Vec<String>,
     pub context_tokens: Vec<String>,
 }
@@ -46,7 +45,6 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
             .map(|value| value.to_ascii_lowercase()),
         parent_symbol: input.parent_symbol.clone(),
         parameter_count: input.parameter_count,
-        return_shape_hint: input.return_shape_hint.clone(),
         local_relationships,
         context_tokens,
     }
@@ -86,47 +84,6 @@ fn build_context_tokens(input: &SemanticFeatureInput, identifier_tokens: &[Strin
 
 pub(super) fn normalize_signature(signature: &str) -> String {
     signature.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-pub(super) fn infer_return_shape_hint(
-    signature: Option<&str>,
-    body: &str,
-    explicit_hint: Option<&str>,
-) -> Option<String> {
-    if let Some(hint) = explicit_hint {
-        let normalized = hint.trim().to_ascii_lowercase();
-        if !normalized.is_empty() {
-            return Some(normalized);
-        }
-    }
-
-    let signature = signature.unwrap_or_default().to_ascii_lowercase();
-    let combined = format!("{signature}\n{}", body.to_ascii_lowercase());
-
-    if combined.contains("promise<") || combined.contains("-> promise") {
-        return Some("promise".to_string());
-    }
-    if combined.contains("result<") || combined.contains("-> result") {
-        return Some("result".to_string());
-    }
-    if combined.contains("option<") || combined.contains("-> option") {
-        return Some("option".to_string());
-    }
-    if combined.contains("vec<")
-        || combined.contains("[]")
-        || combined.contains("array<")
-        || combined.contains("list<")
-    {
-        return Some("collection".to_string());
-    }
-    if combined.contains("string") || combined.contains("to_string") {
-        return Some("string".to_string());
-    }
-    if combined.contains("return true") || combined.contains("return false") {
-        return Some("boolean".to_string());
-    }
-
-    None
 }
 
 pub(super) fn count_parameters_from_signature(signature: &str) -> Option<i32> {

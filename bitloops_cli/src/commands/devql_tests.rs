@@ -526,7 +526,6 @@ fn semantic_features_build_inputs_from_mock_prestage_rows() {
         Some("src/services/user.ts::UserService")
     );
     assert_eq!(method.parameter_count, Some(1));
-    assert_eq!(method.return_shape_hint.as_deref(), Some("promise"));
     assert!(
         method.body.contains("findById"),
         "expected method body to be sliced from blob content"

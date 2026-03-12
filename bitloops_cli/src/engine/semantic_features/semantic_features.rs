@@ -16,8 +16,7 @@ mod store;
 
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path, normalize_string_list};
 use self::features::{
-    SymbolFeaturesRow, build_features_row, count_parameters_from_signature,
-    infer_return_shape_hint, normalize_signature,
+    SymbolFeaturesRow, build_features_row, count_parameters_from_signature, normalize_signature,
 };
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
@@ -79,7 +78,6 @@ pub struct SemanticFeatureInput {
     pub parent_kind: Option<String>,
     pub parent_symbol: Option<String>,
     pub parameter_count: Option<i32>,
-    pub return_shape_hint: Option<String>,
     pub local_relationships: Vec<String>,
     pub context_hints: Vec<String>,
     pub content_hash: Option<String>,
@@ -176,7 +174,6 @@ fn build_semantic_feature_input_from_artefact(
         .into_iter()
         .map(|kind| format!("contains:{kind}"))
         .collect::<Vec<_>>();
-    let return_shape_hint = infer_return_shape_hint(row.signature.as_deref(), &body, None);
     let mut context_hints = vec![normalize_repo_path(&row.path)];
     context_hints.extend(
         parent
@@ -205,7 +202,6 @@ fn build_semantic_feature_input_from_artefact(
             .signature
             .as_deref()
             .and_then(count_parameters_from_signature),
-        return_shape_hint,
         local_relationships,
         context_hints,
         content_hash: row.content_hash.clone(),
@@ -417,10 +413,6 @@ fn build_semantic_features_input_hash(input: &SemanticFeatureInput) -> String {
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
             "parent_symbol": &input.parent_symbol,
             "parameter_count": input.parameter_count,
-            "return_shape_hint": input
-                .return_shape_hint
-                .as_deref()
-                .map(|value| value.to_ascii_lowercase()),
             "local_relationships": normalize_string_list(&input.local_relationships),
             "context_hints": normalize_string_list(&input.context_hints),
             "content_hash": &input.content_hash,

@@ -121,7 +121,6 @@ doc_comment: {doc_comment}\n\
 parent_kind: {parent_kind}\n\
 parent_symbol: {parent_symbol}\n\
 parameter_count: {parameter_count}\n\
-return_shape_hint: {return_shape_hint}\n\
 local_relationships: {local_relationships}\n\
 context_hints: {context_hints}\n\
 body:\n{body}",
@@ -139,7 +138,6 @@ body:\n{body}",
             .parameter_count
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        return_shape_hint = input.return_shape_hint.as_deref().unwrap_or(""),
         local_relationships = input.local_relationships.join(", "),
         context_hints = input.context_hints.join(", "),
         body = body,

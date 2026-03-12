@@ -253,7 +253,6 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     parent_kind TEXT,
     parent_symbol TEXT,
     parameter_count INTEGER,
-    return_shape_hint TEXT,
     local_relationships JSONB NOT NULL DEFAULT '[]'::jsonb,
     context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
     generated_at TIMESTAMPTZ DEFAULT now()
