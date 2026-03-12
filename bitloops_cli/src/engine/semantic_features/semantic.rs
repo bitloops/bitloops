@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn semantic_features_template_summary_without_prestage_contract() {
-        let mut input = sample_input("method", "getById");
+        let input = sample_input("method", "getById");
 
         assert_eq!(build_template_summary(&input), "Method get by id.");
     }
