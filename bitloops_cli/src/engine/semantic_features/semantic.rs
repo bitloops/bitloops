@@ -328,13 +328,19 @@ fn build_template_summary(input: &SemanticFeatureInput) -> String {
     let subject = summary_subject(input);
     let summary = match input.canonical_kind.as_str() {
         "file" | "module" => format!("Defines the {} source file.", input.language),
-        "class" | "interface" | "type" | "enum" | "variable" => format!("Defines {subject}."),
-        "constructor" => format!("Constructs {subject}."),
-        "test" => format!("Tests {subject}."),
-        _ => format!("Implements {subject}."),
+        _ => format!("{} {subject}.", canonical_kind_label(&input.canonical_kind)),
     };
 
     ensure_terminal_period(&summary)
+}
+
+fn canonical_kind_label(kind: &str) -> String {
+    let normalized = kind.trim().replace('_', " ");
+    let mut chars = normalized.chars();
+    let Some(first) = chars.next() else {
+        return "Symbol".to_string();
+    };
+    format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
 }
 
 fn ensure_terminal_period(summary: &str) -> String {
@@ -368,5 +374,125 @@ fn summary_subject(input: &SemanticFeatureInput) -> String {
         input.name.to_ascii_lowercase()
     } else {
         tokens.join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_input(kind: &str, name: &str) -> SemanticFeatureInput {
+        SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: kind.to_string(),
+            language_kind: kind.to_string(),
+            symbol_fqn: format!("src/services/user.ts::{name}"),
+            name: name.to_string(),
+            signature: Some(format!("function {name}()")),
+            body: "return value;".to_string(),
+            doc_comment: None,
+            parent_kind: Some("module".to_string()),
+            parent_symbol: Some("src/services/user.ts".to_string()),
+            parameter_count: Some(0),
+            local_relationships: vec![],
+            context_hints: vec!["src/services/user.ts".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn semantic_features_build_provider_supports_disabled_and_requires_api_key() {
+        let disabled = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
+            semantic_provider: Some("disabled".to_string()),
+            ..SemanticSummaryProviderConfig::default()
+        })
+        .expect("disabled provider should build");
+        assert_eq!(disabled.prompt_version(), "semantic-summary-v1::provider=noop");
+
+        let err = build_semantic_summary_provider(&SemanticSummaryProviderConfig {
+            semantic_provider: Some("openai".to_string()),
+            semantic_model: Some("gpt-test".to_string()),
+            ..SemanticSummaryProviderConfig::default()
+        })
+        .err()
+        .expect("missing API key should fail");
+        assert!(err
+            .to_string()
+            .contains("BITLOOPS_DEVQL_SEMANTIC_API_KEY is required"));
+    }
+
+    #[test]
+    fn semantic_features_prompt_includes_context_and_truncates_body() {
+        let mut input = sample_input("function", "normalizeEmail");
+        input.doc_comment = Some("// Normalizes email.".to_string());
+        input.parameter_count = Some(2);
+        input.local_relationships = vec!["contains:validation".to_string()];
+        input.context_hints = vec!["src/services/user.ts".to_string()];
+        input.body = "x".repeat(MAX_SUMMARY_BODY_CHARS + 50);
+
+        let prompt = build_semantic_summary_prompt(&input);
+        assert!(prompt.contains("doc_comment: // Normalizes email."));
+        assert!(prompt.contains("parameter_count: 2"));
+        assert!(prompt.contains("local_relationships: contains:validation"));
+        assert!(prompt.contains("context_hints: src/services/user.ts"));
+        let body_section = prompt
+            .split("body:\n")
+            .nth(1)
+            .expect("prompt should include body section");
+        assert_eq!(body_section.chars().count(), MAX_SUMMARY_BODY_CHARS);
+    }
+
+    #[test]
+    fn semantic_features_extract_summary_from_doc_comment_strips_tags_and_keeps_first_sentence() {
+        let comment = r#"
+            /// Normalize email addresses before persistence.
+            /// Keeps casing stable for downstream search.
+            /// @param email input value
+        "#;
+
+        let summary = extract_summary_from_doc_comment(Some(comment));
+        assert_eq!(
+            summary.as_deref(),
+            Some("Normalize email addresses before persistence.")
+        );
+    }
+
+    #[test]
+    fn semantic_features_template_summary_uses_neutral_kind_label() {
+        let input = sample_input("function", "normalizeEmail");
+        assert_eq!(build_template_summary(&input), "Function normalize email.");
+    }
+
+    #[test]
+    fn semantic_features_template_summary_keeps_file_special_case() {
+        let mut input = sample_input("file", "user");
+        input.path = "src/services/user.ts".to_string();
+        assert_eq!(
+            build_template_summary(&input),
+            "Defines the typescript source file."
+        );
+    }
+
+    #[test]
+    fn semantic_features_parse_semantic_summary_candidate_json_from_wrapped_text() {
+        let parsed = parse_semantic_summary_candidate_json(
+            r#"Here is the result: {"summary":"Loads a user by id.","confidence":0.82}"#,
+        )
+        .expect("wrapped JSON should parse");
+
+        assert_eq!(parsed.summary, "Loads a user by id.");
+        assert_eq!(parsed.confidence, Some(0.82));
+    }
+
+    #[test]
+    fn semantic_features_extract_json_object_returns_none_for_invalid_wrappers() {
+        assert_eq!(extract_json_object_from_text(""), None);
+        assert_eq!(extract_json_object_from_text("no json here"), None);
+        assert_eq!(extract_json_object_from_text("{missing"), None);
     }
 }

@@ -442,3 +442,108 @@ fn sha256_hex(input: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_row() -> PreStageArtefactRow {
+        PreStageArtefactRow {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "method".to_string(),
+            language_kind: "method".to_string(),
+            symbol_fqn: "src/services/user.ts::UserService::getById".to_string(),
+            parent_artefact_id: Some("parent-1".to_string()),
+            start_line: Some(4),
+            end_line: Some(6),
+            start_byte: None,
+            end_byte: None,
+            signature: Some("async getById(id: string): Promise<User> {".to_string()),
+            content_hash: Some("hash-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn semantic_features_extract_symbol_doc_comment_reads_adjacent_line_comments() {
+        let content = r#"export class UserService {
+  // Fetch a user by id.
+  // Returns null when missing.
+  async getById(id: string) {
+    return null;
+  }
+}"#;
+
+        assert_eq!(
+            extract_symbol_doc_comment(content, Some(4)).as_deref(),
+            Some("// Fetch a user by id.\n// Returns null when missing.")
+        );
+    }
+
+    #[test]
+    fn semantic_features_extract_file_header_comment_stops_at_first_non_comment() {
+        let content = r#"
+// File-level summary.
+/* Extra detail. */
+
+export function run() {}
+"#;
+
+        assert_eq!(
+            extract_file_header_comment(content).as_deref(),
+            Some("// File-level summary.\n/* Extra detail. */")
+        );
+    }
+
+    #[test]
+    fn semantic_features_extract_symbol_body_falls_back_to_line_range() {
+        let row = sample_row();
+        let content = r#"export class UserService {
+  // Fetch a user by id.
+  // Returns null when missing.
+  async getById(id: string) {
+    return db.users.findById(id);
+  }
+}"#;
+
+        let body = extract_symbol_body(&row, content);
+        assert!(body.contains("async getById"));
+        assert!(body.contains("findById"));
+    }
+
+    #[test]
+    fn semantic_features_input_hash_changes_when_doc_comment_changes() {
+        let base = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            body: "return email.trim().toLowerCase();".to_string(),
+            doc_comment: Some("// Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            parent_symbol: Some("src/services/user.ts".to_string()),
+            parameter_count: Some(1),
+            local_relationships: vec![],
+            context_hints: vec!["src/services/user.ts".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        };
+        let mut changed = base.clone();
+        changed.doc_comment = Some("// Normalizes email for storage.".to_string());
+
+        assert_ne!(
+            build_semantic_features_input_hash(&base),
+            build_semantic_features_input_hash(&changed)
+        );
+    }
+}

@@ -107,3 +107,66 @@ pub(super) fn count_parameters_from_signature(signature: &str) -> Option<i32> {
 
     Some(count)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_input() -> SemanticFeatureInput {
+        SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "method".to_string(),
+            language_kind: "method".to_string(),
+            symbol_fqn: "src/services/user.ts::UserService::getById".to_string(),
+            name: "getById".to_string(),
+            signature: Some("async getById(id: string, opts: Map<string, Vec<i32>>): Promise<User>".to_string()),
+            body: "return db.users.findById(id);".to_string(),
+            doc_comment: None,
+            parent_kind: Some("class".to_string()),
+            parent_symbol: Some("src/services/user.ts::UserService".to_string()),
+            parameter_count: Some(2),
+            local_relationships: vec!["contains:method".to_string()],
+            context_hints: vec!["src/services/user.ts".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn semantic_features_normalize_signature_collapses_whitespace() {
+        let normalized = normalize_signature("async   getById( id: string )  : Promise<User>");
+        assert_eq!(normalized, "async getById( id: string ) : Promise<User>");
+    }
+
+    #[test]
+    fn semantic_features_count_parameters_ignores_nested_generics() {
+        let signature =
+            "fn save(id: String, payload: Result<Vec<User>, Error>, flags: Option<bool>)";
+        assert_eq!(count_parameters_from_signature(signature), Some(3));
+    }
+
+    #[test]
+    fn semantic_features_build_features_row_collects_identifier_and_context_tokens() {
+        let row = build_features_row(&sample_input());
+
+        assert_eq!(row.normalized_name, "get_by_id");
+        assert_eq!(row.parameter_count, Some(2));
+        assert!(
+            row.identifier_tokens.contains(&"get".to_string())
+                && row.identifier_tokens.contains(&"user".to_string())
+        );
+        assert!(
+            row.context_tokens.contains(&"services".to_string())
+                && row.context_tokens.contains(&"class".to_string())
+        );
+        assert!(
+            row.normalized_body_tokens.contains(&"find".to_string()),
+            "{:?}",
+            row.normalized_body_tokens
+        );
+    }
+}
