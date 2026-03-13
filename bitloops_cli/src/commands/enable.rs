@@ -1,5 +1,6 @@
 //! `bitloops enable` / `bitloops disable` command implementation.
 
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,7 +16,10 @@ use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::{
+    create_session_backend_or_local, delete_legacy_local_session_state,
+    list_legacy_local_session_ids,
+};
 use crate::engine::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
     settings_local_path, settings_path,
@@ -369,15 +373,15 @@ pub fn run_uninstall(
 }
 
 pub fn count_session_states(repo_root: &Path) -> usize {
-    let backend = LocalFileBackend::new(repo_root);
-    let states_dir = backend.sessions_dir();
-    match fs::read_dir(states_dir) {
-        Ok(entries) => entries
-            .filter_map(io::Result::ok)
-            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .count(),
-        Err(_) => 0,
+    let backend = create_session_backend_or_local(repo_root);
+    let mut session_ids = BTreeSet::new();
+    if let Ok(sessions) = backend.list_sessions() {
+        session_ids.extend(sessions.into_iter().map(|session| session.session_id));
     }
+    if let Ok(legacy_ids) = list_legacy_local_session_ids(repo_root.to_path_buf()) {
+        session_ids.extend(legacy_ids);
+    }
+    session_ids.len()
 }
 
 pub fn count_shadow_branches(repo_root: &Path) -> usize {
@@ -385,23 +389,22 @@ pub fn count_shadow_branches(repo_root: &Path) -> usize {
 }
 
 fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
-    let backend = LocalFileBackend::new(repo_root);
-    let sessions_dir = backend.sessions_dir();
+    let backend = create_session_backend_or_local(repo_root);
+    let mut session_ids = BTreeSet::new();
+
+    let sessions = backend.list_sessions().context("listing session states")?;
+    session_ids.extend(sessions.into_iter().map(|session| session.session_id));
+    let legacy_ids = list_legacy_local_session_ids(repo_root.to_path_buf())
+        .context("listing legacy local session states")?;
+    session_ids.extend(legacy_ids);
+
     let mut removed = 0usize;
-
-    let entries = match fs::read_dir(&sessions_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(err) => return Err(err).context("reading session state directory"),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        fs::remove_file(&path)
-            .with_context(|| format!("removing session state {}", path.display()))?;
+    for session_id in session_ids {
+        backend
+            .delete_session(&session_id)
+            .with_context(|| format!("removing session state {}", session_id))?;
+        delete_legacy_local_session_state(repo_root.to_path_buf(), &session_id)
+            .with_context(|| format!("removing legacy local session state {}", session_id))?;
         removed += 1;
     }
 

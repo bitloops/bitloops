@@ -1,10 +1,12 @@
 use anyhow::{Result, bail};
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::engine::paths;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::{
+    create_session_backend_or_local, delete_legacy_local_session_state,
+    list_legacy_local_session_ids,
+};
 use crate::engine::strategy::manual_commit::{
     delete_shadow_branches_for_cleanup, list_orphaned_session_states_for_cleanup,
     list_shadow_branches_for_cleanup,
@@ -235,11 +237,22 @@ fn delete_session_state(repo_root: Option<&Path>, session_or_path: &str) -> bool
         return false;
     }
 
-    let backend = LocalFileBackend::new(root);
-    let session_path = backend
-        .sessions_dir()
-        .join(format!("{session_or_path}.json"));
-    fs::remove_file(session_path).is_ok()
+    let backend = create_session_backend_or_local(root);
+    let exists_in_backend = backend
+        .load_session(session_or_path)
+        .map(|state| state.is_some())
+        .unwrap_or(false);
+    let exists_in_legacy = list_legacy_local_session_ids(root.to_path_buf())
+        .map(|ids| ids.iter().any(|id| id == session_or_path))
+        .unwrap_or(false);
+    if !exists_in_backend && !exists_in_legacy {
+        return false;
+    }
+
+    if backend.delete_session(session_or_path).is_err() {
+        return false;
+    }
+    delete_legacy_local_session_state(root.to_path_buf(), session_or_path).is_ok()
 }
 
 fn delete_checkpoint_metadata(_repo_root: Option<&Path>, checkpoint_id: &str) -> bool {

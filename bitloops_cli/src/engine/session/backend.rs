@@ -19,6 +19,9 @@ pub trait SessionBackend: Send + Sync {
     /// Persist session state (creates parent directories if needed).
     fn save_session(&self, state: &SessionState) -> Result<()>;
 
+    /// Delete session state (no-op if already absent).
+    fn delete_session(&self, session_id: &str) -> Result<()>;
+
     // ── Pre-prompt state (.bitloops/tmp/pre-prompt-<id>.json) ────────────
 
     /// Load pre-prompt state. Returns `None` if file doesn't exist.
@@ -69,5 +72,23 @@ mod tests {
         let sessions = backend.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "session-trait-object");
+    }
+
+    #[test]
+    fn delete_session_is_available_via_trait_object() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+
+        let backend: Box<dyn SessionBackend> = Box::new(LocalFileBackend::new(dir.path()));
+        let session = SessionState {
+            session_id: "session-delete-trait-object".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        };
+        backend.save_session(&session).unwrap();
+        assert!(backend.load_session(&session.session_id).unwrap().is_some());
+
+        backend.delete_session(&session.session_id).unwrap();
+        assert!(backend.load_session(&session.session_id).unwrap().is_none());
     }
 }

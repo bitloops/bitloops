@@ -128,6 +128,13 @@ impl SessionBackend for LocalFileBackend {
         write_json(&path, state)
     }
 
+    fn delete_session(&self, session_id: &str) -> Result<()> {
+        validate_session_id(session_id)?;
+        let path = self.session_path(session_id);
+        remove_if_exists(&path)
+            .with_context(|| format!("deleting session state: {}", path.display()))
+    }
+
     fn load_pre_prompt(&self, session_id: &str) -> Result<Option<PrePromptState>> {
         validate_session_id(session_id)?;
         let path = self.pre_prompt_path(session_id);
@@ -668,5 +675,16 @@ mod tests {
         // No sessions saved → directory won't exist.
         let sessions = backend.list_sessions().unwrap();
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn delete_session_removes_saved_state() {
+        let (_dir, backend) = setup();
+        let state = sample_state("sess-delete");
+        backend.save_session(&state).unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_some());
+
+        backend.delete_session("sess-delete").unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_none());
     }
 }

@@ -267,6 +267,18 @@ impl SessionBackend for DbSessionBackend {
         })
     }
 
+    fn delete_session(&self, session_id: &str) -> Result<()> {
+        validate_session_id(session_id)?;
+        self.sqlite.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM sessions WHERE session_id = ?1 AND repo_id = ?2",
+                params![session_id, self.repo_id.as_str()],
+            )
+            .context("deleting session state row")?;
+            Ok(())
+        })
+    }
+
     fn load_pre_prompt(&self, session_id: &str) -> Result<Option<PrePromptState>> {
         validate_session_id(session_id)?;
         self.sqlite.with_connection(|conn| {
@@ -590,5 +602,19 @@ mod tests {
 
         backend.delete_pre_task_marker("tool-new").unwrap();
         assert!(backend.load_pre_task_marker("tool-new").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_session_removes_row() {
+        let (_dir, backend) = setup("repo-delete");
+        let session = sample_session("sess-delete");
+        backend.save_session(&session).unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_some());
+
+        backend.delete_session("sess-delete").unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_none());
+
+        // idempotent delete (no-op when missing)
+        backend.delete_session("sess-delete").unwrap();
     }
 }

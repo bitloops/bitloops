@@ -93,6 +93,10 @@ impl SessionBackend for CountingBackend {
         self.inner.save_session(state)
     }
 
+    fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.inner.delete_session(session_id)
+    }
+
     fn load_pre_prompt(&self, session_id: &str) -> anyhow::Result<Option<PrePromptState>> {
         self.inner.load_pre_prompt(session_id)
     }
