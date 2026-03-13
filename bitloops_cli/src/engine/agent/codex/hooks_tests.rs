@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::*;
-use crate::test_support::process_state::with_cwd;
 
 fn init_repo(path: &Path) {
     let output = std::process::Command::new("git")
@@ -69,44 +68,42 @@ fn install_hooks_fresh_and_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let installed = install_hooks(false, false).expect("install");
-        assert_eq!(installed, 2);
-        assert!(are_hooks_installed());
+    let installed = install_hooks_at(dir.path(), false, false).expect("install");
+    assert_eq!(installed, 2);
+    assert!(are_hooks_installed_at(dir.path()));
 
-        let second = install_hooks(false, false).expect("install second");
-        assert_eq!(second, 0);
+    let second = install_hooks_at(dir.path(), false, false).expect("install second");
+    assert_eq!(second, 0);
 
-        let output = read_hooks_json(dir.path());
-        let session_commands = commands_for_hook(&output, "SessionStart");
-        let stop_commands = commands_for_hook(&output, "Stop");
+    let output = read_hooks_json(dir.path());
+    let session_commands = commands_for_hook(&output, "SessionStart");
+    let stop_commands = commands_for_hook(&output, "Stop");
 
-        assert_eq!(
-            session_commands,
-            vec!["bitloops hooks codex session-start".to_string()]
-        );
-        assert_eq!(stop_commands, vec!["bitloops hooks codex stop".to_string()]);
+    assert_eq!(
+        session_commands,
+        vec!["bitloops hooks codex session-start".to_string()]
+    );
+    assert_eq!(stop_commands, vec!["bitloops hooks codex stop".to_string()]);
 
-        let start_hook = output
-            .get("hooks")
-            .and_then(|hooks| hooks.get("SessionStart"))
-            .and_then(Value::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(|entry| entry.get("hooks"))
-            .and_then(Value::as_array)
-            .and_then(|entries| entries.first())
-            .expect("SessionStart hook command");
+    let start_hook = output
+        .get("hooks")
+        .and_then(|hooks| hooks.get("SessionStart"))
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.get("hooks"))
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.first())
+        .expect("SessionStart hook command");
 
-        assert_eq!(
-            start_hook.get("type").and_then(Value::as_str),
-            Some("command")
-        );
-        assert_eq!(
-            start_hook.get("statusMessage").and_then(Value::as_str),
-            Some("Initializing session...")
-        );
-        assert_eq!(start_hook.get("timeout").and_then(Value::as_i64), Some(10));
-    });
+    assert_eq!(
+        start_hook.get("type").and_then(Value::as_str),
+        Some("command")
+    );
+    assert_eq!(
+        start_hook.get("statusMessage").and_then(Value::as_str),
+        Some("Initializing session...")
+    );
+    assert_eq!(start_hook.get("timeout").and_then(Value::as_i64), Some(10));
 }
 
 #[test]
@@ -114,15 +111,13 @@ fn install_hooks_local_dev_writes_cargo_run_commands() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let installed = install_hooks(true, false).expect("install local-dev");
-        assert_eq!(installed, 2);
+    let installed = install_hooks_at(dir.path(), true, false).expect("install local-dev");
+    assert_eq!(installed, 2);
 
-        let output = read_hooks(dir.path());
-        assert!(output.contains("cargo run -- hooks codex session-start"));
-        assert!(output.contains("cargo run -- hooks codex stop"));
-        assert!(!output.contains("bitloops hooks codex session-start"));
-    });
+    let output = read_hooks(dir.path());
+    assert!(output.contains("cargo run -- hooks codex session-start"));
+    assert!(output.contains("cargo run -- hooks codex stop"));
+    assert!(!output.contains("bitloops hooks codex session-start"));
 }
 
 #[test]
@@ -130,16 +125,14 @@ fn install_hooks_force_reinstalls_managed_hooks() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        install_hooks(false, false).expect("initial install");
+    install_hooks_at(dir.path(), false, false).expect("initial install");
 
-        let installed = install_hooks(false, true).expect("force install");
-        assert_eq!(installed, 2);
+    let installed = install_hooks_at(dir.path(), false, true).expect("force install");
+    assert_eq!(installed, 2);
 
-        let output = read_hooks(dir.path());
-        let count = output.matches("bitloops hooks codex stop").count();
-        assert_eq!(count, 1, "force should keep one managed stop hook");
-    });
+    let output = read_hooks(dir.path());
+    let count = output.matches("bitloops hooks codex stop").count();
+    assert_eq!(count, 1, "force should keep one managed stop hook");
 }
 
 #[test]
@@ -147,12 +140,11 @@ fn install_hooks_preserves_unknown_fields() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let codex_dir = dir.path().join(".codex");
-        fs::create_dir_all(&codex_dir).expect("create .codex");
-        fs::write(
-            codex_dir.join("hooks.json"),
-            r#"
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(
+        codex_dir.join("hooks.json"),
+        r#"
 {
   "profile": "strict",
   "hooks": {
@@ -169,15 +161,14 @@ fn install_hooks_preserves_unknown_fields() {
   }
 }
 "#,
-        )
-        .expect("seed config");
+    )
+    .expect("seed config");
 
-        install_hooks(false, false).expect("install");
+    install_hooks_at(dir.path(), false, false).expect("install");
 
-        let output = read_hooks(dir.path());
-        assert!(output.contains("\"profile\": \"strict\""));
-        assert!(output.contains("echo future"));
-    });
+    let output = read_hooks(dir.path());
+    assert!(output.contains("\"profile\": \"strict\""));
+    assert!(output.contains("echo future"));
 }
 
 #[test]
@@ -185,12 +176,11 @@ fn uninstall_preserves_non_bitloops_hooks() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let codex_dir = dir.path().join(".codex");
-        fs::create_dir_all(&codex_dir).expect("create .codex");
-        fs::write(
-            codex_dir.join("hooks.json"),
-            r#"
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(
+        codex_dir.join("hooks.json"),
+        r#"
 {
   "hooks": {
     "SessionStart": [
@@ -220,15 +210,14 @@ fn uninstall_preserves_non_bitloops_hooks() {
   }
 }
 "#,
-        )
-        .expect("seed config");
+    )
+    .expect("seed config");
 
-        uninstall_hooks().expect("uninstall");
-        let output = read_hooks(dir.path());
-        assert!(output.contains("echo custom"));
-        assert!(!output.contains("bitloops hooks codex session-start"));
-        assert!(!output.contains("bitloops hooks codex stop"));
-    });
+    uninstall_hooks_at(dir.path()).expect("uninstall");
+    let output = read_hooks(dir.path());
+    assert!(output.contains("echo custom"));
+    assert!(!output.contains("bitloops hooks codex session-start"));
+    assert!(!output.contains("bitloops hooks codex stop"));
 }
 
 #[test]
@@ -236,12 +225,11 @@ fn install_hooks_migrates_local_dev_commands_without_force() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let codex_dir = dir.path().join(".codex");
-        fs::create_dir_all(&codex_dir).expect("create .codex");
-        fs::write(
-            codex_dir.join("hooks.json"),
-            r#"
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(
+        codex_dir.join("hooks.json"),
+        r#"
 {
   "hooks": {
     "SessionStart": [
@@ -267,18 +255,17 @@ fn install_hooks_migrates_local_dev_commands_without_force() {
   }
 }
 "#,
-        )
-        .expect("seed config");
+    )
+    .expect("seed config");
 
-        let installed = install_hooks(false, false).expect("install");
-        assert_eq!(installed, 2);
+    let installed = install_hooks_at(dir.path(), false, false).expect("install");
+    assert_eq!(installed, 2);
 
-        let output = read_hooks(dir.path());
-        assert!(!output.contains("cargo run -- hooks codex session-start"));
-        assert!(!output.contains("cargo run -- hooks codex stop"));
-        assert!(output.contains("bitloops hooks codex session-start"));
-        assert!(output.contains("bitloops hooks codex stop"));
-    });
+    let output = read_hooks(dir.path());
+    assert!(!output.contains("cargo run -- hooks codex session-start"));
+    assert!(!output.contains("cargo run -- hooks codex stop"));
+    assert!(output.contains("bitloops hooks codex session-start"));
+    assert!(output.contains("bitloops hooks codex stop"));
 }
 
 #[test]
@@ -286,9 +273,7 @@ fn uninstall_hooks_without_config_is_noop() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        uninstall_hooks().expect("uninstall noop");
-    });
+    uninstall_hooks_at(dir.path()).expect("uninstall noop");
 }
 
 #[test]
@@ -296,12 +281,11 @@ fn are_hooks_installed_requires_session_start_and_stop() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    with_cwd(dir.path(), || {
-        let codex_dir = dir.path().join(".codex");
-        fs::create_dir_all(&codex_dir).expect("create .codex");
-        fs::write(
-            codex_dir.join("hooks.json"),
-            r#"
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(
+        codex_dir.join("hooks.json"),
+        r#"
 {
   "hooks": {
     "SessionStart": [
@@ -317,14 +301,13 @@ fn are_hooks_installed_requires_session_start_and_stop() {
   }
 }
 "#,
-        )
-        .expect("seed config");
+    )
+    .expect("seed config");
 
-        assert!(
-            !are_hooks_installed(),
-            "missing stop hook should be treated as incomplete install"
-        );
-    });
+    assert!(
+        !are_hooks_installed_at(dir.path()),
+        "missing stop hook should be treated as incomplete install"
+    );
 }
 
 #[test]
