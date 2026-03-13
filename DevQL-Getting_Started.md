@@ -363,4 +363,4 @@ The branch adds dependency traversal on top of artefact selection.
 
 Why it matters:
 
-- Blast-radius analysis is now a first-class query path rather than an inferred or post-processed capabilit
+- Blast-radius analysis is now a first-class query path rather than an inferred or post-processed capability
