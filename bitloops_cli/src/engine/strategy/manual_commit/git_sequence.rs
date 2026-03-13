@@ -85,7 +85,7 @@ fn get_staged_files(repo_root: &Path) -> Vec<String> {
 fn calculate_session_initial_attribution(
     repo_root: &Path,
     state: &SessionState,
-    shadow_ref: &str,
+    session_tree_hash: Option<&str>,
     head_commit: &str,
     files_touched: &[String],
 ) -> Option<serde_json::Value> {
@@ -94,8 +94,8 @@ fn calculate_session_initial_attribution(
     }
 
     let head_tree = load_tree_snapshot(repo_root, head_commit)?;
-    let shadow_tree = resolve_commit(repo_root, shadow_ref)
-        .and_then(|commit| load_tree_snapshot(repo_root, &commit))
+    let session_tree = session_tree_hash
+        .and_then(|tree_hash| load_tree_snapshot_from_tree_hash(repo_root, tree_hash))
         .unwrap_or_else(|| head_tree.clone());
 
     let attribution_base = if state.attribution_base_commit.is_empty() {
@@ -111,7 +111,7 @@ fn calculate_session_initial_attribution(
 
     let attribution = calculate_attribution_with_accumulated(
         base_tree.as_ref(),
-        Some(&shadow_tree),
+        Some(&session_tree),
         Some(&head_tree),
         files_touched,
         &state
@@ -145,7 +145,18 @@ fn to_strategy_prompt_attribution(pa: &SessionPromptAttribution) -> StrategyProm
 
 fn load_tree_snapshot(repo_root: &Path, commit: &str) -> Option<TreeSnapshot> {
     let tree_ref = format!("{commit}^{{tree}}");
-    let listed = run_git(repo_root, &["ls-tree", "-r", "--name-only", &tree_ref]).ok()?;
+    load_tree_snapshot_from_treeish(repo_root, &tree_ref)
+}
+
+fn load_tree_snapshot_from_tree_hash(repo_root: &Path, tree_hash: &str) -> Option<TreeSnapshot> {
+    if tree_hash.trim().is_empty() {
+        return None;
+    }
+    load_tree_snapshot_from_treeish(repo_root, tree_hash)
+}
+
+fn load_tree_snapshot_from_treeish(repo_root: &Path, treeish: &str) -> Option<TreeSnapshot> {
+    let listed = run_git(repo_root, &["ls-tree", "-r", "--name-only", treeish]).ok()?;
 
     let mut files: Vec<(String, String)> = Vec::new();
     for file_path in listed
@@ -153,7 +164,7 @@ fn load_tree_snapshot(repo_root: &Path, commit: &str) -> Option<TreeSnapshot> {
         .map(str::trim)
         .filter(|path| !path.is_empty())
     {
-        let content = match git_show_file_bytes(repo_root, commit, file_path) {
+        let content = match git_show_file_bytes(repo_root, treeish, file_path) {
             Ok(bytes) => {
                 if bytes.contains(&0) {
                     String::new()
@@ -317,6 +328,51 @@ fn staged_files_overlap_with_content(
     false
 }
 
+fn files_with_remaining_agent_changes_from_tree(
+    repo_root: &Path,
+    session_tree_hash: Option<&str>,
+    head_commit: &str,
+    files_touched: &[String],
+    committed_files: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    if run_git(
+        repo_root,
+        &["cat-file", "-e", &format!("{head_commit}^{{tree}}")],
+    )
+    .is_err()
+    {
+        return subtract_files_by_name(files_touched, committed_files);
+    }
+    let Some(session_tree_hash) = session_tree_hash.filter(|value| !value.trim().is_empty()) else {
+        return subtract_files_by_name(files_touched, committed_files);
+    };
+
+    let mut remaining = Vec::new();
+    for file_path in files_touched {
+        if !committed_files.contains(file_path) {
+            remaining.push(file_path.clone());
+            continue;
+        }
+
+        let session_hash = match file_hash_in_tree(repo_root, session_tree_hash, file_path) {
+            Some(h) => h,
+            None => continue,
+        };
+
+        match file_hash_in_tree(repo_root, head_commit, file_path) {
+            Some(commit_hash) => {
+                if commit_hash != session_hash {
+                    remaining.push(file_path.clone());
+                }
+            }
+            None => remaining.push(file_path.clone()),
+        }
+    }
+
+    remaining
+}
+
+#[cfg(test)]
 fn files_with_remaining_agent_changes(
     repo_root: &Path,
     shadow_branch_name: &str,
@@ -525,4 +581,3 @@ fn calculate_token_usage_from_transcript(
     let usage = claude_transcript::calculate_token_usage(&parsed);
     Some(token_usage_metadata_from_runtime(&usage))
 }
-

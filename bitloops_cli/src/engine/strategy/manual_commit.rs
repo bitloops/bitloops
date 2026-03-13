@@ -1,11 +1,11 @@
-//! ManualCommitStrategy — checkpoints via shadow git branches.
+//! ManualCommitStrategy — checkpoints via temporary trees and DevQL storage.
 //!
 //! # Workflow
-//! 1. `stop` hook → `save_step()` → shadow branch commit (`refs/heads/bitloops/<head[:7]>`)
+//! 1. `stop` hook → `save_step()` → temporary checkpoint tree row in SQLite
 //! 2. `git commit` → `prepare_commit_msg()` → appends `Bitloops-Checkpoint: <12hexid>` trailer
 //! 3. `commit-msg` hook → `commit_msg()` → strips trailer if no user content (empty commit abort)
-//! 4. `post-commit` hook → `post_commit()` → condenses session onto `bitloops/checkpoints/v1`
-//! 5. `git push` → `pre_push()` → pushes `bitloops/checkpoints/v1` alongside
+//! 4. `post-commit` hook → `post_commit()` → condenses session into checkpoint rows/blobs
+//! 5. `git push` → `pre_push()` → optionally pushes legacy metadata branch if present
 //!
 //! Git operations use shell `git` + `GIT_INDEX_FILE` for temp-index tree construction.
 
@@ -31,10 +31,7 @@ use crate::engine::session::phase::{
 use crate::engine::session::state::{PromptAttribution as SessionPromptAttribution, SessionState};
 use crate::engine::session::{SessionBackend, create_session_backend_or_local};
 use crate::engine::stringutil;
-use crate::engine::trailers::{
-    AGENT_TRAILER_KEY, CHECKPOINT_TRAILER_KEY, SESSION_TRAILER_KEY, STRATEGY_TRAILER_KEY,
-    is_valid_checkpoint_id,
-};
+use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use crate::engine::transcript::commit_message;
 use crate::engine::validation::validators::{
     validate_agent_id, validate_session_id, validate_tool_use_id,

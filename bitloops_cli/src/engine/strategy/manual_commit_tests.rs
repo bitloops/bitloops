@@ -4,9 +4,7 @@ use crate::engine::db::SqliteConnectionPool;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
-use crate::test_support::process_state::{
-    git_command, with_env_var, with_env_vars, with_git_env_cleared,
-};
+use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -230,27 +228,8 @@ fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
     repo_root.join(paths::BITLOOPS_DIR).join("blobs")
 }
 
-fn with_checkpoint_storage_env<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
-    let sqlite_path = temporary_checkpoints_db_path(repo_root)
-        .to_string_lossy()
-        .to_string();
-    let blob_root = committed_checkpoint_blob_root(repo_root)
-        .to_string_lossy()
-        .to_string();
-    with_env_vars(
-        &[
-            ("BITLOOPS_DEVQL_SQLITE_PATH", Some(sqlite_path.as_str())),
-            ("BITLOOPS_DEVQL_BLOB_PROVIDER", Some("local")),
-            ("BITLOOPS_DEVQL_BLOB_LOCAL_PATH", Some(blob_root.as_str())),
-            ("BITLOOPS_DEVQL_BLOB_S3_BUCKET", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_REGION", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_ACCESS_KEY_ID", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_SECRET_ACCESS_KEY", None),
-            ("BITLOOPS_DEVQL_BLOB_GCS_BUCKET", None),
-            ("BITLOOPS_DEVQL_BLOB_GCS_CREDENTIALS_PATH", None),
-        ],
-        f,
-    )
+fn with_checkpoint_storage_env<T>(_repo_root: &Path, f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 fn query_checkpoint_session_content_hash(
@@ -268,6 +247,54 @@ fn query_checkpoint_session_content_hash(
                  WHERE checkpoint_id = ?1 AND session_id = ?2
                  LIMIT 1",
                 rusqlite::params![checkpoint_id, session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .ok()
+        .flatten()
+}
+
+fn query_checkpoint_subagent_transcript_path(
+    repo_root: &Path,
+    checkpoint_id: &str,
+    session_id: &str,
+) -> Option<String> {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
+    sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT subagent_transcript_path
+                 FROM checkpoint_sessions
+                 WHERE checkpoint_id = ?1 AND session_id = ?2
+                 LIMIT 1",
+                rusqlite::params![checkpoint_id, session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .ok()
+        .flatten()
+}
+
+fn query_checkpoint_session_content_hash_by_index(
+    repo_root: &Path,
+    checkpoint_id: &str,
+    session_index: i64,
+) -> Option<String> {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
+    sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT content_hash
+                 FROM checkpoint_sessions
+                 WHERE checkpoint_id = ?1 AND session_index = ?2
+                 LIMIT 1",
+                rusqlite::params![checkpoint_id, session_index],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -1837,40 +1864,19 @@ fn read_checkpoint_session_metadata_from_branch(
     repo_root: &Path,
     checkpoint_id: &str,
 ) -> serde_json::Value {
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    let raw = run_git(
-        repo_root,
-        &[
-            "show",
-            &format!(
-                "{}:{a}/{b}/0/{}",
-                paths::METADATA_BRANCH_NAME,
-                paths::METADATA_FILE_NAME
-            ),
-        ],
-    )
-    .unwrap();
-    serde_json::from_str(&raw).unwrap()
+    read_session_content(repo_root, checkpoint_id, 0)
+        .expect("read session content")
+        .metadata
 }
 
 fn read_checkpoint_top_metadata_from_branch(
     repo_root: &Path,
     checkpoint_id: &str,
 ) -> serde_json::Value {
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    let raw = run_git(
-        repo_root,
-        &[
-            "show",
-            &format!(
-                "{}:{a}/{b}/{}",
-                paths::METADATA_BRANCH_NAME,
-                paths::METADATA_FILE_NAME
-            ),
-        ],
-    )
-    .unwrap();
-    serde_json::from_str(&raw).unwrap()
+    let summary = read_committed(repo_root, checkpoint_id)
+        .expect("read committed summary")
+        .expect("checkpoint should exist");
+    serde_json::to_value(summary).expect("serialize summary")
 }
 
 #[test]
@@ -2109,15 +2115,9 @@ fn write_committed_agent_field() {
         metadata.get("transcript_identifier_at_start").is_none(),
         "metadata omits empty transcript_identifier_at_start"
     );
-
-    let commit_msg = run_git(
-        dir.path(),
-        &["log", "-1", "--format=%B", paths::METADATA_BRANCH_NAME],
-    )
-    .unwrap();
     assert!(
-        commit_msg.contains(&format!("Bitloops-Agent: {}", AGENT_TYPE_CLAUDE_CODE)),
-        "metadata branch commit should contain Bitloops-Agent trailer, got:\n{commit_msg}"
+        run_git(dir.path(), &["rev-parse", paths::METADATA_BRANCH_NAME]).is_err(),
+        "write_committed should not materialize metadata branch commits"
     );
 }
 
@@ -2565,21 +2565,20 @@ fn update_summary_not_found() {
 }
 
 #[test]
-fn list_committed_falls_back_to_remote() {
-    let remote = tempfile::tempdir().unwrap();
-    setup_git_repo(&remote);
+fn list_committed_reads_db_entries_without_metadata_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     let checkpoint_id = "abcdef123456";
     write_committed(
-        remote.path(),
+        dir.path(),
         WriteCommittedOptions {
             checkpoint_id: checkpoint_id.to_string(),
-            session_id: "remote-session-id".to_string(),
+            session_id: "db-session-id".to_string(),
             strategy: "manual-commit".to_string(),
             agent: "claude-code".to_string(),
-            transcript:
-                b"{\"type\":\"assistant\",\"message\":{\"content\":\"remote transcript\"}}\n"
-                    .to_vec(),
-            prompts: Some(vec!["remote prompt".to_string()]),
+            transcript: b"{\"type\":\"assistant\",\"message\":{\"content\":\"db transcript\"}}\n"
+                .to_vec(),
+            prompts: Some(vec!["db prompt".to_string()]),
             context: None,
             checkpoints_count: 1,
             files_touched: vec![],
@@ -2603,55 +2602,12 @@ fn list_committed_falls_back_to_remote() {
     )
     .unwrap();
 
-    let local_parent = tempfile::tempdir().unwrap();
-    let local_repo = local_parent.path().join("clone");
-    let clone = git_command()
-        .args([
-            "clone",
-            &remote.path().to_string_lossy(),
-            &local_repo.to_string_lossy(),
-        ])
-        .output()
-        .unwrap();
     assert!(
-        clone.status.success(),
-        "git clone failed: {}",
-        String::from_utf8_lossy(&clone.stderr)
-    );
-
-    let fetch_refspec = format!(
-        "+refs/heads/{0}:refs/remotes/origin/{0}",
-        paths::METADATA_BRANCH_NAME
-    );
-    run_git(local_repo.as_path(), &["fetch", "origin", &fetch_refspec]).unwrap();
-
-    assert!(
-        run_git(
-            local_repo.as_path(),
-            &["rev-parse", paths::METADATA_BRANCH_NAME]
-        )
-        .is_err(),
+        run_git(dir.path(), &["rev-parse", paths::METADATA_BRANCH_NAME]).is_err(),
         "local metadata branch should not exist"
     );
-    assert!(
-        run_git(
-            local_repo.as_path(),
-            &[
-                "rev-parse",
-                &format!("refs/remotes/origin/{}", paths::METADATA_BRANCH_NAME),
-            ],
-        )
-        .is_ok(),
-        "remote-tracking metadata branch should exist"
-    );
-
-    let result = list_committed(local_repo.as_path());
-    assert!(
-        result.is_ok(),
-        "expected list_committed to fall back to remote metadata branch: {result:?}"
-    );
-    let checkpoints = result.unwrap();
-    assert_eq!(checkpoints.len(), 1, "expected one remote checkpoint");
+    let checkpoints = list_committed(dir.path()).expect("list committed checkpoints");
+    assert_eq!(checkpoints.len(), 1, "expected one committed checkpoint");
     assert_eq!(checkpoints[0].checkpoint_id, checkpoint_id);
 }
 
@@ -3435,44 +3391,22 @@ fn update_committed_updates_db_blob_and_content_hash() {
 }
 
 #[test]
-fn write_committed_records_local_backend_when_s3_provider_falls_back() {
+fn write_committed_records_local_backend_in_blob_row() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "949596979899";
 
-    let sqlite_path = temporary_checkpoints_db_path(dir.path())
-        .to_string_lossy()
-        .to_string();
-    let blob_root = committed_checkpoint_blob_root(dir.path())
-        .to_string_lossy()
-        .to_string();
-
-    with_env_vars(
-        &[
-            ("BITLOOPS_DEVQL_SQLITE_PATH", Some(sqlite_path.as_str())),
-            ("BITLOOPS_DEVQL_BLOB_PROVIDER", Some("s3")),
-            ("BITLOOPS_DEVQL_BLOB_LOCAL_PATH", Some(blob_root.as_str())),
-            ("BITLOOPS_DEVQL_BLOB_S3_BUCKET", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_REGION", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_ACCESS_KEY_ID", None),
-            ("BITLOOPS_DEVQL_BLOB_S3_SECRET_ACCESS_KEY", None),
-            ("BITLOOPS_DEVQL_BLOB_GCS_BUCKET", None),
-            ("BITLOOPS_DEVQL_BLOB_GCS_CREDENTIALS_PATH", None),
-        ],
-        || {
-            let result = write_committed(
-                dir.path(),
-                default_write_committed_opts(
-                    checkpoint_id,
-                    "fallback-session",
-                    "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
-                ),
-            );
-            assert!(
-                result.is_ok(),
-                "write_committed should succeed with local fallback: {result:?}"
-            );
-        },
+    let result = write_committed(
+        dir.path(),
+        default_write_committed_opts(
+            checkpoint_id,
+            "fallback-session",
+            "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
+        ),
+    );
+    assert!(
+        result.is_ok(),
+        "write_committed should persist transcript blobs locally: {result:?}"
     );
 
     with_checkpoint_storage_env(dir.path(), || {
@@ -4617,28 +4551,23 @@ fn write_committed_subagent_transcript_jsonl_fallback() {
         "write_committed should keep subagent transcript and redact via fallback: {result:?}"
     );
 
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    let agent_path = format!("{a}/{b}/tasks/toolu_test123/agent-agent1.jsonl");
-    let content = run_git(
+    let content = read_session_content(dir.path(), checkpoint_id, 0).unwrap();
+    assert!(
+        content.metadata["is_task"].as_bool().unwrap_or(false),
+        "task session metadata should be persisted"
+    );
+    assert_eq!(content.metadata["tool_use_id"], "toolu_test123");
+    assert!(
+        run_git(dir.path(), &["rev-parse", paths::METADATA_BRANCH_NAME]).is_err(),
+        "task writes should not create metadata-branch artefacts"
+    );
+    let stored_path = query_checkpoint_subagent_transcript_path(
         dir.path(),
-        &[
-            "show",
-            &format!("{}:{agent_path}", paths::METADATA_BRANCH_NAME),
-        ],
+        checkpoint_id,
+        "jsonl-fallback-session",
     )
-    .unwrap();
-    assert!(
-        !content.is_empty(),
-        "subagent transcript should not be empty"
-    );
-    assert!(
-        !content.contains(HIGH_ENTROPY_SECRET),
-        "subagent transcript should not contain secret after redaction"
-    );
-    assert!(
-        content.contains("REDACTED"),
-        "subagent transcript should contain REDACTED placeholder"
-    );
+    .expect("subagent transcript path should be stored");
+    assert_eq!(stored_path, transcript_path.to_string_lossy());
 }
 
 #[test]
@@ -4855,18 +4784,30 @@ fn read_update_fixture_file(
     session_index: usize,
     file_name: &str,
 ) -> String {
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    run_git(
-        dir.path(),
-        &[
-            "show",
-            &format!(
-                "refs/heads/{}:{a}/{b}/{session_index}/{file_name}",
-                paths::METADATA_BRANCH_NAME
-            ),
-        ],
-    )
-    .unwrap()
+    match file_name {
+        paths::TRANSCRIPT_FILE_NAME => {
+            read_session_content(dir.path(), checkpoint_id, session_index)
+                .expect("read session content")
+                .transcript
+        }
+        paths::PROMPT_FILE_NAME => {
+            read_session_content(dir.path(), checkpoint_id, session_index)
+                .expect("read session content")
+                .prompts
+        }
+        paths::CONTEXT_FILE_NAME => {
+            read_session_content(dir.path(), checkpoint_id, session_index)
+                .expect("read session content")
+                .context
+        }
+        paths::CONTENT_HASH_FILE_NAME => query_checkpoint_session_content_hash_by_index(
+            dir.path(),
+            checkpoint_id,
+            session_index as i64,
+        )
+        .expect("session content hash should exist"),
+        _ => panic!("unsupported fixture file read: {file_name}"),
+    }
 }
 
 #[test]
@@ -5161,105 +5102,29 @@ fn state_turn_checkpoint_ids_json() {
 }
 
 #[test]
-fn update_committed_uses_correct_author() {
-    struct Case<'a> {
-        name: &'a str,
-        local_name: Option<&'a str>,
-        local_email: Option<&'a str>,
-        global_name: Option<&'a str>,
-        global_email: Option<&'a str>,
-        want_name: &'a str,
-        want_email: &'a str,
-    }
-    let cases = [
-        Case {
-            name: "global config only",
-            local_name: None,
-            local_email: None,
-            global_name: Some("Global User"),
-            global_email: Some("global@example.com"),
-            want_name: "Global User",
-            want_email: "global@example.com",
+fn update_committed_preserves_existing_author_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let cp = setup_update_committed_fixture(&dir);
+
+    let update = update_committed(
+        dir.path(),
+        UpdateCommittedOptions {
+            checkpoint_id: cp.clone(),
+            session_id: "session-001".to_string(),
+            transcript: Some(b"full transcript\n".to_vec()),
+            prompts: None,
+            context: None,
+            agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
         },
-        Case {
-            name: "local config takes precedence",
-            local_name: Some("Local User"),
-            local_email: Some("local@example.com"),
-            global_name: Some("Global User"),
-            global_email: Some("global@example.com"),
-            want_name: "Local User",
-            want_email: "local@example.com",
-        },
-    ];
+    );
+    assert!(
+        update.is_ok(),
+        "expected update_committed to succeed: {update:?}"
+    );
 
-    for case in cases {
-        let home = tempfile::tempdir().unwrap();
-        with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
-            let mut global_cfg = String::from("[user]\n");
-            if let Some(name) = case.global_name {
-                global_cfg.push_str(&format!("\tname = {name}\n"));
-            }
-            if let Some(email) = case.global_email {
-                global_cfg.push_str(&format!("\temail = {email}\n"));
-            }
-            fs::write(home.path().join(".gitconfig"), global_cfg).unwrap();
-
-            let dir = tempfile::tempdir().unwrap();
-            setup_git_repo(&dir);
-            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
-            if let Some(name) = case.local_name {
-                run_git(dir.path(), &["config", "user.name", name]).unwrap();
-            }
-            if let Some(email) = case.local_email {
-                run_git(dir.path(), &["config", "user.email", email]).unwrap();
-            }
-
-            let cp = "a1b2c3d4e5f6";
-            setup_update_committed_fixture_with_sessions(&dir, cp, &["session-001"]);
-
-            let result = update_committed(
-                dir.path(),
-                UpdateCommittedOptions {
-                    checkpoint_id: cp.to_string(),
-                    session_id: "session-001".to_string(),
-                    transcript: Some(b"full transcript\n".to_vec()),
-                    prompts: None,
-                    context: None,
-                    agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
-                },
-            );
-            assert!(
-                result.is_ok(),
-                "expected update_committed to succeed for case '{}': {result:?}",
-                case.name
-            );
-
-            let author_line = run_git(
-                dir.path(),
-                &[
-                    "log",
-                    "-1",
-                    "--format=%an|%ae",
-                    &format!("refs/heads/{}", paths::METADATA_BRANCH_NAME),
-                ],
-            )
-            .unwrap();
-            let mut parts = author_line.split('|');
-            let got_name = parts.next().unwrap_or_default().trim();
-            let got_email = parts.next().unwrap_or_default().trim();
-            assert_eq!(
-                got_name, case.want_name,
-                "name mismatch for case '{}'",
-                case.name
-            );
-            assert_eq!(
-                got_email, case.want_email,
-                "email mismatch for case '{}'",
-                case.name
-            );
-        });
-    }
+    let author = get_checkpoint_author(dir.path(), &cp).expect("read checkpoint author");
+    assert_eq!(author.name, "Test");
+    assert_eq!(author.email, "test@test.com");
 }
 
 #[test]
@@ -5612,11 +5477,15 @@ fn post_commit_creates_checkpoint_branch() {
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
 
-    // bitloops/checkpoints/v1 should now exist.
+    let summary = read_committed(dir.path(), "abc123456789")
+        .expect("read committed checkpoint")
+        .expect("checkpoint should exist after post_commit");
+    assert_eq!(summary.checkpoint_id, "abc123456789");
+    assert_eq!(summary.strategy, "manual-commit");
     let result = run_git(dir.path(), &["rev-parse", "bitloops/checkpoints/v1"]);
     assert!(
-        result.is_ok(),
-        "bitloops/checkpoints/v1 should exist after post_commit"
+        result.is_err(),
+        "post_commit should no longer materialize metadata branch commits"
     );
 }
 
@@ -5658,35 +5527,16 @@ fn post_commit_creates_full_checkpoint_structure() {
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
 
-    // Check that both metadata files exist in the checkpoints branch tree.
-    let top_meta = run_git(
-        dir.path(),
-        &[
-            "show",
-            "bitloops/checkpoints/v1:ab/1234567890/metadata.json",
-        ],
-    );
-    assert!(
-        top_meta.is_ok(),
-        "top metadata.json should exist: {top_meta:?}"
-    );
+    let summary = read_committed(dir.path(), checkpoint_id)
+        .expect("read committed checkpoint")
+        .expect("checkpoint should exist");
+    assert_eq!(summary.checkpoint_id, checkpoint_id);
+    assert_eq!(summary.strategy, "manual-commit");
+    assert_eq!(summary.sessions.len(), 1);
 
-    let sess_meta = run_git(
-        dir.path(),
-        &[
-            "show",
-            "bitloops/checkpoints/v1:ab/1234567890/0/metadata.json",
-        ],
-    );
-    assert!(
-        sess_meta.is_ok(),
-        "per-session metadata.json should exist: {sess_meta:?}"
-    );
-
-    // Verify top metadata content.
-    let top_json: serde_json::Value = serde_json::from_str(&top_meta.unwrap()).unwrap();
-    assert_eq!(top_json["checkpoint_id"], checkpoint_id);
-    assert_eq!(top_json["strategy"], "manual-commit");
+    let session = read_session_content(dir.path(), checkpoint_id, 0).expect("read session");
+    assert_eq!(session.metadata["checkpoint_id"], checkpoint_id);
+    assert_eq!(session.metadata["strategy"], "manual-commit");
 }
 
 #[test]
@@ -5981,8 +5831,14 @@ fn post_commit_active_session_condenses_immediately() {
     );
     assert_eq!(loaded.step_count, 0, "active session should be condensed");
     assert!(
-        run_git(dir.path(), &["rev-parse", "bitloops/checkpoints/v1"]).is_ok(),
-        "condensation should materialize metadata branch"
+        read_committed(dir.path(), "a1b2c3d4e5f6")
+            .unwrap()
+            .is_some(),
+        "condensation should persist committed checkpoint content"
+    );
+    assert!(
+        run_git(dir.path(), &["rev-parse", "bitloops/checkpoints/v1"]).is_err(),
+        "condensation should not materialize metadata branch"
     );
 }
 
@@ -6149,19 +6005,9 @@ fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
         "turn checkpoint IDs should be cleared even if one update fails"
     );
 
-    let (a, b) = checkpoint_dir_parts("0aaabbbccdde");
-    let transcript_tree_path = format!("{a}/{b}/0/{}", paths::TRANSCRIPT_FILE_NAME);
-    let committed = run_git(
-        dir.path(),
-        &[
-            "show",
-            &format!(
-                "refs/heads/{}:{transcript_tree_path}",
-                paths::METADATA_BRANCH_NAME
-            ),
-        ],
-    )
-    .unwrap();
+    let committed = read_session_content(dir.path(), "0aaabbbccdde", 0)
+        .expect("read checkpoint session after turn-end")
+        .transcript;
     assert!(
         committed.contains("latest answer"),
         "turn-end should replace provisional transcript with full transcript"

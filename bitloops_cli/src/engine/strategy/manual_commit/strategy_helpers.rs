@@ -129,12 +129,8 @@ impl ManualCommitStrategy {
         }
 
         let transcript_text = String::from_utf8_lossy(&full_transcript).to_string();
-        let mut prompts = extract_user_prompts_from_jsonl(&transcript_text);
-        let redacted_transcript = redact_jsonl_bytes_with_fallback(&full_transcript);
-        for prompt in &mut prompts {
-            *prompt = redact_text(prompt);
-        }
-        let context = redact_bytes(generate_context_from_prompts(&prompts).as_bytes());
+        let prompts = extract_user_prompts_from_jsonl(&transcript_text);
+        let context = generate_context_from_prompts(&prompts).into_bytes();
 
         for checkpoint_id in state.turn_checkpoint_ids.clone() {
             let _ = update_committed(
@@ -142,7 +138,7 @@ impl ManualCommitStrategy {
                 UpdateCommittedOptions {
                     checkpoint_id,
                     session_id: state.session_id.clone(),
-                    transcript: Some(redacted_transcript.clone()),
+                    transcript: Some(full_transcript.clone()),
                     prompts: Some(prompts.clone()),
                     context: Some(context.clone()),
                     agent: state.agent_type.clone(),
@@ -177,7 +173,7 @@ impl ManualCommitStrategy {
         Ok(())
     }
 
-    /// Condenses session work into a checkpoint on `bitloops/checkpoints/v1`.
+    /// Condenses session work into committed checkpoint rows/blobs.
     ///
     fn condense_session(
         &self,
@@ -200,18 +196,25 @@ impl ManualCommitStrategy {
             fallback.sort();
             fallback
         };
-        let shadow_ref = shadow_branch_ref(&state.base_commit, &state.worktree_id);
+        let latest_session_tree_hash =
+            latest_temporary_checkpoint_tree_hash(&self.repo_root, &state.session_id);
         let initial_attribution = calculate_session_initial_attribution(
             &self.repo_root,
             state,
-            &shadow_ref,
+            latest_session_tree_hash.as_deref(),
             new_head,
             &committed_touched,
         );
-        let transcript_content =
-            extract_transcript_from_shadow(&self.repo_root, &shadow_ref, &state.session_id)
-                .or_else(|| read_transcript_from_disk(&self.repo_root, &state.session_id))
-                .unwrap_or_default();
+        let transcript_content = read_transcript_from_disk(&self.repo_root, &state.session_id)
+            .or_else(|| {
+                if state.transcript_path.trim().is_empty() {
+                    return None;
+                }
+                fs::read_to_string(&state.transcript_path)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default();
         let total_transcript_lines = transcript_content.lines().count() as i64;
         let prompts = extract_user_prompts_from_jsonl(&transcript_content);
         let context = generate_context_from_prompts(&prompts).into_bytes();
@@ -302,11 +305,9 @@ impl ManualCommitStrategy {
             },
         )?;
 
-        let shadow_branch =
-            expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-        let remaining_files = files_with_remaining_agent_changes(
+        let remaining_files = files_with_remaining_agent_changes_from_tree(
             &self.repo_root,
-            &shadow_branch,
+            latest_session_tree_hash.as_deref(),
             new_head,
             &state.files_touched,
             &committed_files,

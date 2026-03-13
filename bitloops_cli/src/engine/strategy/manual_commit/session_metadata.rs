@@ -91,25 +91,6 @@ fn read_transcript_with_retry(transcript_path: &str) -> Option<String> {
     }
 }
 
-/// Reads transcript content stored in the shadow branch tree.
-///
-/// Uses `git show <ref>:.bitloops/metadata/<session_id>/full.jsonl`.
-///
-fn extract_transcript_from_shadow(
-    repo_root: &Path,
-    shadow_ref: &str,
-    session_id: &str,
-) -> Option<String> {
-    let path = format!(
-        "{}/{}",
-        paths::session_metadata_dir_from_session_id(session_id),
-        paths::TRANSCRIPT_FILE_NAME
-    );
-    run_git(repo_root, &["show", &format!("{shadow_ref}:{path}")])
-        .ok()
-        .filter(|s| !s.is_empty())
-}
-
 /// Falls back to reading the transcript from the metadata directory on disk.
 fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<String> {
     let path = repo_root
@@ -301,4 +282,3 @@ fn add_checkpoint_trailer(message: &str, id: &str) -> String {
     let trimmed = message.trim_end_matches('\n');
     format!("{trimmed}\n\n{trailer}\n")
 }
-

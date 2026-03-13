@@ -36,62 +36,6 @@ fn token_usage_from_options(
     })
 }
 
-fn token_usage_from_metadata_value(meta_value: &serde_json::Value) -> Option<TokenUsageMetadata> {
-    if let Some(raw_token_usage) = meta_value.get("token_usage")
-        && !raw_token_usage.is_null()
-    {
-        if let Ok(parsed) = serde_json::from_value::<TokenUsageMetadata>(raw_token_usage.clone()) {
-            return Some(parsed);
-        }
-        return Some(TokenUsageMetadata {
-            input_tokens: raw_token_usage
-                .get("input_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            cache_creation_tokens: raw_token_usage
-                .get("cache_creation_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            cache_read_tokens: raw_token_usage
-                .get("cache_read_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            output_tokens: raw_token_usage
-                .get("output_tokens")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            api_call_count: raw_token_usage
-                .get("api_call_count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0),
-            subagent_tokens: None,
-        });
-    }
-
-    let has_legacy_fields = meta_value.get("token_usage_input").is_some()
-        || meta_value.get("token_usage_output").is_some()
-        || meta_value.get("token_usage_api_call_count").is_some();
-    if !has_legacy_fields {
-        return None;
-    }
-
-    Some(TokenUsageMetadata {
-        input_tokens: meta_value
-            .get("token_usage_input")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-        output_tokens: meta_value
-            .get("token_usage_output")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-        api_call_count: meta_value
-            .get("token_usage_api_call_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-        ..Default::default()
-    })
-}
-
 fn aggregate_token_usage(
     existing: Option<TokenUsageMetadata>,
     incoming: Option<TokenUsageMetadata>,
@@ -115,8 +59,7 @@ fn aggregate_token_usage(
     }
 }
 
-/// Top-level checkpoint metadata written to `<cp[:2]>/<cp[2:]>/metadata.json`.
-///
+#[cfg(test)]
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct CheckpointTopMetadata {
     #[serde(default, skip_serializing_if = "String::is_empty")]
