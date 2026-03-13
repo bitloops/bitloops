@@ -23,13 +23,13 @@ use crate::engine::agent::{
     canonical_agent_key,
 };
 use crate::engine::paths;
-use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::{
     Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
     transition_with_context,
 };
 use crate::engine::session::state::{PromptAttribution as SessionPromptAttribution, SessionState};
+use crate::engine::session::{SessionBackend, create_session_backend_or_local};
 use crate::engine::stringutil;
 use crate::engine::trailers::{
     AGENT_TRAILER_KEY, CHECKPOINT_TRAILER_KEY, SESSION_TRAILER_KEY, STRATEGY_TRAILER_KEY,
@@ -60,7 +60,7 @@ pub struct ManualCommitStrategy {
 impl ManualCommitStrategy {
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         let root = repo_root.into();
-        let backend = Box::new(LocalFileBackend::new(&root));
+        let backend = create_session_backend_or_local(&root);
         Self::with_backend(root, backend)
     }
 
