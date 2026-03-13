@@ -22,6 +22,14 @@ const ENV_CLICKHOUSE_URL: &str = "BITLOOPS_DEVQL_CH_URL";
 const ENV_CLICKHOUSE_USER: &str = "BITLOOPS_DEVQL_CH_USER";
 const ENV_CLICKHOUSE_PASSWORD: &str = "BITLOOPS_DEVQL_CH_PASSWORD";
 const ENV_CLICKHOUSE_DATABASE: &str = "BITLOOPS_DEVQL_CH_DATABASE";
+const ENV_BLOB_STORAGE_PROVIDER: &str = "BITLOOPS_DEVQL_BLOB_PROVIDER";
+const ENV_BLOB_LOCAL_PATH: &str = "BITLOOPS_DEVQL_BLOB_LOCAL_PATH";
+const ENV_BLOB_S3_BUCKET: &str = "BITLOOPS_DEVQL_BLOB_S3_BUCKET";
+const ENV_BLOB_S3_REGION: &str = "BITLOOPS_DEVQL_BLOB_S3_REGION";
+const ENV_BLOB_S3_ACCESS_KEY_ID: &str = "BITLOOPS_DEVQL_BLOB_S3_ACCESS_KEY_ID";
+const ENV_BLOB_S3_SECRET_ACCESS_KEY: &str = "BITLOOPS_DEVQL_BLOB_S3_SECRET_ACCESS_KEY";
+const ENV_BLOB_GCS_BUCKET: &str = "BITLOOPS_DEVQL_BLOB_GCS_BUCKET";
+const ENV_BLOB_GCS_CREDENTIALS_PATH: &str = "BITLOOPS_DEVQL_BLOB_GCS_CREDENTIALS_PATH";
 const DASHBOARD_CONFIG_KEY: &str = "dashboard";
 const DASHBOARD_USE_BITLOOPS_LOCAL_KEY: &str = "use_bitloops_local";
 
@@ -55,10 +63,18 @@ impl EventsProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobStorageProvider {
+    Local,
+    S3,
+    Gcs,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevqlBackendConfig {
     pub relational: RelationalBackendConfig,
     pub events: EventsBackendConfig,
+    pub blobs: BlobStorageConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +127,18 @@ impl EventsBackendConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobStorageConfig {
+    pub provider: BlobStorageProvider,
+    pub local_path: Option<String>,
+    pub s3_bucket: Option<String>,
+    pub s3_region: Option<String>,
+    pub s3_access_key_id: Option<String>,
+    pub s3_secret_access_key: Option<String>,
+    pub gcs_bucket: Option<String>,
+    pub gcs_credentials_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DevqlFileConfig {
     pub(crate) relational_provider: Option<String>,
@@ -122,6 +150,14 @@ pub struct DevqlFileConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: Option<String>,
+    pub(crate) blob_provider: Option<String>,
+    pub(crate) blob_local_path: Option<String>,
+    pub(crate) blob_s3_bucket: Option<String>,
+    pub(crate) blob_s3_region: Option<String>,
+    pub(crate) blob_s3_access_key_id: Option<String>,
+    pub(crate) blob_s3_secret_access_key: Option<String>,
+    pub(crate) blob_gcs_bucket: Option<String>,
+    pub(crate) blob_gcs_credentials_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -161,6 +197,7 @@ impl DevqlFileConfig {
 
         let relational = root.get("relational").and_then(Value::as_object);
         let events = root.get("events").and_then(Value::as_object);
+        let blobs = root.get("blobs").and_then(Value::as_object);
 
         Self {
             relational_provider: read_any_string_opt(
@@ -208,6 +245,46 @@ impl DevqlFileConfig {
                         "ch_database",
                         ENV_CLICKHOUSE_DATABASE,
                     ],
+                )
+            }),
+            blob_provider: read_any_string_opt(
+                blobs,
+                &["provider", "blob_provider", ENV_BLOB_STORAGE_PROVIDER],
+            )
+            .or_else(|| read_any_string(root, &["blob_provider", ENV_BLOB_STORAGE_PROVIDER])),
+            blob_local_path: read_any_string_opt(blobs, &["local_path", ENV_BLOB_LOCAL_PATH])
+                .or_else(|| read_any_string(root, &["blob_local_path", ENV_BLOB_LOCAL_PATH])),
+            blob_s3_bucket: read_any_string_opt(blobs, &["s3_bucket", ENV_BLOB_S3_BUCKET])
+                .or_else(|| read_any_string(root, &["blob_s3_bucket", ENV_BLOB_S3_BUCKET])),
+            blob_s3_region: read_any_string_opt(blobs, &["s3_region", ENV_BLOB_S3_REGION])
+                .or_else(|| read_any_string(root, &["blob_s3_region", ENV_BLOB_S3_REGION])),
+            blob_s3_access_key_id: read_any_string_opt(
+                blobs,
+                &["s3_access_key_id", ENV_BLOB_S3_ACCESS_KEY_ID],
+            )
+            .or_else(|| {
+                read_any_string(root, &["blob_s3_access_key_id", ENV_BLOB_S3_ACCESS_KEY_ID])
+            }),
+            blob_s3_secret_access_key: read_any_string_opt(
+                blobs,
+                &["s3_secret_access_key", ENV_BLOB_S3_SECRET_ACCESS_KEY],
+            )
+            .or_else(|| {
+                read_any_string(
+                    root,
+                    &["blob_s3_secret_access_key", ENV_BLOB_S3_SECRET_ACCESS_KEY],
+                )
+            }),
+            blob_gcs_bucket: read_any_string_opt(blobs, &["gcs_bucket", ENV_BLOB_GCS_BUCKET])
+                .or_else(|| read_any_string(root, &["blob_gcs_bucket", ENV_BLOB_GCS_BUCKET])),
+            blob_gcs_credentials_path: read_any_string_opt(
+                blobs,
+                &["gcs_credentials_path", ENV_BLOB_GCS_CREDENTIALS_PATH],
+            )
+            .or_else(|| {
+                read_any_string(
+                    root,
+                    &["blob_gcs_credentials_path", ENV_BLOB_GCS_CREDENTIALS_PATH],
                 )
             }),
         }
@@ -293,6 +370,22 @@ where
         read_non_empty_env(&env_lookup, ENV_CLICKHOUSE_PASSWORD).or(file_cfg.clickhouse_password);
     let clickhouse_database =
         read_non_empty_env(&env_lookup, ENV_CLICKHOUSE_DATABASE).or(file_cfg.clickhouse_database);
+    let blob_provider_raw =
+        read_non_empty_env(&env_lookup, ENV_BLOB_STORAGE_PROVIDER).or(file_cfg.blob_provider);
+    let blob_local_path =
+        read_non_empty_env(&env_lookup, ENV_BLOB_LOCAL_PATH).or(file_cfg.blob_local_path);
+    let blob_s3_bucket =
+        read_non_empty_env(&env_lookup, ENV_BLOB_S3_BUCKET).or(file_cfg.blob_s3_bucket);
+    let blob_s3_region =
+        read_non_empty_env(&env_lookup, ENV_BLOB_S3_REGION).or(file_cfg.blob_s3_region);
+    let blob_s3_access_key_id = read_non_empty_env(&env_lookup, ENV_BLOB_S3_ACCESS_KEY_ID)
+        .or(file_cfg.blob_s3_access_key_id);
+    let blob_s3_secret_access_key = read_non_empty_env(&env_lookup, ENV_BLOB_S3_SECRET_ACCESS_KEY)
+        .or(file_cfg.blob_s3_secret_access_key);
+    let blob_gcs_bucket =
+        read_non_empty_env(&env_lookup, ENV_BLOB_GCS_BUCKET).or(file_cfg.blob_gcs_bucket);
+    let blob_gcs_credentials_path = read_non_empty_env(&env_lookup, ENV_BLOB_GCS_CREDENTIALS_PATH)
+        .or(file_cfg.blob_gcs_credentials_path);
 
     let relational_provider = if let Some(raw) = env_rel_provider.or(file_cfg.relational_provider) {
         parse_relational_provider(&raw)?
@@ -313,6 +406,15 @@ where
     } else {
         EventsProvider::DuckDb
     };
+    let blob_provider = if let Some(raw) = blob_provider_raw {
+        parse_blob_storage_provider(&raw)?
+    } else if blob_s3_bucket.is_some() {
+        BlobStorageProvider::S3
+    } else if blob_gcs_bucket.is_some() {
+        BlobStorageProvider::Gcs
+    } else {
+        BlobStorageProvider::Local
+    };
 
     Ok(DevqlBackendConfig {
         relational: RelationalBackendConfig {
@@ -327,6 +429,16 @@ where
             clickhouse_user,
             clickhouse_password,
             clickhouse_database,
+        },
+        blobs: BlobStorageConfig {
+            provider: blob_provider,
+            local_path: blob_local_path,
+            s3_bucket: blob_s3_bucket,
+            s3_region: blob_s3_region,
+            s3_access_key_id: blob_s3_access_key_id,
+            s3_secret_access_key: blob_s3_secret_access_key,
+            gcs_bucket: blob_gcs_bucket,
+            gcs_credentials_path: blob_gcs_credentials_path,
         },
     })
 }
@@ -465,6 +577,17 @@ fn parse_events_provider(raw: &str) -> Result<EventsProvider> {
     }
 }
 
+fn parse_blob_storage_provider(raw: &str) -> Result<BlobStorageProvider> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "local" => Ok(BlobStorageProvider::Local),
+        "s3" => Ok(BlobStorageProvider::S3),
+        "gcs" => Ok(BlobStorageProvider::Gcs),
+        other => {
+            bail!("unsupported devql blob storage provider `{other}` (supported: local, s3, gcs)")
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn resolve_devql_backend_config_for_tests(
     file_cfg: DevqlFileConfig,
@@ -492,6 +615,10 @@ mod tests {
 
         assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
         assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
+        assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
+        assert_eq!(cfg.blobs.local_path, None);
+        assert_eq!(cfg.blobs.s3_bucket, None);
+        assert_eq!(cfg.blobs.gcs_bucket, None);
     }
 
     #[test]
@@ -531,6 +658,11 @@ mod tests {
                     "provider": "duckdb",
                     "duckdb_path": "/tmp/from-file.duckdb"
                 },
+                "blobs": {
+                    "provider": "gcs",
+                    "gcs_bucket": "file-gcs-bucket",
+                    "gcs_credentials_path": "/tmp/file-gcs-creds.json"
+                },
                 "postgres_dsn": "postgres://file-only",
                 "clickhouse_url": "http://file-clickhouse:8123"
             }
@@ -542,6 +674,11 @@ mod tests {
             (ENV_POSTGRES_DSN, "postgres://env-only"),
             (ENV_CLICKHOUSE_URL, "http://env-clickhouse:8123"),
             (ENV_CLICKHOUSE_DATABASE, "analytics"),
+            (ENV_BLOB_STORAGE_PROVIDER, "s3"),
+            (ENV_BLOB_S3_BUCKET, "env-s3-bucket"),
+            (ENV_BLOB_S3_REGION, "eu-west-1"),
+            (ENV_BLOB_S3_ACCESS_KEY_ID, "env-access-key"),
+            (ENV_BLOB_S3_SECRET_ACCESS_KEY, "env-secret-key"),
         ];
 
         let cfg = resolve_devql_backend_config_for_tests(file_cfg, &env).expect("cfg");
@@ -556,6 +693,17 @@ mod tests {
             Some("http://env-clickhouse:8123")
         );
         assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("analytics"));
+        assert_eq!(cfg.blobs.provider, BlobStorageProvider::S3);
+        assert_eq!(cfg.blobs.s3_bucket.as_deref(), Some("env-s3-bucket"));
+        assert_eq!(cfg.blobs.s3_region.as_deref(), Some("eu-west-1"));
+        assert_eq!(
+            cfg.blobs.s3_access_key_id.as_deref(),
+            Some("env-access-key")
+        );
+        assert_eq!(
+            cfg.blobs.s3_secret_access_key.as_deref(),
+            Some("env-secret-key")
+        );
     }
 
     #[test]

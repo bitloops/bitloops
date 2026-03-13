@@ -1,5 +1,6 @@
 use super::*;
 use crate::commands::devql::DevqlCommand;
+use crate::devql_config::{BlobStorageConfig, BlobStorageProvider};
 use crate::test_support::process_state::git_command;
 use clap::Parser;
 use serde_json::json;
@@ -46,6 +47,16 @@ fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> Devq
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: None,
+        },
+        blobs: BlobStorageConfig {
+            provider: BlobStorageProvider::Local,
+            local_path: None,
+            s3_bucket: None,
+            s3_region: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            gcs_bucket: None,
+            gcs_credentials_path: None,
         },
     }
 }
@@ -2996,4 +3007,28 @@ VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"ex
         count, 2,
         "expected alias-distinct export edges to survive dedup"
     );
+}
+
+#[test]
+fn postgres_schema_sql_includes_checkpoint_migration_tables() {
+    let schema = format!(
+        "{}\n{}",
+        postgres_schema_sql(),
+        checkpoint_schema_sql_postgres()
+    );
+    for table in [
+        "sessions",
+        "temporary_checkpoints",
+        "checkpoints",
+        "checkpoint_sessions",
+        "commit_checkpoints",
+        "pre_prompt_states",
+        "pre_task_markers",
+        "checkpoint_blobs",
+    ] {
+        assert!(
+            schema.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+            "expected checkpoint table `{table}` in postgres schema"
+        );
+    }
 }
