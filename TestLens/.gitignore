@@ -1,0 +1,4 @@
+/target
+node_modules
+/testlens.db
+/test-results.json
