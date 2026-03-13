@@ -11,6 +11,8 @@
   <p>
     <a href="https://bitloops.com">Website</a>
     ·
+    <a href="https://github.com/bitloops/bitloops">GitHub</a>
+    ·
     <a href="#why-bitloops">Why Bitloops</a>
     ·
     <a href="#installation">Installation</a>
@@ -21,14 +23,32 @@
     ·
     <a href="#faqs">FAQs</a>
   </p>
-  [![GitHub forks](https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000)](https://GitHub.com/bitloops/bitloops/network/)
-  [![GitHub stars](https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/bitloops/bitloops/stargazers/)
-  [![GitHub commits](https://badgen.net/github/commits/bitloops/bitloops)](https://GitHub.com/bitloops/bitloops/commit/)
-  [![GitHub tag](https://badgen.net/github/tag/bitloops/bitloops)](https://github.com/bitloops/bitloops/tags/)
-  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total.svg)](https://github.com/bitloops/bitloops/releases)
-  [![License](https://img.shields.io/github/license/bitloops/bitloops?colorA=00C586&colorB=000000)](https://github.com/bitloops/bitloops/blob/main/LICENSE)
-  [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?colorA=00C586&colorB=000000)](https://github.com/bitloops/bitloops/graphs/contributors)
-  <a href="https://github.com/sponsors/bitloops"><img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor"></a>
+  <p style="margin:4px 0;">
+    <a href="https://github.com/bitloops/bitloops/network/">
+      <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000" alt="GitHub forks" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/stargazers/">
+      <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000" alt="GitHub stars" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/commit/">
+      <img src="https://badgen.net/github/commits/bitloops/bitloops" alt="GitHub commits" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/tags/">
+      <img src="https://badgen.net/github/tag/bitloops/bitloops" alt="GitHub tag" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/releases">
+      <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg" alt="Downloads" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/bitloops/bitloops?colorA=00C586&colorB=000000" alt="License" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
+      <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=00C586&colorB=000000" alt="Contributors" />
+    </a>
+    <a href="https://github.com/sponsors/bitloops">
+      <img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor" />
+    </a>
+  </p>
   <p>
     <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-black" />
     <img alt="Open source" src="https://img.shields.io/badge/Open%20Source-Yes-black" />
