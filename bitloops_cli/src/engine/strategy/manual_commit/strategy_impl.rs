@@ -421,35 +421,29 @@ impl Strategy for ManualCommitStrategy {
         let Some(head) = try_head_hash(&self.repo_root)? else {
             return Ok(());
         };
-        // Extract checkpoint ID from HEAD commit.
-        let checkpoint_id = match get_checkpoint_id_from_head(&self.repo_root)? {
-            Some(id) => id,
-            None => {
-                // No trailer — just update base_commit for active sessions.
-                self.update_base_commit_for_active_sessions()?;
-                return Ok(());
-            }
-        };
+        if commit_has_checkpoint_mapping(&self.repo_root, &head)? {
+            return Ok(());
+        }
 
         let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
         let sessions = self.backend.list_sessions().unwrap_or_default();
-        let mut shadow_branches_to_delete: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-        let mut preserved_shadow_branches: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let checkpoint_id = generate_checkpoint_id();
+        let mut condensed_any_session = false;
 
         for mut state in sessions {
-            let shadow_branch_before =
-                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-            let mut condensed = false;
-            let has_pending = state.phase.is_active()
-                || state.phase == SessionPhase::Ended
+            let has_pending = state.phase == SessionPhase::Ended
                 || !state.files_touched.is_empty()
                 || state.step_count > 0;
             if !has_pending {
+                if state.phase.is_active() && state.base_commit != head {
+                    state.base_commit = head.clone();
+                    let _ = self.backend.save_session(&state);
+                }
                 continue;
             }
 
+            let shadow_branch_before =
+                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
             let transition_actions =
                 self.apply_git_commit_transition(&mut state, is_rebase_in_progress);
             let should_condense = transition_actions
@@ -496,7 +490,7 @@ impl Strategy for ManualCommitStrategy {
                     let _ = self.backend.save_session(&state);
                     continue;
                 }
-                condensed = true;
+                condensed_any_session = true;
 
                 // ACTIVE sessions track all turn checkpoint IDs for stop-time finalization.
                 if state.phase.is_active() {
@@ -509,27 +503,11 @@ impl Strategy for ManualCommitStrategy {
                 state.base_commit = head.clone();
             }
 
-            if condensed && !shadow_branch_before.is_empty() {
-                // Condensed branches are eligible for cleanup; keep any
-                // branch that still carries uncommitted files.
-                if state.files_touched.is_empty() {
-                    shadow_branches_to_delete.insert(shadow_branch_before.clone());
-                } else {
-                    preserved_shadow_branches.insert(shadow_branch_before.clone());
-                }
-            }
-            if state.phase.is_active() && !condensed && !shadow_branch_before.is_empty() {
-                preserved_shadow_branches.insert(shadow_branch_before.clone());
-            }
-
             let _ = self.backend.save_session(&state);
         }
 
-        for branch in shadow_branches_to_delete {
-            if preserved_shadow_branches.contains(&branch) {
-                continue;
-            }
-            let _ = run_git(&self.repo_root, &["branch", "-D", &branch]);
+        if condensed_any_session {
+            insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
         }
 
         Ok(())
@@ -548,4 +526,57 @@ impl Strategy for ManualCommitStrategy {
         }
         Ok(())
     }
+}
+
+fn open_commit_checkpoint_mapping_db(
+    repo_root: &Path,
+) -> Result<(crate::engine::db::SqliteConnectionPool, String)> {
+    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
+        .context("resolving SQLite path for commit_checkpoints")?;
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+        .context("opening SQLite for commit_checkpoints")?;
+    sqlite
+        .initialise_checkpoint_schema()
+        .context("initialising checkpoint schema for commit_checkpoints")?;
+
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for commit_checkpoints")?
+        .repo_id;
+    Ok((sqlite, repo_id))
+}
+
+fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<bool> {
+    use rusqlite::OptionalExtension;
+
+    let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
+    sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT 1
+             FROM commit_checkpoints
+             WHERE commit_sha = ?1 AND repo_id = ?2
+             LIMIT 1",
+            rusqlite::params![commit_sha, repo_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|hit| hit.is_some())
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn insert_commit_checkpoint_mapping(
+    repo_root: &Path,
+    commit_sha: &str,
+    checkpoint_id: &str,
+) -> Result<()> {
+    let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
+    sqlite.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![commit_sha, checkpoint_id, repo_id],
+        )
+        .context("inserting commit_checkpoints row")?;
+        Ok(())
+    })
 }

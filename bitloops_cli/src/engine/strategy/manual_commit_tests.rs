@@ -217,6 +217,52 @@ fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
         .unwrap()
 }
 
+fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<String> {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .ok()?
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT checkpoint_id
+                 FROM commit_checkpoints
+                 WHERE commit_sha = ?1 AND repo_id = ?2
+                 ORDER BY created_at DESC, checkpoint_id DESC
+                 LIMIT 1",
+                rusqlite::params![commit_sha, repo_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .ok()
+        .flatten()
+}
+
+fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .unwrap()
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM commit_checkpoints
+                 WHERE commit_sha = ?1 AND repo_id = ?2",
+                rusqlite::params![commit_sha, repo_id],
+                |row| row.get(0),
+            )?;
+            Ok(count)
+        })
+        .unwrap()
+}
+
 #[derive(Debug)]
 struct CheckpointBlobRow {
     storage_backend: String,
@@ -5439,7 +5485,7 @@ fn commit_msg_keeps_real_message() {
 }
 
 #[test]
-fn post_commit_creates_checkpoint_branch() {
+fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -5457,7 +5503,7 @@ fn post_commit_creates_checkpoint_branch() {
     };
     backend.save_session(&state).unwrap();
 
-    // Make a commit with a Bitloops-Checkpoint trailer.
+    // Make a regular commit without a Bitloops trailer.
     fs::write(dir.path().join("change.txt"), "change").unwrap();
     git_command()
         .args(["add", "."])
@@ -5465,22 +5511,26 @@ fn post_commit_creates_checkpoint_branch() {
         .output()
         .unwrap();
     git_command()
-        .args([
-            "commit",
-            "-m",
-            "fix: something\n\nBitloops-Checkpoint: abc123456789",
-        ])
+        .args(["commit", "-m", "fix: something"])
         .current_dir(dir.path())
         .output()
         .unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
 
-    let summary = read_committed(dir.path(), "abc123456789")
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("checkpoint mapping should exist after post_commit");
+    assert!(
+        is_valid_checkpoint_id(&checkpoint_id),
+        "post_commit should generate a valid checkpoint id: {checkpoint_id}"
+    );
+
+    let summary = read_committed(dir.path(), &checkpoint_id)
         .expect("read committed checkpoint")
         .expect("checkpoint should exist after post_commit");
-    assert_eq!(summary.checkpoint_id, "abc123456789");
+    assert_eq!(summary.checkpoint_id, checkpoint_id);
     assert_eq!(summary.strategy, "manual-commit");
     let result = run_git(dir.path(), &["rev-parse", "bitloops/checkpoints/v1"]);
     assert!(
@@ -5506,8 +5556,7 @@ fn post_commit_creates_full_checkpoint_structure() {
     };
     backend.save_session(&state).unwrap();
 
-    // Commit with known checkpoint ID so we can verify the sharded path.
-    let checkpoint_id = "ab1234567890";
+    // Commit without trailer; post_commit should assign and persist checkpoint ID.
     fs::write(dir.path().join("change2.txt"), "change2").unwrap();
     git_command()
         .args(["add", "."])
@@ -5515,28 +5564,60 @@ fn post_commit_creates_full_checkpoint_structure() {
         .output()
         .unwrap();
     git_command()
-        .args([
-            "commit",
-            "-m",
-            &format!("fix\n\nBitloops-Checkpoint: {checkpoint_id}"),
-        ])
+        .args(["commit", "-m", "fix"])
         .current_dir(dir.path())
         .output()
         .unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
 
-    let summary = read_committed(dir.path(), checkpoint_id)
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("checkpoint mapping should exist after post_commit");
+    let summary = read_committed(dir.path(), &checkpoint_id)
         .expect("read committed checkpoint")
         .expect("checkpoint should exist");
     assert_eq!(summary.checkpoint_id, checkpoint_id);
     assert_eq!(summary.strategy, "manual-commit");
     assert_eq!(summary.sessions.len(), 1);
 
-    let session = read_session_content(dir.path(), checkpoint_id, 0).expect("read session");
+    let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
     assert_eq!(session.metadata["checkpoint_id"], checkpoint_id);
     assert_eq!(session.metadata["strategy"], "manual-commit");
+}
+
+#[test]
+fn post_commit_without_trailer_condenses_pending_session_and_maps_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "pc-no-trailer-condense".to_string(),
+            phase: SessionPhase::Idle,
+            base_commit: head,
+            step_count: 1,
+            files_touched: vec!["condense.txt".to_string()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    fs::write(dir.path().join("condense.txt"), "condense").unwrap();
+    git_ok(dir.path(), &["add", "condense.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "commit without trailer"]);
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("post_commit should map HEAD to a generated checkpoint ID");
+    assert!(
+        read_committed(dir.path(), &checkpoint_id)
+            .unwrap()
+            .is_some(),
+        "post_commit should persist checkpoint content for mapped id"
+    );
 }
 
 #[test]
@@ -5581,6 +5662,55 @@ fn post_commit_without_trailer_updates_active_base_commit() {
         loaded.phase,
         crate::engine::session::phase::SessionPhase::Active,
         "phase should remain active on no-trailer commits"
+    );
+}
+
+#[test]
+fn post_commit_skips_already_mapped_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "pc-skip-mapped".to_string(),
+            phase: SessionPhase::Active,
+            base_commit: head,
+            step_count: 1,
+            files_touched: vec!["mapped.txt".to_string()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    fs::write(dir.path().join("mapped.txt"), "first").unwrap();
+    git_ok(dir.path(), &["add", "mapped.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "first mapped commit"]);
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy.post_commit().unwrap();
+    assert_eq!(
+        query_commit_checkpoint_count(dir.path(), &head_sha),
+        1,
+        "first post_commit should create one commit mapping"
+    );
+
+    let mut resumed = backend.load_session("pc-skip-mapped").unwrap().unwrap();
+    resumed.phase = SessionPhase::Active;
+    resumed.step_count = 1;
+    resumed.files_touched = vec!["mapped.txt".to_string()];
+    backend.save_session(&resumed).unwrap();
+
+    strategy.post_commit().unwrap();
+
+    let loaded = backend.load_session("pc-skip-mapped").unwrap().unwrap();
+    assert_eq!(
+        loaded.step_count, 1,
+        "already-mapped HEAD should be ignored by post_commit"
+    );
+    assert_eq!(
+        query_commit_checkpoint_count(dir.path(), &head_sha),
+        1,
+        "post_commit should not add duplicate mappings for the same HEAD commit"
     );
 }
 
@@ -5822,6 +5952,7 @@ fn post_commit_active_session_condenses_immediately() {
         .unwrap();
 
     commit_with_checkpoint_trailer(dir.path(), "a1b2c3d4e5f6", "active.txt");
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let loaded = backend.load_session("pc-active").unwrap().unwrap();
@@ -5830,8 +5961,10 @@ fn post_commit_active_session_condenses_immediately() {
         crate::engine::session::phase::SessionPhase::Active
     );
     assert_eq!(loaded.step_count, 0, "active session should be condensed");
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("post_commit should map active commit to a checkpoint");
     assert!(
-        read_committed(dir.path(), "a1b2c3d4e5f6")
+        read_committed(dir.path(), &checkpoint_id)
             .unwrap()
             .is_some(),
         "condensation should persist committed checkpoint content"
@@ -5859,12 +5992,15 @@ fn post_commit_active_session_records_turn_checkpoint_ids() {
         .unwrap();
 
     commit_with_checkpoint_trailer(dir.path(), "a1b2c3d4e5f6", "index.html");
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("post_commit should map active commit to a checkpoint");
     let loaded = backend.load_session("pc-active-turn").unwrap().unwrap();
     assert_eq!(
         loaded.turn_checkpoint_ids,
-        vec!["a1b2c3d4e5f6".to_string()],
+        vec![checkpoint_id],
         "ACTIVE post-commit should record checkpoint IDs for stop-time finalization"
     );
 }
@@ -5985,8 +6121,11 @@ fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
         .unwrap();
 
     commit_with_checkpoint_trailer(dir.path(), "0aaabbbccdde", "turn-end.txt");
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
+    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
+        .expect("post_commit should map turn-end commit to a checkpoint");
 
     // Update the live transcript so turn-end finalization has richer content to persist.
     let new_transcript = "{\"type\":\"user\",\"message\":{\"content\":\"latest prompt\"}}\n\
@@ -6005,7 +6144,7 @@ fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
         "turn checkpoint IDs should be cleared even if one update fails"
     );
 
-    let committed = read_session_content(dir.path(), "0aaabbbccdde", 0)
+    let committed = read_session_content(dir.path(), &checkpoint_id, 0)
         .expect("read checkpoint session after turn-end")
         .transcript;
     assert!(

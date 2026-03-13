@@ -242,6 +242,7 @@ pub fn parse_checkpoint_id(message: &str) -> Option<String> {
 }
 
 /// Returns the `Bitloops-Checkpoint: <id>` trailer from the HEAD commit, if present.
+#[allow(dead_code)]
 fn get_checkpoint_id_from_head(repo_root: &Path) -> Result<Option<String>> {
     let body = run_git(repo_root, &["cat-file", "commit", "HEAD"])?;
     Ok(parse_checkpoint_id(&body))
