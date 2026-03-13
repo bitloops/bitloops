@@ -82,6 +82,8 @@ fn emit_build_metadata() {
 fn main() {
     println!("cargo:rerun-if-changed={DASHBOARD_CONFIG_PATH}");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs/heads");
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=BITLOOPS_BUILD_TARGET");
