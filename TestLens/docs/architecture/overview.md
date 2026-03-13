@@ -191,6 +191,7 @@ flowchart TD
 
 ## Notes
 
+- Prototype behavior defaults and current threshold decisions are tracked in `docs/architecture/test_harness_decisions.md`.
 - The highest layer in the diagram is the runnable CLI surface: `testlens init`, `testlens ingest-production-artefacts`, `testlens ingest-tests`, `testlens ingest-coverage`, `testlens ingest-results`, `testlens query`, and `testlens list`.
 - The application layer is explicit: command handlers in `src/app/commands/` own parsing and orchestration, query handlers in `src/app/queries/` own read entrypoints, and raw SQL for both write and query persistence lives behind `src/repository/`.
 - The prototype revolves around six architectural milestones: production discovery, test discovery, static linking, coverage ingestion, run ingestion, and derived classification.

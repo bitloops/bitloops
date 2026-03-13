@@ -12,3 +12,6 @@ Feature: Rust quickstart end-to-end acceptance
     And static test links are created for the commit
     And querying "UserRepository.find_by_id" returns covering tests before coverage ingestion
     And the query coverage payload is null before coverage ingestion
+    When I generate and ingest Rust LCOV coverage for the same commit
+    Then querying "UserRepository.find_by_id" with coverage view returns a non-null coverage payload
+    And the coverage payload reports positive line coverage

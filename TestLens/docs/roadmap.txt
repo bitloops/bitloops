@@ -1,0 +1,79 @@
+TestLens Roadmap
+Date: 2026-03-13
+
+Policy
+- Every newly added feature must ship with both:
+  1. BDD coverage under `features/` + `tests/e2e/`
+  2. A real end-to-end acceptance path that uses an actual SQLite database and exercises the full CLI journey
+- Rust remains the first validation target where the feature is practical.
+- TypeScript parity follows on the same contract.
+
+Status legend
+- [done] Implemented and locally validated
+- [in-progress] Actively being implemented
+- [next] Ready to start after the current slice
+- [deferred] Intentionally postponed
+- [later] Deferred until earlier slices land
+
+Roadmap
+
+[done] Phase 1 foundations
+- Production artefact discovery
+- Test suite/scenario discovery
+- Static call-site linkage
+- Commit-addressed SQLite persistence
+- Existing Rust quickstart acceptance path
+
+[done] Query levels and noise control
+- Add explicit query levels for summary, test list, coverage, and full response
+- Add default `min_strength` filtering for test-list style queries with explicit override
+- Keep the query layer read-only and repository-backed
+- Add BDD coverage for the query contract
+- Extend the real SQLite end-to-end suite to cover the full query journey
+- Jira alignment:
+  - `CLI-1347` query layer
+  - `CLI-1351` validation matrix
+  - `CLI-1352` decision capture where implementation now has explicit prototype defaults
+
+[done] Rust-first coverage and full coverage journey
+- Land a real Rust coverage ingestion path, not just static-linkage quickstart
+- Validate `ingest-coverage` against Rust fixtures first
+- Extend the real end-to-end suite to cover coverage ingestion and `coverage()` behavior
+- Jira alignment:
+  - `CLI-1348`
+  - `CLI-1349`
+
+[done] Validation matrix hardening
+- Expand query-layer validation to cover:
+  - summary coverage percentages
+  - untested artefacts
+  - distinct query errors for unindexed commits vs missing artefacts
+- Generate a validation status report on every `cargo test` run at `target/validation/current_status.md`
+- Keep the traceability matrix aligned with the executable test surface
+- Jira alignment:
+  - `CLI-1351`
+
+[deferred] Run outcomes and scoring parity
+- Extend run-result ingestion beyond the current Jest-only path
+- Make `last_run`, `confidence`, and `strength` fully aligned with the design spec
+- Add deterministic tests for score behavior and pre-existing failure reporting
+- Extend the real end-to-end suite for run outcomes
+- Jira alignment:
+  - `CLI-1350`
+
+[done] Prototype decision capture and boundary hardening
+- Move prototype thresholds and scoring bands to explicit named constants
+- Add direct boundary tests for classification, verification level, confidence, and strength defaults
+- Document prototype transport, thresholds, and deferred decision areas
+- Jira alignment:
+  - `CLI-1352`
+
+[later] Product tuning beyond the prototype
+- Empirically tune classification and verification thresholds on more repositories
+- Resolve BDD / smoke / acceptance classification positioning from the design-spec comments
+- Decide the long-term transport shape beyond the CLI prototype
+
+Tracking notes
+- The codebase is ahead of Jira for some Phase 2 mechanics. Jira updates should reflect implemented vs remaining work, not only the original ticket titles.
+- Update this file as slices move from `[in-progress]` to `[done]` and when new acceptance requirements are added.
+- Run outcomes remain intentionally deferred until there is a cross-framework ingestion strategy worth validating.

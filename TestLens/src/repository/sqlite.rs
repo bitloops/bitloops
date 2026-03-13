@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::open_existing_database;
 use crate::domain::{
@@ -403,7 +403,21 @@ LIMIT 1
             .query(params![commit_sha, artefact_query])
             .context("failed querying artefact")?;
         let Some(row) = rows.next().context("failed reading artefact row")? else {
-            anyhow::bail!("Artefact not found");
+            let indexed_for_commit: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM artefacts WHERE commit_sha = ?1 LIMIT 1",
+                    params![commit_sha],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context("failed checking indexed state for commit")?;
+
+            if indexed_for_commit.is_some() {
+                anyhow::bail!("Artefact not found");
+            }
+
+            anyhow::bail!("Repository not indexed");
         };
 
         Ok(QueriedArtefactRecord {

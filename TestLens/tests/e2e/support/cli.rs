@@ -17,6 +17,10 @@ pub fn run_testlens_or_panic(args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("stdout should be valid UTF-8")
 }
 
+pub fn run_testlens_allow_failure(args: &[&str]) -> Output {
+    run_testlens(args)
+}
+
 pub fn list_artefacts_by_kind(db_path: &Path, commit: &str, kind: &str) -> Vec<ListedArtefact> {
     let db_path = db_path.to_string_lossy();
     let output =
@@ -26,23 +30,19 @@ pub fn list_artefacts_by_kind(db_path: &Path, commit: &str, kind: &str) -> Vec<L
 }
 
 pub fn run_cargo_in_dir_or_panic(workdir: &Path, args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO"))
-        .current_dir(workdir)
-        .args(args)
-        .output()
-        .expect("failed to execute cargo command");
-
-    if !output.status.success() {
-        panic!(
-            "cargo command failed in {}: {:?}\nstdout:\n{}\nstderr:\n{}",
-            workdir.display(),
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
+    let output = run_command_in_dir(env!("CARGO"), workdir, args);
+    assert_command_success("cargo", workdir, args, &output);
     String::from_utf8(output.stdout).expect("stdout should be valid UTF-8")
+}
+
+pub fn run_command_in_dir_or_panic(program: &str, workdir: &Path, args: &[&str]) -> String {
+    let output = run_command_in_dir(program, workdir, args);
+    assert_command_success(program, workdir, args, &output);
+    String::from_utf8(output.stdout).expect("stdout should be valid UTF-8")
+}
+
+pub fn run_command_in_dir_allow_failure(program: &str, workdir: &Path, args: &[&str]) -> Output {
+    run_command_in_dir(program, workdir, args)
 }
 
 fn run_testlens(args: &[&str]) -> Output {
@@ -56,6 +56,37 @@ fn run_testlens(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("failed to execute testlens command")
+}
+
+fn run_command_in_dir(program: &str, workdir: &Path, args: &[&str]) -> Output {
+    Command::new(program)
+        .current_dir(workdir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to execute command '{}' in {}: {}\nargs: {:?}",
+                program,
+                workdir.display(),
+                error,
+                args
+            )
+        })
+}
+
+fn assert_command_success(program: &str, workdir: &Path, args: &[&str], output: &Output) {
+    if output.status.success() {
+        return;
+    }
+
+    panic!(
+        "{} command failed in {}: {:?}\nstdout:\n{}\nstderr:\n{}",
+        program,
+        workdir.display(),
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 pub fn project_root() -> PathBuf {

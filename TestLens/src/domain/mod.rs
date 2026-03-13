@@ -133,20 +133,37 @@ pub struct CoverageTarget {
     pub end_line: i64,
 }
 
+pub const UNIT_MAX_FAN_OUT: i64 = 3;
+pub const INTEGRATION_MIN_FAN_OUT: i64 = 4;
+pub const INTEGRATION_MAX_FAN_OUT: i64 = 10;
+pub const E2E_MIN_FAN_OUT: i64 = 11;
+
+pub const UNIT_MAX_BOUNDARY_CROSSINGS: i64 = 1;
+pub const INTEGRATION_MIN_BOUNDARY_CROSSINGS: i64 = 1;
+pub const INTEGRATION_MAX_BOUNDARY_CROSSINGS: i64 = 3;
+pub const E2E_MIN_BOUNDARY_CROSSINGS: i64 = 3;
+
 pub fn derive_test_classification(fan_out: i64, boundary_crossings: i64) -> &'static str {
-    if fan_out >= 11 && boundary_crossings >= 3 {
+    if fan_out >= E2E_MIN_FAN_OUT && boundary_crossings >= E2E_MIN_BOUNDARY_CROSSINGS {
         return "e2e";
     }
-    if (4..=10).contains(&fan_out) && (1..=3).contains(&boundary_crossings) {
+    if (INTEGRATION_MIN_FAN_OUT..=INTEGRATION_MAX_FAN_OUT).contains(&fan_out)
+        && (INTEGRATION_MIN_BOUNDARY_CROSSINGS..=INTEGRATION_MAX_BOUNDARY_CROSSINGS)
+            .contains(&boundary_crossings)
+    {
         return "integration";
     }
-    if (1..=3).contains(&fan_out) && boundary_crossings <= 1 {
+    if (1..=UNIT_MAX_FAN_OUT).contains(&fan_out)
+        && boundary_crossings <= UNIT_MAX_BOUNDARY_CROSSINGS
+    {
         return "unit";
     }
 
-    if fan_out >= 11 || boundary_crossings >= 3 {
+    if fan_out >= E2E_MIN_FAN_OUT || boundary_crossings >= E2E_MIN_BOUNDARY_CROSSINGS {
         "e2e"
-    } else if fan_out >= 4 || boundary_crossings >= 2 {
+    } else if fan_out >= INTEGRATION_MIN_FAN_OUT
+        || boundary_crossings >= INTEGRATION_MIN_BOUNDARY_CROSSINGS + 1
+    {
         "integration"
     } else {
         "unit"
@@ -155,7 +172,11 @@ pub fn derive_test_classification(fan_out: i64, boundary_crossings: i64) -> &'st
 
 #[cfg(test)]
 mod tests {
-    use super::derive_test_classification;
+    use super::{
+        E2E_MIN_BOUNDARY_CROSSINGS, E2E_MIN_FAN_OUT, INTEGRATION_MIN_BOUNDARY_CROSSINGS,
+        INTEGRATION_MIN_FAN_OUT, UNIT_MAX_BOUNDARY_CROSSINGS, UNIT_MAX_FAN_OUT,
+        derive_test_classification,
+    };
 
     #[test]
     fn classifies_unit_for_low_fan_out_and_boundary_crossings() {
@@ -178,5 +199,24 @@ mod tests {
     #[test]
     fn falls_back_to_integration_when_boundary_crossings_are_high() {
         assert_eq!(derive_test_classification(2, 2), "integration");
+    }
+
+    #[test]
+    fn uses_named_threshold_boundaries() {
+        assert_eq!(
+            derive_test_classification(UNIT_MAX_FAN_OUT, UNIT_MAX_BOUNDARY_CROSSINGS),
+            "unit"
+        );
+        assert_eq!(
+            derive_test_classification(
+                INTEGRATION_MIN_FAN_OUT,
+                INTEGRATION_MIN_BOUNDARY_CROSSINGS
+            ),
+            "integration"
+        );
+        assert_eq!(
+            derive_test_classification(E2E_MIN_FAN_OUT, E2E_MIN_BOUNDARY_CROSSINGS),
+            "e2e"
+        );
     }
 }

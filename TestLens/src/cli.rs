@@ -1,9 +1,18 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 pub const DEFAULT_DB_PATH: &str = "./testlens.db";
 pub const DEFAULT_SEED_COMMIT: &str = "abc123";
+pub const DEFAULT_QUERY_VIEW: QueryViewArg = QueryViewArg::Full;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum QueryViewArg {
+    Full,
+    Summary,
+    Tests,
+    Coverage,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "testlens", version, about = "Prototype verification lens CLI")]
@@ -67,6 +76,10 @@ pub enum Commands {
         commit: String,
         #[arg(long)]
         classification: Option<String>,
+        #[arg(long, value_enum, default_value_t = DEFAULT_QUERY_VIEW)]
+        view: QueryViewArg,
+        #[arg(long)]
+        min_strength: Option<f64>,
         #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: PathBuf,
     },

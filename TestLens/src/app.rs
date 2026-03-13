@@ -39,12 +39,16 @@ pub fn run() -> Result<()> {
             artefact,
             commit,
             classification,
+            view,
+            min_strength,
             db: db_path,
         } => queries::query_artefact_harness::handle(
             &db_path,
             &artefact,
             &commit,
             classification.as_deref(),
+            view,
+            min_strength,
         ),
         Commands::List {
             commit,

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::support::cli::{project_root, run_cargo_in_dir_or_panic, run_testlens_or_panic};
+use crate::support::rust_journey::{copy_real_rust_fixture, generate_rust_lcov};
 use cucumber::{World as _, given, then, when};
 use rusqlite::{Connection, params};
 use serde_json::Value;
@@ -10,6 +11,8 @@ use tempfile::TempDir;
 struct RustQuickstartWorld {
     temp_dir: Option<TempDir>,
     db_path: Option<PathBuf>,
+    lcov_path: Option<PathBuf>,
+    source_repo_dir: Option<PathBuf>,
     repo_dir: Option<PathBuf>,
     commit_sha: String,
     last_query_json: Option<Value>,
@@ -19,23 +22,27 @@ struct RustQuickstartWorld {
 fn given_temporary_sqlite_database(world: &mut RustQuickstartWorld) {
     let temp_dir = TempDir::new().expect("failed to create temp dir for rust quickstart e2e");
     let db_path = temp_dir.path().join("testlens-rust-e2e.db");
-    let repo_dir = project_root().join("testlens-fixture-rust");
+    let lcov_path = temp_dir.path().join("rust-coverage.lcov");
+    let source_repo_dir = project_root().join("testlens-fixture-rust");
+    let repo_dir = copy_real_rust_fixture(temp_dir.path());
 
     assert!(
-        repo_dir.exists(),
+        source_repo_dir.exists(),
         "expected rust fixture repo at {}",
-        repo_dir.display()
+        source_repo_dir.display()
     );
 
     world.temp_dir = Some(temp_dir);
     world.db_path = Some(db_path);
+    world.lcov_path = Some(lcov_path);
+    world.source_repo_dir = Some(source_repo_dir);
     world.repo_dir = Some(repo_dir);
     world.commit_sha = "fixture-rust-e2e".to_string();
 }
 
 #[given("the real Rust fixture repository passes its own tests")]
 fn given_rust_fixture_repo_passes_its_tests(world: &mut RustQuickstartWorld) {
-    run_cargo_in_dir_or_panic(world.repo_dir(), &["test"]);
+    run_cargo_in_dir_or_panic(world.source_repo_dir(), &["test"]);
 }
 
 #[when("I run the Rust quickstart ingestion commands")]
@@ -202,6 +209,8 @@ fn then_querying_returns_covering_tests_before_coverage_ingestion(
         &artefact,
         "--commit",
         &world.commit_sha,
+        "--min-strength",
+        "0.0",
     ]);
 
     let json: Value = serde_json::from_str(&output).expect("failed to parse query JSON");
@@ -243,6 +252,65 @@ fn then_the_query_coverage_payload_is_null_before_coverage_ingestion(
     );
 }
 
+#[when("I generate and ingest Rust LCOV coverage for the same commit")]
+fn when_i_generate_and_ingest_rust_lcov_coverage(world: &mut RustQuickstartWorld) {
+    generate_rust_lcov(world.repo_dir(), world.lcov_path());
+
+    let db = world.db_path().to_string_lossy().to_string();
+    let lcov = world.lcov_path().to_string_lossy().to_string();
+    run_testlens_or_panic(&[
+        "ingest-coverage",
+        "--db",
+        &db,
+        "--lcov",
+        &lcov,
+        "--commit",
+        &world.commit_sha,
+    ]);
+}
+
+#[then(expr = "querying {string} with coverage view returns a non-null coverage payload")]
+fn then_querying_with_coverage_view_returns_non_null_payload(
+    world: &mut RustQuickstartWorld,
+    artefact: String,
+) {
+    let db = world.db_path().to_string_lossy().to_string();
+    let output = run_testlens_or_panic(&[
+        "query",
+        "--db",
+        &db,
+        "--artefact",
+        &artefact,
+        "--commit",
+        &world.commit_sha,
+        "--view",
+        "coverage",
+    ]);
+
+    let json: Value = serde_json::from_str(&output).expect("failed to parse coverage query JSON");
+    assert!(
+        json["coverage"].is_object(),
+        "expected non-null coverage payload for artefact {}",
+        artefact
+    );
+    world.last_query_json = Some(json);
+}
+
+#[then("the coverage payload reports positive line coverage")]
+fn then_coverage_payload_reports_positive_line_coverage(world: &mut RustQuickstartWorld) {
+    let json = world
+        .last_query_json
+        .as_ref()
+        .expect("expected query JSON to be available");
+    let line_coverage_pct = json["coverage"]["line_coverage_pct"]
+        .as_f64()
+        .expect("expected line_coverage_pct");
+    assert!(
+        line_coverage_pct > 0.0,
+        "expected positive line coverage percentage"
+    );
+}
+
 #[tokio::test]
 async fn rust_quickstart_e2e_gherkin() {
     RustQuickstartWorld::run("features/rust_quickstart_e2e.feature").await;
@@ -253,6 +321,18 @@ impl RustQuickstartWorld {
         self.db_path
             .as_deref()
             .expect("db path should be initialized for this step")
+    }
+
+    fn lcov_path(&self) -> &Path {
+        self.lcov_path
+            .as_deref()
+            .expect("lcov path should be initialized for this step")
+    }
+
+    fn source_repo_dir(&self) -> &Path {
+        self.source_repo_dir
+            .as_deref()
+            .expect("source repo dir should be initialized for this step")
     }
 
     fn repo_dir(&self) -> &Path {

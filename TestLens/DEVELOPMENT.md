@@ -11,6 +11,7 @@ Production artefacts are seeded first; test artefacts/links/runs are discovered 
 ## 1) Prerequisites
 
 - Rust toolchain (`cargo`)
+- `cargo-llvm-cov` for the Rust coverage flow
 - Node.js + npm
 - `sqlite3`
 
@@ -59,6 +60,10 @@ testlens ingest-results --db ./testlens.db --jest-json ./test-results.json --com
 
 # 6) Query
 testlens query --db ./testlens.db --artefact UserRepository.findById --commit fixture-dev
+testlens query --db ./testlens.db --artefact UserRepository.findById --commit fixture-dev --view summary
+testlens query --db ./testlens.db --artefact UserRepository.findByEmail --commit fixture-dev --view tests
+testlens query --db ./testlens.db --artefact UserRepository.findByEmail --commit fixture-dev --view tests --min-strength 0.0
+testlens query --db ./testlens.db --artefact UserRepository.findById --commit fixture-dev --view coverage
 ```
 
 Notes:
@@ -103,13 +108,22 @@ cd ..
 # 4) Query static linkage before coverage ingestion
 testlens query --db ./testlens.db --artefact UserRepository.find_by_id --commit fixture-rust
 testlens query --db ./testlens.db --artefact UserService.create_user --commit fixture-rust
+
+# 5) Generate Rust LCOV coverage and ingest it
+cd testlens-fixture-rust
+cargo llvm-cov --lcov --output-path ../rust-fixture.lcov
+cd ..
+testlens ingest-coverage --db ./testlens.db --lcov ./rust-fixture.lcov --commit fixture-rust
+
+# 6) Query coverage
+testlens query --db ./testlens.db --artefact UserRepository.find_by_id --commit fixture-rust --view coverage
 ```
 
 Rust fixture notes:
 
-- This quickstart currently validates `Production Artefact Discovered`, `Test Artefact Discovered`, and `Static Test Link Established`.
+- This quickstart now validates `Production Artefact Discovered`, `Test Artefact Discovered`, `Static Test Link Established`, and Rust LCOV ingestion.
 - `testlens query` already surfaces `covering_tests` from static links even before any coverage data is ingested.
-- `ingest-coverage` can ingest LCOV if a Rust LCOV report is produced externally, but this repo does not yet provide a Rust coverage-generation quickstart.
+- `cargo llvm-cov --lcov` is the documented Rust coverage-generation path for the fixture.
 - `ingest-results` is currently Jest JSON based, so it is part of the TypeScript/Jest flow, not the Rust fixture flow.
 
 ## 4) CLI Commands
@@ -143,6 +157,8 @@ Rust fixture notes:
   - `--artefact <id|fqn|path>` artefact selector
   - `--commit <sha>` commit stamp
   - `--classification <unit|integration|e2e>` optional filter
+  - `--view <full|summary|tests|coverage>` optional query level (default `full`)
+  - `--min-strength <0.0-1.0>` optional override for `tests` / `full` views; default is `0.3`
   - `--db <path>` SQLite path
 
 - `testlens list`
@@ -258,6 +274,9 @@ sqlite3 ./testlens.db "select status, count(*) from test_runs where commit_sha='
 - `UserRepository.findById` returns covering tests and non-null coverage.
 - `UserService.createUser` includes a failing test in `last_run.status`.
 - `hashPassword` returns `covering_tests: []`, `coverage: null`, `verification_level: untested`.
+- `query --view summary` returns only `artefact` + `summary`.
+- `query --view tests` applies the default `min_strength` filter; `--min-strength 0.0` returns the full unfiltered match set.
+- `query --view coverage` returns only `artefact` + `coverage`.
 - If Jest JSON includes unknown tests, `ingest-results` logs warnings and continues.
 
 ## 10) Troubleshooting
@@ -312,3 +331,5 @@ Run all tests (unit + BDD):
 ```bash
 cargo test
 ```
+
+Each test run also writes the current validation snapshot to `target/validation/current_status.md`.
