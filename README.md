@@ -43,16 +43,13 @@
     <a href="https://github.com/bitloops/bitloops/graphs/contributors">
       <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=7404e4&colorB=000000" alt="Contributors" />
     </a>
-    <a href="https://github.com/sponsors/bitloops">
-      <img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor" />
+    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
+      <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-7404e4" />
     </a>
-  </p>
-  <p>
-    <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-7404e4" />
-    <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-7404e4" />
-    <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" />
-  </p>
-</div>
+    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
+      <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" />
+    </a>
+  </div>
 
 ## About Bitloops
 
