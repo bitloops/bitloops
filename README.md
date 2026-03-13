@@ -1,11 +1,12 @@
   <div align="center">
-  <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="320" height="132" />
+  <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
   <h1>Bitloops</h1>
   <p><strong style="color:#7404e4;">Git captures what changed. Bitloops captures why.</strong></p>
   <p>
-    The open-source intelligence layer for AI-native development. Bitloops
-    captures the full developer-agent conversation around each commit, builds
-    structured repository memory, and keeps that knowledge local to your repo.
+    Bitloops is the repository-scoped intelligence layer for AI-assisted software
+    development. It records developer-agent conversations on every commit,
+    surfaces structured context back to every session, and keeps that knowledge
+    local so agents and reviewers can work from a shared memory layer.
   </p>
   <p>
     <a href="https://bitloops.com">Website</a>
@@ -20,14 +21,14 @@
     ·
     <a href="#faqs">FAQs</a>
   </p>
-  [![GitHub forks](https://img.shields.io/github/forks/topoteretes/cognee.svg?style=social&label=Fork&maxAge=2592000)](https://GitHub.com/topoteretes/cognee/network/)
-  [![GitHub stars](https://img.shields.io/github/stars/topoteretes/cognee.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/topoteretes/cognee/stargazers/)
-  [![GitHub commits](https://badgen.net/github/commits/topoteretes/cognee)](https://GitHub.com/topoteretes/cognee/commit/)
-  [![GitHub tag](https://badgen.net/github/tag/topoteretes/cognee)](https://github.com/topoteretes/cognee/tags/)
-  [![Downloads](https://static.pepy.tech/badge/cognee)](https://pepy.tech/project/cognee)
-  [![License](https://img.shields.io/github/license/topoteretes/cognee?colorA=00C586&colorB=000000)](https://github.com/topoteretes/cognee/blob/main/LICENSE)
-  [![Contributors](https://img.shields.io/github/contributors/topoteretes/cognee?colorA=00C586&colorB=000000)](https://github.com/topoteretes/cognee/graphs/contributors)
-  <a href="https://github.com/sponsors/topoteretes"><img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor"></a>
+  [![GitHub forks](https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000)](https://GitHub.com/bitloops/bitloops/network/)
+  [![GitHub stars](https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/bitloops/bitloops/stargazers/)
+  [![GitHub commits](https://badgen.net/github/commits/bitloops/bitloops)](https://GitHub.com/bitloops/bitloops/commit/)
+  [![GitHub tag](https://badgen.net/github/tag/bitloops/bitloops)](https://github.com/bitloops/bitloops/tags/)
+  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total.svg)](https://github.com/bitloops/bitloops/releases)
+  [![License](https://img.shields.io/github/license/bitloops/bitloops?colorA=00C586&colorB=000000)](https://github.com/bitloops/bitloops/blob/main/LICENSE)
+  [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?colorA=00C586&colorB=000000)](https://github.com/bitloops/bitloops/graphs/contributors)
+  <a href="https://github.com/sponsors/bitloops"><img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor"></a>
   <p>
     <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-black" />
     <img alt="Open source" src="https://img.shields.io/badge/Open%20Source-Yes-black" />
@@ -48,7 +49,7 @@ instead of more opaque.
 
 ### Why Bitloops
 
-<table style="width:100%; border-collapse:collapse; background:#f8f6ff; border:1px solid #e4defa;">
+<table style="width:100%; border-collapse:collapse; background:#f3f1ff; border:2px solid #7404e4;">
   <thead>
     <tr>
       <th style="text-align:left; padding:12px; background:#7404e4; color:#ffffff;">Without Bitloops</th>
@@ -57,20 +58,20 @@ instead of more opaque.
   </thead>
   <tbody>
     <tr>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Each session starts from zero</td>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Sessions can draw from shared repository memory</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Each session starts from zero</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Sessions can draw from shared repository memory</td>
     </tr>
     <tr>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Agents build siloed, tool-specific context</td>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Supported agents read from the same knowledge store</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Agents build siloed, tool-specific context</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Supported agents read from the same knowledge store</td>
     </tr>
     <tr>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Reviewers see diffs with no reasoning trail</td>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Commits are linked to the developer-agent conversation behind them</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Reviewers see diffs with no reasoning trail</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Commits are linked to the developer-agent conversation behind them</td>
     </tr>
     <tr>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Teams re-explain architecture over and over</td>
-      <td style="padding:12px; border-top:1px solid #e4defa;">Important decisions remain available for the next session</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Teams re-explain architecture over and over</td>
+      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Important decisions remain available for the next session</td>
     </tr>
   </tbody>
 </table>
@@ -127,29 +128,25 @@ From within the repo you are currently working on:
    bitloops init
    ```
 
-   Select your agents, or use `Ctrl+A` to select them all. If you already know
-   the target agent, you can also run `bitloops init --agent <name>`.
+   Select your agents, or use `Ctrl+A` to select them all.
 
-2. Enable Bitloops for the repository:
+2. To start recording Checkpoints run:
 
    ```bash
    bitloops enable
    ```
-
-   This configures Bitloops settings and installs the required git hooks so the
-   CLI can capture checkpoints.
 
 3. Work as usual and commit normally. Bitloops will capture the relevant
    developer-agent context around those changes.
 
 ## Dashboard
 
-To view your checkpoints, run the following command again from within the root
-of your repo:
+To view your checkpoints, run the following command again from within the root of your repo:
 
 ```bash
 bitloops dashboard
 ```
+
 
 ## Supported Agents
 
@@ -172,11 +169,11 @@ targeted insights regarding your codebases within milliseconds.
 ### Do you need access to my codebase?
 
 No. None of your code is sent to our servers. Your data is stored in your git
-repo (`bitloops/checkpoints/v1`) as well as your databases.
+repo (`bitloops/checkpoints/v1`) as well as your DBs.
 
 ### Is this totally free for real?
 
-You bet.
+You bet!
 
 ### What kind of databases do I need?
 
@@ -197,12 +194,12 @@ users and are analyzed and considered in aggregate.
 
 ## Community & Support
 
-**Contributing**
+### Contributing
 
 We welcome contributions from the community! Your input helps make Bitloops better
 for everyone. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
-**Code of Conduct**
+### Code of Conduct
 
 We're committed to fostering an inclusive and respectful community. Read our
 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for guidelines.
