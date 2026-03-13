@@ -15,7 +15,7 @@ impl Strategy for ManualCommitStrategy {
         self.initialize_or_refresh_session(session_id, agent_type, transcript_path, user_prompt)
     }
 
-    /// Creates a shadow-branch commit capturing the current working tree state.
+    /// Persists a temporary checkpoint tree capturing the current working tree state.
     ///
     fn save_step(&self, ctx: &StepContext) -> Result<()> {
         // If the repo has no commits yet, HEAD doesn't exist — skip silently.
@@ -59,8 +59,6 @@ impl Strategy for ManualCommitStrategy {
         if !ctx.transcript_path.trim().is_empty() {
             state.transcript_path = ctx.transcript_path.clone();
         }
-
-        self.migrate_shadow_branch_if_needed(&mut state)?;
 
         let default_prompt_attr = SessionPromptAttribution {
             checkpoint_number: state.step_count as i32 + 1,
@@ -144,7 +142,7 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                worktree_id: state.worktree_id.clone(),
+                step_number: state.step_count + 1,
                 modified_files: modified.clone(),
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
@@ -160,7 +158,7 @@ impl Strategy for ManualCommitStrategy {
             anyhow::bail!("temporary checkpoint commit hash is empty");
         }
 
-        // Dedup: skip if tree is identical to the last shadow commit's tree.
+        // Dedup: skip if tree is identical to the latest temporary checkpoint tree.
         // Still persist token_usage when provided so turn-end can record usage without a new commit.
         if result.skipped {
             if let Some(usage) = &ctx.token_usage {
@@ -195,7 +193,7 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 
-    /// Creates a task checkpoint on the shadow branch.
+    /// Persists a task checkpoint as a temporary checkpoint tree.
     ///
     fn save_task_step(&self, ctx: &TaskStepContext) -> Result<()> {
         use super::messages::{format_incremental_subject, format_subagent_end_message};
@@ -259,8 +257,6 @@ impl Strategy for ManualCommitStrategy {
             }
         };
 
-        self.migrate_shadow_branch_if_needed(&mut state)?;
-
         let author_name = if ctx.author_name.trim().is_empty() {
             "Bitloops".to_string()
         } else {
@@ -277,7 +273,7 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryTaskOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                worktree_id: state.worktree_id.clone(),
+                step_number: state.step_count,
                 tool_use_id: ctx.tool_use_id.clone(),
                 agent_id: ctx.agent_id.clone(),
                 modified_files: ctx.modified_files.clone(),
@@ -553,4 +549,3 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 }
-

@@ -1,9 +1,11 @@
 use super::*;
 use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
+use crate::engine::db::SqliteConnectionPool;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,6 +31,7 @@ fn setup_git_repo(dir: &TempDir) -> String {
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
+    run(&["config", "commit.gpgsign", "false"]);
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);
     run(&["commit", "--allow-empty", "-m", "initial"]);
@@ -66,6 +69,7 @@ fn setup_empty_git_repo(dir: &TempDir) {
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
+    run(&["config", "commit.gpgsign", "false"]);
 }
 
 struct CountingBackend {
@@ -154,6 +158,59 @@ fn initialize_session_uses_injected_session_backend() {
 
 fn git_ok(repo_root: &Path, args: &[&str]) -> String {
     run_git(repo_root, args).unwrap_or_else(|e| panic!("git {:?} failed: {e}", args))
+}
+
+fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(paths::BITLOOPS_DIR)
+        .join("devql")
+        .join("relational.db")
+}
+
+fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
+    sqlite.initialise_checkpoint_schema().ok()?;
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .ok()?
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT tree_hash
+                 FROM temporary_checkpoints
+                 WHERE session_id = ?1 AND repo_id = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+                rusqlite::params![session_id, repo_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .ok()
+        .flatten()
+}
+
+fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .unwrap()
+        .repo_id;
+
+    sqlite
+        .with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM temporary_checkpoints
+                 WHERE session_id = ?1 AND repo_id = ?2",
+                rusqlite::params![session_id, repo_id],
+                |row| row.get(0),
+            )?;
+            Ok(count)
+        })
+        .unwrap()
 }
 
 fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
@@ -800,7 +857,7 @@ fn is_git_sequence_operation_worktree() {
 }
 
 #[test]
-fn save_step_creates_shadow_branch() {
+fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -837,14 +894,22 @@ fn save_step_creates_shadow_branch() {
     };
     strategy.save_step(&ctx).unwrap();
 
-    // Shadow branch should exist.
+    // New flow writes a DB-backed temporary checkpoint tree and does not create a shadow branch.
     let shadow = shadow_branch_ref(&head, "");
     let result = run_git(dir.path(), &["rev-parse", &shadow]);
-    assert!(result.is_ok(), "shadow branch should exist after save_step");
+    assert!(
+        result.is_err(),
+        "shadow branch should not be created after save_step"
+    );
+
+    let tree_hash = latest_temporary_tree_hash(dir.path(), "s1")
+        .expect("latest temporary checkpoint tree hash should be persisted");
+    let file_content = run_git(dir.path(), &["show", &format!("{tree_hash}:file.txt")]).unwrap();
+    assert_eq!(file_content, "hello");
 }
 
 #[test]
-fn save_step_shadow_has_modified_file() {
+fn save_step_checkpoint_tree_has_modified_file() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -878,10 +943,14 @@ fn save_step_shadow_has_modified_file() {
     };
     strategy.save_step(&ctx).unwrap();
 
-    // Check file exists in shadow branch tree.
-    let shadow = shadow_branch_ref(&head, "");
-    let result = run_git(dir.path(), &["ls-tree", &shadow, "src.rs"]);
-    assert!(result.is_ok(), "src.rs should be in shadow branch tree");
+    // Check file exists in the latest temporary checkpoint tree.
+    let tree_hash = latest_temporary_tree_hash(dir.path(), "s2")
+        .expect("latest temporary checkpoint tree hash should exist");
+    let result = run_git(dir.path(), &["ls-tree", &tree_hash, "src.rs"]);
+    assert!(
+        result.is_ok(),
+        "src.rs should be in temporary checkpoint tree"
+    );
     assert!(result.unwrap().contains("src.rs"));
 }
 
@@ -1016,6 +1085,49 @@ fn save_step_sets_base_commit() {
 }
 
 #[test]
+fn save_task_step_keeps_existing_base_commit_without_shadow_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_commit = setup_git_repo(&dir);
+
+    fs::write(dir.path().join("head-advance-task.txt"), "head moved").unwrap();
+    git_ok(dir.path(), &["add", "head-advance-task.txt"]);
+    git_ok(
+        dir.path(),
+        &["commit", "-m", "advance head for task checkpoint"],
+    );
+    let current_head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(base_commit, current_head, "HEAD should have advanced");
+
+    let backend = LocalFileBackend::new(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "task-no-migrate".to_string(),
+            base_commit: base_commit.clone(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy
+        .save_task_step(&TaskStepContext {
+            session_id: "task-no-migrate".to_string(),
+            tool_use_id: "toolu_nomigrate".to_string(),
+            agent_id: "agent_nomigrate".to_string(),
+            checkpoint_uuid: "task-checkpoint-1".to_string(),
+            agent_type: AGENT_TYPE_CLAUDE_CODE.to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let loaded = backend.load_session("task-no-migrate").unwrap().unwrap();
+    assert_eq!(
+        loaded.base_commit, base_commit,
+        "save_task_step should not migrate base_commit via shadow branch logic"
+    );
+}
+
+#[test]
 fn initialize_session_sets_pending_prompt_attribution() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -1037,6 +1149,91 @@ fn initialize_session_sets_pending_prompt_attribution() {
             .as_ref()
             .map(|pa| pa.checkpoint_number),
         Some(1)
+    );
+}
+
+#[test]
+fn initialize_session_keeps_existing_base_commit_without_shadow_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_commit = setup_git_repo(&dir);
+
+    fs::write(dir.path().join("head-advance.txt"), "head moved").unwrap();
+    git_ok(dir.path(), &["add", "head-advance.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "advance head"]);
+    let current_head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(base_commit, current_head, "HEAD should have advanced");
+
+    let backend = LocalFileBackend::new(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "init-no-migrate".to_string(),
+            base_commit: base_commit.clone(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy
+        .initialize_session(
+            "init-no-migrate",
+            AGENT_TYPE_CLAUDE_CODE,
+            "",
+            "keep base commit",
+        )
+        .unwrap();
+
+    let loaded = backend.load_session("init-no-migrate").unwrap().unwrap();
+    assert_eq!(
+        loaded.base_commit, base_commit,
+        "initialize_session should not migrate base_commit via shadow branch logic"
+    );
+}
+
+#[test]
+fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_commit = setup_git_repo(&dir);
+    let session_id = "attr-latest-temp-tree";
+
+    fs::write(dir.path().join("README.md"), "agent baseline\n").unwrap();
+    let metadata_dir_abs = create_checkpoint_metadata_dir(dir.path(), session_id);
+    let result = write_temporary(
+        dir.path(),
+        first_checkpoint_opts(session_id, &base_commit, &metadata_dir_abs),
+    )
+    .unwrap();
+    assert!(!result.skipped);
+
+    // Ensure there is no shadow-branch fallback available.
+    let shadow = shadow_branch_ref(&base_commit, "");
+    let short_shadow = shadow
+        .strip_prefix("refs/heads/")
+        .unwrap_or(shadow.as_str())
+        .to_string();
+    let _ = run_git(dir.path(), &["branch", "-D", &short_shadow]);
+    assert!(
+        run_git(dir.path(), &["rev-parse", &shadow]).is_err(),
+        "shadow branch should be absent so attribution must rely on DB tree hash"
+    );
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy
+        .initialize_session(session_id, AGENT_TYPE_CLAUDE_CODE, "", "prompt")
+        .unwrap();
+
+    let backend = LocalFileBackend::new(dir.path());
+    let loaded = backend.load_session(session_id).unwrap().unwrap();
+    let pending = loaded
+        .pending_prompt_attribution
+        .expect("pending prompt attribution should be set");
+    assert_eq!(
+        pending.user_lines_added, 0,
+        "worktree matches latest temporary checkpoint tree, so user_lines_added should be 0"
+    );
+    assert_eq!(
+        pending.user_lines_removed, 0,
+        "worktree matches latest temporary checkpoint tree, so user_lines_removed should be 0"
     );
 }
 
@@ -1096,9 +1293,9 @@ fn save_step_consumes_pending_prompt_attribution() {
     assert_eq!(loaded.prompt_attributions[0].user_lines_added, 2);
 }
 
-// New test: save_step includes transcript in shadow branch tree.
+// New test: save_step includes transcript in the temporary checkpoint tree.
 #[test]
-fn save_step_includes_transcript_in_shadow_branch() {
+fn save_step_includes_transcript_in_checkpoint_tree() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -1136,26 +1333,34 @@ fn save_step_includes_transcript_in_shadow_branch() {
     };
     strategy.save_step(&ctx).unwrap();
 
-    // Shadow branch should contain the transcript metadata file.
     let shadow = shadow_branch_ref(&head, "");
-    let result = run_git(dir.path(), &["ls-tree", "-r", "--name-only", &shadow]);
-    assert!(result.is_ok(), "shadow branch should exist");
+    let shadow_branch = run_git(dir.path(), &["rev-parse", &shadow]);
+    assert!(
+        shadow_branch.is_err(),
+        "save_step should not create a shadow branch"
+    );
+
+    // Latest checkpoint tree should contain the transcript metadata files.
+    let tree_hash = latest_temporary_tree_hash(dir.path(), "s_transcript")
+        .expect("latest temporary checkpoint tree hash should exist");
+    let result = run_git(dir.path(), &["ls-tree", "-r", "--name-only", &tree_hash]);
+    assert!(result.is_ok(), "temporary checkpoint tree should exist");
     let files = result.unwrap();
     assert!(
         files.contains(".bitloops/metadata/s_transcript/full.jsonl"),
-        "shadow branch should contain full.jsonl: {files}"
+        "checkpoint tree should contain full.jsonl: {files}"
     );
     assert!(
         files.contains(".bitloops/metadata/s_transcript/prompt.txt"),
-        "shadow branch should contain prompt.txt: {files}"
+        "checkpoint tree should contain prompt.txt: {files}"
     );
     assert!(
         files.contains(".bitloops/metadata/s_transcript/summary.txt"),
-        "shadow branch should contain summary.txt: {files}"
+        "checkpoint tree should contain summary.txt: {files}"
     );
     assert!(
         files.contains(".bitloops/metadata/s_transcript/context.md"),
-        "shadow branch should contain context.md: {files}"
+        "checkpoint tree should contain context.md: {files}"
     );
 }
 
@@ -1858,13 +2063,26 @@ fn write_temporary_deduplication() {
 
         strategy.save_step(&ctx).unwrap();
         let shadow = shadow_branch_ref(&head, "");
-        let first_hash = run_git(dir.path(), &["rev-parse", &shadow]).unwrap();
+        assert!(
+            run_git(dir.path(), &["rev-parse", &shadow]).is_err(),
+            "save_step should not create a shadow branch"
+        );
+        let first_hash = latest_temporary_tree_hash(dir.path(), "dedup-session")
+            .expect("first temporary checkpoint row should exist");
+        let count_after_first = temporary_checkpoint_count(dir.path(), "dedup-session");
+        assert_eq!(count_after_first, 1);
 
         strategy.save_step(&ctx).unwrap();
-        let second_hash = run_git(dir.path(), &["rev-parse", &shadow]).unwrap();
+        let second_hash = latest_temporary_tree_hash(dir.path(), "dedup-session")
+            .expect("latest temporary checkpoint row should exist after second save");
+        let count_after_second = temporary_checkpoint_count(dir.path(), "dedup-session");
         assert_eq!(
             second_hash, first_hash,
-            "identical content should keep the same temporary checkpoint commit hash"
+            "identical content should keep the same temporary checkpoint tree hash"
+        );
+        assert_eq!(
+            count_after_second, count_after_first,
+            "identical content should not insert a duplicate temporary checkpoint row"
         );
 
         fs::write(
@@ -1873,10 +2091,17 @@ fn write_temporary_deduplication() {
         )
         .unwrap();
         strategy.save_step(&ctx).unwrap();
-        let third_hash = run_git(dir.path(), &["rev-parse", &shadow]).unwrap();
+        let third_hash = latest_temporary_tree_hash(dir.path(), "dedup-session")
+            .expect("latest temporary checkpoint row should exist after content change");
+        let count_after_third = temporary_checkpoint_count(dir.path(), "dedup-session");
         assert_ne!(
             third_hash, first_hash,
-            "modified content should create a new temporary checkpoint commit"
+            "modified content should create a new temporary checkpoint tree hash"
+        );
+        assert_eq!(
+            count_after_third,
+            count_after_second + 1,
+            "changed content should insert a new temporary checkpoint row"
         );
     });
 }
@@ -3060,7 +3285,7 @@ fn first_checkpoint_opts(
     WriteTemporaryOptions {
         session_id: session_id.to_string(),
         base_commit: base_commit.to_string(),
-        worktree_id: String::new(),
+        step_number: 1,
         modified_files: vec![],
         new_files: vec![],
         deleted_files: vec![],
@@ -4055,7 +4280,7 @@ fn write_temporary_task_subagent_transcript_redacts_secrets() {
         WriteTemporaryTaskOptions {
             session_id: "test-session".to_string(),
             base_commit: base_commit.clone(),
-            worktree_id: String::new(),
+            step_number: 1,
             tool_use_id: "toolu_test456".to_string(),
             agent_id: "agent1".to_string(),
             modified_files: vec![],
@@ -4077,13 +4302,26 @@ fn write_temporary_task_subagent_transcript_redacts_secrets() {
         result.is_ok(),
         "write_temporary_task should redact subagent transcript secrets: {result:?}"
     );
+    let result = result.unwrap();
 
     let shadow_branch = shadow_branch_ref(&base_commit, "");
+    assert!(
+        run_git(dir.path(), &["rev-parse", &shadow_branch]).is_err(),
+        "write_temporary_task should not create a shadow branch"
+    );
+
+    let latest_tree_hash = latest_temporary_tree_hash(dir.path(), "test-session")
+        .expect("task checkpoint should persist a temporary_checkpoints row");
+    assert_eq!(
+        latest_tree_hash, result.commit_hash,
+        "write_temporary_task result should return the persisted tree hash"
+    );
+
     let agent_path =
         ".bitloops/metadata/test-session/tasks/toolu_test456/agent-agent1.jsonl".to_string();
     let content = run_git(
         dir.path(),
-        &["show", &format!("{shadow_branch}:{agent_path}")],
+        &["show", &format!("{}:{agent_path}", result.commit_hash)],
     )
     .unwrap();
     assert!(
@@ -4092,11 +4330,11 @@ fn write_temporary_task_subagent_transcript_redacts_secrets() {
     );
     assert!(
         !content.contains(HIGH_ENTROPY_SECRET),
-        "subagent transcript on shadow branch should not contain secret"
+        "subagent transcript in checkpoint tree should not contain secret"
     );
     assert!(
         content.contains("REDACTED"),
-        "subagent transcript on shadow branch should contain REDACTED"
+        "subagent transcript in checkpoint tree should contain REDACTED"
     );
 }
 

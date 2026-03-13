@@ -57,42 +57,9 @@ impl ManualCommitStrategy {
         state.last_checkpoint_id.clear();
         state.turn_checkpoint_ids.clear();
 
-        self.migrate_shadow_branch_if_needed(&mut state)?;
         state.pending_prompt_attribution = Some(self.calculate_prompt_attribution_at_start(&state));
 
         self.backend.save_session(&state)
-    }
-
-    fn migrate_shadow_branch_if_needed(&self, state: &mut SessionState) -> Result<()> {
-        if state.base_commit.trim().is_empty() {
-            return Ok(());
-        }
-
-        let Some(current_head) = try_head_hash(&self.repo_root)? else {
-            return Ok(());
-        };
-        if state.base_commit == current_head {
-            return Ok(());
-        }
-
-        let old_shadow_ref = shadow_branch_ref(&state.base_commit, &state.worktree_id);
-        let new_shadow_ref = shadow_branch_ref(&current_head, &state.worktree_id);
-        if old_shadow_ref != new_shadow_ref
-            && let Ok(old_shadow_commit) = run_git(&self.repo_root, &["rev-parse", &old_shadow_ref])
-            && !old_shadow_commit.trim().is_empty()
-        {
-            run_git(
-                &self.repo_root,
-                &["update-ref", &new_shadow_ref, old_shadow_commit.trim()],
-            )?;
-            let old_short = old_shadow_ref
-                .strip_prefix("refs/heads/")
-                .unwrap_or(old_shadow_ref.as_str());
-            let _ = run_git(&self.repo_root, &["branch", "-D", old_short]);
-        }
-
-        state.base_commit = current_head;
-        Ok(())
     }
 
     fn calculate_prompt_attribution_at_start(
@@ -123,11 +90,9 @@ impl ManualCommitStrategy {
         } else {
             load_tree_snapshot(&self.repo_root, &state.base_commit)
         };
-        let last_checkpoint_tree = resolve_commit(
-            &self.repo_root,
-            &shadow_branch_ref(&state.base_commit, &state.worktree_id),
-        )
-        .and_then(|commit| load_tree_snapshot(&self.repo_root, &commit));
+        let last_checkpoint_tree =
+            latest_temporary_checkpoint_tree_hash(&self.repo_root, &state.session_id)
+                .and_then(|tree_hash| load_tree_snapshot(&self.repo_root, &tree_hash));
 
         let attr = calculate_prompt_attribution(
             base_tree.as_ref(),
