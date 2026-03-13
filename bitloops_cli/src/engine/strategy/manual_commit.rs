@@ -54,13 +54,18 @@ const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct ManualCommitStrategy {
     repo_root: PathBuf,
-    backend: LocalFileBackend,
+    backend: Box<dyn SessionBackend>,
 }
 
 impl ManualCommitStrategy {
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         let root = repo_root.into();
-        let backend = LocalFileBackend::new(&root);
+        let backend = Box::new(LocalFileBackend::new(&root));
+        Self::with_backend(root, backend)
+    }
+
+    pub fn with_backend(repo_root: impl Into<PathBuf>, backend: Box<dyn SessionBackend>) -> Self {
+        let root = repo_root.into();
         Self {
             repo_root: root,
             backend,

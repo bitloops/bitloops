@@ -10,6 +10,9 @@ use super::state::{PrePromptState, PreTaskState, SessionState};
 pub trait SessionBackend: Send + Sync {
     // ── Session state (<git-common-dir>/bitloops-sessions/<id>.json) ─────
 
+    /// Return all persisted session states.
+    fn list_sessions(&self) -> Result<Vec<SessionState>>;
+
     /// Load session state. Returns `None` if no state file exists yet.
     fn load_session(&self, session_id: &str) -> Result<Option<SessionState>>;
 
@@ -41,4 +44,30 @@ pub trait SessionBackend: Send + Sync {
     /// Scan for any active pre-task marker and return its `tool_use_id`.
     /// Returns `None` if no marker is found (i.e. not inside a subagent turn).
     fn find_active_pre_task(&self) -> Result<Option<String>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::session::local_backend::LocalFileBackend;
+    use crate::engine::session::phase::SessionPhase;
+    use tempfile::TempDir;
+
+    #[test]
+    fn list_sessions_is_available_via_trait_object() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+
+        let backend: Box<dyn SessionBackend> = Box::new(LocalFileBackend::new(dir.path()));
+        let session = SessionState {
+            session_id: "session-trait-object".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        };
+        backend.save_session(&session).unwrap();
+
+        let sessions = backend.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "session-trait-object");
+    }
 }

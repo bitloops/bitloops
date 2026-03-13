@@ -103,6 +103,10 @@ impl LocalFileBackend {
 }
 
 impl SessionBackend for LocalFileBackend {
+    fn list_sessions(&self) -> Result<Vec<SessionState>> {
+        LocalFileBackend::list_sessions(self)
+    }
+
     fn load_session(&self, session_id: &str) -> Result<Option<SessionState>> {
         validate_session_id(session_id)?;
         let path = self.session_path(session_id);

@@ -1,7 +1,12 @@
 use super::*;
 use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
+use crate::engine::session::backend::SessionBackend;
+use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
@@ -61,6 +66,90 @@ fn setup_empty_git_repo(dir: &TempDir) {
     run(&["init"]);
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
+}
+
+struct CountingBackend {
+    inner: LocalFileBackend,
+    save_calls: Arc<AtomicUsize>,
+}
+
+impl SessionBackend for CountingBackend {
+    fn list_sessions(&self) -> anyhow::Result<Vec<SessionState>> {
+        self.inner.list_sessions()
+    }
+
+    fn load_session(&self, session_id: &str) -> anyhow::Result<Option<SessionState>> {
+        self.inner.load_session(session_id)
+    }
+
+    fn save_session(&self, state: &SessionState) -> anyhow::Result<()> {
+        self.save_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.save_session(state)
+    }
+
+    fn load_pre_prompt(&self, session_id: &str) -> anyhow::Result<Option<PrePromptState>> {
+        self.inner.load_pre_prompt(session_id)
+    }
+
+    fn save_pre_prompt(&self, state: &PrePromptState) -> anyhow::Result<()> {
+        self.inner.save_pre_prompt(state)
+    }
+
+    fn delete_pre_prompt(&self, session_id: &str) -> anyhow::Result<()> {
+        self.inner.delete_pre_prompt(session_id)
+    }
+
+    fn create_pre_task_marker(&self, state: &PreTaskState) -> anyhow::Result<()> {
+        self.inner.create_pre_task_marker(state)
+    }
+
+    fn load_pre_task_marker(&self, tool_use_id: &str) -> anyhow::Result<Option<PreTaskState>> {
+        self.inner.load_pre_task_marker(tool_use_id)
+    }
+
+    fn delete_pre_task_marker(&self, tool_use_id: &str) -> anyhow::Result<()> {
+        self.inner.delete_pre_task_marker(tool_use_id)
+    }
+
+    fn find_active_pre_task(&self) -> anyhow::Result<Option<String>> {
+        self.inner.find_active_pre_task()
+    }
+}
+
+#[test]
+fn initialize_session_uses_injected_session_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let save_calls = Arc::new(AtomicUsize::new(0));
+
+    let strategy = ManualCommitStrategy::with_backend(
+        dir.path(),
+        Box::new(CountingBackend {
+            inner: LocalFileBackend::new(dir.path()),
+            save_calls: Arc::clone(&save_calls),
+        }),
+    );
+
+    strategy
+        .initialize_session(
+            "injected-backend-session",
+            AGENT_TYPE_CLAUDE_CODE,
+            "/tmp/injected-transcript.jsonl",
+            "test prompt",
+        )
+        .unwrap();
+
+    assert!(
+        save_calls.load(Ordering::SeqCst) >= 1,
+        "expected injected backend to record at least one save"
+    );
+
+    let verify_backend = LocalFileBackend::new(dir.path());
+    let state = verify_backend
+        .load_session("injected-backend-session")
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.phase, SessionPhase::Active);
 }
 
 fn git_ok(repo_root: &Path, args: &[&str]) -> String {
