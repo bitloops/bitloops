@@ -38,3 +38,33 @@ impl Strategy for NoOpStrategy {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noop_strategy_accepts_all_strategy_operations() {
+        let strategy = NoOpStrategy;
+
+        assert_eq!(strategy.name(), "noop");
+        strategy
+            .save_step(&StepContext::default())
+            .expect("save_step should be a no-op");
+        strategy
+            .save_task_step(&TaskStepContext::default())
+            .expect("save_task_step should be a no-op");
+        strategy
+            .prepare_commit_msg(Path::new("/tmp/ignored"), Some("message"))
+            .expect("prepare_commit_msg should be a no-op");
+        strategy
+            .commit_msg(Path::new("/tmp/ignored"))
+            .expect("commit_msg should be a no-op");
+        strategy
+            .post_commit()
+            .expect("post_commit should be a no-op");
+        strategy
+            .pre_push("origin")
+            .expect("pre_push should be a no-op");
+    }
+}
