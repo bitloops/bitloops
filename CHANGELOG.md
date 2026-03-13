@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Tree-sitter is now used as the parsing backend for all DevQL code extraction, providing accurate language-aware symbol resolution.
 - Updated DevQL Getting Started documentation with expanded field references and query examples.
 - Improved the version command and added a `bitloops --version --check` flag to check for the latest version.
-- Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the .bitloops/config.json file.
+- Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the user-home config file (`~/.bitloops/config.json`).
 
 ### Changed
 
