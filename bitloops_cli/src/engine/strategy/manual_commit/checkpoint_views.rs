@@ -251,6 +251,29 @@ pub fn update_summary(
     checkpoint_id: &str,
     summary: serde_json::Value,
 ) -> Result<()> {
+    let redacted_summary = redact_json_value(&summary);
+    let db_updated =
+        update_checkpoint_session_summary_in_db(repo_root, checkpoint_id, &redacted_summary)?;
+    if !db_updated {
+        return update_summary_legacy(repo_root, checkpoint_id, redacted_summary);
+    }
+
+    if let Err(err) = update_summary_legacy(repo_root, checkpoint_id, redacted_summary) {
+        let message = format!("{err:#}");
+        if !(message.contains("checkpoint not found")
+            || message.contains("reading session metadata"))
+        {
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+fn update_summary_legacy(
+    repo_root: &Path,
+    checkpoint_id: &str,
+    redacted_summary: serde_json::Value,
+) -> Result<()> {
     ensure_metadata_branch(repo_root)?;
     let summary_view = read_committed(repo_root, checkpoint_id)?
         .ok_or_else(|| anyhow::anyhow!("checkpoint not found"))?;
@@ -267,7 +290,7 @@ pub fn update_summary(
         .with_context(|| format!("reading session metadata at {meta_tree_path}"))?;
     let mut value: serde_json::Value = serde_json::from_str(&raw)
         .with_context(|| format!("parsing session metadata at {meta_tree_path}"))?;
-    value["summary"] = redact_json_value(&summary);
+    value["summary"] = redacted_summary;
 
     let staging_dir = repo_root
         .join(paths::BITLOOPS_TMP_DIR)
