@@ -26,6 +26,11 @@ pub trait BlobStore: Send + Sync {
     fn exists(&self, key: &str) -> Result<bool>;
 }
 
+pub struct ResolvedBlobStore {
+    pub store: Box<dyn BlobStore>,
+    pub backend: &'static str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlobType {
     Transcript,
@@ -107,13 +112,20 @@ pub fn create_blob_store_from_backend_config(
 }
 
 pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> {
+    Ok(create_blob_store_with_backend(cfg)?.store)
+}
+
+pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
     match cfg.provider {
-        BlobStorageProvider::Local => Ok(Box::new(LocalBlobStore::from_config(cfg)?)),
+        BlobStorageProvider::Local => Ok(ResolvedBlobStore {
+            store: Box::new(LocalBlobStore::from_config(cfg)?),
+            backend: "local",
+        }),
         BlobStorageProvider::S3 => {
-            create_with_local_fallback(cfg, "s3", || S3BlobStore::from_config(cfg))
+            create_with_local_fallback(cfg, "s3", "s3", || S3BlobStore::from_config(cfg))
         }
         BlobStorageProvider::Gcs => {
-            create_with_local_fallback(cfg, "gcs", || GcsBlobStore::from_config(cfg))
+            create_with_local_fallback(cfg, "gcs", "gcs", || GcsBlobStore::from_config(cfg))
         }
     }
 }
@@ -121,19 +133,26 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
 fn create_with_local_fallback<T, F>(
     cfg: &BlobStorageConfig,
     provider_name: &str,
+    provider_backend: &'static str,
     build_remote: F,
-) -> Result<Box<dyn BlobStore>>
+) -> Result<ResolvedBlobStore>
 where
     T: BlobStore + 'static,
     F: FnOnce() -> Result<T>,
 {
     match build_remote() {
-        Ok(store) => Ok(Box::new(store)),
+        Ok(store) => Ok(ResolvedBlobStore {
+            store: Box::new(store),
+            backend: provider_backend,
+        }),
         Err(err) => {
             log::warn!(
                 "failed to initialise {provider_name} blob storage backend, falling back to local filesystem: {err:#}"
             );
-            Ok(Box::new(LocalBlobStore::from_config(cfg)?))
+            Ok(ResolvedBlobStore {
+                store: Box::new(LocalBlobStore::from_config(cfg)?),
+                backend: "local",
+            })
         }
     }
 }
@@ -284,7 +303,9 @@ mod tests {
             temp.path().to_string_lossy().to_string(),
         );
 
-        let store = create_blob_store(&cfg).expect("fallback local store");
+        let resolved = create_blob_store_with_backend(&cfg).expect("fallback local store");
+        assert_eq!(resolved.backend, "local");
+        let store = resolved.store;
         store
             .write("repo-id/cp-1/0/transcript.jsonl", b"hello")
             .expect("write via local fallback");
@@ -300,7 +321,9 @@ mod tests {
             temp.path().to_string_lossy().to_string(),
         );
 
-        let store = create_blob_store(&cfg).expect("fallback local store");
+        let resolved = create_blob_store_with_backend(&cfg).expect("fallback local store");
+        assert_eq!(resolved.backend, "local");
+        let store = resolved.store;
         store
             .write("repo-id/cp-2/1/prompts.txt", b"prompt content")
             .expect("write via local fallback");

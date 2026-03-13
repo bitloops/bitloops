@@ -5,14 +5,6 @@ struct CheckpointStorageContext {
     repo_id: String,
 }
 
-fn blob_backend_name(provider: crate::devql_config::BlobStorageProvider) -> &'static str {
-    match provider {
-        crate::devql_config::BlobStorageProvider::Local => "local",
-        crate::devql_config::BlobStorageProvider::S3 => "s3",
-        crate::devql_config::BlobStorageProvider::Gcs => "gcs",
-    }
-}
-
 fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorageContext> {
     let cfg = crate::devql_config::resolve_devql_backend_config()
         .context("resolving DevQL backend config for committed checkpoints")?;
@@ -37,7 +29,7 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
                 .to_string(),
         );
     }
-    let blob_store = crate::engine::blob::create_blob_store(&blob_cfg)
+    let resolved_blob_store = crate::engine::blob::create_blob_store_with_backend(&blob_cfg)
         .context("initialising blob storage for committed checkpoints")?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
@@ -46,8 +38,8 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
 
     Ok(CheckpointStorageContext {
         sqlite,
-        blob_store,
-        blob_backend: blob_backend_name(blob_cfg.provider).to_string(),
+        blob_store: resolved_blob_store.store,
+        blob_backend: resolved_blob_store.backend.to_string(),
         repo_id,
     })
 }

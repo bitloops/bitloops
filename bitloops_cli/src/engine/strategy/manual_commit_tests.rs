@@ -4,7 +4,9 @@ use crate::engine::db::SqliteConnectionPool;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
-use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
+use crate::test_support::process_state::{
+    git_command, with_env_var, with_env_vars, with_git_env_cleared,
+};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -215,6 +217,7 @@ fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
 
 #[derive(Debug)]
 struct CheckpointBlobRow {
+    storage_backend: String,
     storage_path: String,
     content_hash: String,
 }
@@ -224,8 +227,26 @@ fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
 }
 
 fn with_checkpoint_storage_env<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
-    let _ = repo_root;
-    f()
+    let sqlite_path = temporary_checkpoints_db_path(repo_root)
+        .to_string_lossy()
+        .to_string();
+    let blob_root = committed_checkpoint_blob_root(repo_root)
+        .to_string_lossy()
+        .to_string();
+    with_env_vars(
+        &[
+            ("BITLOOPS_DEVQL_SQLITE_PATH", Some(sqlite_path.as_str())),
+            ("BITLOOPS_DEVQL_BLOB_PROVIDER", Some("local")),
+            ("BITLOOPS_DEVQL_BLOB_LOCAL_PATH", Some(blob_root.as_str())),
+            ("BITLOOPS_DEVQL_BLOB_S3_BUCKET", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_REGION", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_ACCESS_KEY_ID", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_SECRET_ACCESS_KEY", None),
+            ("BITLOOPS_DEVQL_BLOB_GCS_BUCKET", None),
+            ("BITLOOPS_DEVQL_BLOB_GCS_CREDENTIALS_PATH", None),
+        ],
+        f,
+    )
 }
 
 fn query_checkpoint_session_content_hash(
@@ -263,15 +284,16 @@ fn query_checkpoint_blob_row(
     sqlite
         .with_connection(|conn| {
             conn.query_row(
-                "SELECT storage_path, content_hash
+                "SELECT storage_backend, storage_path, content_hash
                  FROM checkpoint_blobs
                  WHERE checkpoint_id = ?1 AND session_index = ?2 AND blob_type = ?3
                  LIMIT 1",
                 rusqlite::params![checkpoint_id, session_index, blob_type],
                 |row| {
                     Ok(CheckpointBlobRow {
-                        storage_path: row.get(0)?,
-                        content_hash: row.get(1)?,
+                        storage_backend: row.get(0)?,
+                        storage_path: row.get(1)?,
+                        content_hash: row.get(2)?,
                     })
                 },
             )
@@ -3404,6 +3426,57 @@ fn update_committed_updates_db_blob_and_content_hash() {
         assert_eq!(
             String::from_utf8_lossy(&transcript_payload),
             updated_transcript
+        );
+    });
+}
+
+#[test]
+fn write_committed_records_local_backend_when_s3_provider_falls_back() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let checkpoint_id = "949596979899";
+
+    let sqlite_path = temporary_checkpoints_db_path(dir.path())
+        .to_string_lossy()
+        .to_string();
+    let blob_root = committed_checkpoint_blob_root(dir.path())
+        .to_string_lossy()
+        .to_string();
+
+    with_env_vars(
+        &[
+            ("BITLOOPS_DEVQL_SQLITE_PATH", Some(sqlite_path.as_str())),
+            ("BITLOOPS_DEVQL_BLOB_PROVIDER", Some("s3")),
+            ("BITLOOPS_DEVQL_BLOB_LOCAL_PATH", Some(blob_root.as_str())),
+            ("BITLOOPS_DEVQL_BLOB_S3_BUCKET", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_REGION", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_ACCESS_KEY_ID", None),
+            ("BITLOOPS_DEVQL_BLOB_S3_SECRET_ACCESS_KEY", None),
+            ("BITLOOPS_DEVQL_BLOB_GCS_BUCKET", None),
+            ("BITLOOPS_DEVQL_BLOB_GCS_CREDENTIALS_PATH", None),
+        ],
+        || {
+            let result = write_committed(
+                dir.path(),
+                default_write_committed_opts(
+                    checkpoint_id,
+                    "fallback-session",
+                    "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
+                ),
+            );
+            assert!(
+                result.is_ok(),
+                "write_committed should succeed with local fallback: {result:?}"
+            );
+        },
+    );
+
+    with_checkpoint_storage_env(dir.path(), || {
+        let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
+            .expect("transcript blob reference should exist");
+        assert_eq!(
+            transcript_blob.storage_backend, "local",
+            "storage_backend should record effective local fallback backend"
         );
     });
 }
