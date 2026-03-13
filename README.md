@@ -22,33 +22,35 @@
     <a href="#faqs">FAQs</a>
   </p>
   <p style="margin:4px 0;">
-    <a href="https://github.com/bitloops/bitloops/network/">
-      <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000&colorA=7404e4&colorB=000000" alt="GitHub forks" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/stargazers/">
-      <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000&colorA=7404e4&colorB=000000" alt="GitHub stars" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/commit/">
-      <img src="https://badgen.net/github/commits/bitloops/bitloops?color=7404e4" alt="GitHub commits" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/tags/">
-      <img src="https://badgen.net/github/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/releases">
-      <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg?color=7404e4" alt="Downloads" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
-      <img src="https://img.shields.io/github/license/bitloops/bitloops?colorA=7404e4&colorB=000000" alt="License" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-      <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=7404e4&colorB=000000" alt="Contributors" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-      <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-7404e4" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-      <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" />
-    </a>
+<p style="margin:4px 0;">
+  <a href="https://github.com/bitloops/bitloops/network/">
+    <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork" alt="GitHub forks" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/stargazers/">
+    <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star" alt="GitHub stars" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/commit/">
+    <img src="https://badgen.net/github/commits/bitloops/bitloops?color=6b7280" alt="GitHub Commits" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/tags/">
+    <img src="https://badgen.net/github/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/releases">
+    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg?color=6b7280" alt="Downloads" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/bitloops/bitloops?color=111827" alt="License" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?color=6b7280" alt="Contributors" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops">
+    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4" alt="Local first" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops">
+    <img src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" alt="Agent agnostic" />
+  </a>
+</p>
   </div>
 
 ## About Bitloops
@@ -63,34 +65,17 @@ instead of more opaque.
 
 ### Why Bitloops
 
-<table style="width:100%; border-collapse:collapse; background:#f3f1ff; border:2px solid #7404e4;">
-  <thead>
-    <tr>
-      <th style="text-align:left; padding:12px; background:#7404e4; color:#ffffff;">Without Bitloops</th>
-      <th style="text-align:left; padding:12px; background:#7404e4; color:#ffffff;">With Bitloops</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Each session starts from zero</td>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Sessions can draw from shared repository memory</td>
-    </tr>
-    <tr>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Agents build siloed, tool-specific context</td>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Supported agents read from the same knowledge store</td>
-    </tr>
-    <tr>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Reviewers see diffs with no reasoning trail</td>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Commits are linked to the developer-agent conversation behind them</td>
-    </tr>
-    <tr>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#fdfcff;">Teams re-explain architecture over and over</td>
-      <td style="padding:12px; border-top:1px solid #d0c0ff; background:#eef2ff;">Important decisions remain available for the next session</td>
-    </tr>
-  </tbody>
-</table>
+Bitloops gives every agent shared repository memory and keeps reviewer context aligned, so the comparison below contrasts working without that shared layer versus with Bitloops in place.
 
-### What Bitloops Does
+| | |
+|---|---|
+| **Without Bitloops** | **With Bitloops** |
+| Each session starts from zero | Sessions draw from shared repository memory |
+| Agents build siloed, tool-specific context | Agents read from a shared semantic knowledge store |
+| Reviewers see diffs with no reasoning trail | Commits link to the developer-AI conversation behind them |
+| Teams re-explain architecture repeatedly | Important decisions remain available for future sessions |
+
+### What Bitloops does
 
 - **Shared memory for coding agents:** Bitloops gives supported tools the same repository-scoped knowledge layer, so
 context becomes shared infrastructure instead of tribal knowledge.
