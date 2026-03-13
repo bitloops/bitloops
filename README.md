@@ -23,25 +23,34 @@
   </p>
   <p style="margin:4px 0;">
     <a href="https://github.com/bitloops/bitloops/network/">
-      <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000" alt="GitHub forks" />
+      <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork&maxAge=2592000&colorA=7404e4&colorB=000000" alt="GitHub forks" />
     </a>
     <a href="https://github.com/bitloops/bitloops/stargazers/">
-      <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000" alt="GitHub stars" />
+      <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star&maxAge=2592000&colorA=7404e4&colorB=000000" alt="GitHub stars" />
     </a>
     <a href="https://github.com/bitloops/bitloops/commit/">
-      <img src="https://badgen.net/github/commits/bitloops/bitloops" alt="GitHub commits" />
+      <img src="https://badgen.net/github/commits/bitloops/bitloops?color=7404e4" alt="GitHub commits" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/tags/">
+      <img src="https://badgen.net/github/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
+    </a>
+    <a href="https://github.com/bitloops/bitloops/releases">
+      <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg?color=7404e4" alt="Downloads" />
     </a>
     <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
-      <img src="https://img.shields.io/github/license/bitloops/bitloops?colorA=00C586&colorB=000000" alt="License" />
+      <img src="https://img.shields.io/github/license/bitloops/bitloops?colorA=7404e4&colorB=000000" alt="License" />
     </a>
     <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-      <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=00C586&colorB=000000" alt="Contributors" />
+      <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=7404e4&colorB=000000" alt="Contributors" />
+    </a>
+    <a href="https://github.com/sponsors/bitloops">
+      <img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor" />
     </a>
   </p>
   <p>
-    <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-black" />
-    <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-black" />
-    <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-black" />
+    <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-7404e4" />
+    <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-7404e4" />
+    <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" />
   </p>
 </div>
 
