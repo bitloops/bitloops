@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::devql_config::{
-    DevqlFileConfig, EventsProvider, RelationalProvider, resolve_devql_backend_config,
+    DevqlBackendConfig, DevqlFileConfig, EventsBackendConfig, EventsProvider,
+    RelationalBackendConfig, RelationalProvider, resolve_devql_backend_config,
 };
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -94,79 +95,7 @@ const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 
 pub async fn run_connection_status() -> Result<()> {
     let cfg = resolve_devql_backend_config()?;
-    let mut rows = Vec::new();
-
-    let relational_status = match cfg.relational.provider {
-        RelationalProvider::Sqlite => {
-            let sqlite_path = cfg.relational.resolve_sqlite_db_path();
-            match sqlite_path {
-                Ok(path) => match check_sqlite_connection(&path).await {
-                    Ok(_) => DatabaseConnectionStatus::Connected,
-                    Err(err) => classify_connection_error(&err.to_string()),
-                },
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
-        RelationalProvider::Postgres => match cfg.relational.postgres_dsn.as_deref() {
-            Some(dsn) => match check_postgres_connection(dsn).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            },
-            None => DatabaseConnectionStatus::NotConfigured,
-        },
-    };
-
-    let relational_label = match cfg.relational.provider {
-        RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
-        RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
-    };
-    rows.push(DatabaseStatusRow {
-        db: relational_label,
-        status: relational_status,
-    });
-
-    let events_status = match cfg.events.provider {
-        EventsProvider::DuckDb => {
-            let duckdb_path = cfg.events.duckdb_path_or_default();
-            match check_duckdb_connection(&duckdb_path).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
-        EventsProvider::ClickHouse => {
-            let clickhouse_url = cfg
-                .events
-                .clickhouse_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:8123".to_string());
-            let clickhouse_database = cfg
-                .events
-                .clickhouse_database
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let clickhouse_endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
-            match run_clickhouse_sql_http(
-                &clickhouse_endpoint,
-                cfg.events.clickhouse_user.as_deref(),
-                cfg.events.clickhouse_password.as_deref(),
-                "SELECT 1 FORMAT TabSeparated",
-            )
-            .await
-            {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
-    };
-
-    let events_label = match cfg.events.provider {
-        EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
-        EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
-    };
-    rows.push(DatabaseStatusRow {
-        db: events_label,
-        status: events_status,
-    });
+    let rows = collect_connection_status_rows(&cfg).await;
 
     print_db_status_table(&rows);
 
@@ -176,6 +105,86 @@ pub async fn run_connection_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn collect_connection_status_rows(cfg: &DevqlBackendConfig) -> Vec<DatabaseStatusRow> {
+    vec![
+        DatabaseStatusRow {
+            db: relational_status_label(&cfg.relational),
+            status: relational_connection_status(&cfg.relational).await,
+        },
+        DatabaseStatusRow {
+            db: events_status_label(&cfg.events),
+            status: events_connection_status(&cfg.events).await,
+        },
+    ]
+}
+
+fn relational_status_label(cfg: &RelationalBackendConfig) -> &'static str {
+    match cfg.provider {
+        RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
+        RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
+    }
+}
+
+fn events_status_label(cfg: &EventsBackendConfig) -> &'static str {
+    match cfg.provider {
+        EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
+        EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
+    }
+}
+
+async fn relational_connection_status(cfg: &RelationalBackendConfig) -> DatabaseConnectionStatus {
+    match cfg.provider {
+        RelationalProvider::Sqlite => match cfg.resolve_sqlite_db_path() {
+            Ok(path) => match check_sqlite_connection(&path).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            },
+            Err(err) => classify_connection_error(&err.to_string()),
+        },
+        RelationalProvider::Postgres => match cfg.postgres_dsn.as_deref() {
+            Some(dsn) => match check_postgres_connection(dsn).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            },
+            None => DatabaseConnectionStatus::NotConfigured,
+        },
+    }
+}
+
+async fn events_connection_status(cfg: &EventsBackendConfig) -> DatabaseConnectionStatus {
+    match cfg.provider {
+        EventsProvider::DuckDb => {
+            let duckdb_path = cfg.duckdb_path_or_default();
+            match check_duckdb_connection(&duckdb_path).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
+        EventsProvider::ClickHouse => {
+            let clickhouse_url = cfg
+                .clickhouse_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:8123".to_string());
+            let clickhouse_database = cfg
+                .clickhouse_database
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            let clickhouse_endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
+            match run_clickhouse_sql_http(
+                &clickhouse_endpoint,
+                cfg.clickhouse_user.as_deref(),
+                cfg.clickhouse_password.as_deref(),
+                "SELECT 1 FORMAT TabSeparated",
+            )
+            .await
+            {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
+    }
 }
 
 async fn check_postgres_connection(dsn: &str) -> Result<()> {

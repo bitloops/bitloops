@@ -3,6 +3,7 @@ use crate::commands::devql::DevqlCommand;
 use clap::Parser;
 use serde_json::json;
 use std::env;
+use tempfile::tempdir;
 
 fn test_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -27,6 +28,43 @@ fn test_cfg_with_repo_id(repo_suffix: &str, dsn: &str) -> DevqlConfig {
     cfg.pg_dsn = Some(dsn.to_string());
     cfg.repo.repo_id = deterministic_uuid(&format!("repo://{repo_suffix}"));
     cfg
+}
+
+fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> DevqlBackendConfig {
+    DevqlBackendConfig {
+        relational: RelationalBackendConfig {
+            provider: RelationalProvider::Sqlite,
+            sqlite_path,
+            postgres_dsn: None,
+        },
+        events: EventsBackendConfig {
+            provider: EventsProvider::DuckDb,
+            duckdb_path,
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        },
+    }
+}
+
+fn create_sqlite_db(path: &Path) {
+    let conn = rusqlite::Connection::open(path).expect("create sqlite db");
+    conn.execute_batch("SELECT 1")
+        .expect("validate sqlite db file");
+}
+
+fn create_duckdb_db(path: &Path) {
+    let conn = duckdb::Connection::open(path).expect("create duckdb db");
+    conn.execute_batch("SELECT 1")
+        .expect("validate duckdb db file");
+}
+
+fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {
+    rows.iter()
+        .find(|row| row.db == label)
+        .map(|row| row.status)
+        .unwrap_or_else(|| panic!("missing status row for {label}"))
 }
 
 fn test_file_row(
@@ -415,6 +453,50 @@ fn devql_file_config_parses_top_level_env_keys() {
     assert_eq!(cfg.pg_dsn.as_deref(), Some("postgres://x/y"));
     assert_eq!(cfg.clickhouse_url.as_deref(), Some("http://ch:8123"));
     assert_eq!(cfg.clickhouse_database.as_deref(), Some("analytics"));
+}
+
+#[tokio::test]
+async fn connection_status_rows_report_connected_for_sqlite_and_duckdb_files() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let duckdb_path = temp.path().join("events.duckdb");
+
+    create_sqlite_db(&sqlite_path);
+    create_duckdb_db(&duckdb_path);
+
+    let cfg = backend_cfg(
+        Some(sqlite_path.display().to_string()),
+        Some(duckdb_path.display().to_string()),
+    );
+
+    let rows = collect_connection_status_rows(&cfg).await;
+
+    assert_eq!(
+        status_for(&rows, RELATIONAL_SQLITE_LABEL),
+        DatabaseConnectionStatus::Connected
+    );
+    assert_eq!(
+        status_for(&rows, EVENTS_DUCKDB_LABEL),
+        DatabaseConnectionStatus::Connected
+    );
+}
+
+#[tokio::test]
+async fn connection_status_rows_report_error_for_invalid_sqlite_and_duckdb_paths() {
+    let temp = tempdir().expect("temp dir");
+    let invalid_path = temp.path().display().to_string();
+    let cfg = backend_cfg(Some(invalid_path.clone()), Some(invalid_path));
+
+    let rows = collect_connection_status_rows(&cfg).await;
+
+    assert_eq!(
+        status_for(&rows, RELATIONAL_SQLITE_LABEL),
+        DatabaseConnectionStatus::Error
+    );
+    assert_eq!(
+        status_for(&rows, EVENTS_DUCKDB_LABEL),
+        DatabaseConnectionStatus::Error
+    );
 }
 
 #[test]
