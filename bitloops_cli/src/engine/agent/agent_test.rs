@@ -1,9 +1,12 @@
 use super::*;
 use serde_json::json;
 use std::collections::HashMap;
+use std::io::Cursor;
 
 const MOCK_AGENT_NAME: &str = "mock";
 const MOCK_AGENT_TYPE: &str = "Mock Agent";
+const MINIMAL_AGENT_NAME: &str = "minimal";
+const MINIMAL_AGENT_TYPE: &str = "Minimal Agent";
 
 #[derive(Default)]
 struct MockAgent;
@@ -108,6 +111,46 @@ impl Agent for MockFileWatcher {
 
 impl FileWatcher for MockFileWatcher {}
 
+struct MinimalAgent;
+
+impl Agent for MinimalAgent {
+    fn name(&self) -> String {
+        MINIMAL_AGENT_NAME.to_string()
+    }
+
+    fn agent_type(&self) -> String {
+        MINIMAL_AGENT_TYPE.to_string()
+    }
+}
+
+struct MinimalHookSupport;
+
+impl Agent for MinimalHookSupport {
+    fn name(&self) -> String {
+        MINIMAL_AGENT_NAME.to_string()
+    }
+
+    fn agent_type(&self) -> String {
+        MINIMAL_AGENT_TYPE.to_string()
+    }
+}
+
+impl HookSupport for MinimalHookSupport {}
+
+struct MinimalFileWatcher;
+
+impl Agent for MinimalFileWatcher {
+    fn name(&self) -> String {
+        MINIMAL_AGENT_NAME.to_string()
+    }
+
+    fn agent_type(&self) -> String {
+        MINIMAL_AGENT_TYPE.to_string()
+    }
+}
+
+impl FileWatcher for MinimalFileWatcher {}
+
 #[test]
 #[allow(non_snake_case)]
 fn TestAgentInterfaceCompliance() {
@@ -210,4 +253,102 @@ fn TestSessionChangeStructure() {
     assert_eq!(change.session_id, "test-session");
     assert_eq!(change.event_type, HookType::SessionStart);
     assert_eq!(change.event_type.as_str(), "session_start");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestAgentDefaultMethodsAreSafeNoOps() {
+    let agent = MinimalAgent;
+    let mut stdin = Cursor::new(br#"{"ignored":true}"#);
+
+    assert_eq!(agent.description(), "TODO");
+    assert!(agent.is_preview());
+    assert!(
+        !agent
+            .detect_presence()
+            .expect("presence check should succeed")
+    );
+    assert_eq!(agent.get_session_id(&HookInput::default()), "");
+    assert!(agent.protected_dirs().is_empty());
+    assert!(agent.hook_names().is_empty());
+    assert!(
+        agent
+            .parse_hook_event("stop", &mut stdin)
+            .expect("hook parsing should succeed")
+            .is_none()
+    );
+    assert!(
+        agent
+            .read_transcript("session-ref")
+            .expect("transcript read should succeed")
+            .is_empty()
+    );
+    assert_eq!(
+        agent
+            .chunk_transcript(b"hello", 1)
+            .expect("chunking should succeed"),
+        vec![b"hello".to_vec()]
+    );
+    assert_eq!(
+        agent
+            .reassemble_transcript(&[b"he".to_vec(), b"llo".to_vec()])
+            .expect("reassembly should succeed"),
+        b"hello".to_vec()
+    );
+    assert_eq!(
+        agent
+            .get_session_dir("/tmp/repo")
+            .expect("session dir lookup should succeed"),
+        ""
+    );
+    assert_eq!(
+        agent.resolve_session_file("/tmp/sessions", "abc123"),
+        "/tmp/sessions/abc123.jsonl"
+    );
+    assert!(
+        agent
+            .read_session(&HookInput::default())
+            .expect("session read should succeed")
+            .is_none()
+    );
+    agent
+        .write_session(&AgentSession::default())
+        .expect("session write should succeed");
+    assert_eq!(agent.format_resume_command("abc123"), "");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestHookSupportDefaultMethodsAreSafeNoOps() {
+    let agent = MinimalHookSupport;
+
+    assert_eq!(
+        agent
+            .install_hooks(false, false)
+            .expect("hook install should succeed"),
+        0
+    );
+    agent
+        .uninstall_hooks()
+        .expect("hook uninstall should succeed");
+    assert!(!agent.are_hooks_installed());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestFileWatcherDefaultMethodsAreSafeNoOps() {
+    let watcher = MinimalFileWatcher;
+
+    assert!(
+        watcher
+            .get_watch_paths()
+            .expect("watch path lookup should succeed")
+            .is_empty()
+    );
+    assert!(
+        watcher
+            .on_file_change("src/main.rs")
+            .expect("file change handler should succeed")
+            .is_none()
+    );
 }

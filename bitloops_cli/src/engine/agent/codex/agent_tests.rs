@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::agent::{Agent, HookSupport};
+use crate::engine::agent::Agent;
 use crate::test_support::process_state::with_cwd;
 
 fn init_repo(path: &std::path::Path) {
@@ -57,15 +57,14 @@ fn read_and_write_session_roundtrip() {
 }
 
 #[test]
-fn hook_support_wires_to_hook_manager() {
+fn path_based_hooks_api_manages_hooks_without_cwd() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
-    with_cwd(dir.path(), || {
-        let agent = CodexAgent;
-        let installed = HookSupport::install_hooks(&agent, false, false).expect("install");
-        assert_eq!(installed, 2);
-        assert!(HookSupport::are_hooks_installed(&agent));
-        HookSupport::uninstall_hooks(&agent).expect("uninstall");
-        assert!(!HookSupport::are_hooks_installed(&agent));
-    });
+
+    let installed = super::hooks::install_hooks_at(dir.path(), false, false).expect("install");
+    assert_eq!(installed, 2);
+    assert!(super::hooks::are_hooks_installed_at(dir.path()));
+
+    super::hooks::uninstall_hooks_at(dir.path()).expect("uninstall");
+    assert!(!super::hooks::are_hooks_installed_at(dir.path()));
 }
