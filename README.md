@@ -1,12 +1,10 @@
   <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Bitloops</h1>
-  <p><strong style="color:#7404e4;">Git captures what changed. Bitloops captures why.</strong></p>
+  <h1>Git captures what changed. Bitloops captures why.</h1>
   <p>
-    Bitloops is the repository-scoped intelligence layer for AI-assisted software
-    development. It records developer-agent conversations on every commit,
-    surfaces structured context back to every session, and keeps that knowledge
-    local so agents and reviewers can work from a shared memory layer.
+    The open-source intelligence layer for AI-driven software development. Bitloops 
+    captures the full developer–AI conversation for every commit and builds a 
+    structured semantic model of your codebase that you and your agents can query.
   </p>
   <p>
     <a href="https://bitloops.com">Website</a>
@@ -33,25 +31,15 @@
     <a href="https://github.com/bitloops/bitloops/commit/">
       <img src="https://badgen.net/github/commits/bitloops/bitloops" alt="GitHub commits" />
     </a>
-    <a href="https://github.com/bitloops/bitloops/tags/">
-      <img src="https://badgen.net/github/tag/bitloops/bitloops" alt="GitHub tag" />
-    </a>
-    <a href="https://github.com/bitloops/bitloops/releases">
-      <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg" alt="Downloads" />
-    </a>
     <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
       <img src="https://img.shields.io/github/license/bitloops/bitloops?colorA=00C586&colorB=000000" alt="License" />
     </a>
     <a href="https://github.com/bitloops/bitloops/graphs/contributors">
       <img src="https://img.shields.io/github/contributors/bitloops/bitloops?colorA=00C586&colorB=000000" alt="Contributors" />
     </a>
-    <a href="https://github.com/sponsors/bitloops">
-      <img src="https://img.shields.io/badge/Sponsor-❤️-ff69b4.svg" alt="Sponsor" />
-    </a>
   </p>
   <p>
     <img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-black" />
-    <img alt="Open source" src="https://img.shields.io/badge/Open%20Source-Yes-black" />
     <img alt="Local first" src="https://img.shields.io/badge/Data-Local%20First-black" />
     <img alt="Agent agnostic" src="https://img.shields.io/badge/Agents-Agent--Agnostic-black" />
   </p>
