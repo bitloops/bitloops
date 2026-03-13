@@ -12,6 +12,9 @@ pub const DEVQL_CONFIG_RELATIVE_PATH: &str = ".bitloops/config.json";
 pub const DEVQL_DUCKDB_DEFAULT_PATH: &str = "~/.bitloops/devql/events.duckdb";
 /// Default relative path from user home to the local SQLite relational DB file.
 pub const DEVQL_SQLITE_RELATIVE_PATH: &str = ".bitloops/devql/relational.db";
+/// Default relative path from user home to local blob storage.
+#[allow(dead_code)]
+pub const DEVQL_BLOB_LOCAL_RELATIVE_PATH: &str = ".bitloops/blobs";
 
 const ENV_RELATIONAL_PROVIDER: &str = "BITLOOPS_DEVQL_RELATIONAL_PROVIDER";
 const ENV_EVENTS_PROVIDER: &str = "BITLOOPS_DEVQL_EVENTS_PROVIDER";
@@ -137,6 +140,13 @@ pub struct BlobStorageConfig {
     pub s3_secret_access_key: Option<String>,
     pub gcs_bucket: Option<String>,
     pub gcs_credentials_path: Option<String>,
+}
+
+impl BlobStorageConfig {
+    #[allow(dead_code)]
+    pub fn local_path_or_default(&self) -> Result<PathBuf> {
+        resolve_blob_local_path(self.local_path.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -344,6 +354,24 @@ pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
                 );
             };
             Ok(home.join(DEVQL_SQLITE_RELATIVE_PATH))
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn resolve_blob_local_path(raw_path: Option<&str>) -> Result<PathBuf> {
+    match raw_path {
+        Some(raw) if !raw.trim().is_empty() => {
+            let expanded = expand_home_prefix(raw.trim())?;
+            Ok(PathBuf::from(expanded))
+        }
+        _ => {
+            let Some(home) = user_home_dir() else {
+                bail!(
+                    "unable to resolve home directory for default blob path; configure `devql.blobs.local_path` or `BITLOOPS_DEVQL_BLOB_LOCAL_PATH`"
+                );
+            };
+            Ok(home.join(DEVQL_BLOB_LOCAL_RELATIVE_PATH))
         }
     }
 }
@@ -785,6 +813,44 @@ mod tests {
             PathBuf::from(expanded),
             windows_home.join(r".bitloops\devql\relational.db")
         );
+    }
+
+    #[test]
+    fn blob_local_path_resolution_uses_explicit_path() {
+        let resolved = resolve_blob_local_path(Some("/tmp/bitloops-blobs"))
+            .expect("explicit blob path should resolve");
+        assert_eq!(resolved, PathBuf::from("/tmp/bitloops-blobs"));
+    }
+
+    #[test]
+    fn blob_local_path_resolution_expands_tilde_prefix() {
+        let Some(home) = user_home_dir() else {
+            return;
+        };
+
+        let resolved = resolve_blob_local_path(Some("~/blob-storage"))
+            .expect("tilde blob path should resolve");
+        assert_eq!(resolved, home.join("blob-storage"));
+    }
+
+    #[test]
+    fn blob_local_path_resolution_defaults_under_bitloops_directory() {
+        let blobs = BlobStorageConfig {
+            provider: BlobStorageProvider::Local,
+            local_path: None,
+            s3_bucket: None,
+            s3_region: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            gcs_bucket: None,
+            gcs_credentials_path: None,
+        };
+
+        let resolved = blobs
+            .local_path_or_default()
+            .expect("default local blob path");
+        let rendered = resolved.to_string_lossy();
+        assert!(rendered.ends_with(".bitloops/blobs") || rendered.ends_with(".bitloops\\blobs"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod blob;
 pub mod db;
 pub mod db_status;
 pub mod devql;
