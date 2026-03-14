@@ -22,17 +22,6 @@ pub fn append_transcript_section(
     }
 }
 
-pub fn count_lines(content: &[u8]) -> usize {
-    if content.is_empty() {
-        return 0;
-    }
-    content.iter().filter(|b| **b == b'\n').count() + 1
-}
-
-pub fn transcript_offset(transcript_bytes: &[u8], _agent_type: AgentType) -> usize {
-    count_lines(transcript_bytes)
-}
-
 // CLI-856 / CLI-857 / CLI-850: git traversal + branch discovery stubs
 pub fn get_associated_commits(
     commits: &[CommitNode],
