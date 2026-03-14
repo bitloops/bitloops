@@ -274,8 +274,14 @@ fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
     repo_root.join(paths::BITLOOPS_DIR).join("blobs")
 }
 
-fn with_checkpoint_storage_env<T>(_repo_root: &Path, f: impl FnOnce() -> T) -> T {
-    f()
+fn with_checkpoint_storage_env<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
+    let blob_root = committed_checkpoint_blob_root(repo_root);
+    let blob_root_owned = blob_root.to_string_lossy().to_string();
+    with_env_var(
+        "BITLOOPS_DEVQL_BLOB_LOCAL_PATH",
+        Some(blob_root_owned.as_str()),
+        f,
+    )
 }
 
 fn query_checkpoint_session_content_hash(
@@ -3442,20 +3448,20 @@ fn write_committed_records_local_backend_in_blob_row() {
     setup_git_repo(&dir);
     let checkpoint_id = "949596979899";
 
-    let result = write_committed(
-        dir.path(),
-        default_write_committed_opts(
-            checkpoint_id,
-            "fallback-session",
-            "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
-        ),
-    );
-    assert!(
-        result.is_ok(),
-        "write_committed should persist transcript blobs locally: {result:?}"
-    );
-
     with_checkpoint_storage_env(dir.path(), || {
+        let result = write_committed(
+            dir.path(),
+            default_write_committed_opts(
+                checkpoint_id,
+                "fallback-session",
+                "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
+            ),
+        );
+        assert!(
+            result.is_ok(),
+            "write_committed should persist transcript blobs locally: {result:?}"
+        );
+
         let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
             .expect("transcript blob reference should exist");
         assert_eq!(

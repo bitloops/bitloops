@@ -121,39 +121,18 @@ pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<Resolve
             store: Box::new(LocalBlobStore::from_config(cfg)?),
             backend: "local",
         }),
-        BlobStorageProvider::S3 => {
-            create_with_local_fallback(cfg, "s3", "s3", || S3BlobStore::from_config(cfg))
-        }
-        BlobStorageProvider::Gcs => {
-            create_with_local_fallback(cfg, "gcs", "gcs", || GcsBlobStore::from_config(cfg))
-        }
-    }
-}
-
-fn create_with_local_fallback<T, F>(
-    cfg: &BlobStorageConfig,
-    provider_name: &str,
-    provider_backend: &'static str,
-    build_remote: F,
-) -> Result<ResolvedBlobStore>
-where
-    T: BlobStore + 'static,
-    F: FnOnce() -> Result<T>,
-{
-    match build_remote() {
-        Ok(store) => Ok(ResolvedBlobStore {
-            store: Box::new(store),
-            backend: provider_backend,
+        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+            store: Box::new(
+                S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
+            ),
+            backend: "s3",
         }),
-        Err(err) => {
-            log::warn!(
-                "failed to initialise {provider_name} blob storage backend, falling back to local filesystem: {err:#}"
-            );
-            Ok(ResolvedBlobStore {
-                store: Box::new(LocalBlobStore::from_config(cfg)?),
-                backend: "local",
-            })
-        }
+        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+            store: Box::new(
+                GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
+            ),
+            backend: "gcs",
+        }),
     }
 }
 
@@ -296,39 +275,33 @@ mod tests {
     }
 
     #[test]
-    fn create_blob_store_falls_back_to_local_when_s3_config_invalid() {
+    fn create_blob_store_returns_error_when_s3_config_invalid() {
         let temp = TempDir::new().expect("temp dir");
         let cfg = test_blob_config(
             BlobStorageProvider::S3,
             temp.path().to_string_lossy().to_string(),
         );
 
-        let resolved = create_blob_store_with_backend(&cfg).expect("fallback local store");
-        assert_eq!(resolved.backend, "local");
-        let store = resolved.store;
-        store
-            .write("repo-id/cp-1/0/transcript.jsonl", b"hello")
-            .expect("write via local fallback");
-
-        assert!(temp.path().join("repo-id/cp-1/0/transcript.jsonl").exists());
+        let err = match create_blob_store_with_backend(&cfg) {
+            Ok(_) => panic!("invalid S3 config must fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("initialising S3 blob storage backend"));
     }
 
     #[test]
-    fn create_blob_store_falls_back_to_local_when_gcs_config_invalid() {
+    fn create_blob_store_returns_error_when_gcs_config_invalid() {
         let temp = TempDir::new().expect("temp dir");
         let cfg = test_blob_config(
             BlobStorageProvider::Gcs,
             temp.path().to_string_lossy().to_string(),
         );
 
-        let resolved = create_blob_store_with_backend(&cfg).expect("fallback local store");
-        assert_eq!(resolved.backend, "local");
-        let store = resolved.store;
-        store
-            .write("repo-id/cp-2/1/prompts.txt", b"prompt content")
-            .expect("write via local fallback");
-
-        assert!(temp.path().join("repo-id/cp-2/1/prompts.txt").exists());
+        let err = match create_blob_store_with_backend(&cfg) {
+            Ok(_) => panic!("invalid GCS config must fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("initialising GCS blob storage backend"));
     }
 
     #[test]
