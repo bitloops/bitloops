@@ -1,10 +1,9 @@
   <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Git captures what changed. Bitloops captures why.</h1>
+  <h1>Give your AI agents high-signal context in milliseconds.</h1>
   <p>
-    The open-source intelligence layer for AI-driven software development. Bitloops 
-    captures the full developer–AI conversation for every commit and builds a 
-    structured semantic model of your codebase that you and your agents can query.
+    Bitloops continuously models your codebase and development history so agents can retrieve 
+    architecture, decisions, and intent instantly — instead of crawling your repositories.
   </p>
   <p>
     <a href="https://bitloops.com">Website</a>
@@ -114,6 +113,7 @@ to AI-assisted development.
 - **Local observability**  
   A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
+  
 
 ## Installation
 
