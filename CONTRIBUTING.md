@@ -118,6 +118,11 @@ the private reporting instructions in [SECURITY.md](SECURITY.md).
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md)
 - Prefer clarity over volume in issues and pull requests
 
+## Contributor License Agreement
+
+By submitting a pull request to this project, you agree to the terms of the
+Contributor License Agreement (see [CLA.md](./CLA.md)).
+
 ## Licensing
 
 Unless explicitly stated otherwise, contributions intentionally submitted for

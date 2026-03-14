@@ -220,6 +220,15 @@ users and are analyzed and considered in aggregate.
 We welcome contributions from the community! Your input helps make Bitloops better
 for everyone. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
+We welcome:
+- bug reports
+- documentation improvements
+- performance improvements
+- new integrations with AI coding tools
+- architectural ideas and discussions
+
+If you are unsure where to start, open an issue and we will help guide you.
+
 ### Code of Conduct
 
 We're committed to fostering an inclusive and respectful community. Read our
