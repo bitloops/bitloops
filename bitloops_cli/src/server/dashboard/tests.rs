@@ -84,17 +84,18 @@ struct SeedCheckpointSession<'a> {
     context: &'a str,
 }
 
-fn seed_checkpoint_storage_for_dashboard(
-    repo_root: &Path,
-    commit_sha: &str,
-    checkpoint_id: &str,
-    branch: &str,
-    files_touched: &[&str],
+struct SeedCheckpointStorage<'a> {
+    commit_sha: &'a str,
+    checkpoint_id: &'a str,
+    branch: &'a str,
+    files_touched: &'a [&'a str],
     checkpoints_count: i64,
     token_usage: serde_json::Value,
-    sessions: &[SeedCheckpointSession<'_>],
+    sessions: &'a [SeedCheckpointSession<'a>],
     insert_mapping: bool,
-) {
+}
+
+fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointStorage<'_>) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
         crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
@@ -102,8 +103,9 @@ fn seed_checkpoint_storage_for_dashboard(
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
     let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
-    let files_touched_raw = serde_json::to_string(files_touched).expect("serialise files_touched");
-    let token_usage_raw = serde_json::to_string(&token_usage).expect("serialise token_usage");
+    let files_touched_raw =
+        serde_json::to_string(seed.files_touched).expect("serialise files_touched");
+    let token_usage_raw = serde_json::to_string(&seed.token_usage).expect("serialise token_usage");
 
     sqlite
         .with_connection(|conn| {
@@ -113,18 +115,18 @@ fn seed_checkpoint_storage_for_dashboard(
                     files_touched, checkpoints_count, token_usage
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
-                    checkpoint_id,
+                    seed.checkpoint_id,
                     repo_id.as_str(),
                     "manual-commit",
-                    branch,
+                    seed.branch,
                     "0.0.3",
                     files_touched_raw.as_str(),
-                    checkpoints_count,
+                    seed.checkpoints_count,
                     token_usage_raw.as_str(),
                 ],
             )?;
 
-            for session in sessions {
+            for session in seed.sessions {
                 conn.execute(
                     "INSERT INTO checkpoint_sessions (
                         checkpoint_id, session_id, session_index, agent, turn_id, checkpoints_count,
@@ -137,7 +139,7 @@ fn seed_checkpoint_storage_for_dashboard(
                         'Alice', 'alice@example.com', '', ?7
                     )",
                     rusqlite::params![
-                        checkpoint_id,
+                        seed.checkpoint_id,
                         session.session_id,
                         session.session_index,
                         session.agent,
@@ -159,7 +161,7 @@ fn seed_checkpoint_storage_for_dashboard(
         .local_path_or_default()
         .expect("resolve local blob root");
 
-    for session in sessions {
+    for session in seed.sessions {
         let blob_payloads = [
             (
                 crate::engine::blob::BlobType::Transcript,
@@ -172,7 +174,7 @@ fn seed_checkpoint_storage_for_dashboard(
         for (blob_type, payload) in blob_payloads {
             let key = crate::engine::blob::build_blob_key(
                 repo_id.as_str(),
-                checkpoint_id,
+                seed.checkpoint_id,
                 session.session_index,
                 blob_type,
             );
@@ -182,7 +184,7 @@ fn seed_checkpoint_storage_for_dashboard(
             }
             fs::write(&path, payload.as_bytes()).expect("write seeded blob");
             let reference = crate::engine::blob::CheckpointBlobReference::new(
-                checkpoint_id,
+                seed.checkpoint_id,
                 session.session_index,
                 blob_type,
                 "local",
@@ -195,8 +197,8 @@ fn seed_checkpoint_storage_for_dashboard(
         }
     }
 
-    if insert_mapping {
-        insert_commit_checkpoint_mapping(repo_root, commit_sha, checkpoint_id);
+    if seed.insert_mapping {
+        insert_commit_checkpoint_mapping(repo_root, seed.commit_sha, seed.checkpoint_id);
     }
 }
 
@@ -316,29 +318,31 @@ fn seed_dashboard_repo() -> TempDir {
 
     seed_checkpoint_storage_for_dashboard(
         repo_root,
-        &checkpoint_commit_sha,
-        "aabbccddeeff",
-        "main",
-        &["app.rs"],
-        2,
-        json!({
-            "input_tokens": 100,
-            "output_tokens": 40,
-            "cache_creation_tokens": 10,
-            "cache_read_tokens": 5,
-            "api_call_count": 3
-        }),
-        &[SeedCheckpointSession {
-            session_index: 0,
-            session_id: "session-1",
-            agent: "claude-code",
-            created_at: "2026-02-27T12:00:00Z",
+        SeedCheckpointStorage {
+            commit_sha: &checkpoint_commit_sha,
+            checkpoint_id: "aabbccddeeff",
+            branch: "main",
+            files_touched: &["app.rs"],
             checkpoints_count: 2,
-            transcript: transcript_payload,
-            prompts: prompt_payload,
-            context: context_payload,
-        }],
-        true,
+            token_usage: json!({
+                "input_tokens": 100,
+                "output_tokens": 40,
+                "cache_creation_tokens": 10,
+                "cache_read_tokens": 5,
+                "api_call_count": 3
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-1",
+                agent: "claude-code",
+                created_at: "2026-02-27T12:00:00Z",
+                checkpoints_count: 2,
+                transcript: transcript_payload,
+                prompts: prompt_payload,
+                context: context_payload,
+            }],
+            insert_mapping: true,
+        },
     );
 
     dir
@@ -442,29 +446,31 @@ fn seed_dashboard_repo_without_commit_trailer() -> TempDir {
 
     seed_checkpoint_storage_for_dashboard(
         repo_root,
-        &checkpoint_commit_sha,
-        "aabbccddeeff",
-        "main",
-        &["app.rs"],
-        2,
-        json!({
-            "input_tokens": 100,
-            "output_tokens": 40,
-            "cache_creation_tokens": 10,
-            "cache_read_tokens": 5,
-            "api_call_count": 3
-        }),
-        &[SeedCheckpointSession {
-            session_index: 0,
-            session_id: "session-1",
-            agent: "claude-code",
-            created_at: "2026-02-27T12:00:00Z",
+        SeedCheckpointStorage {
+            commit_sha: &checkpoint_commit_sha,
+            checkpoint_id: "aabbccddeeff",
+            branch: "main",
+            files_touched: &["app.rs"],
             checkpoints_count: 2,
-            transcript: transcript_payload,
-            prompts: prompt_payload,
-            context: context_payload,
-        }],
-        false,
+            token_usage: json!({
+                "input_tokens": 100,
+                "output_tokens": 40,
+                "cache_creation_tokens": 10,
+                "cache_read_tokens": 5,
+                "api_call_count": 3
+            }),
+            sessions: &[SeedCheckpointSession {
+                session_index: 0,
+                session_id: "session-1",
+                agent: "claude-code",
+                created_at: "2026-02-27T12:00:00Z",
+                checkpoints_count: 2,
+                transcript: transcript_payload,
+                prompts: prompt_payload,
+                context: context_payload,
+            }],
+            insert_mapping: false,
+        },
     );
 
     dir
@@ -626,41 +632,43 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
 
     seed_checkpoint_storage_for_dashboard(
         repo_root,
-        &checkpoint_commit_sha,
-        "112233445566",
-        "main",
-        &["app.rs"],
-        3,
-        json!({
-            "input_tokens": 200,
-            "output_tokens": 80,
-            "cache_creation_tokens": 20,
-            "cache_read_tokens": 10,
-            "api_call_count": 6
-        }),
-        &[
-            SeedCheckpointSession {
-                session_index: 0,
-                session_id: "session-1",
-                agent: "claude-code",
-                created_at: "2026-02-27T12:00:00Z",
-                checkpoints_count: 1,
-                transcript: session_zero_transcript,
-                prompts: &session_zero_prompt,
-                context: session_zero_context,
-            },
-            SeedCheckpointSession {
-                session_index: 1,
-                session_id: "session-2",
-                agent: "gemini-cli",
-                created_at: "2026-02-27T12:10:00Z",
-                checkpoints_count: 2,
-                transcript: session_one_transcript,
-                prompts: session_one_prompt,
-                context: session_one_context,
-            },
-        ],
-        true,
+        SeedCheckpointStorage {
+            commit_sha: &checkpoint_commit_sha,
+            checkpoint_id: "112233445566",
+            branch: "main",
+            files_touched: &["app.rs"],
+            checkpoints_count: 3,
+            token_usage: json!({
+                "input_tokens": 200,
+                "output_tokens": 80,
+                "cache_creation_tokens": 20,
+                "cache_read_tokens": 10,
+                "api_call_count": 6
+            }),
+            sessions: &[
+                SeedCheckpointSession {
+                    session_index: 0,
+                    session_id: "session-1",
+                    agent: "claude-code",
+                    created_at: "2026-02-27T12:00:00Z",
+                    checkpoints_count: 1,
+                    transcript: session_zero_transcript,
+                    prompts: &session_zero_prompt,
+                    context: session_zero_context,
+                },
+                SeedCheckpointSession {
+                    session_index: 1,
+                    session_id: "session-2",
+                    agent: "gemini-cli",
+                    created_at: "2026-02-27T12:10:00Z",
+                    checkpoints_count: 2,
+                    transcript: session_one_transcript,
+                    prompts: session_one_prompt,
+                    context: session_one_context,
+                },
+            ],
+            insert_mapping: true,
+        },
     );
 
     dir

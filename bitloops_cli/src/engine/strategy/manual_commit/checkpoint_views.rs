@@ -430,10 +430,9 @@ fn to_committed_info_from_db(
         &summary.checkpoint_id,
         0,
         crate::engine::blob::BlobType::Prompts.as_str(),
-    )? {
-        if let Ok(prompt_bytes) = storage.blob_store.read(&first_ref.storage_path) {
-            info.first_prompt_preview = first_prompt_preview(&String::from_utf8_lossy(&prompt_bytes));
-        }
+    )? && let Ok(prompt_bytes) = storage.blob_store.read(&first_ref.storage_path)
+    {
+        info.first_prompt_preview = first_prompt_preview(&String::from_utf8_lossy(&prompt_bytes));
     }
 
     Ok(info)
@@ -611,10 +610,10 @@ pub fn get_checkpoint_author(repo_root: &Path, checkpoint_id: &str) -> Result<Ch
         .optional()
         .map_err(anyhow::Error::from)
     })?;
-    if let Some((name, email)) = db_author {
-        if !name.trim().is_empty() || !email.trim().is_empty() {
-            return Ok(CheckpointAuthor { name, email });
-        }
+    if let Some((name, email)) = db_author
+        && (!name.trim().is_empty() || !email.trim().is_empty())
+    {
+        return Ok(CheckpointAuthor { name, email });
     }
     Ok(CheckpointAuthor::default())
 }
