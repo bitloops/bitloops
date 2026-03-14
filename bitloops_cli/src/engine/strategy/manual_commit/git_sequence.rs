@@ -21,6 +21,7 @@ fn is_git_sequence_operation(repo_root: &Path) -> bool {
         || git_dir.join("REVERT_HEAD").exists()
 }
 
+#[cfg(test)]
 fn has_overlapping_files(staged_files: &[String], files_touched: &[String]) -> bool {
     let touched: std::collections::HashSet<&str> =
         files_touched.iter().map(String::as_str).collect();
@@ -168,6 +169,7 @@ fn load_tree_snapshot_from_treeish(repo_root: &Path, treeish: &str) -> Option<Tr
     Some(TreeSnapshot::from_files(files))
 }
 
+#[cfg(test)]
 fn resolve_commit(repo_root: &Path, rev: &str) -> Option<String> {
     run_git(
         repo_root,
@@ -180,10 +182,12 @@ fn file_hash_in_tree(repo_root: &Path, rev: &str, file_path: &str) -> Option<Str
     run_git(repo_root, &["rev-parse", &format!("{rev}:{file_path}")]).ok()
 }
 
+#[cfg(test)]
 fn read_blob_content(repo_root: &Path, blob_hash: &str) -> Option<String> {
     run_git(repo_root, &["cat-file", "-p", blob_hash]).ok()
 }
 
+#[cfg(test)]
 fn staged_index_hashes(repo_root: &Path) -> Option<std::collections::HashMap<String, String>> {
     let out = run_git(repo_root, &["ls-files", "--stage"]).ok()?;
     let mut hashes = std::collections::HashMap::new();
@@ -204,6 +208,7 @@ fn staged_index_hashes(repo_root: &Path) -> Option<std::collections::HashMap<Str
     Some(hashes)
 }
 
+#[cfg(test)]
 fn files_overlap_with_content(
     repo_root: &Path,
     shadow_branch_name: &str,
@@ -257,6 +262,7 @@ fn files_overlap_with_content(
     false
 }
 
+#[cfg(test)]
 fn staged_files_overlap_with_content(
     repo_root: &Path,
     shadow_branch_name: &str,
@@ -406,6 +412,7 @@ fn files_with_remaining_agent_changes(
     remaining
 }
 
+#[cfg(test)]
 fn has_significant_content_overlap(staged_content: &str, shadow_content: &str) -> bool {
     let shadow_lines = extract_significant_lines(shadow_content);
     let staged_lines = extract_significant_lines(staged_content);
@@ -431,6 +438,7 @@ fn has_significant_content_overlap(staged_content: &str, shadow_content: &str) -
     false
 }
 
+#[cfg(test)]
 fn extract_significant_lines(content: &str) -> std::collections::HashSet<String> {
     let mut lines = std::collections::HashSet::new();
     for line in content.lines() {
@@ -442,6 +450,7 @@ fn extract_significant_lines(content: &str) -> std::collections::HashSet<String>
     lines
 }
 
+#[cfg(test)]
 fn trim_line(line: &str) -> String {
     line.trim_matches(|c| c == ' ' || c == '\t').to_string()
 }

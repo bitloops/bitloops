@@ -249,6 +249,7 @@ fn get_checkpoint_id_from_head(repo_root: &Path) -> Result<Option<String>> {
 }
 
 /// Appends `\n\nBitloops-Checkpoint: <id>\n` to the message.
+#[cfg(test)]
 fn add_checkpoint_trailer(message: &str, id: &str) -> String {
     let trailer = format!("{CHECKPOINT_TRAILER_KEY}: {id}");
     let trimmed = message.trim_end_matches('\n');
