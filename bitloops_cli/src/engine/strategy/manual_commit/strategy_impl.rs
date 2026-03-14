@@ -315,100 +315,15 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 
-    /// Appends a `Bitloops-Checkpoint: <id>` trailer to the commit message file.
-    ///
     /// Called by the `prepare-commit-msg` git hook.
-    ///
-    fn prepare_commit_msg(&self, commit_msg_file: &Path, source: Option<&str>) -> Result<()> {
-        let source = source.unwrap_or("");
-
-        // Skip during git sequence operations (rebase, cherry-pick, revert).
-        if is_git_sequence_operation(&self.repo_root) {
-            return Ok(());
-        }
-
-        // Skip for auto-generated messages.
-        if source == "merge" || source == "squash" {
-            return Ok(());
-        }
-
-        // For amend: preserve or restore trailer.
-        if source == "commit" {
-            return self.handle_amend_commit_msg(commit_msg_file);
-        }
-
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        if sessions.is_empty() {
-            return Ok(());
-        }
-
-        let staged_files = get_staged_files(&self.repo_root);
-
-        // Only attach a fresh trailer when there is pending session work
-        // and the staged content overlaps with files touched by the session.
-        let has_pending_session_content = sessions.iter().any(|s| {
-            let has_pending = s.phase.is_active()
-                || !s.files_touched.is_empty()
-                || (s.phase != SessionPhase::Ended && s.step_count > 0);
-            if !has_pending {
-                return false;
-            }
-            if s.files_touched.is_empty() {
-                return true;
-            }
-            if staged_files.is_empty() {
-                return true;
-            }
-            let shadow_branch = expected_shadow_branch_short_name(&s.base_commit, &s.worktree_id);
-            staged_files_overlap_with_content(
-                &self.repo_root,
-                &shadow_branch,
-                &staged_files,
-                &s.files_touched,
-            )
-        });
-        if !has_pending_session_content {
-            return Ok(());
-        }
-
-        // Read current commit message.
-        let content = fs::read_to_string(commit_msg_file).unwrap_or_default();
-
-        // If trailer already present, keep it.
-        if parse_checkpoint_id(&content).is_some() {
-            return Ok(());
-        }
-
-        // Generate a new checkpoint ID and append the trailer.
-        let id = generate_checkpoint_id();
-        let new_content = add_checkpoint_trailer(&content, &id);
-        fs::write(commit_msg_file, new_content)
-            .with_context(|| format!("writing commit msg file: {}", commit_msg_file.display()))?;
-
+    /// This is intentionally a no-op.
+    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
         Ok(())
     }
 
-    /// Strips the checkpoint trailer when the commit message has no user content.
-    ///
-    /// Called by the `commit-msg` git hook.  Returning an error causes git to abort.
-    ///
-    fn commit_msg(&self, commit_msg_file: &Path) -> Result<()> {
-        let content = match fs::read_to_string(commit_msg_file) {
-            Ok(c) => c,
-            Err(_) => return Ok(()), // be silent on failure
-        };
-
-        // Only act when our trailer is present.
-        if parse_checkpoint_id(&content).is_none() {
-            return Ok(());
-        }
-
-        // Strip the trailer if there's no real user content.
-        if !has_user_content(&content) {
-            let stripped = strip_checkpoint_trailer(&content);
-            let _ = fs::write(commit_msg_file, stripped);
-        }
-
+    /// Called by the `commit-msg` git hook.
+    /// This is intentionally a no-op.
+    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
         Ok(())
     }
 
@@ -513,17 +428,9 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 
-    /// Pushes `bitloops/checkpoints/v1` alongside the user's push.
-    ///
     /// Called by the `pre-push` git hook.
-    ///
-    fn pre_push(&self, remote: &str) -> Result<()> {
-        // Only push if the checkpoints branch exists.
-        if run_git(&self.repo_root, &["rev-parse", paths::METADATA_BRANCH_NAME]).is_ok() {
-            // Non-fatal: push failure must not block the user's push.
-            // Use --no-verify to avoid recursive pre-push hook execution.
-            let _ = push_checkpoints_branch_no_verify(&self.repo_root, remote);
-        }
+    /// This is intentionally a no-op.
+    fn pre_push(&self, _remote: &str) -> Result<()> {
         Ok(())
     }
 }

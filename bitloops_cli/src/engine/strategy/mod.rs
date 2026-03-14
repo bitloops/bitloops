@@ -99,18 +99,21 @@ pub trait Strategy: Send + Sync {
         Ok(())
     }
 
-    // ── git hook handlers (optional no-ops for NoOpStrategy) ─────────────
+    // ── git hook handlers ─────────────────────────────────────────────────
 
     /// Called by the `prepare-commit-msg` git hook.
-    /// Appends a `Bitloops-Checkpoint: <id>` trailer to the commit message file.
+    /// Default implementation is a no-op.
     ///
-    fn prepare_commit_msg(&self, commit_msg_file: &Path, source: Option<&str>) -> Result<()>;
+    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
+        Ok(())
+    }
 
     /// Called by the `commit-msg` git hook.
-    /// Strips the checkpoint trailer when there is no other user content
-    /// (so git can abort the commit for an empty message).
+    /// Default implementation is a no-op.
     ///
-    fn commit_msg(&self, commit_msg_file: &Path) -> Result<()>;
+    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
+        Ok(())
+    }
 
     /// Called by the `post-commit` git hook.
     /// Reads the `Bitloops-Checkpoint:` trailer from HEAD and condenses session data
@@ -119,7 +122,9 @@ pub trait Strategy: Send + Sync {
     fn post_commit(&self) -> Result<()>;
 
     /// Called by the `pre-push` git hook.
-    /// Pushes the `bitloops/checkpoints/v1` branch alongside the user's push.
+    /// Default implementation is a no-op.
     ///
-    fn pre_push(&self, remote: &str) -> Result<()>;
+    fn pre_push(&self, _remote: &str) -> Result<()> {
+        Ok(())
+    }
 }

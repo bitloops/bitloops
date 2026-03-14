@@ -5220,7 +5220,7 @@ fn get_git_author_from_repo_no_config() {
 }
 
 #[test]
-fn prepare_commit_msg_adds_trailer() {
+fn prepare_commit_msg_is_noop_even_with_active_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -5236,14 +5236,16 @@ fn prepare_commit_msg_adds_trailer() {
 
     let strategy = ManualCommitStrategy::new(dir.path());
     let msg_file = dir.path().join("COMMIT_EDITMSG");
-    fs::write(&msg_file, "fix: my change\n").unwrap();
+    let original = "fix: my change\n";
+    fs::write(&msg_file, original).unwrap();
 
     strategy.prepare_commit_msg(&msg_file, None).unwrap();
 
     let content = fs::read_to_string(&msg_file).unwrap();
+    assert_eq!(content, original, "commit message should be unchanged");
     assert!(
-        content.contains(CHECKPOINT_TRAILER_KEY),
-        "trailer should be added: {content}"
+        !content.contains(CHECKPOINT_TRAILER_KEY),
+        "no checkpoint trailer should be injected: {content}"
     );
 }
 
@@ -5308,7 +5310,7 @@ fn prepare_commit_msg_skips_merge() {
 }
 
 #[test]
-fn prepare_commit_msg_amend_preserves_trailer() {
+fn prepare_commit_msg_is_noop_for_amend_source() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -5322,75 +5324,7 @@ fn prepare_commit_msg_amend_preserves_trailer() {
         .unwrap();
 
     let content = fs::read_to_string(&msg_file).unwrap();
-    assert_eq!(
-        content, existing_msg,
-        "existing trailer should be preserved on amend"
-    );
-}
-
-#[test]
-fn prepare_commit_msg_amend_restores_trailer_from_last_checkpoint_id() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-
-    let backend = LocalFileBackend::new(dir.path());
-    backend
-        .save_session(&SessionState {
-            session_id: "amend-restore".to_string(),
-            phase: crate::engine::session::phase::SessionPhase::Active,
-            last_checkpoint_id: "abc123def456".to_string(),
-            ..Default::default()
-        })
-        .unwrap();
-
-    let strategy = ManualCommitStrategy::new(dir.path());
-    let msg_file = dir.path().join("COMMIT_EDITMSG");
-    fs::write(&msg_file, "New amended message\n").unwrap();
-
-    strategy
-        .prepare_commit_msg(&msg_file, Some("commit"))
-        .unwrap();
-
-    let content = fs::read_to_string(&msg_file).unwrap();
-    assert_eq!(
-        parse_checkpoint_id(&content).as_deref(),
-        Some("abc123def456"),
-        "amend should restore trailer from last_checkpoint_id"
-    );
-}
-
-#[test]
-fn prepare_commit_msg_amend_no_trailer_no_last_checkpoint_id() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-
-    let backend = LocalFileBackend::new(dir.path());
-    backend
-        .save_session(&SessionState {
-            session_id: "amend-no-id".to_string(),
-            phase: crate::engine::session::phase::SessionPhase::Active,
-            ..Default::default()
-        })
-        .unwrap();
-
-    let strategy = ManualCommitStrategy::new(dir.path());
-    let msg_file = dir.path().join("COMMIT_EDITMSG");
-    let original = "Amended without checkpoint context\n";
-    fs::write(&msg_file, original).unwrap();
-
-    strategy
-        .prepare_commit_msg(&msg_file, Some("commit"))
-        .unwrap();
-
-    let content = fs::read_to_string(&msg_file).unwrap();
-    assert_eq!(
-        content, original,
-        "amend should not add a trailer when last_checkpoint_id is empty"
-    );
-    assert!(
-        parse_checkpoint_id(&content).is_none(),
-        "checkpoint trailer should remain absent"
-    );
+    assert_eq!(content, existing_msg, "amend message should be unchanged");
 }
 
 #[test]
@@ -5414,7 +5348,7 @@ fn prepare_commit_msg_noop_no_session() {
 }
 
 #[test]
-fn prepare_commit_msg_skips_idle_sessions_without_pending_steps() {
+fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -5438,31 +5372,28 @@ fn prepare_commit_msg_skips_idle_sessions_without_pending_steps() {
     let content = fs::read_to_string(&msg_file).unwrap();
     assert_eq!(
         content, original,
-        "idle sessions with no pending steps should not get new trailers"
+        "idle sessions with no pending steps should keep message unchanged"
     );
 }
 
 #[test]
-fn commit_msg_strips_empty_commit() {
+fn commit_msg_is_noop_for_trailer_only_message() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
     let strategy = ManualCommitStrategy::new(dir.path());
     let msg_file = dir.path().join("COMMIT_EDITMSG");
-    // Only trailer, no user content.
-    fs::write(&msg_file, "Bitloops-Checkpoint: abcdef123456\n").unwrap();
+    let original = "Bitloops-Checkpoint: abcdef123456\n";
+    fs::write(&msg_file, original).unwrap();
 
     strategy.commit_msg(&msg_file).unwrap();
 
     let content = fs::read_to_string(&msg_file).unwrap();
-    assert!(
-        !content.contains(CHECKPOINT_TRAILER_KEY),
-        "trailer should be stripped from empty commit: {content}"
-    );
+    assert_eq!(content, original, "commit message should be unchanged");
 }
 
 #[test]
-fn commit_msg_keeps_real_message() {
+fn commit_msg_is_noop_for_real_message() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -5474,14 +5405,7 @@ fn commit_msg_keeps_real_message() {
     strategy.commit_msg(&msg_file).unwrap();
 
     let content = fs::read_to_string(&msg_file).unwrap();
-    assert!(
-        content.contains("fix: real change"),
-        "user message should be preserved: {content}"
-    );
-    assert!(
-        content.contains(CHECKPOINT_TRAILER_KEY),
-        "trailer should be preserved when user content exists: {content}"
-    );
+    assert_eq!(content, msg, "commit message should be unchanged");
 }
 
 #[test]
@@ -5824,7 +5748,7 @@ fn write_session_metadata_writes_prompt_and_summary_for_nested_claude_jsonl() {
 }
 
 #[test]
-fn pre_push_pushes_checkpoints_branch_when_present() {
+fn pre_push_is_noop_even_when_checkpoints_branch_exists() {
     let base = tempfile::tempdir().unwrap();
     let origin_dir = base.path().join("origin.git");
     let work_dir = base.path().join("work");
@@ -5868,7 +5792,7 @@ fn pre_push_pushes_checkpoints_branch_when_present() {
     let strategy = ManualCommitStrategy::new(repo_dir);
     strategy.pre_push("origin").unwrap();
 
-    // Remote should now have bitloops/checkpoints/v1.
+    // Remote should not have bitloops/checkpoints/v1 because pre_push is now a no-op.
     let remote_ref = git_command()
         .args([
             "--git-dir",
@@ -5880,8 +5804,8 @@ fn pre_push_pushes_checkpoints_branch_when_present() {
         .output()
         .unwrap();
     assert!(
-        remote_ref.status.success(),
-        "remote should contain checkpoints branch after pre-push"
+        !remote_ref.status.success(),
+        "remote should not contain checkpoints branch after pre-push no-op"
     );
 }
 

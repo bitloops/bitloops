@@ -2,10 +2,10 @@
 //!
 //! # Workflow
 //! 1. `stop` hook → `save_step()` → temporary checkpoint tree row in SQLite
-//! 2. `git commit` → `prepare_commit_msg()` → appends `Bitloops-Checkpoint: <12hexid>` trailer
-//! 3. `commit-msg` hook → `commit_msg()` → strips trailer if no user content (empty commit abort)
+//! 2. `git commit` → `prepare_commit_msg()` → no-op
+//! 3. `commit-msg` hook → `commit_msg()` → no-op
 //! 4. `post-commit` hook → `post_commit()` → condenses session into checkpoint rows/blobs
-//! 5. `git push` → `pre_push()` → optionally pushes legacy metadata branch if present
+//! 5. `git push` → `pre_push()` → no-op
 //!
 //! Git operations use shell `git` + `GIT_INDEX_FILE` for temp-index tree construction.
 
