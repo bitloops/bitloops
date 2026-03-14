@@ -102,6 +102,40 @@ fn seed_git_repo() -> TempDir {
     dir
 }
 
+fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![commit_sha, checkpoint_id, repo_id.as_str()],
+            )?;
+            Ok(())
+        })
+        .expect("insert commit-checkpoint mapping");
+}
+
+fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+    let cfg =
+        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        crate::devql_config::resolve_sqlite_db_path(Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        repo_root
+            .join(crate::engine::paths::BITLOOPS_DIR)
+            .join("devql")
+            .join("relational.db")
+    }
+}
+
 fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {
     rows.iter()
         .find(|row| row.db == label)
@@ -475,6 +509,35 @@ fn collect_checkpoint_commit_map_prefers_newest_valid_checkpoint_commit() {
         .expect("checkpoint should be present");
     assert_eq!(info.subject, "newest checkpoint");
     assert!(!info.commit_sha.is_empty());
+    assert!(info.commit_unix > 0);
+}
+
+#[test]
+fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
+    let repo = seed_git_repo();
+    let checkpoint_id = "b0b1b2b3b4b5";
+
+    git_ok(
+        repo.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "checkpoint without trailer",
+        ],
+    );
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);
+
+    let checkpoint_map =
+        collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");
+
+    assert_eq!(checkpoint_map.len(), 1);
+    let info = checkpoint_map
+        .get(checkpoint_id)
+        .expect("checkpoint should be present");
+    assert_eq!(info.commit_sha, commit_sha);
+    assert_eq!(info.subject, "checkpoint without trailer");
     assert!(info.commit_unix > 0);
 }
 

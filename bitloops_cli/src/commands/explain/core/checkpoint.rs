@@ -4,6 +4,8 @@ fn build_commit_graph_from_git(
     repo_root: &std::path::Path,
     limit: usize,
 ) -> Result<Vec<CommitNode>> {
+    let checkpoint_mappings = read_commit_checkpoint_mappings(repo_root).unwrap_or_default();
+
     let format = format!(
         "--format=%H|%P|%an|%ct|%s|%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)"
     );
@@ -38,15 +40,24 @@ fn build_commit_graph_from_git(
         let trailer_raw = if parts.len() > 5 { parts[5] } else { "" };
 
         let mut trailers: HashMap<String, String> = HashMap::new();
+        let mapped_checkpoint_id = checkpoint_mappings
+            .get(sha.as_str())
+            .cloned()
+            .unwrap_or_default();
         // The %(trailers:...) format may emit empty lines or newlines for missing trailers.
-        let cp_id = trailer_raw
+        let trailer_checkpoint_id = trailer_raw
             .split('\x00')
             .map(str::trim)
-            .find(|s| !s.is_empty())
+            .find(|s| is_valid_checkpoint_id(s))
             .unwrap_or("")
             .to_string();
-        if !cp_id.is_empty() {
-            trailers.insert(CHECKPOINT_TRAILER_KEY.to_string(), cp_id);
+        let checkpoint_id = if !mapped_checkpoint_id.is_empty() {
+            mapped_checkpoint_id
+        } else {
+            trailer_checkpoint_id
+        };
+        if is_valid_checkpoint_id(&checkpoint_id) {
+            trailers.insert(CHECKPOINT_TRAILER_KEY.to_string(), checkpoint_id);
         }
 
         nodes.push(CommitNode {

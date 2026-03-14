@@ -24,6 +24,87 @@ fn default_branch_name(repo_root: &Path) -> String {
 fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
+    match collect_checkpoint_commit_map_from_db(repo_root) {
+        Ok(map) if !map.is_empty() => return Ok(map),
+        Ok(_) => {}
+        Err(err) => {
+            log::debug!(
+                "devql ingest: failed to read commit_checkpoints mapping (falling back to trailers): {:#}",
+                err
+            );
+        }
+    }
+
+    collect_checkpoint_commit_map_from_trailers(repo_root)
+}
+
+fn collect_checkpoint_commit_map_from_db(
+    repo_root: &Path,
+) -> Result<HashMap<String, CheckpointCommitInfo>> {
+    let mappings = read_commit_checkpoint_mappings(repo_root)?;
+    let mut out: HashMap<String, CheckpointCommitInfo> = HashMap::new();
+
+    for (commit_sha, checkpoint_id) in mappings {
+        let Some(info) = checkpoint_commit_info_from_sha(repo_root, &commit_sha) else {
+            continue;
+        };
+
+        let should_replace = match out.get(&checkpoint_id) {
+            None => true,
+            Some(existing) => {
+                info.commit_unix > existing.commit_unix
+                    || (info.commit_unix == existing.commit_unix
+                        && info.commit_sha > existing.commit_sha)
+            }
+        };
+        if should_replace {
+            out.insert(checkpoint_id, info);
+        }
+    }
+
+    Ok(out)
+}
+
+fn checkpoint_commit_info_from_sha(
+    repo_root: &Path,
+    commit_sha: &str,
+) -> Option<CheckpointCommitInfo> {
+    if commit_sha.trim().is_empty() {
+        return None;
+    }
+
+    let raw = run_git(
+        repo_root,
+        &[
+            "show",
+            "-s",
+            "--format=%ct%x1f%an%x1f%ae%x1f%s",
+            commit_sha,
+        ],
+    )
+    .ok()?;
+
+    let mut parts = raw.trim().splitn(4, '\u{1f}');
+    let commit_unix = parts
+        .next()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    let author_name = parts.next().unwrap_or_default().trim().to_string();
+    let author_email = parts.next().unwrap_or_default().trim().to_string();
+    let subject = parts.next().unwrap_or_default().trim().to_string();
+
+    Some(CheckpointCommitInfo {
+        commit_sha: commit_sha.to_string(),
+        commit_unix,
+        author_name,
+        author_email,
+        subject,
+    })
+}
+
+fn collect_checkpoint_commit_map_from_trailers(
+    repo_root: &Path,
+) -> Result<HashMap<String, CheckpointCommitInfo>> {
     let fmt = format!(
         "%H%x1f%ct%x1f%an%x1f%ae%x1f%s%x1f%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)%x1e"
     );
