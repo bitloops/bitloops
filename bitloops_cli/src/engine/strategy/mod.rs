@@ -25,9 +25,9 @@ pub struct StepContext {
     pub modified_files: Vec<String>,
     pub new_files: Vec<String>,
     pub deleted_files: Vec<String>,
-    /// Relative path to session metadata directory.
+    /// Legacy: relative path to session metadata directory.
     pub metadata_dir: String,
-    /// Absolute path to session metadata directory.
+    /// Legacy: absolute path to session metadata directory.
     pub metadata_dir_abs: String,
     pub commit_message: String,
     pub transcript_path: String,

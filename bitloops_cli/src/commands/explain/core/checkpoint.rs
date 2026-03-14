@@ -480,6 +480,10 @@ fn explain_temporary_checkpoint_real(
     sha_prefix: &str,
     opts: &ExplainExecutionOptions,
 ) -> Result<Option<String>> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return Ok(None);
+    }
+
     if sha_prefix.is_empty() {
         return Ok(None);
     }

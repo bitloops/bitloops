@@ -97,22 +97,6 @@ pub fn parse_task_metadata(commit_message: &str) -> (String, bool) {
     (String::new(), false)
 }
 
-pub fn format_shadow_commit(message: &str, metadata_dir: &str, session_id: &str) -> String {
-    format!(
-        "{message}\n\n{METADATA_TRAILER_KEY}: {metadata_dir}\n{SESSION_TRAILER_KEY}: {session_id}\n{STRATEGY_TRAILER_KEY}: manual-commit\n"
-    )
-}
-
-pub fn format_shadow_task_commit(
-    message: &str,
-    task_metadata_dir: &str,
-    session_id: &str,
-) -> String {
-    format!(
-        "{message}\n\n{METADATA_TASK_TRAILER_KEY}: {task_metadata_dir}\n{SESSION_TRAILER_KEY}: {session_id}\n{STRATEGY_TRAILER_KEY}: manual-commit\n"
-    )
-}
-
 pub fn format_source_ref(branch: &str, commit_hash: &str) -> String {
     let short_hash = if commit_hash.len() > SHORT_ID_LENGTH {
         &commit_hash[..SHORT_ID_LENGTH]

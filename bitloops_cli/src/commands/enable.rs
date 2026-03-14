@@ -412,6 +412,10 @@ fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
 }
 
 fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return vec![];
+    }
+
     let mut branches = Vec::new();
     for pattern in ["bitloops/*"] {
         let output = Command::new("git")

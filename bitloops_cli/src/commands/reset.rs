@@ -71,6 +71,10 @@ fn cleanup_session_files(repo_root: &Path, target_session_id: Option<&str>) -> R
 }
 
 fn cleanup_shadow_branches(repo_root: &Path) -> Result<()> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return Ok(());
+    }
+
     let out = Command::new("git")
         .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
         .current_dir(repo_root)

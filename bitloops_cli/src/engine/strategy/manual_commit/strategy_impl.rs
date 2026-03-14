@@ -88,32 +88,31 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let default_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let mut metadata_dir = if ctx.metadata_dir.trim().is_empty() {
-            default_metadata_dir.clone()
+        let legacy_metadata_enabled = crate::engine::session::legacy_local_backend_enabled();
+        let default_metadata_dir = if legacy_metadata_enabled {
+            paths::session_metadata_dir_from_session_id(&ctx.session_id)
         } else {
-            ctx.metadata_dir.clone()
+            String::new()
         };
-        let mut metadata_dir_abs = if ctx.metadata_dir_abs.trim().is_empty() {
-            self.repo_root
-                .join(&metadata_dir)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            ctx.metadata_dir_abs.clone()
-        };
-        if metadata_dir.trim().is_empty() {
+        let mut metadata_dir = ctx.metadata_dir.trim().to_string();
+        let mut metadata_dir_abs = ctx.metadata_dir_abs.trim().to_string();
+
+        if legacy_metadata_enabled && metadata_dir.is_empty() {
             metadata_dir = default_metadata_dir.clone();
         }
-        if metadata_dir_abs.trim().is_empty() {
+        if legacy_metadata_enabled && metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
             metadata_dir_abs = self
                 .repo_root
                 .join(&metadata_dir)
                 .to_string_lossy()
                 .to_string();
         }
+        if !legacy_metadata_enabled && (metadata_dir.is_empty() || metadata_dir_abs.is_empty()) {
+            metadata_dir.clear();
+            metadata_dir_abs.clear();
+        }
         // Legacy compatibility: only materialise session metadata files when explicitly enabled.
-        if crate::engine::session::legacy_local_backend_enabled()
+        if legacy_metadata_enabled
             && metadata_dir == default_metadata_dir
             && !transcript_path.trim().is_empty()
         {
@@ -131,14 +130,13 @@ impl Strategy for ManualCommitStrategy {
             ctx.author_email.clone()
         };
 
-        // Commit message with Bitloops metadata trailers.
+        // Persist plain subjects for temporary checkpoints; metadata lives in DB/blobs.
         let subject = if ctx.commit_message.is_empty() {
             "Bitloops checkpoint".to_string()
         } else {
             ctx.commit_message.clone()
         };
-        let commit_msg =
-            crate::engine::trailers::format_shadow_commit(&subject, &metadata_dir, &ctx.session_id);
+        let commit_msg = subject;
 
         let result = write_temporary(
             &self.repo_root,
@@ -222,14 +220,8 @@ impl Strategy for ManualCommitStrategy {
             format_subagent_end_message(&ctx.subagent_type, &ctx.task_description, short_id)
         };
 
-        // Build the full commit message with task-specific trailers.
-        let session_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let task_metadata_dir = format!("{}/tasks/{}", session_metadata_dir, ctx.tool_use_id);
-        let commit_msg = crate::engine::trailers::format_shadow_task_commit(
-            &subject,
-            &task_metadata_dir,
-            &ctx.session_id,
-        );
+        // Persist plain subjects for temporary task checkpoints.
+        let commit_msg = subject;
 
         // If the repo has no commits yet, skip silently.
         let Some(head) = try_head_hash(&self.repo_root)? else {
@@ -360,8 +352,6 @@ impl Strategy for ManualCommitStrategy {
                 continue;
             }
 
-            let shadow_branch_before =
-                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
             let transition_actions =
                 self.apply_git_commit_transition(&mut state, is_rebase_in_progress);
             let should_condense = transition_actions
@@ -380,18 +370,6 @@ impl Strategy for ManualCommitStrategy {
                         .cloned()
                         .collect();
                     if committed_touched.is_empty() {
-                        if state.phase.is_active() && state.base_commit != head {
-                            state.base_commit = head.clone();
-                        }
-                        let _ = self.backend.save_session(&state);
-                        continue;
-                    }
-                    if !files_overlap_with_content(
-                        &self.repo_root,
-                        &shadow_branch_before,
-                        &head,
-                        &committed_touched,
-                    ) {
                         if state.phase.is_active() && state.base_commit != head {
                             state.base_commit = head.clone();
                         }

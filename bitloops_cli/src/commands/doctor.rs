@@ -343,6 +343,10 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return vec![];
+    }
+
     let mut all = Vec::<String>::new();
     for pattern in ["bitloops/*"] {
         let output = Command::new("git")
