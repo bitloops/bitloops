@@ -145,8 +145,12 @@ pub fn resume_from_current_branch(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create restore directory {}", parent.display()))?;
     }
-    fs::write(&restore_path, transcript.as_bytes())
-        .with_context(|| format!("failed to write restored transcript {}", restore_path.display()))?;
+    fs::write(&restore_path, transcript.as_bytes()).with_context(|| {
+        format!(
+            "failed to write restored transcript {}",
+            restore_path.display()
+        )
+    })?;
 
     Ok(ResumeOutcome {
         message: format!("Restored session log from checkpoint '{checkpoint_id}'."),
@@ -396,5 +400,4 @@ mod tests {
             "run_resume should fail with uncommitted changes"
         );
     }
-
 }

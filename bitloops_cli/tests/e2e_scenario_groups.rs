@@ -1434,8 +1434,8 @@ fn cli_1150_rewind_after_commit() {
         "commit rewind after commit test",
     );
 
-    let latest_checkpoint_id =
-        checkpoint_id_for_rev(dir.path(), "HEAD").expect("latest commit should map to a checkpoint");
+    let latest_checkpoint_id = checkpoint_id_for_rev(dir.path(), "HEAD")
+        .expect("latest commit should map to a checkpoint");
     assert!(
         !latest_checkpoint_id.is_empty(),
         "committed checkpoint id should be present"

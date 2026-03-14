@@ -532,8 +532,7 @@ fn stop_handles_already_committed_files_gracefully() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.phase, SessionPhase::Idle);
     assert_eq!(
-        state.step_count,
-        0,
+        state.step_count, 0,
         "checkpoint should be skipped when no working tree changes remain"
     );
 
@@ -583,7 +582,10 @@ fn stop_subagent_only_changes_still_create_checkpoint() {
         "checkpoint_count should increase for subagent-only file changes"
     );
     assert!(
-        state.files_touched.iter().any(|f| f == "subagent_output.rs"),
+        state
+            .files_touched
+            .iter()
+            .any(|f| f == "subagent_output.rs"),
         "subagent output file should be tracked in session state"
     );
 
@@ -704,7 +706,10 @@ fn stop_creates_shadow_branch_named_after_head_prefix() {
 
     let state = session_state(dir.path(), sid);
     assert_eq!(state.phase, SessionPhase::Idle);
-    assert!(state.step_count > 0, "stop should create a pending checkpoint");
+    assert!(
+        state.step_count > 0,
+        "stop should create a pending checkpoint"
+    );
 
     let refs = run_git(
         dir.path(),
@@ -779,8 +784,7 @@ fn commit_condenses_metadata_to_checkpoints_branch() {
     let state = session_state(dir.path(), sid);
     assert_eq!(state.last_checkpoint_id, checkpoint_id);
     assert_eq!(
-        state.step_count,
-        0,
+        state.step_count, 0,
         "checkpoint_count should be reset after condensation"
     );
 }
