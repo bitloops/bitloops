@@ -542,33 +542,6 @@ fn build_tree_with_explicit_paths(
     Ok(tree)
 }
 
-/// Pushes `bitloops/checkpoints/v1` with `--no-verify` to prevent recursive pre-push hooks.
-fn push_checkpoints_branch_no_verify(repo_root: &Path, remote: &str) -> Result<()> {
-    let output = new_git_command()
-        .args(["push", "--no-verify", remote, paths::METADATA_BRANCH_NAME])
-        .current_dir(repo_root)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| {
-            format!(
-                "running git push --no-verify {remote} {}",
-                paths::METADATA_BRANCH_NAME
-            )
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "git push --no-verify {} {} failed ({}): {}",
-            remote,
-            paths::METADATA_BRANCH_NAME,
-            output.status,
-            stderr.trim()
-        );
-    }
-    Ok(())
-}
-
 /// Returns `(modified, new_files, deleted)` from `git status --porcelain`.
 fn working_tree_changes(repo_root: &Path) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let output = new_git_command()

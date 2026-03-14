@@ -70,18 +70,6 @@ fn files_changed_in_commit(
         .collect())
 }
 
-fn get_staged_files(repo_root: &Path) -> Vec<String> {
-    run_git(repo_root, &["diff", "--cached", "--name-only"])
-        .map(|out| {
-            out.lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn calculate_session_initial_attribution(
     repo_root: &Path,
     state: &SessionState,

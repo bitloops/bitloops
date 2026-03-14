@@ -148,31 +148,6 @@ impl ManualCommitStrategy {
         state.turn_checkpoint_ids.clear();
     }
 
-    /// Handles `prepare-commit-msg` for `git commit --amend` (source = "commit").
-    fn handle_amend_commit_msg(&self, commit_msg_file: &Path) -> Result<()> {
-        let content = fs::read_to_string(commit_msg_file).unwrap_or_default();
-
-        // If message already has our trailer, keep it.
-        if parse_checkpoint_id(&content).is_some() {
-            return Ok(());
-        }
-
-        // Try to restore last_checkpoint_id from an active session.
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        for state in &sessions {
-            if state.phase == SessionPhase::Ended {
-                continue;
-            }
-            if !state.last_checkpoint_id.is_empty() {
-                let new_content = add_checkpoint_trailer(&content, &state.last_checkpoint_id);
-                let _ = fs::write(commit_msg_file, new_content);
-                return Ok(());
-            }
-        }
-
-        Ok(())
-    }
-
     /// Condenses session work into committed checkpoint rows/blobs.
     ///
     fn condense_session(

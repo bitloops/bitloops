@@ -248,35 +248,6 @@ fn get_checkpoint_id_from_head(repo_root: &Path) -> Result<Option<String>> {
     Ok(parse_checkpoint_id(&body))
 }
 
-/// Returns `true` if the message has any non-comment, non-trailer lines.
-fn has_user_content(message: &str) -> bool {
-    let trailer_prefix = format!("{CHECKPOINT_TRAILER_KEY}:");
-    for line in message.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if t.starts_with('#') {
-            continue;
-        }
-        if t.starts_with(trailer_prefix.as_str()) {
-            continue;
-        }
-        return true;
-    }
-    false
-}
-
-/// Removes the `Bitloops-Checkpoint:` trailer line from a message.
-fn strip_checkpoint_trailer(message: &str) -> String {
-    let trailer_prefix = format!("{CHECKPOINT_TRAILER_KEY}:");
-    message
-        .lines()
-        .filter(|l| !l.trim().starts_with(trailer_prefix.as_str()))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Appends `\n\nBitloops-Checkpoint: <id>\n` to the message.
 fn add_checkpoint_trailer(message: &str, id: &str) -> String {
     let trailer = format!("{CHECKPOINT_TRAILER_KEY}: {id}");
