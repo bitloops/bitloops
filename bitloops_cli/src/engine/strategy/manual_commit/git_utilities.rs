@@ -178,7 +178,7 @@ fn delete_shadow_branches(repo_root: &Path, branches: &[String]) -> (Vec<String>
 }
 
 fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root.to_path_buf());
     let states = backend.list_sessions()?;
     if states.is_empty() {
         return Ok(vec![]);

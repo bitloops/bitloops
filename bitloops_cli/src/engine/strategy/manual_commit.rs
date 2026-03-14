@@ -23,7 +23,6 @@ use crate::engine::agent::{
     canonical_agent_key,
 };
 use crate::engine::paths;
-use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::{
     Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
     transition_with_context,

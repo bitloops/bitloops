@@ -11,7 +11,29 @@ pub mod state;
 pub use backend::SessionBackend;
 pub use db_backend::DbSessionBackend;
 
+pub const LEGACY_LOCAL_BACKEND_ENV: &str = "BITLOOPS_ENABLE_LEGACY_LOCAL_BACKEND";
+
+#[cfg(test)]
+pub fn legacy_local_backend_enabled() -> bool {
+    true
+}
+
+#[cfg(not(test))]
+pub fn legacy_local_backend_enabled() -> bool {
+    std::env::var(LEGACY_LOCAL_BACKEND_ENV)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 pub fn list_legacy_local_session_ids(repo_root: impl Into<PathBuf>) -> Result<Vec<String>> {
+    if !legacy_local_backend_enabled() {
+        return Ok(vec![]);
+    }
     let backend = local_backend::LocalFileBackend::new(repo_root.into());
     let dir = backend.sessions_dir();
 
@@ -47,6 +69,9 @@ pub fn delete_legacy_local_session_state(
     repo_root: impl Into<PathBuf>,
     session_id: &str,
 ) -> Result<()> {
+    if !legacy_local_backend_enabled() {
+        return Ok(());
+    }
     let backend = local_backend::LocalFileBackend::new(repo_root.into());
     backend.delete_session(session_id)
 }
@@ -68,10 +93,84 @@ pub fn create_session_backend_or_local(repo_root: impl Into<PathBuf>) -> Box<dyn
     match create_session_backend(root.clone()) {
         Ok(backend) => backend,
         Err(err) => {
-            log::warn!(
-                "failed to initialise DbSessionBackend; falling back to LocalFileBackend: {err:#}"
+            if legacy_local_backend_enabled() {
+                log::warn!(
+                    "failed to initialise DbSessionBackend; falling back to LocalFileBackend because {LEGACY_LOCAL_BACKEND_ENV}=1: {err:#}"
+                );
+                return Box::new(local_backend::LocalFileBackend::new(root));
+            }
+
+            let reason = format!(
+                "failed to initialise DbSessionBackend while legacy fallback is disabled ({LEGACY_LOCAL_BACKEND_ENV}=1 enables it): {err:#}"
             );
-            Box::new(local_backend::LocalFileBackend::new(root))
+            log::error!("{reason}");
+            Box::new(UnavailableSessionBackend::new(reason))
         }
+    }
+}
+
+#[cfg(not(test))]
+struct UnavailableSessionBackend {
+    reason: String,
+}
+
+#[cfg(not(test))]
+impl UnavailableSessionBackend {
+    fn new(reason: String) -> Self {
+        Self { reason }
+    }
+
+    fn unavailable<T>(&self) -> Result<T> {
+        Err(anyhow::anyhow!(
+            "session backend unavailable: {}",
+            self.reason
+        ))
+    }
+}
+
+#[cfg(not(test))]
+impl SessionBackend for UnavailableSessionBackend {
+    fn list_sessions(&self) -> Result<Vec<state::SessionState>> {
+        self.unavailable()
+    }
+
+    fn load_session(&self, _session_id: &str) -> Result<Option<state::SessionState>> {
+        self.unavailable()
+    }
+
+    fn save_session(&self, _state: &state::SessionState) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn delete_session(&self, _session_id: &str) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn load_pre_prompt(&self, _session_id: &str) -> Result<Option<state::PrePromptState>> {
+        self.unavailable()
+    }
+
+    fn save_pre_prompt(&self, _state: &state::PrePromptState) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn delete_pre_prompt(&self, _session_id: &str) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn create_pre_task_marker(&self, _state: &state::PreTaskState) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn load_pre_task_marker(&self, _tool_use_id: &str) -> Result<Option<state::PreTaskState>> {
+        self.unavailable()
+    }
+
+    fn delete_pre_task_marker(&self, _tool_use_id: &str) -> Result<()> {
+        self.unavailable()
+    }
+
+    fn find_active_pre_task(&self) -> Result<Option<String>> {
+        self.unavailable()
     }
 }

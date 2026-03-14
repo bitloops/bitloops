@@ -6,7 +6,8 @@ use super::state::{PrePromptState, PreTaskState, SessionState};
 
 /// Storage interface for session lifecycle data.
 ///
-/// Production code uses `LocalFileBackend`; tests inject this directly.
+/// Production code uses `DbSessionBackend` by default.
+/// `LocalFileBackend` is legacy compatibility storage.
 pub trait SessionBackend: Send + Sync {
     // ── Session state (<git-common-dir>/bitloops-sessions/<id>.json) ─────
 

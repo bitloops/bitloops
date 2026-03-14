@@ -10,8 +10,7 @@ use serde_json::json;
 
 use crate::engine::agent::canonical_agent_key;
 use crate::engine::paths;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::SessionState;
 use crate::engine::stringutil;
 use crate::engine::trailers::{
@@ -447,7 +446,7 @@ impl SessionInitializer for AutoCommitStrategy {
         transcript_path: &str,
         user_prompt: &str,
     ) -> Result<()> {
-        let backend = LocalFileBackend::new(&self.repo_root);
+        let backend = create_session_backend_or_local(&self.repo_root);
 
         if let Some(mut existing) = backend.load_session(session_id)? {
             existing.last_interaction_time = Some(now_string());

@@ -112,8 +112,11 @@ impl Strategy for ManualCommitStrategy {
                 .to_string_lossy()
                 .to_string();
         }
-        // Keep compatibility with direct strategy tests that don't precreate metadata.
-        if metadata_dir == default_metadata_dir && !transcript_path.trim().is_empty() {
+        // Legacy compatibility: only materialise session metadata files when explicitly enabled.
+        if crate::engine::session::legacy_local_backend_enabled()
+            && metadata_dir == default_metadata_dir
+            && !transcript_path.trim().is_empty()
+        {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
         }
 

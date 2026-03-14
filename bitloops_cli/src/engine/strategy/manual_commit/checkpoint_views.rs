@@ -650,6 +650,10 @@ pub fn get_checkpoint_author(repo_root: &Path, checkpoint_id: &str) -> Result<Ch
         }
     }
 
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return Ok(CheckpointAuthor::default());
+    }
+
     let metadata_ref = format!("refs/heads/{}", paths::METADATA_BRANCH_NAME);
     if run_git(repo_root, &["rev-parse", &metadata_ref]).is_err() {
         return Ok(CheckpointAuthor::default());
@@ -1084,6 +1088,10 @@ fn get_commit_author(repo_root: &Path, commit_ref: &str) -> Option<(String, Stri
 }
 
 pub(crate) fn metadata_read_ref(repo_root: &Path) -> Option<String> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return None;
+    }
+
     let local = format!("refs/heads/{}", paths::METADATA_BRANCH_NAME);
     if run_git(repo_root, &["rev-parse", &local]).is_ok() {
         return Some(local);

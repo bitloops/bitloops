@@ -4,6 +4,9 @@
 //!   `<git-common-dir>/bitloops-sessions/<session_id>.json`   — session state
 //!   `.bitloops/tmp/pre-prompt-<session_id>.json` — pre-prompt state
 //!   `.bitloops/tmp/pre-task-<tool_use_id>.json`   — pre-task marker
+//!
+//! Legacy compatibility backend. Non-test runtime only falls back to this backend
+//! when `BITLOOPS_ENABLE_LEGACY_LOCAL_BACKEND=1` is set.
 
 use std::fs;
 use std::path::{Path, PathBuf};
