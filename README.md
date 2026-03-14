@@ -1,11 +1,11 @@
   <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
   <h1>Git captures what changed. Bitloops captures why.</h1>
-  <p>
+  <h3>
     The open-source intelligence layer for AI-driven software development. Bitloops 
     captures the full developer–AI conversation for every commit and builds a 
     structured semantic model of your codebase that you and your agents can query.
-  </p>
+  </h3>
   <p>
     <a href="https://bitloops.com">Website</a>
     ·
@@ -51,6 +51,8 @@
 </p>
   </div>
 
+<h3>Bitloops continuously models your codebase and development history so agents can retrieve architecture, decisions, and intent instantly — instead of crawling your repositories.</h3>
+
 ## About Bitloops
 
 Bitloops is a memory and context layer for AI coding agents.
@@ -81,7 +83,6 @@ Bitloops introduces three core capabilities:
 Together, these allow agents to work with better context while teams retain
 visibility and governance over AI-generated changes.
 
-| | |
 |---|---|
 | **Without Bitloops** | **With Bitloops** |
 | Each session starts from zero | Sessions build on shared repository memory |
@@ -99,20 +100,16 @@ visibility and governance over AI-generated changes.
 Bitloops adds structured memory, context retrieval, and reasoning traceability
 to AI-assisted development.
 
-- **Shared memory for coding agents**  
-  Supported tools access the same repository-scoped knowledge layer, turning
+- **Shared memory for coding agents:**Supported tools access the same repository-scoped knowledge layer, turning
   context into shared infrastructure instead of siloed sessions.
 
-- **Git-linked reasoning capture**  
-  Bitloops records the developer–agent workflow around each commit so teams can
+- **Git-linked reasoning capture:** Bitloops records the developer–agent workflow around each commit so teams can
   trace how a change was produced, not just what appears in the diff.
 
-- **Targeted context retrieval**  
-  Instead of forcing every session to search the codebase from scratch, Bitloops
+- **Targeted context retrieval:** Instead of forcing every session to search the codebase from scratch, Bitloops
   retrieves the most relevant structural and historical signals for the task.
 
-- **Local observability**  
-  A local dashboard lets teams inspect AI-assisted activity without sending code
+- **Local observability:** A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
 
 ## Installation
