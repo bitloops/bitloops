@@ -12,7 +12,7 @@ on:
 jobs:
   changelog:
     name: Changelog updated
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Skip if labeled
         if: contains(github.event.pull_request.labels.*.name, 'skip-changelog')

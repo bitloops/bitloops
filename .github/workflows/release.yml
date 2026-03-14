@@ -116,7 +116,7 @@ jobs:
 
   publish:
     name: Publish release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build
     steps:
       - name: Download packaged artifacts
@@ -140,7 +140,7 @@ jobs:
 
   update-homebrew-tap:
     name: Update Homebrew tap formula
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: publish
     environment: "Production CLI"
     steps:
@@ -226,7 +226,7 @@ jobs:
 
   verify:
     name: Verify published release artifacts
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: publish
     steps:
       - name: Download assets from published release

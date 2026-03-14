@@ -10,7 +10,7 @@ use clap::Args;
 use crate::commands::enable::{find_repo_root, initialized_agents};
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
-use crate::engine::agent::codex::agent::CodexAgent;
+use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -99,7 +99,7 @@ fn install_agent_hooks(
         )),
         AGENT_CODEX => Ok((
             "Codex CLI".to_string(),
-            HookSupport::install_hooks(&CodexAgent, local_dev, force)?,
+            codex_hooks::install_hooks_at(repo_root, local_dev, force)?,
         )),
         AGENT_CURSOR => Ok((
             "Cursor".to_string(),

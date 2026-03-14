@@ -11,7 +11,7 @@ use clap::Args;
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
-use crate::engine::agent::codex::agent::CodexAgent;
+use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -167,7 +167,7 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
     if HookSupport::are_hooks_installed(&CursorAgent) {
         agents.push("cursor".to_string());
     }
-    if HookSupport::are_hooks_installed(&CodexAgent) {
+    if codex_hooks::are_hooks_installed_at(repo_root) {
         agents.push("codex".to_string());
     }
     if HookSupport::are_hooks_installed(&GeminiCliAgent) {
@@ -264,7 +264,7 @@ pub fn run_uninstall(
     let shadow_branch_count = count_shadow_branches(repo_root);
     let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
     let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
-    let codex_hooks_installed = HookSupport::are_hooks_installed(&CodexAgent);
+    let codex_hooks_installed = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_hooks_installed = HookSupport::are_hooks_installed(&CursorAgent);
     let gemini_hooks_installed = HookSupport::are_hooks_installed(&GeminiCliAgent);
     let opencode_hooks_installed = HookSupport::are_hooks_installed(&OpenCodeAgent);
@@ -466,9 +466,8 @@ fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
         writeln!(out, "  Removed Cursor hooks")?;
     }
 
-    let codex = CodexAgent;
-    if HookSupport::are_hooks_installed(&codex) {
-        HookSupport::uninstall_hooks(&codex)?;
+    if codex_hooks::are_hooks_installed_at(repo_root) {
+        codex_hooks::uninstall_hooks_at(repo_root)?;
         writeln!(out, "  Removed Codex CLI hooks")?;
     }
 
@@ -504,7 +503,7 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         return (false, String::new(), String::new());
     }
     let claude_enabled = claude_hooks::are_hooks_installed(repo_root);
-    let codex_enabled = HookSupport::are_hooks_installed(&CodexAgent);
+    let codex_enabled = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_enabled = HookSupport::are_hooks_installed(&CursorAgent);
     let gemini_enabled = HookSupport::are_hooks_installed(&GeminiCliAgent);
     let opencode_enabled = HookSupport::are_hooks_installed(&OpenCodeAgent);
