@@ -99,7 +99,7 @@ visibility and governance over AI-generated changes.
 Bitloops adds structured memory, context retrieval, and reasoning traceability
 to AI-assisted development.
 
-- **Shared memory for coding agents:**Supported tools access the same repository-scoped knowledge layer, turning
+- **Shared memory for coding agents:** Supported tools access the same repository-scoped knowledge layer, turning
   context into shared infrastructure instead of siloed sessions.
 
 - **Git-linked reasoning capture:** Bitloops records the developer–agent workflow around each commit so teams can
