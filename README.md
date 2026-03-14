@@ -51,8 +51,6 @@
 </p>
   </div>
 
-<h3>Bitloops continuously models your codebase and development history so agents can retrieve architecture, decisions, and intent instantly — instead of crawling your repositories.</h3>
-
 ## About Bitloops
 
 Bitloops is a memory and context layer for AI coding agents.
@@ -83,6 +81,7 @@ Bitloops introduces three core capabilities:
 Together, these allow agents to work with better context while teams retain
 visibility and governance over AI-generated changes.
 
+| | |
 |---|---|
 | **Without Bitloops** | **With Bitloops** |
 | Each session starts from zero | Sessions build on shared repository memory |

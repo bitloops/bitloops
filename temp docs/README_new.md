@@ -80,6 +80,7 @@ Bitloops introduces three core capabilities:
 Together, these allow agents to work with better context while teams retain
 visibility and governance over AI-generated changes.
 
+| | |
 |---|---|
 | **Without Bitloops** | **With Bitloops** |
 | Each session starts from zero | Sessions build on shared repository memory |
