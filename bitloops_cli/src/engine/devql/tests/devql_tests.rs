@@ -462,43 +462,22 @@ fn default_branch_name_uses_current_branch_and_falls_back_to_main() {
 }
 
 #[test]
-fn collect_checkpoint_commit_map_prefers_newest_valid_checkpoint_commit() {
+fn collect_checkpoint_commit_map_prefers_newest_db_mapped_checkpoint_commit() {
     let repo = seed_git_repo();
     let checkpoint_id = "aabbccddeeff";
 
     git_ok(
         repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "older checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}"),
-        ],
+        &["commit", "--allow-empty", "-m", "older checkpoint"],
     );
+    let older_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     git_ok(
         repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "ignored invalid checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: not-valid"),
-        ],
+        &["commit", "--allow-empty", "-m", "newest checkpoint"],
     );
-    git_ok(
-        repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "newest checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}"),
-        ],
-    );
+    let newest_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &older_sha, checkpoint_id);
+    insert_commit_checkpoint_mapping(repo.path(), &newest_sha, checkpoint_id);
 
     let checkpoint_map =
         collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");

@@ -361,7 +361,7 @@ fn build_runtime_session_info(
     Some((session, details))
 }
 
-/// Real implementation: reads committed checkpoints from git + shadow branches.
+/// Real implementation: reads committed checkpoints from git commit graph + DB checkpoint mappings.
 pub fn get_branch_checkpoints_real(
     repo_root: &std::path::Path,
     limit: usize,
@@ -443,10 +443,6 @@ pub fn get_branch_checkpoints_real(
         });
     }
 
-    // Also gather temporary (shadow-branch) checkpoints.
-    let temp = get_reachable_temporary_checkpoints_shell(repo_root, &commits, is_default);
-    points.extend(temp);
-
     points.sort_by(|a, b| b.date.cmp(&a.date));
     if limit > 0 && points.len() > limit {
         points.truncate(limit);
@@ -455,6 +451,7 @@ pub fn get_branch_checkpoints_real(
     Ok(points)
 }
 
+#[allow(dead_code)]
 /// Try to gather temporary (shadow-branch) checkpoints from real git branches.
 fn get_reachable_temporary_checkpoints_shell(
     repo_root: &std::path::Path,

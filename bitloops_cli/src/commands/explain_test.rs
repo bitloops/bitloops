@@ -6,12 +6,15 @@ use crate::test_support::process_state::git_command;
 use anyhow::{Result, anyhow};
 use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
+use std::path::PathBuf;
+
 fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     run_git_cmd(&root, &["init"]);
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
+    run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
     (tmp, root)
 }
 
@@ -52,6 +55,75 @@ fn make_checkpoint_commit(
     make_commit(root, file, content, &full_message)
 }
 
+fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
+    let cfg =
+        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        crate::devql_config::resolve_sqlite_db_path(Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        repo_root
+            .join(crate::engine::paths::BITLOOPS_DIR)
+            .join("devql")
+            .join("relational.db")
+    }
+}
+
+fn insert_commit_checkpoint_mapping(
+    repo_root: &std::path::Path,
+    commit_sha: &str,
+    checkpoint_id: &str,
+) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![commit_sha, checkpoint_id, repo_id.as_str()],
+            )?;
+            Ok(())
+        })
+        .expect("insert commit checkpoint mapping");
+}
+
+fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &str) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO checkpoints (
+                    checkpoint_id, repo_id, strategy, branch, cli_version,
+                    files_touched, checkpoints_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    checkpoint_id,
+                    repo_id.as_str(),
+                    "manual-commit",
+                    "",
+                    "0.0.3",
+                    "[]",
+                    1_i64,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert committed checkpoint row");
+}
+
 fn write_committed_checkpoint_metadata(root: &std::path::Path, checkpoint_ids: &[&str]) {
     let current_branch = run_git_cmd(root, &["rev-parse", "--abbrev-ref", "HEAD"]);
     run_git_cmd(root, &["checkout", "--orphan", "bitloops/checkpoints/v1"]);
@@ -80,6 +152,26 @@ fn write_committed_checkpoint_metadata(root: &std::path::Path, checkpoint_ids: &
     run_git_cmd(root, &["add", "."]);
     run_git_cmd(root, &["commit", "-m", "seed checkpoint metadata"]);
     run_git_cmd(root, &["checkout", &current_branch]);
+
+    for checkpoint_id in checkpoint_ids {
+        insert_committed_checkpoint_row(root, checkpoint_id);
+        let grep_pattern = format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}");
+        let commit_sha = run_git_cmd(
+            root,
+            &[
+                "log",
+                "--all",
+                "--format=%H",
+                "--grep",
+                &grep_pattern,
+                "-n",
+                "1",
+            ],
+        );
+        if !commit_sha.is_empty() {
+            insert_commit_checkpoint_mapping(root, &commit_sha, checkpoint_id);
+        }
+    }
 }
 
 fn sample_opts() -> ExplainExecutionOptions {

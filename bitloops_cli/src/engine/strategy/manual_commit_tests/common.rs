@@ -274,14 +274,10 @@ fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
     repo_root.join(paths::BITLOOPS_DIR).join("blobs")
 }
 
-fn with_checkpoint_storage_env<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
-    let blob_root = committed_checkpoint_blob_root(repo_root);
-    let blob_root_owned = blob_root.to_string_lossy().to_string();
-    with_env_var(
-        "BITLOOPS_DEVQL_BLOB_LOCAL_PATH",
-        Some(blob_root_owned.as_str()),
-        f,
-    )
+fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {
+    let disk_path = committed_checkpoint_blob_root(repo_root).join(storage_path);
+    std::fs::read(&disk_path)
+        .unwrap_or_else(|err| panic!("failed reading blob payload at {}: {err}", disk_path.display()))
 }
 
 fn query_checkpoint_session_content_hash(
@@ -431,4 +427,3 @@ fn create_shadow_branch_with_content(repo_root: &Path, branch: &str, files: &[(&
     );
     git_ok(repo_root, &["checkout", &current]);
 }
-

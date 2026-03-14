@@ -4,12 +4,10 @@ fn build_commit_graph_from_git(
     repo_root: &std::path::Path,
     limit: usize,
 ) -> Result<Vec<CommitNode>> {
-    let checkpoint_mappings = read_commit_checkpoint_mappings(repo_root).unwrap_or_default();
+    let checkpoint_mappings = read_commit_checkpoint_mappings(repo_root)?;
 
-    let format = format!(
-        "--format=%H|%P|%an|%ct|%s|%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)"
-    );
-    let mut args: Vec<String> = vec!["log".to_string(), format];
+    let format = "--format=%H|%P|%an|%ct|%s";
+    let mut args: Vec<String> = vec!["log".to_string(), format.to_string()];
     if limit > 0 {
         args.push("--max-count".to_string());
         args.push(limit.to_string());
@@ -24,7 +22,7 @@ fn build_commit_graph_from_git(
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.splitn(6, '|').collect();
+        let parts: Vec<&str> = line.splitn(5, '|').collect();
         if parts.len() < 5 {
             continue;
         }
@@ -37,25 +35,12 @@ fn build_commit_graph_from_git(
         let author = parts[2].trim().to_string();
         let timestamp: i64 = parts[3].trim().parse().unwrap_or(0);
         let message = parts[4].trim().to_string();
-        let trailer_raw = if parts.len() > 5 { parts[5] } else { "" };
 
         let mut trailers: HashMap<String, String> = HashMap::new();
-        let mapped_checkpoint_id = checkpoint_mappings
+        let checkpoint_id = checkpoint_mappings
             .get(sha.as_str())
             .cloned()
             .unwrap_or_default();
-        // The %(trailers:...) format may emit empty lines or newlines for missing trailers.
-        let trailer_checkpoint_id = trailer_raw
-            .split('\x00')
-            .map(str::trim)
-            .find(|s| is_valid_checkpoint_id(s))
-            .unwrap_or("")
-            .to_string();
-        let checkpoint_id = if !mapped_checkpoint_id.is_empty() {
-            mapped_checkpoint_id
-        } else {
-            trailer_checkpoint_id
-        };
         if is_valid_checkpoint_id(&checkpoint_id) {
             trailers.insert(CHECKPOINT_TRAILER_KEY.to_string(), checkpoint_id);
         }
@@ -320,12 +305,7 @@ pub(crate) fn run_explain_checkpoint_in(
                     checkpoint_id_prefix
                 );
             }
-            return match explain_temporary_checkpoint_real(repo_root, checkpoint_id_prefix, opts) {
-                Ok(Some(output)) => Ok(output),
-                Ok(None) => Err(anyhow!("checkpoint not found: {checkpoint_id_prefix}")),
-                Err(err) if err.to_string().contains("ambiguous checkpoint prefix") => Err(err),
-                Err(_) => Err(anyhow!("checkpoint not found: {checkpoint_id_prefix}")),
-            };
+            return Err(anyhow!("checkpoint not found: {checkpoint_id_prefix}"));
         }
         [one] => one.checkpoint_id.clone(),
         many => {
@@ -405,7 +385,7 @@ pub(crate) fn run_explain_checkpoint_in(
     } else {
         COMMIT_SCAN_LIMIT
     };
-    let commits = build_commit_graph_from_git(repo_root, graph_limit).unwrap_or_default();
+    let commits = build_commit_graph_from_git(repo_root, graph_limit)?;
     let associated = get_associated_commits(&commits, &full_checkpoint_id, opts.search_all)?;
 
     let output = format_checkpoint_output(
@@ -418,249 +398,6 @@ pub(crate) fn run_explain_checkpoint_in(
         opts.full,
     );
     Ok(output)
-}
-
-/// Format a Unix timestamp as "YYYY-MM-DD HH:MM:SS" UTC.
-fn format_unix_datetime_utc(unix: i64) -> String {
-    if unix <= 0 {
-        return String::new();
-    }
-    let s = unix % 60;
-    let m = (unix / 60) % 60;
-    let h = (unix / 3600) % 24;
-    let days = unix / 86400;
-    // Euclidean affine Gregorian calendar algorithm (UTC).
-    // Reference: https://howardhinnant.github.io/date_algorithms.html
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { y + 1 } else { y };
-    format!("{year:04}-{month:02}-{d:02} {h:02}:{m:02}:{s:02}")
-}
-
-/// Read transcript bytes from a git commit tree, trying primary filename then legacy.
-fn read_transcript_from_tree(
-    repo_root: &std::path::Path,
-    commit_sha: &str,
-    metadata_dir: &str,
-) -> Vec<u8> {
-    let primary = format!(
-        "{}:{}/{}",
-        commit_sha,
-        metadata_dir,
-        paths::TRANSCRIPT_FILE_NAME
-    );
-    if let Ok(out) = run_git(repo_root, &["show", &primary])
-        && !out.is_empty()
-    {
-        return out.into_bytes();
-    }
-    let legacy = format!(
-        "{}:{}/{}",
-        commit_sha,
-        metadata_dir,
-        paths::TRANSCRIPT_FILE_NAME_LEGACY
-    );
-    run_git(repo_root, &["show", &legacy])
-        .unwrap_or_default()
-        .into_bytes()
-}
-
-/// Try to explain a temporary (shadow-branch) checkpoint by SHA prefix.
-/// Searches ALL shadow branches.
-/// Returns Ok(Some(output)) if found, Ok(None) if not found, Err for ambiguous.
-fn explain_temporary_checkpoint_real(
-    repo_root: &std::path::Path,
-    sha_prefix: &str,
-    opts: &ExplainExecutionOptions,
-) -> Result<Option<String>> {
-    if !crate::engine::session::legacy_local_backend_enabled() {
-        return Ok(None);
-    }
-
-    if sha_prefix.is_empty() {
-        return Ok(None);
-    }
-
-    // List ALL bitloops/* shadow branches — no worktree or reachability filter.
-    let branches_out = run_git(repo_root, &["branch", "--list", "bitloops/*"]).unwrap_or_default();
-    let shadow_branches: Vec<String> = branches_out
-        .lines()
-        .map(|l| l.trim().trim_start_matches('*').trim().to_string())
-        .filter(|b| !b.is_empty() && b != paths::METADATA_BRANCH_NAME)
-        .collect();
-
-    struct TempMatch {
-        commit_sha: String,
-        timestamp: i64,
-        session_id: String,
-    }
-
-    let mut matches: Vec<TempMatch> = Vec::new();
-
-    for branch in &shadow_branches {
-        let log_out =
-            run_git(repo_root, &["log", "--format=%H|%ct", branch.as_str()]).unwrap_or_default();
-
-        for line in log_out.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let mut parts = line.splitn(2, '|');
-            let sha = match parts.next() {
-                Some(s) => s.trim(),
-                None => continue,
-            };
-            let timestamp: i64 = parts
-                .next()
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(0);
-
-            if sha.starts_with(sha_prefix) {
-                let commit_msg =
-                    run_git(repo_root, &["show", "-s", "--format=%B", sha]).unwrap_or_default();
-                let (session_id, _) = parse_session(&commit_msg);
-                matches.push(TempMatch {
-                    commit_sha: sha.to_string(),
-                    timestamp,
-                    session_id,
-                });
-            }
-        }
-    }
-
-    if matches.is_empty() {
-        return Ok(None);
-    }
-
-    if matches.len() > 1 {
-        let mut msg = format!(
-            "ambiguous checkpoint prefix {:?} matches {} temporary checkpoints:\n",
-            sha_prefix,
-            matches.len()
-        );
-        for m in matches.iter().take(5) {
-            let short_id = &m.commit_sha[..m.commit_sha.len().min(7)];
-            let dt = format_unix_datetime_utc(m.timestamp);
-            let _ = writeln!(msg, "  {}  {}  session {}", short_id, dt, m.session_id);
-        }
-        bail!("{}", msg.trim_end());
-    }
-
-    let m = &matches[0];
-    let commit_sha = &m.commit_sha;
-
-    // Read commit message to extract metadata_dir and session_id.
-    let commit_msg = run_git(
-        repo_root,
-        &["show", "-s", "--format=%B", commit_sha.as_str()],
-    )?;
-    let (metadata_dir, md_found) = parse_metadata(&commit_msg);
-    if !md_found || metadata_dir.is_empty() {
-        return Ok(None);
-    }
-    let (session_id, _) = parse_session(&commit_msg);
-
-    // Read metadata.json to determine agent type.
-    let metadata_path = format!(
-        "{}:{}/{}",
-        commit_sha,
-        metadata_dir,
-        paths::METADATA_FILE_NAME
-    );
-    let metadata_json = run_git(repo_root, &["show", &metadata_path]).unwrap_or_default();
-    let agent_type = if metadata_json.is_empty() {
-        AgentType::ClaudeCode
-    } else if let Ok(val) = serde_json::from_str::<Value>(&metadata_json) {
-        val.get("agent")
-            .and_then(Value::as_str)
-            .map(agent_type_from_str)
-            .unwrap_or_default()
-    } else {
-        AgentType::ClaudeCode
-    };
-
-    // Handle raw transcript output.
-    if opts.raw_transcript {
-        let transcript_bytes = read_transcript_from_tree(repo_root, commit_sha, &metadata_dir);
-        if transcript_bytes.is_empty() {
-            bail!(
-                "checkpoint {} has no transcript",
-                &commit_sha[..commit_sha.len().min(7)]
-            );
-        }
-        use std::io::Write;
-        std::io::stdout().write_all(&transcript_bytes)?;
-        return Ok(Some(String::new()));
-    }
-
-    // Read prompt from shadow commit tree.
-    let prompt_path = format!(
-        "{}:{}/{}",
-        commit_sha,
-        metadata_dir,
-        paths::PROMPT_FILE_NAME
-    );
-    let session_prompt = run_git(repo_root, &["show", &prompt_path]).unwrap_or_default();
-
-    // Build output matching formatCheckpointOutput style but for temporary checkpoints.
-    let short_id = &commit_sha[..commit_sha.len().min(7)];
-    let dt = format_unix_datetime_utc(m.timestamp);
-    let mut out = String::new();
-    let _ = writeln!(out, "Checkpoint: {} [temporary]", short_id);
-    let _ = writeln!(out, "Session: {}", session_id);
-    let _ = writeln!(out, "Created: {}", dt);
-    out.push('\n');
-
-    let intent = session_prompt
-        .lines()
-        .find(|l| !l.is_empty())
-        .map(|l| truncate_description(l, MAX_INTENT_DISPLAY_LENGTH))
-        .unwrap_or_else(|| "(not available)".to_string());
-    let _ = writeln!(out, "Intent: {}", intent);
-    out.push_str("Outcome: (not generated)\n");
-
-    if opts.full || opts.verbose {
-        let full_transcript = read_transcript_from_tree(repo_root, commit_sha, &metadata_dir);
-        let scoped_transcript = if opts.verbose && !full_transcript.is_empty() {
-            // Get parent commit to compute checkpoint scope.
-            let parent_out =
-                run_git(repo_root, &["rev-parse", &format!("{}^", commit_sha)]).unwrap_or_default();
-            let parent_sha = parent_out.trim();
-            if !parent_sha.is_empty() {
-                let parent_transcript =
-                    read_transcript_from_tree(repo_root, parent_sha, &metadata_dir);
-                if !parent_transcript.is_empty() {
-                    let offset = transcript_offset(&parent_transcript, agent_type);
-                    scope_transcript_for_checkpoint(&full_transcript, offset, agent_type)
-                } else {
-                    full_transcript.clone()
-                }
-            } else {
-                full_transcript.clone()
-            }
-        } else {
-            Vec::new()
-        };
-        append_transcript_section(
-            &mut out,
-            opts.verbose,
-            opts.full,
-            &full_transcript,
-            &scoped_transcript,
-            &session_prompt,
-            agent_type,
-        );
-    }
-
-    Ok(Some(out))
 }
 
 /// Generates an AI summary for a checkpoint and persists it via `update_summary`.

@@ -91,6 +91,7 @@ fn summary_session_count(summary: &CheckpointSummaryView) -> usize {
     summary.sessions.len()
 }
 
+#[allow(dead_code)]
 fn to_committed_info(
     repo_root: &Path,
     read_ref: &str,
@@ -583,45 +584,11 @@ pub fn list_committed(repo_root: &Path) -> Result<Vec<CommittedInfo>> {
     })?;
 
     let mut out: Vec<CommittedInfo> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     for checkpoint_id in checkpoint_ids {
         if let Some(summary) = read_committed_from_db(&storage, &checkpoint_id)? {
-            seen.insert(checkpoint_id.clone());
             out.push(to_committed_info_from_db(&storage, &summary)?);
         }
     }
-
-    let Some(read_ref) = metadata_read_ref(repo_root) else {
-        return Ok(out);
-    };
-
-    let buckets = run_git(repo_root, &["ls-tree", "--name-only", &read_ref]).unwrap_or_default();
-
-    for bucket in buckets.lines() {
-        if bucket.len() != 2 || !bucket.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
-        }
-        let bucket_ref = format!("{read_ref}:{bucket}");
-        let children =
-            run_git(repo_root, &["ls-tree", "--name-only", &bucket_ref]).unwrap_or_default();
-        for suffix in children.lines() {
-            if !suffix.chars().all(|c| c.is_ascii_hexdigit()) {
-                continue;
-            }
-            let checkpoint_id = format!("{bucket}{suffix}");
-            if checkpoint_id.len() != 12 {
-                continue;
-            }
-            if seen.contains(checkpoint_id.as_str()) {
-                continue;
-            }
-            if let Some(summary) = read_committed_with_ref(repo_root, &read_ref, &checkpoint_id)? {
-                seen.insert(checkpoint_id.clone());
-                out.push(to_committed_info(repo_root, &read_ref, &summary));
-            }
-        }
-    }
-
     Ok(out)
 }
 
@@ -649,39 +616,7 @@ pub fn get_checkpoint_author(repo_root: &Path, checkpoint_id: &str) -> Result<Ch
             return Ok(CheckpointAuthor { name, email });
         }
     }
-
-    if !crate::engine::session::legacy_local_backend_enabled() {
-        return Ok(CheckpointAuthor::default());
-    }
-
-    let metadata_ref = format!("refs/heads/{}", paths::METADATA_BRANCH_NAME);
-    if run_git(repo_root, &["rev-parse", &metadata_ref]).is_err() {
-        return Ok(CheckpointAuthor::default());
-    }
-
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    let metadata_path = format!("{a}/{b}/{}", paths::METADATA_FILE_NAME);
-    let log = run_git(
-        repo_root,
-        &[
-            "log",
-            "--reverse",
-            "--format=%an|%ae",
-            &metadata_ref,
-            "--",
-            &metadata_path,
-        ],
-    )
-    .unwrap_or_default();
-    let first = log.lines().next().unwrap_or_default().trim();
-    if first.is_empty() {
-        return Ok(CheckpointAuthor::default());
-    }
-    let mut parts = first.split('|');
-    Ok(CheckpointAuthor {
-        name: parts.next().unwrap_or_default().trim().to_string(),
-        email: parts.next().unwrap_or_default().trim().to_string(),
-    })
+    Ok(CheckpointAuthor::default())
 }
 
 pub fn read_committed(
@@ -689,16 +624,10 @@ pub fn read_committed(
     checkpoint_id: &str,
 ) -> Result<Option<CheckpointSummaryView>> {
     let storage = open_checkpoint_storage_context(repo_root)?;
-    if let Some(summary) = read_committed_from_db(&storage, checkpoint_id)? {
-        return Ok(Some(summary));
-    }
-
-    let Some(read_ref) = metadata_read_ref(repo_root) else {
-        return Ok(None);
-    };
-    read_committed_with_ref(repo_root, &read_ref, checkpoint_id)
+    read_committed_from_db(&storage, checkpoint_id)
 }
 
+#[allow(dead_code)]
 fn read_committed_with_ref(
     repo_root: &Path,
     read_ref: &str,
@@ -727,14 +656,7 @@ pub fn read_committed_info(repo_root: &Path, checkpoint_id: &str) -> Result<Opti
     if let Some(summary) = read_committed_from_db(&storage, checkpoint_id)? {
         return Ok(Some(to_committed_info_from_db(&storage, &summary)?));
     }
-
-    let Some(read_ref) = metadata_read_ref(repo_root) else {
-        return Ok(None);
-    };
-    let Some(summary) = read_committed_with_ref(repo_root, &read_ref, checkpoint_id)? else {
-        return Ok(None);
-    };
-    Ok(Some(to_committed_info(repo_root, &read_ref, &summary)))
+    Ok(None)
 }
 
 pub fn read_session_content(
@@ -743,45 +665,14 @@ pub fn read_session_content(
     session_index: usize,
 ) -> Result<SessionContentView> {
     let storage = open_checkpoint_storage_context(repo_root)?;
-    if let Some(summary) = read_committed_from_db(&storage, checkpoint_id)? {
-        let session_count = summary_session_count(&summary);
-        if session_index >= session_count {
-            anyhow::bail!("session {session_index} not found");
-        }
-        let content = read_session_content_from_db(&storage, checkpoint_id, session_index)?
-            .ok_or_else(|| anyhow::anyhow!("session {session_index} not found"))?;
-        return Ok(content);
-    }
-
-    let summary = read_committed(repo_root, checkpoint_id)?
+    let summary = read_committed_from_db(&storage, checkpoint_id)?
         .ok_or_else(|| anyhow::anyhow!("checkpoint not found"))?;
     let session_count = summary_session_count(&summary);
     if session_index >= session_count {
         anyhow::bail!("session {session_index} not found");
     }
-    let metadata_ref =
-        metadata_read_ref(repo_root).ok_or_else(|| anyhow::anyhow!("checkpoint not found"))?;
-    let (a, b) = checkpoint_dir_parts(checkpoint_id);
-    let base = format!("{a}/{b}/{session_index}");
-    let metadata_path = format!("{base}/{}", paths::METADATA_FILE_NAME);
-    let transcript_path = format!("{base}/{}", paths::TRANSCRIPT_FILE_NAME);
-    let prompt_path = format!("{base}/{}", paths::PROMPT_FILE_NAME);
-    let context_path = format!("{base}/{}", paths::CONTEXT_FILE_NAME);
-
-    let metadata_raw = git_show_file(repo_root, &metadata_ref, &metadata_path)
-        .with_context(|| format!("session {session_index} not found"))?;
-    let metadata = serde_json::from_str::<serde_json::Value>(&metadata_raw)
-        .context("parsing session metadata")?;
-    let transcript = git_show_file(repo_root, &metadata_ref, &transcript_path).unwrap_or_default();
-    let prompts = git_show_file(repo_root, &metadata_ref, &prompt_path).unwrap_or_default();
-    let context = git_show_file(repo_root, &metadata_ref, &context_path).unwrap_or_default();
-
-    Ok(SessionContentView {
-        metadata,
-        transcript,
-        prompts,
-        context,
-    })
+    read_session_content_from_db(&storage, checkpoint_id, session_index)?
+        .ok_or_else(|| anyhow::anyhow!("session {session_index} not found"))
 }
 
 pub fn read_latest_session_content(
@@ -1050,6 +941,7 @@ pub(crate) fn commit_files_to_metadata_branch(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn git_show_file(repo_root: &Path, reference: &str, tree_path: &str) -> Result<String> {
     run_git(repo_root, &["show", &format!("{reference}:{tree_path}")])
 }
@@ -1087,6 +979,7 @@ fn get_commit_author(repo_root: &Path, commit_ref: &str) -> Option<(String, Stri
     Some((name, email))
 }
 
+#[allow(dead_code)]
 pub(crate) fn metadata_read_ref(repo_root: &Path) -> Option<String> {
     if !crate::engine::session::legacy_local_backend_enabled() {
         return None;

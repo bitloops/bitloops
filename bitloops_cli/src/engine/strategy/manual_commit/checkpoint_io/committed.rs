@@ -15,7 +15,21 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
         .initialise_checkpoint_schema()
         .context("initialising committed checkpoint schema")?;
 
+    #[cfg(test)]
+    let mut blob_cfg = cfg.blobs.clone();
+    #[cfg(not(test))]
     let blob_cfg = cfg.blobs.clone();
+    #[cfg(test)]
+    if matches!(
+        blob_cfg.provider,
+        crate::devql_config::BlobStorageProvider::Local
+    ) {
+        let test_blob_root = repo_root
+            .join(crate::engine::paths::BITLOOPS_DIR)
+            .join("blobs");
+        blob_cfg.local_path = Some(test_blob_root.to_string_lossy().to_string());
+    }
+
     let resolved_blob_store = crate::engine::blob::create_blob_store_with_backend(&blob_cfg)
         .context("initialising blob storage for committed checkpoints")?;
 

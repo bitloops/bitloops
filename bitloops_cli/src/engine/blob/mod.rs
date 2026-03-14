@@ -286,7 +286,10 @@ mod tests {
             Ok(_) => panic!("invalid S3 config must fail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("initialising S3 blob storage backend"));
+        assert!(
+            err.to_string()
+                .contains("initialising S3 blob storage backend")
+        );
     }
 
     #[test]
@@ -301,7 +304,10 @@ mod tests {
             Ok(_) => panic!("invalid GCS config must fail"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("initialising GCS blob storage backend"));
+        assert!(
+            err.to_string()
+                .contains("initialising GCS blob storage backend")
+        );
     }
 
     #[test]

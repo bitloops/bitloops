@@ -24,18 +24,7 @@ fn default_branch_name(repo_root: &Path) -> String {
 fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
-    match collect_checkpoint_commit_map_from_db(repo_root) {
-        Ok(map) if !map.is_empty() => return Ok(map),
-        Ok(_) => {}
-        Err(err) => {
-            log::debug!(
-                "devql ingest: failed to read commit_checkpoints mapping (falling back to trailers): {:#}",
-                err
-            );
-        }
-    }
-
-    collect_checkpoint_commit_map_from_trailers(repo_root)
+    collect_checkpoint_commit_map_from_db(repo_root)
 }
 
 fn collect_checkpoint_commit_map_from_db(
@@ -100,67 +89,6 @@ fn checkpoint_commit_info_from_sha(
         author_email,
         subject,
     })
-}
-
-fn collect_checkpoint_commit_map_from_trailers(
-    repo_root: &Path,
-) -> Result<HashMap<String, CheckpointCommitInfo>> {
-    let fmt = format!(
-        "%H%x1f%ct%x1f%an%x1f%ae%x1f%s%x1f%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)%x1e"
-    );
-    let raw = run_git(
-        repo_root,
-        &[
-            "log",
-            "--all",
-            "--date-order",
-            &format!("--format={fmt}"),
-            "--max-count=50000",
-            "--no-color",
-        ],
-    )
-    .unwrap_or_default();
-
-    let mut out = HashMap::new();
-    for record in raw.split('\u{1e}') {
-        let record = record.trim();
-        if record.is_empty() {
-            continue;
-        }
-
-        let mut parts = record.split('\u{1f}');
-        let commit_sha = parts.next().unwrap_or_default().trim().to_string();
-        let commit_unix = parts
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .parse::<i64>()
-            .unwrap_or(0);
-        let author_name = parts.next().unwrap_or_default().trim().to_string();
-        let author_email = parts.next().unwrap_or_default().trim().to_string();
-        let subject = parts.next().unwrap_or_default().trim().to_string();
-        let checkpoints = parts.next().unwrap_or_default();
-
-        if commit_sha.is_empty() {
-            continue;
-        }
-
-        for cp in checkpoints.split('\x00').map(str::trim) {
-            if !is_valid_checkpoint_id(cp) {
-                continue;
-            }
-            out.entry(cp.to_string())
-                .or_insert_with(|| CheckpointCommitInfo {
-                    commit_sha: commit_sha.clone(),
-                    commit_unix,
-                    author_name: author_name.clone(),
-                    author_email: author_email.clone(),
-                    subject: subject.clone(),
-                });
-        }
-    }
-
-    Ok(out)
 }
 
 async fn fetch_existing_checkpoint_event_ids(cfg: &DevqlConfig) -> Result<HashSet<String>> {

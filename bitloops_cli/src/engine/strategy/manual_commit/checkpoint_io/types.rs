@@ -118,6 +118,7 @@ pub(crate) struct CommittedMetadata {
     pub(crate) transcript_path: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CheckpointType {
     #[default]
@@ -125,6 +126,7 @@ enum CheckpointType {
     Committed,
 }
 
+#[allow(dead_code)]
 fn checkpoint_type_for_ref(reference: &str) -> CheckpointType {
     if reference.ends_with(paths::METADATA_BRANCH_NAME) {
         return CheckpointType::Committed;

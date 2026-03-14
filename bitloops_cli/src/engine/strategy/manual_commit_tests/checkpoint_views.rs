@@ -930,107 +930,95 @@ fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
     let prompts = vec!["first prompt".to_string(), "second prompt".to_string()];
     let context = b"db context payload".to_vec();
 
-    with_checkpoint_storage_env(dir.path(), || {
-        let result = write_committed(
-            dir.path(),
-            WriteCommittedOptions {
-                checkpoint_id: checkpoint_id.to_string(),
-                session_id: "db-session".to_string(),
-                strategy: "manual-commit".to_string(),
-                agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
-                transcript: transcript.as_bytes().to_vec(),
-                prompts: Some(prompts.clone()),
-                context: Some(context.clone()),
-                checkpoints_count: 2,
-                files_touched: vec!["src/lib.rs".to_string()],
-                token_usage_input: Some(10),
-                token_usage_output: Some(5),
-                token_usage_api_call_count: Some(1),
-                turn_id: "turn-db-1".to_string(),
-                transcript_identifier_at_start: "msg-1".to_string(),
-                checkpoint_transcript_start: 0,
-                token_usage: None,
-                initial_attribution: None,
-                author_name: "DB Test".to_string(),
-                author_email: "db@test.com".to_string(),
-                summary: None,
-                is_task: false,
-                tool_use_id: String::new(),
-                agent_id: String::new(),
-                transcript_path: String::new(),
-                subagent_transcript_path: String::new(),
-            },
-        );
+    let result = write_committed(
+        dir.path(),
+        WriteCommittedOptions {
+            checkpoint_id: checkpoint_id.to_string(),
+            session_id: "db-session".to_string(),
+            strategy: "manual-commit".to_string(),
+            agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
+            transcript: transcript.as_bytes().to_vec(),
+            prompts: Some(prompts.clone()),
+            context: Some(context.clone()),
+            checkpoints_count: 2,
+            files_touched: vec!["src/lib.rs".to_string()],
+            token_usage_input: Some(10),
+            token_usage_output: Some(5),
+            token_usage_api_call_count: Some(1),
+            turn_id: "turn-db-1".to_string(),
+            transcript_identifier_at_start: "msg-1".to_string(),
+            checkpoint_transcript_start: 0,
+            token_usage: None,
+            initial_attribution: None,
+            author_name: "DB Test".to_string(),
+            author_email: "db@test.com".to_string(),
+            summary: None,
+            is_task: false,
+            tool_use_id: String::new(),
+            agent_id: String::new(),
+            transcript_path: String::new(),
+            subagent_transcript_path: String::new(),
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "write_committed should persist to DB/blob storage: {result:?}"
+    );
+
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+        .expect("connect checkpoint sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_identity(dir.path())
+        .expect("resolve repo identity")
+        .repo_id;
+
+    let checkpoint_rows = sqlite
+        .with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM checkpoints
+                 WHERE checkpoint_id = ?1 AND repo_id = ?2",
+                rusqlite::params![checkpoint_id, repo_id.as_str()],
+                |row| row.get(0),
+            )?;
+            Ok(count)
+        })
+        .expect("query checkpoint row count");
+    assert_eq!(
+        checkpoint_rows, 1,
+        "expected checkpoints row for write_committed"
+    );
+
+    let content_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "db-session")
+        .expect("checkpoint_sessions row should exist");
+    assert_eq!(
+        content_hash,
+        format!("sha256:{}", sha256_hex(transcript.as_bytes())),
+        "session row should persist transcript hash"
+    );
+
+    let expected_blobs = [
+        ("transcript", transcript.to_string(), "transcript.jsonl"),
+        ("prompts", prompts.join("\n\n---\n\n"), "prompts.txt"),
+        (
+            "context",
+            String::from_utf8_lossy(&context).to_string(),
+            "context.md",
+        ),
+    ];
+    for (blob_type, expected_content, expected_file_name) in expected_blobs {
+        let row = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, blob_type)
+            .unwrap_or_else(|| panic!("expected checkpoint_blobs row for blob_type={blob_type}"));
+        let payload = read_blob_payload_from_storage(dir.path(), &row.storage_path);
+        assert_eq!(String::from_utf8_lossy(&payload), expected_content);
         assert!(
-            result.is_ok(),
-            "write_committed should persist to DB/blob storage: {result:?}"
+            row.storage_path.ends_with(expected_file_name),
+            "storage path should end with {expected_file_name}, got {}",
+            row.storage_path
         );
-
-        let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
-            .expect("connect checkpoint sqlite");
-        sqlite
-            .initialise_checkpoint_schema()
-            .expect("initialise checkpoint schema");
-        let repo_id = crate::engine::devql::resolve_repo_identity(dir.path())
-            .expect("resolve repo identity")
-            .repo_id;
-
-        let checkpoint_rows = sqlite
-            .with_connection(|conn| {
-                let count: i64 = conn.query_row(
-                    "SELECT COUNT(*)
-                     FROM checkpoints
-                     WHERE checkpoint_id = ?1 AND repo_id = ?2",
-                    rusqlite::params![checkpoint_id, repo_id.as_str()],
-                    |row| row.get(0),
-                )?;
-                Ok(count)
-            })
-            .expect("query checkpoint row count");
-        assert_eq!(
-            checkpoint_rows, 1,
-            "expected checkpoints row for write_committed"
-        );
-
-        let content_hash =
-            query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "db-session")
-                .expect("checkpoint_sessions row should exist");
-        assert_eq!(
-            content_hash,
-            format!("sha256:{}", sha256_hex(transcript.as_bytes())),
-            "session row should persist transcript hash"
-        );
-
-        let blob_root = committed_checkpoint_blob_root(dir.path());
-        let expected_blobs = [
-            ("transcript", transcript.to_string(), "transcript.jsonl"),
-            ("prompts", prompts.join("\n\n---\n\n"), "prompts.txt"),
-            (
-                "context",
-                String::from_utf8_lossy(&context).to_string(),
-                "context.md",
-            ),
-        ];
-        for (blob_type, expected_content, expected_file_name) in expected_blobs {
-            let row = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, blob_type)
-                .unwrap_or_else(|| {
-                    panic!("expected checkpoint_blobs row for blob_type={blob_type}")
-                });
-            let disk_path = blob_root.join(&row.storage_path);
-            let payload = fs::read(&disk_path).unwrap_or_else(|err| {
-                panic!(
-                    "failed reading blob payload at {}: {err}",
-                    disk_path.display()
-                )
-            });
-            assert_eq!(String::from_utf8_lossy(&payload), expected_content);
-            assert!(
-                row.storage_path.ends_with(expected_file_name),
-                "storage path should end with {expected_file_name}, got {}",
-                row.storage_path
-            );
-        }
-    });
+    }
 }
 
 #[test]
@@ -1039,60 +1027,54 @@ fn update_committed_updates_db_blob_and_content_hash() {
     setup_git_repo(&dir);
     let checkpoint_id = "929394959697";
 
-    with_checkpoint_storage_env(dir.path(), || {
-        let mut initial = default_write_committed_opts(
-            checkpoint_id,
-            "update-db-session",
-            "{\"type\":\"assistant\",\"message\":{\"content\":\"before\"}}\n",
-        );
-        initial.prompts = Some(vec!["before prompt".to_string()]);
-        initial.context = Some(b"before context".to_vec());
-        write_committed(dir.path(), initial).expect("initial write_committed");
+    let mut initial = default_write_committed_opts(
+        checkpoint_id,
+        "update-db-session",
+        "{\"type\":\"assistant\",\"message\":{\"content\":\"before\"}}\n",
+    );
+    initial.prompts = Some(vec!["before prompt".to_string()]);
+    initial.context = Some(b"before context".to_vec());
+    write_committed(dir.path(), initial).expect("initial write_committed");
 
-        let before_hash =
-            query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
-                .expect("content hash before update");
+    let before_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
+        .expect("content hash before update");
 
-        let updated_transcript = "{\"type\":\"assistant\",\"message\":{\"content\":\"after\"}}\n";
-        let update = update_committed(
-            dir.path(),
-            UpdateCommittedOptions {
-                checkpoint_id: checkpoint_id.to_string(),
-                session_id: "update-db-session".to_string(),
-                transcript: Some(updated_transcript.as_bytes().to_vec()),
-                prompts: Some(vec!["after prompt".to_string()]),
-                context: Some(b"after context".to_vec()),
-                agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
-            },
-        );
-        assert!(
-            update.is_ok(),
-            "update_committed should update DB/blob storage: {update:?}"
-        );
+    let updated_transcript = "{\"type\":\"assistant\",\"message\":{\"content\":\"after\"}}\n";
+    let update = update_committed(
+        dir.path(),
+        UpdateCommittedOptions {
+            checkpoint_id: checkpoint_id.to_string(),
+            session_id: "update-db-session".to_string(),
+            transcript: Some(updated_transcript.as_bytes().to_vec()),
+            prompts: Some(vec!["after prompt".to_string()]),
+            context: Some(b"after context".to_vec()),
+            agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
+        },
+    );
+    assert!(
+        update.is_ok(),
+        "update_committed should update DB/blob storage: {update:?}"
+    );
 
-        let after_hash =
-            query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
-                .expect("content hash after update");
-        assert_ne!(before_hash, after_hash, "content hash should be refreshed");
-        assert_eq!(
-            after_hash,
-            format!("sha256:{}", sha256_hex(updated_transcript.as_bytes()))
-        );
+    let after_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
+        .expect("content hash after update");
+    assert_ne!(before_hash, after_hash, "content hash should be refreshed");
+    assert_eq!(
+        after_hash,
+        format!("sha256:{}", sha256_hex(updated_transcript.as_bytes()))
+    );
 
-        let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
-            .expect("transcript blob reference should exist");
-        assert_eq!(
-            transcript_blob.content_hash,
-            format!("sha256:{}", sha256_hex(updated_transcript.as_bytes()))
-        );
-        let transcript_payload =
-            fs::read(committed_checkpoint_blob_root(dir.path()).join(transcript_blob.storage_path))
-                .expect("read updated transcript blob");
-        assert_eq!(
-            String::from_utf8_lossy(&transcript_payload),
-            updated_transcript
-        );
-    });
+    let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
+        .expect("transcript blob reference should exist");
+    assert_eq!(
+        transcript_blob.content_hash,
+        format!("sha256:{}", sha256_hex(updated_transcript.as_bytes()))
+    );
+    let transcript_payload = read_blob_payload_from_storage(dir.path(), &transcript_blob.storage_path);
+    assert_eq!(
+        String::from_utf8_lossy(&transcript_payload),
+        updated_transcript
+    );
 }
 
 #[test]
@@ -1101,27 +1083,25 @@ fn write_committed_records_local_backend_in_blob_row() {
     setup_git_repo(&dir);
     let checkpoint_id = "949596979899";
 
-    with_checkpoint_storage_env(dir.path(), || {
-        let result = write_committed(
-            dir.path(),
-            default_write_committed_opts(
-                checkpoint_id,
-                "fallback-session",
-                "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
-            ),
-        );
-        assert!(
-            result.is_ok(),
-            "write_committed should persist transcript blobs locally: {result:?}"
-        );
+    let result = write_committed(
+        dir.path(),
+        default_write_committed_opts(
+            checkpoint_id,
+            "fallback-session",
+            "{\"type\":\"assistant\",\"message\":{\"content\":\"fallback\"}}\n",
+        ),
+    );
+    assert!(
+        result.is_ok(),
+        "write_committed should persist transcript blobs locally: {result:?}"
+    );
 
-        let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
-            .expect("transcript blob reference should exist");
-        assert_eq!(
-            transcript_blob.storage_backend, "local",
-            "storage_backend should record effective local fallback backend"
-        );
-    });
+    let transcript_blob = query_checkpoint_blob_row(dir.path(), checkpoint_id, 0, "transcript")
+        .expect("transcript blob reference should exist");
+    assert_eq!(
+        transcript_blob.storage_backend, "local",
+        "storage_backend should record effective local fallback backend"
+    );
 }
 
 #[test]
@@ -1130,53 +1110,51 @@ fn update_summary_persists_summary_in_checkpoint_sessions_table() {
     setup_git_repo(&dir);
     let checkpoint_id = "939495969798";
 
-    with_checkpoint_storage_env(dir.path(), || {
-        write_committed(
-            dir.path(),
-            default_write_committed_opts(
-                checkpoint_id,
-                "summary-db-session",
-                "{\"type\":\"assistant\",\"message\":{\"content\":\"summary\"}}\n",
-            ),
-        )
-        .expect("initial write_committed");
+    write_committed(
+        dir.path(),
+        default_write_committed_opts(
+            checkpoint_id,
+            "summary-db-session",
+            "{\"type\":\"assistant\",\"message\":{\"content\":\"summary\"}}\n",
+        ),
+    )
+    .expect("initial write_committed");
 
-        let summary = serde_json::json!({
-            "intent": "Persist summary in DB",
-            "outcome": "Summary updated"
-        });
-        let update = update_summary(dir.path(), checkpoint_id, summary.clone());
-        assert!(
-            update.is_ok(),
-            "update_summary should persist to checkpoint_sessions: {update:?}"
-        );
-
-        let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
-            .expect("connect checkpoint sqlite");
-        sqlite
-            .initialise_checkpoint_schema()
-            .expect("initialise checkpoint schema");
-        let summary_json = sqlite
-            .with_connection(|conn| {
-                conn.query_row(
-                    "SELECT summary
-                     FROM checkpoint_sessions
-                     WHERE checkpoint_id = ?1 AND session_id = ?2
-                     LIMIT 1",
-                    rusqlite::params![checkpoint_id, "summary-db-session"],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()
-                .map_err(anyhow::Error::from)
-            })
-            .expect("query checkpoint_sessions summary")
-            .flatten()
-            .expect("summary column should be populated");
-        let saved: serde_json::Value =
-            serde_json::from_str(&summary_json).expect("parse summary JSON");
-        assert_eq!(saved["intent"], "Persist summary in DB");
-        assert_eq!(saved["outcome"], "Summary updated");
+    let summary = serde_json::json!({
+        "intent": "Persist summary in DB",
+        "outcome": "Summary updated"
     });
+    let update = update_summary(dir.path(), checkpoint_id, summary.clone());
+    assert!(
+        update.is_ok(),
+        "update_summary should persist to checkpoint_sessions: {update:?}"
+    );
+
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path()))
+        .expect("connect checkpoint sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let summary_json = sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT summary
+                 FROM checkpoint_sessions
+                 WHERE checkpoint_id = ?1 AND session_id = ?2
+                 LIMIT 1",
+                rusqlite::params![checkpoint_id, "summary-db-session"],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .expect("query checkpoint_sessions summary")
+        .flatten()
+        .expect("summary column should be populated");
+    let saved: serde_json::Value =
+        serde_json::from_str(&summary_json).expect("parse summary JSON");
+    assert_eq!(saved["intent"], "Persist summary in DB");
+    assert_eq!(saved["outcome"], "Summary updated");
 }
 
 #[test]
@@ -1277,4 +1255,3 @@ fn read_committed_nonexistent_checkpoint() {
         "nonexistent checkpoint should return None, not an error"
     );
 }
-
