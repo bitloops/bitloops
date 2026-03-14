@@ -1,6 +1,6 @@
   <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1 style="margin:0.5rem 0 0;">Git captures what changed. Bitloops captures why.</h1>
+  <h1>Git captures what changed. Bitloops captures why.</h1>
   <p>
   <strong>The open-source intelligence layer for AI-driven software development. Bitloops 
     captures the full developer–AI conversation for every commit and builds a 
