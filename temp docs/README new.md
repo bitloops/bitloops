@@ -1,5 +1,5 @@
   <div align="center">
-  <img src=".../assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
+  <img src="../../assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
   <h1>Give your AI agents high-signal context in milliseconds.</h1>
   <p>
     Bitloops continuously models your codebase and development history so agents can retrieve 
