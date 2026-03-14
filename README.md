@@ -1,11 +1,11 @@
   <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Git captures what changed. Bitloops captures why.</h1>
-  <h3>
-    The open-source intelligence layer for AI-driven software development. Bitloops 
+  <h1 style="margin:0.5rem 0 0;">Git captures what changed. Bitloops captures why.</h1>
+  <p>
+  <strong>The open-source intelligence layer for AI-driven software development. Bitloops 
     captures the full developer–AI conversation for every commit and builds a 
-    structured semantic model of your codebase that you and your agents can query.
-  </h3>
+    structured semantic model of your codebase that you and your agents can query.</strong>
+</p>
   <p>
     <a href="https://bitloops.com">Website</a>
     ·

@@ -1,10 +1,10 @@
   <div align="center">
-  <img src="../../assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
+  <img src="../assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
   <h1>Give your AI agents high-signal context in milliseconds.</h1>
-  <h3>
-    Bitloops continuously models your codebase and development history so agents can retrieve 
-    architecture, decisions, and intent instantly — instead of crawling your repositories.
-  </h3>
+<p>
+  <strong>Bitloops continuously models your codebase and development history so agents can retrieve
+  architecture, decisions, and intent instantly — instead of crawling your repositories.</strong>
+</p>
   <p>
     <a href="https://bitloops.com">Website</a>
     ·
