@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Updated DevQL Getting Started documentation with expanded field references and query examples.
 - Improved the version command and added a `bitloops --version --check` flag to check for the latest version.
 - Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the user-home config file (`~/.bitloops/config.json`).
+- Updated Readme documentation
+- Add documetnation around Contributing, Security & Code of Conduct
 
 ### Changed
 
