@@ -43,7 +43,7 @@ fn collect_checkpoint_commit_map_from_db(
             Some(existing) => {
                 info.commit_unix > existing.commit_unix
                     || (info.commit_unix == existing.commit_unix
-                        && info.commit_sha > existing.commit_sha)
+                        && is_newer_commit_sha(repo_root, &existing.commit_sha, &info.commit_sha))
             }
         };
         if should_replace {
@@ -52,6 +52,27 @@ fn collect_checkpoint_commit_map_from_db(
     }
 
     Ok(out)
+}
+
+fn is_newer_commit_sha(repo_root: &Path, existing_sha: &str, candidate_sha: &str) -> bool {
+    if existing_sha == candidate_sha {
+        return false;
+    }
+    if commit_is_ancestor_of(repo_root, existing_sha, candidate_sha) {
+        return true;
+    }
+    if commit_is_ancestor_of(repo_root, candidate_sha, existing_sha) {
+        return false;
+    }
+    candidate_sha > existing_sha
+}
+
+fn commit_is_ancestor_of(repo_root: &Path, ancestor_sha: &str, descendant_sha: &str) -> bool {
+    run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+    )
+    .is_ok()
 }
 
 fn checkpoint_commit_info_from_sha(

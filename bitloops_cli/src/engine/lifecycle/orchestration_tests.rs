@@ -7,8 +7,7 @@ use super::{
     LifecycleEvent, LifecycleEventType, capture_pre_prompt_state, handle_lifecycle_turn_end,
 };
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::test_support::process_state::{git_command, with_cwd};
 
 fn setup_git_repo(dir: &tempfile::TempDir) {
@@ -60,7 +59,7 @@ fn capture_pre_prompt_state_persists_transcript_position_from_agent() {
         )
         .expect("capture_pre_prompt_state should succeed");
 
-        let backend = LocalFileBackend::new(repo_root);
+        let backend = create_session_backend_or_local(repo_root);
         let state = backend
             .load_pre_prompt(session_id)
             .expect("load_pre_prompt should succeed")
@@ -154,7 +153,7 @@ fn turn_end_includes_token_usage_in_step() {
         handle_lifecycle_turn_end(&adapter, &event)
             .expect("handle_lifecycle_turn_end should succeed");
 
-        let backend = LocalFileBackend::new(dir.path());
+        let backend = create_session_backend_or_local(dir.path());
         let state = backend
             .load_session("token-session")
             .expect("load_session should succeed");

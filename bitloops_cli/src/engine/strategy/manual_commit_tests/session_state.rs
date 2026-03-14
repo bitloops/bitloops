@@ -9,7 +9,7 @@ fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
     let strategy = ManualCommitStrategy::new(dir.path());
 
     // Pre-create session state so save_step can load it.
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s1".to_string(),
         base_commit: head.clone(),
@@ -58,7 +58,7 @@ fn save_step_checkpoint_tree_has_modified_file() {
     fs::write(dir.path().join("src.rs"), "fn main() {}").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s2".to_string(),
         base_commit: head.clone(),
@@ -104,7 +104,7 @@ fn save_step_skips_when_no_changes() {
     fs::write(dir.path().join("file.txt"), "hello").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s3".to_string(),
         base_commit: head.clone(),
@@ -152,7 +152,7 @@ fn save_step_increments_step_count() {
     fs::write(dir.path().join("a.txt"), "a").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s4".to_string(),
         base_commit: head.clone(),
@@ -195,7 +195,7 @@ fn save_step_sets_base_commit() {
     fs::write(dir.path().join("b.txt"), "b").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s5".to_string(),
         base_commit: head.clone(),
@@ -240,7 +240,7 @@ fn save_task_step_keeps_existing_base_commit_without_shadow_migration() {
     let current_head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
     assert_ne!(base_commit, current_head, "HEAD should have advanced");
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "task-no-migrate".to_string(),
@@ -274,7 +274,7 @@ fn initialize_session_sets_pending_prompt_attribution() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
 
     strategy
         .initialize_session("attr-pending", AGENT_TYPE_CLAUDE_CODE, "", "initial prompt")
@@ -305,7 +305,7 @@ fn initialize_session_keeps_existing_base_commit_without_shadow_migration() {
     let current_head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
     assert_ne!(base_commit, current_head, "HEAD should have advanced");
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "init-no-migrate".to_string(),
@@ -364,7 +364,7 @@ fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_h
         .initialize_session(session_id, AGENT_TYPE_CLAUDE_CODE, "", "prompt")
         .unwrap();
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let loaded = backend.load_session(session_id).unwrap().unwrap();
     let pending = loaded
         .pending_prompt_attribution
@@ -386,7 +386,7 @@ fn save_step_consumes_pending_prompt_attribution() {
     fs::write(dir.path().join("tracked.txt"), "line1\nline2\n").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "attr-save".to_string(),
@@ -448,7 +448,7 @@ fn save_step_includes_transcript_in_checkpoint_tree() {
     fs::write(dir.path().join("changed.txt"), "content").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s_transcript".to_string(),
         base_commit: head.clone(),
@@ -482,27 +482,19 @@ fn save_step_includes_transcript_in_checkpoint_tree() {
         "save_step should not create a shadow branch"
     );
 
-    // Latest checkpoint tree should contain the transcript metadata files.
+    // Latest checkpoint tree should include the working-file change and the raw transcript.
     let tree_hash = latest_temporary_tree_hash(dir.path(), "s_transcript")
         .expect("latest temporary checkpoint tree hash should exist");
     let result = run_git(dir.path(), &["ls-tree", "-r", "--name-only", &tree_hash]);
     assert!(result.is_ok(), "temporary checkpoint tree should exist");
     let files = result.unwrap();
     assert!(
-        files.contains(".bitloops/metadata/s_transcript/full.jsonl"),
-        "checkpoint tree should contain full.jsonl: {files}"
+        files.contains("changed.txt"),
+        "checkpoint tree should contain changed.txt: {files}"
     );
     assert!(
-        files.contains(".bitloops/metadata/s_transcript/prompt.txt"),
-        "checkpoint tree should contain prompt.txt: {files}"
-    );
-    assert!(
-        files.contains(".bitloops/metadata/s_transcript/summary.txt"),
-        "checkpoint tree should contain summary.txt: {files}"
-    );
-    assert!(
-        files.contains(".bitloops/metadata/s_transcript/context.md"),
-        "checkpoint tree should contain context.md: {files}"
+        files.contains("transcript.jsonl"),
+        "checkpoint tree should contain transcript.jsonl: {files}"
     );
 }
 
@@ -518,7 +510,7 @@ fn save_step_with_untracked_dir_does_not_crash() {
     fs::write(sub.join("file.txt"), "content").unwrap();
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "s_dir".to_string(),
         base_commit: head.clone(),
@@ -581,4 +573,3 @@ fn save_step_no_head_is_noop() {
         "save_step should no-op when HEAD is missing: {result:?}"
     );
 }
-

@@ -9,7 +9,8 @@ use super::{
     select_host_with_dashboard_preference,
 };
 use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
-use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, git_command};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
+use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
 use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode},
@@ -22,22 +23,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tower::util::ServiceExt;
-
-fn git_ok(repo_root: &Path, args: &[&str]) -> String {
-    let out = git_command()
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .unwrap_or_else(|err| panic!("failed to start git {:?}: {err}", args));
-    assert!(
-        out.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
 
 fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
@@ -154,12 +139,7 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
         })
         .expect("insert checkpoint rows");
 
-    let cfg =
-        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
-    let blob_root = cfg
-        .blobs
-        .local_path_or_default()
-        .expect("resolve local blob root");
+    let blob_root = repo_local_blob_root(repo_root);
 
     for session in seed.sessions {
         let blob_payloads = [
@@ -215,10 +195,7 @@ fn seed_dashboard_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
 
-    git_ok(repo_root, &["init"]);
-    git_ok(repo_root, &["checkout", "-B", "main"]);
-    git_ok(repo_root, &["config", "user.name", "Alice"]);
-    git_ok(repo_root, &["config", "user.email", "alice@example.com"]);
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
 
     fs::write(repo_root.join("app.rs"), "fn main() {}\n").expect("write app.rs");
     git_ok(repo_root, &["add", "app.rs"]);
@@ -352,10 +329,7 @@ fn seed_dashboard_repo_without_commit_trailer() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
 
-    git_ok(repo_root, &["init"]);
-    git_ok(repo_root, &["checkout", "-B", "main"]);
-    git_ok(repo_root, &["config", "user.name", "Alice"]);
-    git_ok(repo_root, &["config", "user.email", "alice@example.com"]);
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
 
     fs::write(repo_root.join("app.rs"), "fn main() {}\n").expect("write app.rs");
     git_ok(repo_root, &["add", "app.rs"]);
@@ -480,10 +454,7 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
 
-    git_ok(repo_root, &["init"]);
-    git_ok(repo_root, &["checkout", "-B", "main"]);
-    git_ok(repo_root, &["config", "user.name", "Alice"]);
-    git_ok(repo_root, &["config", "user.email", "alice@example.com"]);
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
 
     fs::write(repo_root.join("app.rs"), "fn main() {}\n").expect("write app.rs");
     git_ok(repo_root, &["add", "app.rs"]);

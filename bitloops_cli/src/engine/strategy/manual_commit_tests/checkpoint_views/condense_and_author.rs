@@ -11,12 +11,13 @@ fn condense_session_files_touched_fallback_empty_state() {
     let strategy = ManualCommitStrategy::new(dir.path());
     let session_id = "test-empty-files";
     let mut state = idle_state(session_id, &base_head, vec![], 1);
-    write_session_transcript(
+    let transcript_path = write_session_transcript(
         dir.path(),
         session_id,
         r#"{"type":"human","message":{"content":"create agent.rs"}}
 {"type":"assistant","message":{"content":"Done"}}"#,
     );
+    state.transcript_path = transcript_path.to_string_lossy().to_string();
 
     let checkpoint_id = "fa11bac00001";
     strategy
@@ -56,12 +57,13 @@ fn condense_session_files_touched_no_fallback_no_overlap() {
         vec!["session_file.rs".to_string()],
         1,
     );
-    write_session_transcript(
+    let transcript_path = write_session_transcript(
         dir.path(),
         session_id,
         r#"{"type":"human","message":{"content":"work on session_file.rs"}}
 {"type":"assistant","message":{"content":"Done"}}"#,
     );
+    state.transcript_path = transcript_path.to_string_lossy().to_string();
 
     let checkpoint_id = "00001a000001";
     strategy
@@ -99,14 +101,14 @@ fn condense_session_writes_turn_and_transcript_start_metadata() {
     state.turn_id = "turn-123".to_string();
     state.transcript_identifier_at_start = "user-1".to_string();
     state.checkpoint_transcript_start = 1;
-    state.transcript_path = "/tmp/transcript-session.jsonl".to_string();
-    write_session_transcript(
+    let transcript_path = write_session_transcript(
         dir.path(),
         session_id,
         r#"{"uuid":"user-1","type":"user","message":{"content":"create agent.rs"}}
 {"uuid":"assistant-1","type":"assistant","message":{"id":"msg_1","usage":{"input_tokens":8,"output_tokens":5}}}
 "#,
     );
+    state.transcript_path = transcript_path.to_string_lossy().to_string();
 
     let checkpoint_id = "00aa11bb22cc";
     strategy
@@ -121,7 +123,10 @@ fn condense_session_writes_turn_and_transcript_start_metadata() {
     assert_eq!(metadata["token_usage"]["input_tokens"], 8);
     assert_eq!(metadata["token_usage"]["output_tokens"], 5);
     assert_eq!(metadata["token_usage"]["api_call_count"], 1);
-    assert_eq!(metadata["transcript_path"], "/tmp/transcript-session.jsonl");
+    assert_eq!(
+        metadata["transcript_path"],
+        transcript_path.to_string_lossy().to_string()
+    );
     assert!(
         metadata.get("initial_attribution").is_some(),
         "manual-commit session metadata should include initial_attribution"

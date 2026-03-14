@@ -386,7 +386,8 @@ pub(crate) fn run_explain_checkpoint_in(
         COMMIT_SCAN_LIMIT
     };
     let commits = build_commit_graph_from_git(repo_root, graph_limit)?;
-    let associated = get_associated_commits(&commits, &full_checkpoint_id, opts.search_all)?;
+    let associated =
+        get_associated_commits_from_db(repo_root, &commits, &full_checkpoint_id, opts.search_all)?;
 
     let output = format_checkpoint_output(
         &summary,

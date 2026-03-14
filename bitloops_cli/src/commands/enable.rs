@@ -1,9 +1,7 @@
 //! `bitloops enable` / `bitloops disable` command implementation.
 
-use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
@@ -16,10 +14,7 @@ use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
-use crate::engine::session::{
-    create_session_backend_or_local, delete_legacy_local_session_state,
-    list_legacy_local_session_ids,
-};
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
     settings_local_path, settings_path,
@@ -265,7 +260,6 @@ pub fn run_uninstall(
 
     let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);
     let session_state_count = count_session_states(repo_root);
-    let shadow_branch_count = count_shadow_branches(repo_root);
     let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
     let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
     let codex_hooks_installed = codex_hooks::are_hooks_installed_at(repo_root);
@@ -276,7 +270,6 @@ pub fn run_uninstall(
     if !bitloops_dir_exists
         && !git_hooks_installed
         && session_state_count == 0
-        && shadow_branch_count == 0
         && !claude_hooks_installed
         && !codex_hooks_installed
         && !cursor_hooks_installed
@@ -303,9 +296,6 @@ pub fn run_uninstall(
         }
         if session_state_count > 0 {
             writeln!(out, "  - Session state files ({session_state_count})")?;
-        }
-        if shadow_branch_count > 0 {
-            writeln!(out, "  - Shadow branches ({shadow_branch_count})")?;
         }
         let mut agents = Vec::new();
         if claude_hooks_installed {
@@ -363,101 +353,34 @@ pub fn run_uninstall(
         writeln!(out, "  Removed .bitloops directory")?;
     }
 
-    let branches_removed = remove_all_shadow_branches(repo_root).unwrap_or(0);
-    if branches_removed > 0 {
-        writeln!(out, "  Removed {branches_removed} shadow branches")?;
-    }
-
     writeln!(out, "\nBitloops CLI uninstalled successfully.")?;
     Ok(())
 }
 
 pub fn count_session_states(repo_root: &Path) -> usize {
     let backend = create_session_backend_or_local(repo_root);
-    let mut session_ids = BTreeSet::new();
-    if let Ok(sessions) = backend.list_sessions() {
-        session_ids.extend(sessions.into_iter().map(|session| session.session_id));
-    }
-    if let Ok(legacy_ids) = list_legacy_local_session_ids(repo_root.to_path_buf()) {
-        session_ids.extend(legacy_ids);
-    }
-    session_ids.len()
+    backend.list_sessions().map_or(0, |sessions| sessions.len())
 }
 
+#[cfg(test)]
 pub fn count_shadow_branches(repo_root: &Path) -> usize {
-    list_shadow_branches(repo_root).len()
+    let _ = repo_root;
+    0
 }
 
 fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
     let backend = create_session_backend_or_local(repo_root);
-    let mut session_ids = BTreeSet::new();
-
     let sessions = backend.list_sessions().context("listing session states")?;
-    session_ids.extend(sessions.into_iter().map(|session| session.session_id));
-    let legacy_ids = list_legacy_local_session_ids(repo_root.to_path_buf())
-        .context("listing legacy local session states")?;
-    session_ids.extend(legacy_ids);
 
     let mut removed = 0usize;
-    for session_id in session_ids {
+    for session in sessions {
+        let session_id = session.session_id;
         backend
             .delete_session(&session_id)
             .with_context(|| format!("removing session state {}", session_id))?;
-        delete_legacy_local_session_state(repo_root.to_path_buf(), &session_id)
-            .with_context(|| format!("removing legacy local session state {}", session_id))?;
         removed += 1;
     }
 
-    Ok(removed)
-}
-
-fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
-    if !crate::engine::session::legacy_local_backend_enabled() {
-        return vec![];
-    }
-
-    let mut branches = Vec::new();
-    for pattern in ["bitloops/*"] {
-        let output = Command::new("git")
-            .args(["branch", "--list", pattern])
-            .current_dir(repo_root)
-            .output();
-        let Ok(output) = output else { continue };
-        if !output.status.success() {
-            continue;
-        }
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let branch = line.trim().trim_start_matches('*').trim();
-            if branch.is_empty() || branch == crate::engine::paths::METADATA_BRANCH_NAME {
-                continue;
-            }
-            branches.push(branch.to_string());
-        }
-    }
-    branches.sort();
-    branches.dedup();
-    branches
-}
-
-fn remove_all_shadow_branches(repo_root: &Path) -> Result<usize> {
-    let branches = list_shadow_branches(repo_root);
-    let mut removed = 0usize;
-    for branch in branches {
-        let output = Command::new("git")
-            .args(["branch", "-D", &branch])
-            .current_dir(repo_root)
-            .output()
-            .with_context(|| format!("deleting branch {branch}"))?;
-        if output.status.success() {
-            removed += 1;
-            continue;
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not found") || stderr.contains("not exist") {
-            continue;
-        }
-        bail!("failed to delete branch {branch}: {}", stderr.trim());
-    }
     Ok(removed)
 }
 

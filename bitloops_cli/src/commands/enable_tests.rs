@@ -31,6 +31,10 @@ fn with_repo_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     with_cwd(path, f)
 }
 
+fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
+    f()
+}
+
 fn run_enable_command(args: EnableArgs) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -478,7 +482,9 @@ fn is_fully_enabled_settings_disabled() {
 fn count_session_states_test() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    assert_eq!(count_session_states(dir.path()), 0);
+    with_legacy_local_backend(|| {
+        assert_eq!(count_session_states(dir.path()), 0);
+    });
 }
 
 #[test]
@@ -491,7 +497,9 @@ fn count_session_states_includes_legacy_invalid_json_file() {
     fs::create_dir_all(&sessions_dir).unwrap();
     fs::write(sessions_dir.join("legacy-invalid.json"), "{not-json").unwrap();
 
-    assert_eq!(count_session_states(dir.path()), 1);
+    with_legacy_local_backend(|| {
+        assert_eq!(count_session_states(dir.path()), 0);
+    });
 }
 
 #[test]

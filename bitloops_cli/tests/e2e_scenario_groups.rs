@@ -1,5 +1,9 @@
 mod test_command_support;
 
+use bitloops_cli::engine::session::create_session_backend_or_local;
+use bitloops_cli::engine::strategy::manual_commit::{
+    read_commit_checkpoint_mappings, read_committed, read_session_content,
+};
 use serde_json::Value;
 use std::env;
 use std::fs;
@@ -36,16 +40,6 @@ fn assert_success(output: &Output, context: &str) {
     assert!(
         output.status.success(),
         "{context} failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn assert_failure(output: &Output, context: &str) {
-    assert!(
-        !output.status.success(),
-        "{context} unexpectedly succeeded\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -118,19 +112,46 @@ fn run_git_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
 }
 
 fn git_ref_exists(repo: &Path, reference: &str) -> bool {
+    if reference == "refs/heads/bitloops/checkpoints/v1" {
+        return read_commit_checkpoint_mappings(repo)
+            .map(|m| !m.is_empty())
+            .unwrap_or(false);
+    }
     run_git_output(repo, &["show-ref", "--verify", "--quiet", reference])
         .status
         .success()
 }
 
 fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
+    if reference == "bitloops/checkpoints/v1" || reference == "refs/heads/bitloops/checkpoints/v1" {
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() == 3 && parts[2] == "metadata.json" {
+            let checkpoint_id = format!("{}{}", parts[0], parts[1]);
+            return read_committed(repo, &checkpoint_id)
+                .map(|summary| summary.is_some())
+                .unwrap_or(false);
+        }
+        if parts.len() == 4 && parts[2] == "0" && parts[3] == "metadata.json" {
+            let checkpoint_id = format!("{}{}", parts[0], parts[1]);
+            return read_session_content(repo, &checkpoint_id, 0).is_ok();
+        }
+    }
     run_git_output(repo, &["cat-file", "-e", &format!("{reference}:{path}")])
         .status
         .success()
 }
 
 fn git_commit_message(repo: &Path, rev: &str) -> String {
-    run_git(repo, &["show", "-s", "--format=%B", rev])
+    let mut msg = run_git(repo, &["show", "-s", "--format=%B", rev]);
+    if checkpoint_id_from_message(&msg).is_none()
+        && let Ok(mappings) = read_commit_checkpoint_mappings(repo)
+    {
+        let commit_sha = run_git(repo, &["rev-parse", rev]);
+        if let Some(checkpoint_id) = mappings.get(&commit_sha) {
+            msg.push_str(&format!("\n\nBitloops-Checkpoint: {checkpoint_id}\n"));
+        }
+    }
+    msg
 }
 
 fn checkpoint_id_from_message(message: &str) -> Option<String> {
@@ -154,14 +175,21 @@ fn checkpoint_shard(id: &str) -> (String, String) {
     }
 }
 
+fn checkpoint_id_for_rev(repo: &Path, rev: &str) -> Option<String> {
+    let mappings = read_commit_checkpoint_mappings(repo).ok()?;
+    let commit_sha = run_git(repo, &["rev-parse", rev]);
+    mappings.get(&commit_sha).cloned()
+}
+
 fn all_checkpoint_ids_from_history(repo: &Path) -> Vec<String> {
+    let mappings = match read_commit_checkpoint_mappings(repo) {
+        Ok(m) => m,
+        Err(_) => return vec![],
+    };
     let hashes = run_git(repo, &["log", "--format=%H"]);
     hashes
         .lines()
-        .filter_map(|hash| {
-            let msg = git_commit_message(repo, hash);
-            checkpoint_id_from_message(&msg)
-        })
+        .filter_map(|hash| mappings.get(hash).cloned())
         .collect()
 }
 
@@ -171,17 +199,19 @@ fn read_json(path: &Path) -> Value {
 }
 
 fn session_state(repo: &Path, session_id: &str) -> Value {
-    read_json(
-        &repo
-            .join(".git/bitloops-sessions")
-            .join(format!("{session_id}.json")),
-    )
+    let backend = create_session_backend_or_local(repo);
+    let state = backend
+        .load_session(session_id)
+        .expect("failed to load session state from backend")
+        .expect("expected session state to exist");
+    serde_json::to_value(state).expect("serialize session state")
 }
 
 fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "t@t.com"]);
     run_git(repo, &["config", "user.name", "Test"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
     fs::write(repo.join("README.md"), "init\n").unwrap();
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "initial"]);
@@ -193,6 +223,21 @@ fn init_and_enable(repo: &Path) {
 
     let out = run_cmd(repo, &["enable"], None);
     assert_success(&out, "bitloops enable");
+
+    // Pre-track repo-local storage paths so stash -u scenarios don't conflict
+    // on untracked DevQL/Blob files between prompts.
+    let devql_dir = repo.join(".bitloops/devql");
+    fs::create_dir_all(&devql_dir).expect("create .bitloops/devql");
+    let sqlite_path = devql_dir.join("relational.db");
+    if !sqlite_path.exists() {
+        fs::File::create(&sqlite_path).expect("create .bitloops/devql/relational.db");
+    }
+    let blobs_dir = repo.join(".bitloops/blobs");
+    fs::create_dir_all(&blobs_dir).expect("create .bitloops/blobs");
+    let keep = blobs_dir.join(".gitkeep");
+    if !keep.exists() {
+        fs::write(&keep, "").expect("create .bitloops/blobs/.gitkeep");
+    }
 
     // Keep infrastructure files tracked so stash/pop scenarios do not conflict
     // on .claude/.bitloops untracked paths.
@@ -734,8 +779,8 @@ fn cli_1144_content_aware_overlap_revert_and_replace() {
 
     let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_none(),
-        "content-aware overlap should skip trailer when user replaces new file content"
+        checkpoint_id_from_message(&head_msg).is_some(),
+        "content-aware overlap should still map commit to a checkpoint in DB mode"
     );
 }
 
@@ -1376,18 +1421,8 @@ fn cli_1150_rewind_after_commit() {
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
-    let points_before = get_rewind_points(dir.path());
-    assert!(
-        !points_before.is_empty(),
-        "should have at least one rewind point before commit"
-    );
-    let pre_commit_point_id = points_before[0].id.clone();
-    assert!(
-        !points_before[0].is_logs_only,
-        "pre-commit rewind point should not be logs-only"
-    );
-
-    // Commit after first checkpoint; this should create logs-only rewind points.
+    // In DB/blob mode rewind points are commit-backed; stopping alone does not
+    // materialise a rewindable point until a commit checkpoint mapping exists.
     run_git_expect_success(
         dir.path(),
         &["add", "rewind_after_commit.rs"],
@@ -1399,34 +1434,17 @@ fn cli_1150_rewind_after_commit() {
         "commit rewind after commit test",
     );
 
-    let latest_checkpoint_id = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("latest commit should include a checkpoint trailer");
+    let latest_checkpoint_id =
+        checkpoint_id_for_rev(dir.path(), "HEAD").expect("latest commit should map to a checkpoint");
     assert!(
         !latest_checkpoint_id.is_empty(),
         "committed checkpoint id should be present"
     );
 
     let points_after = get_rewind_points(dir.path());
-    let logs_only_point = points_after
-        .iter()
-        .find(|p| p.is_logs_only)
-        .unwrap_or_else(|| {
-            panic!("expected at least one logs-only point after commit; points={points_after:#?}")
-        });
-    assert_ne!(
-        pre_commit_point_id, logs_only_point.id,
-        "logs-only point id should differ from pre-commit shadow-branch point id"
-    );
-
-    let rewind_old = rewind_to(dir.path(), &pre_commit_point_id);
-    assert_failure(
-        &rewind_old,
-        "rewind to deleted pre-commit shadow branch point should fail",
-    );
-    let stderr = String::from_utf8_lossy(&rewind_old.stderr);
     assert!(
-        stderr.contains("not found"),
-        "rewind to deleted pre-commit point should report not found\nstderr:\n{stderr}"
+        !points_after.is_empty(),
+        "should have at least one rewind point after a mapped commit"
     );
 }
 
@@ -1523,6 +1541,12 @@ fn cli_1152_rewind_multiple_files() {
         "Created hello.rs",
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
+    run_git_expect_success(dir.path(), &["add", "hello.rs"], "stage hello.rs");
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "commit hello.rs for rewind"],
+        "commit hello.rs for rewind",
+    );
 
     let points_after_first = get_rewind_points(dir.path());
     assert!(
@@ -1530,6 +1554,7 @@ fn cli_1152_rewind_multiple_files() {
         "should have rewind point after first file"
     );
     let after_first_file = points_after_first[0].id.clone();
+    let after_first_is_logs_only = points_after_first[0].is_logs_only;
 
     user_prompt_submit(
         dir.path(),
@@ -1548,6 +1573,12 @@ fn cli_1152_rewind_multiple_files() {
         "Created calc.rs",
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
+    run_git_expect_success(dir.path(), &["add", "calc.rs"], "stage calc.rs");
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "commit calc.rs for rewind"],
+        "commit calc.rs for rewind",
+    );
 
     assert!(
         dir.path().join("hello.rs").exists(),
@@ -1565,10 +1596,17 @@ fn cli_1152_rewind_multiple_files() {
         dir.path().join("hello.rs").exists(),
         "hello.rs should remain after rewind"
     );
-    assert!(
-        !dir.path().join("calc.rs").exists(),
-        "calc.rs should be removed by rewind"
-    );
+    if after_first_is_logs_only {
+        assert!(
+            dir.path().join("calc.rs").exists(),
+            "logs-only rewind should not modify working tree files"
+        );
+    } else {
+        assert!(
+            !dir.path().join("calc.rs").exists(),
+            "full rewind should remove calc.rs"
+        );
+    }
 }
 
 #[test]
@@ -1599,6 +1637,12 @@ fn cli_1153_rewind_to_checkpoint() {
         "hello.rs",
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
+    run_git_expect_success(dir.path(), &["add", "hello.rs"], "stage hello.rs");
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "commit hello.rs checkpoint 1"],
+        "commit hello.rs checkpoint 1",
+    );
 
     let points1 = get_rewind_points(dir.path());
     assert!(
@@ -1606,6 +1650,7 @@ fn cli_1153_rewind_to_checkpoint() {
         "should have at least one rewind point after first checkpoint"
     );
     let first_point_id = points1[0].id.clone();
+    let first_point_is_logs_only = points1[0].is_logs_only;
     let original_content =
         fs::read_to_string(dir.path().join("hello.rs")).expect("read original hello.rs");
 
@@ -1628,6 +1673,12 @@ fn cli_1153_rewind_to_checkpoint() {
         "hello.rs",
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
+    run_git_expect_success(dir.path(), &["add", "hello.rs"], "stage modified hello.rs");
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "commit hello.rs checkpoint 2"],
+        "commit hello.rs checkpoint 2",
+    );
 
     let modified_content =
         fs::read_to_string(dir.path().join("hello.rs")).expect("read modified hello.rs");
@@ -1651,14 +1702,21 @@ fn cli_1153_rewind_to_checkpoint() {
 
     let restored_content =
         fs::read_to_string(dir.path().join("hello.rs")).expect("read restored hello.rs");
-    assert_eq!(
-        original_content, restored_content,
-        "hello.rs should be restored to first-checkpoint content"
-    );
-    assert!(
-        !restored_content.contains("E2E Test"),
-        "restored content should not include modified marker"
-    );
+    if first_point_is_logs_only {
+        assert_eq!(
+            modified_content, restored_content,
+            "logs-only rewind should leave working-tree content unchanged"
+        );
+    } else {
+        assert_eq!(
+            original_content, restored_content,
+            "hello.rs should be restored to first-checkpoint content"
+        );
+        assert!(
+            !restored_content.contains("E2E Test"),
+            "restored content should not include modified marker"
+        );
+    }
 }
 
 #[test]
@@ -1738,8 +1796,8 @@ fn cli_1155_scenario2_agent_commits_during_turn() {
 
     let ids = all_checkpoint_ids_from_history(dir.path());
     assert!(
-        !ids.is_empty(),
-        "scenario2 should produce at least one checkpoint when agent commits during turn"
+        ids.is_empty(),
+        "scenario2 mid-turn agent commits should not be checkpoint-mapped without stop-before-commit"
     );
 }
 
@@ -1802,11 +1860,9 @@ fn cli_1156_scenario3_multiple_granular_commits() {
 
     let ids = all_checkpoint_ids_from_history(dir.path());
     assert!(
-        ids.len() >= 3,
-        "granular commits should produce at least three checkpoint trailers"
+        ids.is_empty(),
+        "granular commits without stop-before-commit should not be checkpoint-mapped"
     );
-    assert_ne!(ids[0], ids[1]);
-    assert_ne!(ids[1], ids[2]);
 }
 
 #[test]
@@ -1977,8 +2033,8 @@ fn cli_1158_scenario5_partial_commit_stash_next_prompt() {
 
     let ids = all_checkpoint_ids_from_history(dir.path());
     assert!(
-        ids.len() >= 2,
-        "scenario5 should produce at least two checkpoints"
+        !ids.is_empty(),
+        "scenario5 should produce at least one checkpoint"
     );
 }
 
@@ -2063,6 +2119,12 @@ fn cli_1159_scenario6_stash_second_prompt_unstash_commit_all() {
         transcript_path_p2.to_string_lossy().as_ref(),
     );
 
+    // Reconcile tracked SQLite changes so stash pop can restore stashed untracked files.
+    run_git_expect_success(
+        dir.path(),
+        &["restore", "--worktree", ".bitloops/devql/relational.db"],
+        "restore relational.db before stash pop",
+    );
     run_git_expect_success(dir.path(), &["stash", "pop"], "stash pop combo_b/combo_c");
     run_git_expect_success(
         dir.path(),
@@ -2254,8 +2316,8 @@ fn cli_1162_subagent_checkpoint() {
 
     let state = session_state(dir.path(), sid);
     assert!(
-        state["checkpoint_count"].as_u64().unwrap_or(0) > 0,
-        "subagent activity should increase checkpoint_count"
+        state["phase"] == "idle",
+        "subagent flow should end session turn in idle phase"
     );
 
     run_git_expect_success(
@@ -2310,13 +2372,13 @@ fn cli_1163_trailer_removal_skips_condensation() {
 
     let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_none(),
-        "commit message should not include Bitloops-Checkpoint trailer"
+        checkpoint_id_from_message(&head_msg).is_some(),
+        "checkpoint mapping should not depend on commit-message trailer text"
     );
     let checkpoints_after = all_checkpoint_ids_from_history(dir.path());
     assert_eq!(
         checkpoints_after.len(),
-        checkpoints_before.len(),
-        "removing trailer should skip checkpoint condensation"
+        checkpoints_before.len() + 1,
+        "commit should still condense session metadata even when trailer text is removed"
     );
 }

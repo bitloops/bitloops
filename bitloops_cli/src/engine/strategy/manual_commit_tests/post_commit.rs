@@ -4,7 +4,7 @@ fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     let head = setup_git_repo(&dir);
 
     // Create a session with active state.
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "pc1".to_string(),
         phase: crate::engine::session::phase::SessionPhase::Idle,
@@ -59,7 +59,7 @@ fn post_commit_creates_full_checkpoint_structure() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let state = SessionState {
         session_id: "pc2".to_string(),
         phase: crate::engine::session::phase::SessionPhase::Idle,
@@ -105,7 +105,7 @@ fn post_commit_creates_full_checkpoint_structure() {
 fn post_commit_without_trailer_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-no-trailer-condense".to_string(),
@@ -138,7 +138,7 @@ fn post_commit_without_trailer_condenses_pending_session_and_maps_head() {
 fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let initial_head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-squash".to_string(),
@@ -188,7 +188,7 @@ fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
 fn post_commit_without_trailer_updates_active_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-no-trailer".to_string(),
@@ -233,7 +233,7 @@ fn post_commit_without_trailer_updates_active_base_commit() {
 fn post_commit_skips_already_mapped_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-skip-mapped".to_string(),
@@ -282,7 +282,7 @@ fn post_commit_skips_already_mapped_head() {
 fn post_commit_without_trailer_updates_active_base_commit_during_rebase() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-no-trailer-rebase".to_string(),
@@ -503,7 +503,7 @@ fn shadow_strategy_validate_repository_not_git_repo() {
 fn post_commit_active_session_condenses_immediately() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-active".to_string(),
@@ -543,7 +543,7 @@ fn post_commit_active_session_condenses_immediately() {
 fn post_commit_active_session_records_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-active-turn".to_string(),
@@ -573,7 +573,7 @@ fn post_commit_active_session_records_turn_checkpoint_ids() {
 fn post_commit_idle_session_condenses() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-idle".to_string(),
@@ -600,7 +600,7 @@ fn post_commit_idle_session_condenses() {
 fn post_commit_rebase_during_active_skips_transition() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-rebase".to_string(),
@@ -632,7 +632,7 @@ fn post_commit_rebase_during_active_skips_transition() {
 fn post_commit_files_touched_resets_after_condensation() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "pc-files".to_string(),
@@ -664,7 +664,7 @@ fn post_commit_files_touched_resets_after_condensation() {
 fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     let transcript_path = dir.path().join("live-transcript.jsonl");
     fs::write(
         &transcript_path,
@@ -753,7 +753,7 @@ fn files_changed_in_commit_initial_commit_compat() {
 fn save_step_empty_base_commit_recovery() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "save-recovery".to_string(),
@@ -785,7 +785,7 @@ fn save_step_uses_ctx_agent_type_when_no_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
 
     strategy
         .save_step(&StepContext {
@@ -813,7 +813,7 @@ fn save_step_uses_ctx_agent_type_when_no_session_state() {
 fn save_step_uses_ctx_agent_type_when_partial_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "save-agent-partial".to_string(),
@@ -865,7 +865,7 @@ fn update_base_commit_no_head_is_noop() {
     setup_empty_git_repo(&dir);
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
             session_id: "s_update_base_no_head".to_string(),

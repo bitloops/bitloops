@@ -1,6 +1,6 @@
 use crate::engine::paths;
 use crate::engine::strategy::manual_commit::{
-    get_checkpoint_author, list_committed, parse_checkpoint_id, read_commit_checkpoint_mappings,
+    get_checkpoint_author, list_committed, read_commit_checkpoint_mappings,
     read_committed, read_latest_session_content, read_session_content_by_id, run_git,
 };
 use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};

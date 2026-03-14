@@ -2,6 +2,7 @@ use super::*;
 use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::session::backend::SessionBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
@@ -70,6 +71,10 @@ fn setup_empty_git_repo(dir: &TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
+}
+
+fn session_backend(repo_root: &Path) -> Box<dyn SessionBackend> {
+    create_session_backend_or_local(repo_root)
 }
 
 struct CountingBackend {

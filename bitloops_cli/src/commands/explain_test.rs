@@ -960,7 +960,7 @@ fn TestRunExplainCommit_NoCheckpointTrailer() {
 #[test]
 fn TestRunExplainCommit_WithCheckpointTrailer() {
     let (tmp, root) = setup_git_repo();
-    // Commit with Bitloops-Checkpoint trailer but no metadata stored.
+    // Commit with Bitloops-Checkpoint trailer but no DB commit mapping.
     make_commit(
         &root,
         "file.txt",
@@ -969,14 +969,13 @@ fn TestRunExplainCommit_WithCheckpointTrailer() {
     );
 
     let sha = run_git_cmd(&root, &["rev-parse", "HEAD"]);
-    let err = run_explain_commit_in(&root, &sha, false, false, false, false)
-        .expect_err("expected missing checkpoint lookup failure");
+    let output = run_explain_commit_in(&root, &sha, false, false, false, false)
+        .expect("expected no-checkpoint output when commit mapping is missing");
     drop(tmp);
 
-    let msg = err.to_string();
     assert!(
-        msg.contains("checkpoint not found") || msg.contains("abc123def456"),
-        "expected checkpoint-not-found style error, got: {msg}"
+        output.contains("No associated Bitloops checkpoint"),
+        "expected no-checkpoint message, got: {output}"
     );
 }
 

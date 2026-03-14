@@ -7,6 +7,7 @@ use crate::engine::hooks::dispatcher::{
     run_agent_hook_with_logging,
 };
 use crate::engine::lifecycle::UNKNOWN_SESSION_ID;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
@@ -715,13 +716,13 @@ fn cursor_session_end_with_idle_zero_steps_still_saves_checkpoint() {
 fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":"","prompt":"Fix bug"}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "before-submit-prompt",
@@ -733,7 +734,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::Stop,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "stop",
@@ -752,7 +753,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::SessionEnd,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "session-end",
@@ -1128,7 +1129,7 @@ fn stop_saves_step_with_detected_changes() {
 fn stop_preserves_strategy_checkpoint_count_updates() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     backend
@@ -1154,7 +1155,7 @@ fn stop_preserves_strategy_checkpoint_count_updates() {
             session_id: "stop-manual".to_string(),
             transcript_path: String::new(),
         },
-        &backend,
+        backend.as_ref(),
         &strat,
         Some(dir.path()),
     )

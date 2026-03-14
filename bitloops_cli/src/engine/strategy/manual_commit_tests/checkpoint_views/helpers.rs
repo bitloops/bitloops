@@ -1,7 +1,9 @@
-fn write_session_transcript(repo_root: &Path, session_id: &str, transcript_jsonl: &str) {
+fn write_session_transcript(repo_root: &Path, session_id: &str, transcript_jsonl: &str) -> PathBuf {
     let meta_dir = repo_root.join(paths::session_metadata_dir_from_session_id(session_id));
     fs::create_dir_all(&meta_dir).unwrap();
-    fs::write(meta_dir.join(paths::TRANSCRIPT_FILE_NAME), transcript_jsonl).unwrap();
+    let transcript_path = meta_dir.join(paths::TRANSCRIPT_FILE_NAME);
+    fs::write(&transcript_path, transcript_jsonl).unwrap();
+    transcript_path
 }
 
 fn idle_state(
@@ -28,7 +30,8 @@ fn condense_with_transcript(
     new_head: &str,
     transcript_jsonl: &str,
 ) {
-    write_session_transcript(&strategy.repo_root, &state.session_id, transcript_jsonl);
+    let transcript_path = write_session_transcript(&strategy.repo_root, &state.session_id, transcript_jsonl);
+    state.transcript_path = transcript_path.to_string_lossy().to_string();
     strategy
         .condense_session(state, checkpoint_id, new_head)
         .unwrap();
