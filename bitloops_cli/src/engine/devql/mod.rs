@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -277,8 +277,8 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
-    let summary_provider =
-        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
+    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
+        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if init {
         init_clickhouse_schema(cfg).await?;
@@ -372,7 +372,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             let semantic_feature_stats = upsert_semantic_feature_rows(
                 &pg_client,
                 &semantic_feature_inputs,
-                summary_provider.as_ref(),
+                Arc::clone(&summary_provider),
             )
             .await?;
             counters.artefacts_upserted += 1;

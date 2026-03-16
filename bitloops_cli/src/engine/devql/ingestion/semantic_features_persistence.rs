@@ -57,19 +57,26 @@ async fn load_pre_stage_artefacts_for_blob(
 async fn upsert_semantic_feature_rows(
     pg_client: &tokio_postgres::Client,
     inputs: &[semantic::SemanticFeatureInput],
-    summary_provider: &dyn semantic::SemanticSummaryProvider,
+    summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
 ) -> Result<semantic::SemanticFeatureIngestionStats> {
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
 
     for input in inputs {
-        let next_input_hash = semantic::build_semantic_feature_input_hash(input, summary_provider);
+        let next_input_hash =
+            semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
         let state = load_semantic_index_state(pg_client, &input.artefact_id).await?;
         if !semantic::semantic_features_require_reindex(&state, &next_input_hash) {
             stats.skipped += 1;
             continue;
         }
 
-        let rows = semantic::build_semantic_feature_rows(input, summary_provider);
+        let input = input.clone();
+        let summary_provider = Arc::clone(&summary_provider);
+        let rows = tokio::task::spawn_blocking(move || {
+            semantic::build_semantic_feature_rows(&input, summary_provider.as_ref())
+        })
+        .await
+        .context("building semantic feature rows on blocking worker")?;
         persist_semantic_feature_rows(pg_client, &rows).await?;
         stats.upserted += 1;
     }

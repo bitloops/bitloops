@@ -19,7 +19,7 @@ pub struct SemanticSummaryCandidate {
     pub source_model: Option<String>,
 }
 
-pub trait SemanticSummaryProvider {
+pub trait SemanticSummaryProvider: Send + Sync {
     fn cache_key(&self) -> String;
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate>;
 }

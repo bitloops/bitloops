@@ -2,7 +2,7 @@ mod openai_compatible;
 
 use anyhow::Result;
 
-pub trait LlmProvider {
+pub trait LlmProvider: Send + Sync {
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Option<String>;
     fn descriptor(&self) -> String;
 }
