@@ -15,6 +15,7 @@ fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
     run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
+    ensure_relational_store_file(&root);
     (tmp, root)
 }
 
@@ -64,6 +65,15 @@ fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
     } else {
         crate::engine::paths::default_relational_db_path(repo_root)
     }
+}
+
+fn ensure_relational_store_file(repo_root: &std::path::Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
 }
 
 fn insert_commit_checkpoint_mapping(

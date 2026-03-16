@@ -15,8 +15,9 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
         .initialise_checkpoint_schema()
         .context("initialising committed checkpoint schema")?;
 
-    let resolved_blob_store = crate::engine::blob::create_blob_store_with_backend(&cfg.blobs)
-        .context("initialising blob storage for committed checkpoints")?;
+    let resolved_blob_store =
+        crate::engine::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
+            .context("initialising blob storage for committed checkpoints")?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for committed checkpoints")?

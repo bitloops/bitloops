@@ -8,6 +8,7 @@ use crate::engine::strategy::manual_commit::run_git;
 use crate::engine::trailers::{
     METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
 };
+use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::git_command;
 
 use super::*;
@@ -33,6 +34,7 @@ fn setup_git_repo(dir: &TempDir) {
     fs::write(dir.path().join("README.md"), "# Test").expect("write README");
     run(&["add", "README.md"]);
     run(&["commit", "-m", "Initial commit"]);
+    ensure_test_store_backends(dir.path());
 }
 
 fn commit_tree_hash(dir: &TempDir, rev: &str) -> String {

@@ -14,6 +14,7 @@ use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::noop::NoOpStrategy;
 use crate::engine::strategy::registry;
 use crate::engine::strategy::{StepContext, TaskStepContext};
+use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::{
     git_command, isolated_git_command, with_cwd, with_process_state,
@@ -45,6 +46,7 @@ fn setup_git_repo(dir: &TempDir) {
     fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
+    ensure_test_store_backends(dir.path());
 }
 
 fn run_git(dir: &Path, args: &[&str]) {

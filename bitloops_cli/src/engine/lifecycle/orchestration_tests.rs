@@ -8,6 +8,7 @@ use super::{
 };
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::session::create_session_backend_or_local;
+use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd};
 
 fn setup_git_repo(dir: &tempfile::TempDir) {
@@ -31,6 +32,7 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
+    ensure_test_store_backends(dir.path());
 }
 
 /// Fails until capture_pre_prompt_state uses the agent's get_transcript_position and persists it.

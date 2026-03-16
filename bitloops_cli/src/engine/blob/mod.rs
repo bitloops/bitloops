@@ -8,13 +8,16 @@ pub use s3::S3BlobStore;
 
 use std::cell::RefCell;
 use std::future::Future;
+use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
 use crate::engine::db::SqliteConnectionPool;
-use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreBackendConfig};
+use crate::store_config::{
+    BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
+};
 
 thread_local! {
     static BLOB_SYNC_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -121,6 +124,34 @@ pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<Resolve
             store: Box::new(LocalBlobStore::from_config(cfg)?),
             backend: "local",
         }),
+        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+            store: Box::new(
+                S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
+            ),
+            backend: "s3",
+        }),
+        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+            store: Box::new(
+                GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
+            ),
+            backend: "gcs",
+        }),
+    }
+}
+
+pub fn create_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    match cfg.provider {
+        BlobStorageProvider::Local => {
+            let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
+                .context("resolving local blob store path for repository")?;
+            Ok(ResolvedBlobStore {
+                store: Box::new(LocalBlobStore::new(root)?),
+                backend: "local",
+            })
+        }
         BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
