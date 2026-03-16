@@ -27,6 +27,7 @@ pub trait BlobStore: Send + Sync {
     fn write(&self, key: &str, data: &[u8]) -> Result<()>;
     fn read(&self, key: &str) -> Result<Vec<u8>>;
     fn exists(&self, key: &str) -> Result<bool>;
+    fn delete(&self, key: &str) -> Result<()>;
 }
 
 pub struct ResolvedBlobStore {

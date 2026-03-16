@@ -95,6 +95,108 @@ fn semantic_config_reads_values_from_semantic_block() {
 }
 
 #[test]
+fn provider_config_defaults_when_block_missing() {
+    let value = serde_json::json!({
+        "stores": {
+            "relational": { "provider": "sqlite" }
+        }
+    });
+
+    let cfg = resolve_provider_config_for_tests(&value, &[]).expect("provider config");
+    assert_eq!(cfg, ProviderConfig::default());
+}
+
+#[test]
+fn provider_config_reads_literal_values() {
+    let value = serde_json::json!({
+        "providers": {
+            "github": { "token": "gh-token" },
+            "jira": {
+                "site_url": "https://bitloops.atlassian.net",
+                "email": "jira@example.com",
+                "token": "jira-token"
+            },
+            "confluence": {
+                "site_url": "https://bitloops.atlassian.net",
+                "email": "docs@example.com",
+                "token": "confluence-token"
+            }
+        }
+    });
+
+    let cfg = resolve_provider_config_for_tests(&value, &[]).expect("provider config");
+    assert_eq!(
+        cfg.github,
+        Some(GithubProviderConfig {
+            token: "gh-token".to_string()
+        })
+    );
+    assert_eq!(
+        cfg.jira,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "jira@example.com".to_string(),
+            token: "jira-token".to_string(),
+        })
+    );
+    assert_eq!(
+        cfg.confluence,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "docs@example.com".to_string(),
+            token: "confluence-token".to_string(),
+        })
+    );
+}
+
+#[test]
+fn provider_config_resolves_env_indirection() {
+    let value = serde_json::json!({
+        "providers": {
+            "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+        }
+    });
+
+    let cfg = resolve_provider_config_for_tests(&value, &[("BITLOOPS_GITHUB_TOKEN", "env-gh")])
+        .expect("provider config");
+    assert_eq!(
+        cfg.github,
+        Some(GithubProviderConfig {
+            token: "env-gh".to_string()
+        })
+    );
+}
+
+#[test]
+fn provider_config_rejects_missing_env_value() {
+    let value = serde_json::json!({
+        "providers": {
+            "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+        }
+    });
+
+    let err =
+        resolve_provider_config_for_tests(&value, &[]).expect_err("missing env should fail");
+    assert!(err.to_string().contains("providers.github.token"));
+}
+
+#[test]
+fn provider_config_rejects_missing_required_field() {
+    let value = serde_json::json!({
+        "providers": {
+            "jira": {
+                "site_url": "https://bitloops.atlassian.net",
+                "email": "jira@example.com"
+            }
+        }
+    });
+
+    let err = resolve_provider_config_for_tests(&value, &[])
+        .expect_err("missing provider field should fail");
+    assert!(err.to_string().contains("missing `providers.jira.token`"));
+}
+
+#[test]
 fn semantic_config_honors_env_over_file_precedence() {
     let value = serde_json::json!({
         "semantic": {

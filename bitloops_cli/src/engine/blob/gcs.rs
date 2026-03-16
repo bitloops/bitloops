@@ -77,6 +77,15 @@ impl BlobStore for GcsBlobStore {
         })
         .context("checking blob existence in GCS")
     }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        let object_path = Self::parse_object_path(key)?;
+        block_on_blob(async {
+            self.store.delete(&object_path).await?;
+            Ok(())
+        })
+        .context("deleting blob from GCS")
+    }
 }
 
 #[cfg(test)]

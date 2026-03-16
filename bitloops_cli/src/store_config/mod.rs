@@ -1,7 +1,7 @@
 //! Shared backend config parsing and path resolution.
 //! Used by both the CLI and the dashboard server so supported keys and defaults stay in sync.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value};
 use std::env;
 use std::fs;
@@ -17,6 +17,7 @@ const EVENT_CONFIG_KEY: &str = "event";
 const EVENTS_CONFIG_KEY: &str = "events";
 const BLOB_CONFIG_KEY: &str = "blob";
 const BLOBS_CONFIG_KEY: &str = "blobs";
+const PROVIDERS_CONFIG_KEY: &str = "providers";
 const SEMANTIC_CONFIG_KEY: &str = "semantic";
 const DASHBOARD_CONFIG_KEY: &str = "dashboard";
 const DASHBOARD_USE_BITLOOPS_LOCAL_KEY: &str = "use_bitloops_local";
@@ -68,6 +69,25 @@ pub struct StoreBackendConfig {
     pub relational: RelationalBackendConfig,
     pub events: EventsBackendConfig,
     pub blobs: BlobStorageConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderConfig {
+    pub github: Option<GithubProviderConfig>,
+    pub jira: Option<AtlassianProviderConfig>,
+    pub confluence: Option<AtlassianProviderConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubProviderConfig {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtlassianProviderConfig {
+    pub site_url: String,
+    pub email: String,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -180,17 +200,9 @@ impl StoreFileConfig {
 
     /// Load config from `<repo_root>/.bitloops/config.json`.
     pub fn load_for_repo(repo_root: &Path) -> Self {
-        let path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-
-        let data = match fs::read(&path) {
-            Ok(data) => data,
-            Err(_) => return Self::default(),
-        };
-        let value: Value = match serde_json::from_slice(&data) {
-            Ok(value) => value,
-            Err(_) => return Self::default(),
-        };
-        Self::from_json_value(&value)
+        load_repo_config_value(repo_root)
+            .map(|value| Self::from_json_value(&value))
+            .unwrap_or_default()
     }
 
     /// Parse config from a JSON value (e.g. from file or tests).
@@ -267,17 +279,9 @@ impl DashboardFileConfig {
     /// Returns default if the file is missing or invalid.
     pub fn load() -> Self {
         let repo_root = current_repo_root_or_cwd();
-        let path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-
-        let data = match fs::read(&path) {
-            Ok(data) => data,
-            Err(_) => return Self::default(),
-        };
-        let value: Value = match serde_json::from_slice(&data) {
-            Ok(value) => value,
-            Err(_) => return Self::default(),
-        };
-        Self::from_json_value(&value)
+        load_repo_config_value(&repo_root)
+            .map(|value| Self::from_json_value(&value))
+            .unwrap_or_default()
     }
 
     /// Parse dashboard config from a JSON value.
@@ -312,6 +316,16 @@ pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBa
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
     let file_cfg = StoreFileConfig::load();
     resolve_store_semantic_config_with(file_cfg, |key| env::var(key).ok())
+}
+
+pub fn resolve_provider_config() -> Result<ProviderConfig> {
+    let repo_root = current_repo_root_or_cwd_result()?;
+    resolve_provider_config_for_repo(&repo_root)
+}
+
+pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConfig> {
+    let value = load_repo_config_value(repo_root).unwrap_or(Value::Object(Map::new()));
+    resolve_provider_config_from_value_with(&value, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -398,6 +412,38 @@ fn resolve_store_backend_config_with(file_cfg: StoreFileConfig) -> Result<StoreB
     })
 }
 
+fn resolve_provider_config_from_value_with<F>(value: &Value, env_lookup: F) -> Result<ProviderConfig>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(root) = value.as_object() else {
+        return Ok(ProviderConfig::default());
+    };
+    let Some(providers) = root.get(PROVIDERS_CONFIG_KEY).and_then(Value::as_object) else {
+        return Ok(ProviderConfig::default());
+    };
+
+    Ok(ProviderConfig {
+        github: providers
+            .get("github")
+            .and_then(Value::as_object)
+            .map(|github| parse_github_provider_config(github, &env_lookup))
+            .transpose()?,
+        jira: providers
+            .get("jira")
+            .and_then(Value::as_object)
+            .map(|jira| parse_atlassian_provider_config(jira, &env_lookup, "providers.jira"))
+            .transpose()?,
+        confluence: providers
+            .get("confluence")
+            .and_then(Value::as_object)
+            .map(|confluence| {
+                parse_atlassian_provider_config(confluence, &env_lookup, "providers.confluence")
+            })
+            .transpose()?,
+    })
+}
+
 fn resolve_store_semantic_config_with<F>(
     file_cfg: StoreFileConfig,
     env_lookup: F,
@@ -417,9 +463,84 @@ where
     }
 }
 
+fn parse_github_provider_config<F>(
+    map: &Map<String, Value>,
+    env_lookup: &F,
+) -> Result<GithubProviderConfig>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    Ok(GithubProviderConfig {
+        token: resolve_required_provider_string(map, "token", env_lookup, "providers.github")?,
+    })
+}
+
+fn parse_atlassian_provider_config<F>(
+    map: &Map<String, Value>,
+    env_lookup: &F,
+    section: &str,
+) -> Result<AtlassianProviderConfig>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    Ok(AtlassianProviderConfig {
+        site_url: resolve_required_provider_string(map, "site_url", env_lookup, section)?,
+        email: resolve_required_provider_string(map, "email", env_lookup, section)?,
+        token: resolve_required_provider_string(map, "token", env_lookup, section)?,
+    })
+}
+
+fn resolve_required_provider_string<F>(
+    map: &Map<String, Value>,
+    key: &str,
+    env_lookup: &F,
+    section: &str,
+) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = map
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing `{section}.{key}`"))?;
+    resolve_provider_string(raw, env_lookup)
+        .with_context(|| format!("resolving `{section}.{key}`"))
+}
+
+fn resolve_provider_string<F>(raw: &str, env_lookup: &F) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("provider value must not be empty");
+    }
+
+    if let Some(key) = trimmed
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        let env_value = env_lookup(key)
+            .ok_or_else(|| anyhow!("environment variable `{key}` is not set"))?;
+        let env_trimmed = env_value.trim();
+        if env_trimmed.is_empty() {
+            bail!("environment variable `{key}` is empty");
+        }
+        Ok(env_trimmed.to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
 fn current_repo_root_or_cwd_result() -> Result<PathBuf> {
     paths::repo_root()
         .or_else(|_| env::current_dir().context("resolving current directory for repo config"))
+}
+
+fn load_repo_config_value(repo_root: &Path) -> Option<Value> {
+    let path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let data = fs::read(&path).ok()?;
+    serde_json::from_slice(&data).ok()
 }
 
 fn current_repo_root_or_cwd() -> PathBuf {
@@ -608,6 +729,22 @@ pub(crate) fn resolve_store_semantic_config_for_tests(
     env: &[(&str, &str)],
 ) -> StoreSemanticConfig {
     resolve_store_semantic_config_with(file_cfg, |key| {
+        env.iter().find_map(|(k, v)| {
+            if *k == key {
+                Some((*v).to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_provider_config_for_tests(
+    value: &Value,
+    env: &[(&str, &str)],
+) -> Result<ProviderConfig> {
+    resolve_provider_config_from_value_with(value, |key| {
         env.iter().find_map(|(k, v)| {
             if *k == key {
                 Some((*v).to_string())

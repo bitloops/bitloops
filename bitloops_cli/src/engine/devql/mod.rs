@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::engine::db_status::{
@@ -23,6 +22,11 @@ use crate::store_config::{
     resolve_store_semantic_config,
 };
 use crate::terminal::db_status_table::print_db_status_table;
+
+pub mod capabilities;
+pub(crate) mod identity;
+
+pub(crate) use identity::deterministic_uuid;
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {

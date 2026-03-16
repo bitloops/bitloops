@@ -80,16 +80,16 @@ Bitloops introduces three core capabilities:
 Together, these allow agents to work with better context while teams retain
 visibility and governance over AI-generated changes.
 
-| | |
-|---|---|
-| **Without Bitloops** | **With Bitloops** |
-| Each session starts from zero | Sessions build on shared repository memory |
+|                                                              |                                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------- |
+| **Without Bitloops**                                         | **With Bitloops**                                             |
+| Each session starts from zero                                | Sessions build on shared repository memory                    |
 | Agents send large amounts of repository context to the model | Only relevant code, architecture, and reasoning are retrieved |
-| High token usage with noisy context | Fewer tokens with higher-quality context |
-| Reviewers see diffs with no reasoning trail | Commits link to the developer–AI conversation |
-| AI reasoning disappears between sessions | Agent reasoning remains searchable |
-| Limited governance over AI-generated changes | Teams can review and audit AI reasoning through commits |
-| Multiple iterations to reach a correct result | Higher chance of getting it right the first time |
+| High token usage with noisy context                          | Fewer tokens with higher-quality context                      |
+| Reviewers see diffs with no reasoning trail                  | Commits link to the developer–AI conversation                 |
+| AI reasoning disappears between sessions                     | Agent reasoning remains searchable                            |
+| Limited governance over AI-generated changes                 | Teams can review and audit AI reasoning through commits       |
+| Multiple iterations to reach a correct result                | Higher chance of getting it right the first time              |
 
 ---
 
@@ -110,6 +110,23 @@ to AI-assisted development.
 - **Local observability:** A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
 
+### Manual external knowledge
+
+Bitloops can also ingest repository-scoped external knowledge by URL:
+
+```bash
+bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
+bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
+```
+
+Supported sources:
+
+- GitHub issues
+- GitHub pull requests
+- Jira issues
+- Confluence pages
+
+For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
 
 ## Installation
 
@@ -168,7 +185,6 @@ To view your checkpoints, run the following command again from within the root o
 bitloops dashboard
 ```
 
-
 ## Supported Agents
 
 - [x] Claude Code
@@ -199,6 +215,7 @@ You bet!
 ### What kind of databases do I need?
 
 DevQL now uses a provider model:
+
 - Relational backend: `sqlite` or `postgres`
 - Events backend: `duckdb` or `clickhouse`
 
@@ -221,6 +238,7 @@ We welcome contributions from the community! Your input helps make Bitloops bett
 for everyone. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
 We welcome:
+
 - bug reports
 - documentation improvements
 - performance improvements
