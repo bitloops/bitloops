@@ -7,6 +7,7 @@ use crate::engine::hooks::dispatcher::{
     run_agent_hook_with_logging,
 };
 use crate::engine::lifecycle::UNKNOWN_SESSION_ID;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
@@ -14,7 +15,9 @@ use crate::engine::strategy::noop::NoOpStrategy;
 use crate::engine::strategy::registry;
 use crate::engine::strategy::{StepContext, TaskStepContext};
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
+use crate::test_support::process_state::{
+    git_command, isolated_git_command, with_cwd, with_process_state,
+};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -30,9 +33,8 @@ fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = git_command()
+        let out = isolated_git_command(dir.path())
             .args(args)
-            .current_dir(dir.path())
             .output()
             .unwrap();
         assert!(out.status.success(), "git {:?} failed", args);
@@ -46,7 +48,7 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = git_command().args(args).current_dir(dir).output().unwrap();
+    let out = isolated_git_command(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
 }
 
@@ -715,13 +717,13 @@ fn cursor_session_end_with_idle_zero_steps_still_saves_checkpoint() {
 fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":"","prompt":"Fix bug"}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "before-submit-prompt",
@@ -733,7 +735,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::Stop,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "stop",
@@ -752,7 +754,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::SessionEnd,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "session-end",
@@ -1128,7 +1130,7 @@ fn stop_saves_step_with_detected_changes() {
 fn stop_preserves_strategy_checkpoint_count_updates() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     backend
@@ -1154,7 +1156,7 @@ fn stop_preserves_strategy_checkpoint_count_updates() {
             session_id: "stop-manual".to_string(),
             transcript_path: String::new(),
         },
-        &backend,
+        backend.as_ref(),
         &strat,
         Some(dir.path()),
     )

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value, json};
@@ -47,11 +47,14 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
     ]
 }
 
-fn hooks_file_path() -> Result<PathBuf> {
-    let repo_root = crate::engine::paths::repo_root().or_else(|_| {
+fn resolve_repo_root() -> Result<PathBuf> {
+    crate::engine::paths::repo_root().or_else(|_| {
         std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
-    })?;
-    Ok(repo_root.join(".codex").join(HOOKS_FILE_NAME))
+    })
+}
+
+fn hooks_file_path_for(repo_root: &Path) -> PathBuf {
+    repo_root.join(".codex").join(HOOKS_FILE_NAME)
 }
 
 fn parse_top_level_map(data: &[u8]) -> Result<Map<String, Value>> {
@@ -63,7 +66,7 @@ fn parse_top_level_map(data: &[u8]) -> Result<Map<String, Value>> {
     Ok(map.clone())
 }
 
-fn write_hooks_file(path: &PathBuf, root: &Map<String, Value>) -> Result<()> {
+fn write_hooks_file(path: &Path, root: &Map<String, Value>) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| anyhow!("failed to create .codex directory: {err}"))?;
@@ -212,8 +215,8 @@ fn normalize_entries_for_install(
     (*entries != before, inserted)
 }
 
-pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
-    let path = hooks_file_path()?;
+pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    let path = hooks_file_path_for(repo_root);
     let existing_data = fs::read(&path).ok();
 
     let mut raw_file = match existing_data {
@@ -254,8 +257,13 @@ pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     Ok(installed)
 }
 
-pub fn uninstall_hooks() -> Result<()> {
-    let path = hooks_file_path()?;
+pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
+    let repo_root = resolve_repo_root()?;
+    install_hooks_at(&repo_root, local_dev, force)
+}
+
+pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
+    let path = hooks_file_path_for(repo_root);
     let data = match fs::read(&path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -298,12 +306,13 @@ pub fn uninstall_hooks() -> Result<()> {
     write_hooks_file(&path, &raw_file)
 }
 
-pub fn are_hooks_installed() -> bool {
-    let path = match hooks_file_path() {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
+pub fn uninstall_hooks() -> Result<()> {
+    let repo_root = resolve_repo_root()?;
+    uninstall_hooks_at(&repo_root)
+}
 
+pub fn are_hooks_installed_at(repo_root: &Path) -> bool {
+    let path = hooks_file_path_for(repo_root);
     let Ok(data) = fs::read(&path) else {
         return false;
     };
@@ -325,6 +334,14 @@ pub fn are_hooks_installed() -> bool {
                 .any(|hook| is_bitloops_hook(hook.command.as_str()))
         })
     })
+}
+
+pub fn are_hooks_installed() -> bool {
+    let repo_root = match resolve_repo_root() {
+        Ok(repo_root) => repo_root,
+        Err(_) => return false,
+    };
+    are_hooks_installed_at(&repo_root)
 }
 
 #[cfg(test)]

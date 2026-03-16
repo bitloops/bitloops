@@ -42,6 +42,9 @@ Create `~/.bitloops/config.json`:
 ```json
 {
   "devql": {
+    "semantic_provider": "openai",
+    "semantic_model": "gpt-4.1-mini",
+    "semantic_api_key": "YOUR_KEY",
     "relational": {
       "provider": "sqlite",
       "sqlite_path": "~/.bitloops/devql/relational.db"
@@ -102,7 +105,7 @@ What this does:
 Example output:
 
 ```text
-DB Status
+
 +------------+-----------------------+
 | DB         | Status                |
 +------------+-----------------------+
@@ -363,4 +366,4 @@ The branch adds dependency traversal on top of artefact selection.
 
 Why it matters:
 
-- Blast-radius analysis is now a first-class query path rather than an inferred or post-processed capabilit
+- Blast-radius analysis is now a first-class query path rather than an inferred or post-processed capability

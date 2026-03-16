@@ -21,8 +21,7 @@ use super::{
     handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
@@ -178,7 +177,7 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
     setup_git_repo(&dir);
 
     with_cwd(dir.path(), || {
-        let backend = LocalFileBackend::new(dir.path());
+        let backend = create_session_backend_or_local(dir.path());
         backend
             .save_session(&SessionState {
                 session_id: "session-compaction".to_string(),

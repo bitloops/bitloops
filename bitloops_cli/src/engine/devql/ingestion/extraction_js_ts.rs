@@ -201,6 +201,13 @@ fn collect_js_ts_nodes_recursive(
     }
 }
 
+struct JsTsArtefactDescriptor<'a> {
+    language_kind: &'a str,
+    name: &'a str,
+    symbol_fqn: String,
+    parent_symbol_fqn: Option<String>,
+}
+
 fn push_js_ts_artefact(
     out: &mut Vec<JsTsArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
@@ -208,7 +215,14 @@ fn push_js_ts_artefact(
     content: &str,
     descriptor: JsTsArtefactDescriptor<'_>,
 ) {
-    if descriptor.name.is_empty() || !js_ts_supports_language_kind(descriptor.language_kind) {
+    let JsTsArtefactDescriptor {
+        language_kind,
+        name,
+        symbol_fqn,
+        parent_symbol_fqn,
+    } = descriptor;
+
+    if name.is_empty() || !js_ts_supports_language_kind(language_kind) {
         return;
     }
 

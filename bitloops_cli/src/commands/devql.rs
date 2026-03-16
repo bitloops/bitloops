@@ -6,6 +6,8 @@ use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
+const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`";
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
     #[command(subcommand)]
@@ -53,9 +55,7 @@ pub struct DevqlConnectionStatusArgs {}
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
     let Some(command) = args.command else {
-        bail!(
-            "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`"
-        );
+        bail!(MISSING_SUBCOMMAND_MESSAGE);
     };
 
     if matches!(&command, DevqlCommand::ConnectionStatus(_)) {

@@ -24,62 +24,92 @@ fn default_branch_name(repo_root: &Path) -> String {
 fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
-    let fmt = format!(
-        "%H%x1f%ct%x1f%an%x1f%ae%x1f%s%x1f%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)%x1e"
-    );
-    let raw = run_git(
-        repo_root,
-        &[
-            "log",
-            "--all",
-            "--date-order",
-            &format!("--format={fmt}"),
-            "--max-count=50000",
-            "--no-color",
-        ],
-    )
-    .unwrap_or_default();
+    collect_checkpoint_commit_map_from_db(repo_root)
+}
 
-    let mut out = HashMap::new();
-    for record in raw.split('\u{1e}') {
-        let record = record.trim();
-        if record.is_empty() {
+fn collect_checkpoint_commit_map_from_db(
+    repo_root: &Path,
+) -> Result<HashMap<String, CheckpointCommitInfo>> {
+    let mappings = read_commit_checkpoint_mappings(repo_root)?;
+    let mut out: HashMap<String, CheckpointCommitInfo> = HashMap::new();
+
+    for (commit_sha, checkpoint_id) in mappings {
+        let Some(info) = checkpoint_commit_info_from_sha(repo_root, &commit_sha) else {
             continue;
-        }
+        };
 
-        let mut parts = record.split('\u{1f}');
-        let commit_sha = parts.next().unwrap_or_default().trim().to_string();
-        let commit_unix = parts
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .parse::<i64>()
-            .unwrap_or(0);
-        let author_name = parts.next().unwrap_or_default().trim().to_string();
-        let author_email = parts.next().unwrap_or_default().trim().to_string();
-        let subject = parts.next().unwrap_or_default().trim().to_string();
-        let checkpoints = parts.next().unwrap_or_default();
-
-        if commit_sha.is_empty() {
-            continue;
-        }
-
-        for cp in checkpoints.split('\x00').map(str::trim) {
-            if !is_valid_checkpoint_id(cp) {
-                continue;
+        let should_replace = match out.get(&checkpoint_id) {
+            None => true,
+            Some(existing) => {
+                info.commit_unix > existing.commit_unix
+                    || (info.commit_unix == existing.commit_unix
+                        && is_newer_commit_sha(repo_root, &existing.commit_sha, &info.commit_sha))
             }
-            out.entry(cp.to_string())
-                .or_insert_with(|| CheckpointCommitInfo {
-                    commit_sha: commit_sha.clone(),
-                    commit_unix,
-                    author_name: author_name.clone(),
-                    author_email: author_email.clone(),
-                    subject: subject.clone(),
-                });
+        };
+        if should_replace {
+            out.insert(checkpoint_id, info);
         }
     }
 
     Ok(out)
+}
+
+fn is_newer_commit_sha(repo_root: &Path, existing_sha: &str, candidate_sha: &str) -> bool {
+    if existing_sha == candidate_sha {
+        return false;
+    }
+    if commit_is_ancestor_of(repo_root, existing_sha, candidate_sha) {
+        return true;
+    }
+    if commit_is_ancestor_of(repo_root, candidate_sha, existing_sha) {
+        return false;
+    }
+    candidate_sha > existing_sha
+}
+
+fn commit_is_ancestor_of(repo_root: &Path, ancestor_sha: &str, descendant_sha: &str) -> bool {
+    run_git(
+        repo_root,
+        &["merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
+    )
+    .is_ok()
+}
+
+fn checkpoint_commit_info_from_sha(
+    repo_root: &Path,
+    commit_sha: &str,
+) -> Option<CheckpointCommitInfo> {
+    if commit_sha.trim().is_empty() {
+        return None;
+    }
+
+    let raw = run_git(
+        repo_root,
+        &[
+            "show",
+            "-s",
+            "--format=%ct%x1f%an%x1f%ae%x1f%s",
+            commit_sha,
+        ],
+    )
+    .ok()?;
+
+    let mut parts = raw.trim().splitn(4, '\u{1f}');
+    let commit_unix = parts
+        .next()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    let author_name = parts.next().unwrap_or_default().trim().to_string();
+    let author_email = parts.next().unwrap_or_default().trim().to_string();
+    let subject = parts.next().unwrap_or_default().trim().to_string();
+
+    Some(CheckpointCommitInfo {
+        commit_sha: commit_sha.to_string(),
+        commit_unix,
+        author_name,
+        author_email,
+        subject,
+    })
 }
 
 async fn fetch_existing_checkpoint_event_ids(cfg: &DevqlConfig) -> Result<HashSet<String>> {

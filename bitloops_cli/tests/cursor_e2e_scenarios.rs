@@ -1,5 +1,8 @@
 mod test_command_support;
 
+use bitloops_cli::engine::strategy::manual_commit::{
+    read_commit_checkpoint_mappings, read_committed,
+};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -88,52 +91,28 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
         .success()
 }
 
-fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
-    run_git_output(repo, &["cat-file", "-e", &format!("{reference}:{path}")])
-        .status
-        .success()
-}
-
-fn git_commit_message(repo: &Path, rev: &str) -> String {
-    run_git(repo, &["show", "-s", "--format=%B", rev])
-}
-
-fn checkpoint_id_from_message(message: &str) -> Option<String> {
-    for line in message.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Bitloops-Checkpoint: ") {
-            let id = rest.trim();
-            if id.len() >= 12 && id[..12].chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(id[..12].to_lowercase());
-            }
-        }
-    }
-    None
-}
-
-fn checkpoint_shard(id: &str) -> (String, String) {
-    if id.len() >= 2 {
-        (id[..2].to_string(), id[2..].to_string())
-    } else {
-        (id.to_string(), String::new())
-    }
+fn checkpoint_id_for_head(repo: &Path) -> Option<String> {
+    let head = run_git(repo, &["rev-parse", "HEAD"]);
+    read_commit_checkpoint_mappings(repo)
+        .expect("failed to read commit-checkpoint mappings")
+        .get(&head)
+        .cloned()
 }
 
 fn all_checkpoint_ids_from_history(repo: &Path) -> Vec<String> {
-    let hashes = run_git(repo, &["log", "--format=%H"]);
-    hashes
-        .lines()
-        .filter_map(|hash| {
-            let msg = git_commit_message(repo, hash);
-            checkpoint_id_from_message(&msg)
-        })
-        .collect()
+    let mappings =
+        read_commit_checkpoint_mappings(repo).expect("failed to read commit-checkpoint mappings");
+    let mut ids: Vec<String> = mappings.into_values().collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "t@t.com"]);
     run_git(repo, &["config", "user.name", "Test"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
     fs::write(repo.join("README.md"), "init\n").unwrap();
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "initial"]);
@@ -246,10 +225,9 @@ fn cursor_basic_workflow() {
         "commit cursor_hello.rs",
     );
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_some(),
-        "cursor workflow commit should include checkpoint trailer"
+        checkpoint_id_for_head(dir.path()).is_some(),
+        "cursor workflow commit should map HEAD to a checkpoint"
     );
 }
 
@@ -290,22 +268,19 @@ fn cursor_checkpoint_metadata() {
         "commit cursor_meta.rs",
     );
 
-    let checkpoint_id = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint trailer should exist");
-    let (a, b) = checkpoint_shard(&checkpoint_id);
-    let cp_ref = "bitloops/checkpoints/v1";
+    let checkpoint_id =
+        checkpoint_id_for_head(dir.path()).expect("HEAD commit should map to a checkpoint");
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("reading committed checkpoint should succeed")
+        .expect("committed checkpoint should exist");
 
     assert!(
-        git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
-        "checkpoints branch should exist"
+        summary.files_touched.iter().any(|f| f == "cursor_meta.rs"),
+        "checkpoint should include cursor_meta.rs in files_touched"
     );
     assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{a}/{b}/metadata.json")),
-        "top-level metadata should exist"
-    );
-    assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{a}/{b}/0/metadata.json")),
-        "session metadata should exist"
+        summary.sessions.len() == 1,
+        "single cursor stop+commit should produce one checkpoint session"
     );
 }
 
@@ -423,10 +398,12 @@ fn cursor_intermediate_commit_without_new_prompt_has_no_checkpoint_trailer() {
         &["commit", "-m", "cursor intermediate commit"],
         "cursor intermediate commit",
     );
-    let second_msg = git_commit_message(dir.path(), "HEAD");
+    let second_head = run_git(dir.path(), &["rev-parse", "HEAD"]);
+    let mappings = read_commit_checkpoint_mappings(dir.path())
+        .expect("reading commit-checkpoint mappings should succeed");
     assert!(
-        checkpoint_id_from_message(&second_msg).is_none(),
-        "cursor intermediate commit without new prompt should not have checkpoint trailer"
+        !mappings.contains_key(&second_head),
+        "cursor intermediate commit without new prompt should not map to a checkpoint"
     );
 }
 
@@ -462,9 +439,15 @@ fn cursor_pre_push_pushes_checkpoints_branch_to_remote() {
         &["commit", "-m", "cursor push test"],
         "cursor push test commit",
     );
+    let checkpoint_id =
+        checkpoint_id_for_head(dir.path()).expect("cursor push commit should map to a checkpoint");
     assert!(
-        git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
-        "local checkpoints branch should exist before push"
+        !checkpoint_id.is_empty(),
+        "mapped checkpoint id should not be empty"
+    );
+    assert!(
+        !git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
+        "DB/blob mode should not materialise a local checkpoints branch"
     );
 
     let remote_dir = tempfile::tempdir().unwrap();
@@ -486,8 +469,8 @@ fn cursor_pre_push_pushes_checkpoints_branch_to_remote() {
         .output()
         .expect("failed to inspect remote refs");
     assert!(
-        out.status.success(),
-        "remote should contain bitloops/checkpoints/v1 after cursor push\nstdout:\n{}\nstderr:\n{}",
+        !out.status.success(),
+        "remote should not contain bitloops/checkpoints/v1 in DB/blob mode\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );

@@ -1,8 +1,12 @@
 use super::*;
 use crate::commands::devql::DevqlCommand;
+use crate::devql_config::{BlobStorageConfig, BlobStorageProvider};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use clap::Parser;
 use serde_json::json;
 use std::env;
+use std::path::Path;
+use tempfile::{TempDir, tempdir};
 
 fn test_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -19,6 +23,10 @@ fn test_cfg() -> DevqlConfig {
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_database: "default".to_string(),
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
     }
 }
 
@@ -27,6 +35,99 @@ fn test_cfg_with_repo_id(repo_suffix: &str, dsn: &str) -> DevqlConfig {
     cfg.pg_dsn = Some(dsn.to_string());
     cfg.repo.repo_id = deterministic_uuid(&format!("repo://{repo_suffix}"));
     cfg
+}
+
+fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> DevqlBackendConfig {
+    DevqlBackendConfig {
+        relational: RelationalBackendConfig {
+            provider: RelationalProvider::Sqlite,
+            sqlite_path,
+            postgres_dsn: None,
+        },
+        events: EventsBackendConfig {
+            provider: EventsProvider::DuckDb,
+            duckdb_path,
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        },
+        blobs: BlobStorageConfig {
+            provider: BlobStorageProvider::Local,
+            local_path: None,
+            s3_bucket: None,
+            s3_region: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            gcs_bucket: None,
+            gcs_credentials_path: None,
+        },
+    }
+}
+
+fn create_sqlite_db(path: &Path) {
+    let conn = rusqlite::Connection::open(path).expect("create sqlite db");
+    conn.execute_batch("SELECT 1")
+        .expect("validate sqlite db file");
+}
+
+fn create_duckdb_db(path: &Path) {
+    let conn = duckdb::Connection::open(path).expect("create duckdb db");
+    conn.execute_batch("SELECT 1")
+        .expect("validate duckdb db file");
+}
+
+fn seed_git_repo() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
+    dir
+}
+
+fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![commit_sha, checkpoint_id, repo_id.as_str()],
+            )?;
+            Ok(())
+        })
+        .expect("insert commit-checkpoint mapping");
+}
+
+fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+    let cfg =
+        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        crate::devql_config::resolve_sqlite_db_path(Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        repo_root
+            .join(crate::engine::paths::BITLOOPS_DIR)
+            .join("devql")
+            .join("relational.db")
+    }
+}
+
+fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {
+    rows.iter()
+        .find(|row| row.db == label)
+        .map(|row| row.status)
+        .unwrap_or_else(|| panic!("missing status row for {label}"))
 }
 
 fn test_file_row(
@@ -102,6 +203,308 @@ fn test_unresolved_call_edge(
         end_line: Some(line),
         metadata: json!({ "resolution": "unresolved" }),
     }
+}
+
+#[test]
+fn sql_helpers_escape_nullable_and_json_values() {
+    assert_eq!(sql_nullable_text(None), "NULL");
+    assert_eq!(sql_nullable_text(Some("O'Reilly")), "'O''Reilly'");
+    assert_eq!(
+        sql_jsonb_text_array(&["O'Reilly".to_string(), "plain".to_string()]),
+        r#"'["O''Reilly","plain"]'::jsonb"#
+    );
+}
+
+#[test]
+fn supported_symbol_languages_are_whitelisted() {
+    for language in ["typescript", "javascript", "rust"] {
+        assert!(
+            is_supported_symbol_language(language),
+            "{language} should be supported"
+        );
+    }
+
+    for language in ["python", "go", ""] {
+        assert!(
+            !is_supported_symbol_language(language),
+            "{language} should not be supported"
+        );
+    }
+}
+
+#[test]
+fn build_file_current_record_preserves_file_metadata() {
+    let cfg = test_cfg();
+    let file = test_file_row(&cfg, "src/main.rs", "blob-1", 42, 420);
+    let record = build_file_current_record(
+        "src/main.rs",
+        "blob-1",
+        &file,
+        Some("Top-level docs".to_string()),
+    );
+
+    assert_eq!(record.symbol_id, file.symbol_id);
+    assert_eq!(record.artefact_id, file.artefact_id);
+    assert_eq!(record.canonical_kind.as_deref(), Some("file"));
+    assert_eq!(record.language_kind, "file");
+    assert_eq!(record.symbol_fqn, "src/main.rs");
+    assert_eq!(record.end_line, 42);
+    assert_eq!(record.end_byte, 420);
+    assert_eq!(record.docstring.as_deref(), Some("Top-level docs"));
+    assert_eq!(record.content_hash, "blob-1");
+}
+
+#[test]
+fn build_symbol_records_chain_file_and_nested_parent_links() {
+    let cfg = test_cfg();
+    let path = "src/ui.ts";
+    let blob_sha = "blob-ui";
+    let file = test_file_row(&cfg, path, blob_sha, 30, 300);
+    let items = vec![
+        JsTsArtefact {
+            canonical_kind: Some("class".to_string()),
+            language_kind: "class_declaration".to_string(),
+            name: "Widget".to_string(),
+            symbol_fqn: format!("{path}::Widget"),
+            parent_symbol_fqn: None,
+            start_line: 1,
+            end_line: 20,
+            start_byte: 0,
+            end_byte: 200,
+            signature: "export class Widget {}".to_string(),
+            modifiers: vec!["export".to_string()],
+            docstring: Some("Widget docs".to_string()),
+        },
+        JsTsArtefact {
+            canonical_kind: Some("method".to_string()),
+            language_kind: "method_definition".to_string(),
+            name: "render".to_string(),
+            symbol_fqn: format!("{path}::Widget::render"),
+            parent_symbol_fqn: Some(format!("{path}::Widget")),
+            start_line: 5,
+            end_line: 10,
+            start_byte: 40,
+            end_byte: 120,
+            signature: "render(): void {}".to_string(),
+            modifiers: vec![],
+            docstring: None,
+        },
+    ];
+
+    let records = build_symbol_records(&cfg, path, blob_sha, &file, &items);
+    assert_eq!(records.len(), 2);
+
+    let class_record = &records[0];
+    assert_eq!(class_record.parent_symbol_id, Some(file.symbol_id.clone()));
+    assert_eq!(
+        class_record.parent_artefact_id,
+        Some(file.artefact_id.clone())
+    );
+    assert_eq!(class_record.docstring.as_deref(), Some("Widget docs"));
+
+    let method_record = &records[1];
+    assert_eq!(
+        method_record.parent_symbol_id,
+        Some(class_record.symbol_id.clone())
+    );
+    assert_eq!(
+        method_record.parent_artefact_id,
+        Some(class_record.artefact_id.clone())
+    );
+    assert_eq!(
+        method_record.signature.as_deref(),
+        Some("render(): void {}")
+    );
+}
+
+#[test]
+fn build_historical_edge_records_keep_resolved_and_unresolved_targets() {
+    let cfg = test_cfg();
+    let path = "src/main.ts";
+    let blob_sha = "blob-2";
+    let from = test_symbol_record(&cfg, path, blob_sha, "from-symbol", "source", 1, 2);
+    let to = test_symbol_record(&cfg, path, blob_sha, "to-symbol", "target", 4, 5);
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_historical_edge_records(
+        &cfg,
+        blob_sha,
+        "typescript",
+        vec![
+            test_call_edge(&from.symbol_fqn, &to.symbol_fqn, 7),
+            test_unresolved_call_edge(&from.symbol_fqn, "remote::symbol", 9),
+            test_call_edge("missing::from", &to.symbol_fqn, 11),
+        ],
+        &current_by_fqn,
+    );
+
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert!(records[0].to_symbol_ref.is_none());
+    assert!(records[1].to_symbol_id.is_none());
+    assert!(records[1].to_artefact_id.is_none());
+    assert_eq!(records[1].to_symbol_ref.as_deref(), Some("remote::symbol"));
+}
+
+#[test]
+fn build_current_edge_records_resolve_local_and_external_targets() {
+    let cfg = test_cfg();
+    let path = "src/main.ts";
+    let blob_sha = "blob-3";
+    let from = test_symbol_record(&cfg, path, blob_sha, "from-symbol", "source", 1, 2);
+    let to = test_symbol_record(&cfg, path, blob_sha, "to-symbol", "target", 4, 5);
+    let current_by_fqn = [
+        (from.symbol_fqn.clone(), from.clone()),
+        (to.symbol_fqn.clone(), to.clone()),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    let external_targets = [(
+        "pkg::remote".to_string(),
+        (
+            "external-symbol".to_string(),
+            "external-artefact".to_string(),
+        ),
+    )]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    let records = build_current_edge_records(
+        &cfg,
+        "commit-3",
+        blob_sha,
+        "typescript",
+        vec![
+            test_call_edge(&from.symbol_fqn, &to.symbol_fqn, 7),
+            test_unresolved_call_edge(&from.symbol_fqn, "pkg::remote", 8),
+        ],
+        &current_by_fqn,
+        &external_targets,
+    );
+
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[0].to_symbol_id.as_deref(),
+        Some(to.symbol_id.as_str())
+    );
+    assert_eq!(
+        records[0].to_artefact_id.as_deref(),
+        Some(to.artefact_id.as_str())
+    );
+    assert_eq!(records[1].to_symbol_id.as_deref(), Some("external-symbol"));
+    assert_eq!(
+        records[1].to_artefact_id.as_deref(),
+        Some("external-artefact")
+    );
+    assert_eq!(records[1].to_symbol_ref.as_deref(), Some("pkg::remote"));
+}
+
+#[test]
+fn incoming_revision_is_newer_prefers_newer_timestamp_then_sha() {
+    assert!(incoming_revision_is_newer(None, "bbb", 10));
+    assert!(incoming_revision_is_newer(
+        Some(("aaa".to_string(), 9)),
+        "bbb",
+        10
+    ));
+    assert!(!incoming_revision_is_newer(
+        Some(("zzz".to_string(), 11)),
+        "bbb",
+        10
+    ));
+    assert!(incoming_revision_is_newer(
+        Some(("aaa".to_string(), 10)),
+        "bbb",
+        10
+    ));
+    assert!(!incoming_revision_is_newer(
+        Some(("ccc".to_string(), 10)),
+        "bbb",
+        10
+    ));
+}
+
+#[test]
+fn default_branch_name_uses_current_branch_and_falls_back_to_main() {
+    let repo = seed_git_repo();
+    git_ok(repo.path(), &["checkout", "-B", "feature/test-branch"]);
+
+    assert_eq!(default_branch_name(repo.path()), "feature/test-branch");
+    assert_eq!(
+        default_branch_name(tempdir().expect("temp dir").path()),
+        "main"
+    );
+}
+
+#[test]
+fn collect_checkpoint_commit_map_prefers_newest_db_mapped_checkpoint_commit() {
+    let repo = seed_git_repo();
+    let checkpoint_id = "aabbccddeeff";
+
+    git_ok(
+        repo.path(),
+        &["commit", "--allow-empty", "-m", "older checkpoint"],
+    );
+    let older_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    git_ok(
+        repo.path(),
+        &["commit", "--allow-empty", "-m", "newest checkpoint"],
+    );
+    let newest_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &older_sha, checkpoint_id);
+    insert_commit_checkpoint_mapping(repo.path(), &newest_sha, checkpoint_id);
+
+    let checkpoint_map =
+        collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");
+
+    assert_eq!(checkpoint_map.len(), 1);
+    let info = checkpoint_map
+        .get(checkpoint_id)
+        .expect("checkpoint should be present");
+    assert_eq!(info.subject, "newest checkpoint");
+    assert!(!info.commit_sha.is_empty());
+    assert!(info.commit_unix > 0);
+}
+
+#[test]
+fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
+    let repo = seed_git_repo();
+    let checkpoint_id = "b0b1b2b3b4b5";
+
+    git_ok(
+        repo.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "checkpoint without trailer",
+        ],
+    );
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);
+
+    let checkpoint_map =
+        collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");
+
+    assert_eq!(checkpoint_map.len(), 1);
+    let info = checkpoint_map
+        .get(checkpoint_id)
+        .expect("checkpoint should be present");
+    assert_eq!(info.commit_sha, commit_sha);
+    assert_eq!(info.subject, "checkpoint without trailer");
+    assert!(info.commit_unix > 0);
 }
 
 #[test]
@@ -415,6 +818,50 @@ fn devql_file_config_parses_top_level_env_keys() {
     assert_eq!(cfg.pg_dsn.as_deref(), Some("postgres://x/y"));
     assert_eq!(cfg.clickhouse_url.as_deref(), Some("http://ch:8123"));
     assert_eq!(cfg.clickhouse_database.as_deref(), Some("analytics"));
+}
+
+#[tokio::test]
+async fn connection_status_rows_report_connected_for_sqlite_and_duckdb_files() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let duckdb_path = temp.path().join("events.duckdb");
+
+    create_sqlite_db(&sqlite_path);
+    create_duckdb_db(&duckdb_path);
+
+    let cfg = backend_cfg(
+        Some(sqlite_path.display().to_string()),
+        Some(duckdb_path.display().to_string()),
+    );
+
+    let rows = collect_connection_status_rows(&cfg).await;
+
+    assert_eq!(
+        status_for(&rows, RELATIONAL_SQLITE_LABEL),
+        DatabaseConnectionStatus::Connected
+    );
+    assert_eq!(
+        status_for(&rows, EVENTS_DUCKDB_LABEL),
+        DatabaseConnectionStatus::Connected
+    );
+}
+
+#[tokio::test]
+async fn connection_status_rows_report_error_for_invalid_sqlite_and_duckdb_paths() {
+    let temp = tempdir().expect("temp dir");
+    let invalid_path = temp.path().display().to_string();
+    let cfg = backend_cfg(Some(invalid_path.clone()), Some(invalid_path));
+
+    let rows = collect_connection_status_rows(&cfg).await;
+
+    assert_eq!(
+        status_for(&rows, RELATIONAL_SQLITE_LABEL),
+        DatabaseConnectionStatus::Error
+    );
+    assert_eq!(
+        status_for(&rows, EVENTS_DUCKDB_LABEL),
+        DatabaseConnectionStatus::Error
+    );
 }
 
 #[test]
@@ -1518,7 +1965,7 @@ fn factorial(n: u64) -> u64 {
 }
 
 #[test]
-fn semantic_symbol_id_is_stable_for_positional_impl_names() {
+fn symbol_id_is_stable_when_impl_block_moves_lines() {
     let original = JsTsArtefact {
         canonical_kind: None,
         language_kind: "impl_item".to_string(),
@@ -1542,8 +1989,8 @@ fn semantic_symbol_id_is_stable_for_positional_impl_names() {
     };
 
     assert_eq!(
-        semantic_symbol_id_for_artefact(&original, None),
-        semantic_symbol_id_for_artefact(&moved, None)
+        structural_symbol_id_for_artefact(&original, None),
+        structural_symbol_id_for_artefact(&moved, None)
     );
 }
 
@@ -1622,8 +2069,8 @@ impl Service for Repo {
         .iter()
         .find(|artefact| artefact.language_kind == "impl_item")
         .expect("expected impl artefact in moved ingest");
-    let original_impl_symbol_id = semantic_symbol_id_for_artefact(original_impl, None);
-    let moved_impl_symbol_id = semantic_symbol_id_for_artefact(moved_impl, None);
+    let original_impl_symbol_id = structural_symbol_id_for_artefact(original_impl, None);
+    let moved_impl_symbol_id = structural_symbol_id_for_artefact(moved_impl, None);
     assert_eq!(original_impl_symbol_id, moved_impl_symbol_id);
 
     let original_method = original_artefacts
@@ -1640,9 +2087,9 @@ impl Service for Repo {
         .expect("expected run method in moved ingest");
 
     let original_method_symbol_id =
-        semantic_symbol_id_for_artefact(original_method, Some(&original_impl_symbol_id));
+        structural_symbol_id_for_artefact(original_method, Some(&original_impl_symbol_id));
     let moved_method_symbol_id =
-        semantic_symbol_id_for_artefact(moved_method, Some(&moved_impl_symbol_id));
+        structural_symbol_id_for_artefact(moved_method, Some(&moved_impl_symbol_id));
 
     assert_eq!(original_method_symbol_id, moved_method_symbol_id);
     assert_ne!(
@@ -2589,4 +3036,28 @@ VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"ex
         count, 2,
         "expected alias-distinct export edges to survive dedup"
     );
+}
+
+#[test]
+fn postgres_schema_sql_includes_checkpoint_migration_tables() {
+    let schema = format!(
+        "{}\n{}",
+        postgres_schema_sql(),
+        checkpoint_schema_sql_postgres()
+    );
+    for table in [
+        "sessions",
+        "temporary_checkpoints",
+        "checkpoints",
+        "checkpoint_sessions",
+        "commit_checkpoints",
+        "pre_prompt_states",
+        "pre_task_markers",
+        "checkpoint_blobs",
+    ] {
+        assert!(
+            schema.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+            "expected checkpoint table `{table}` in postgres schema"
+        );
+    }
 }

@@ -12,11 +12,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - DevQL tracks dependency edges between artefacts (exports, inheritance, references, calls) for both Rust and JS/TS, enabling cross-symbol graph queries.
 - DevQL maintains both a **current snapshot** and full **historical record** of artefacts and edges, allowing point-in-time queries over the evolution of a codebase.
 - Tree-sitter is now used as the parsing backend for all DevQL code extraction, providing accurate language-aware symbol resolution.
+- Checkpoint migration is complete (`CLI-1357` and `CLI-1358` to `CLI-1367`): checkpoint/session persistence now uses relational storage (SQLite with optional PostgreSQL) plus blob storage backends (local filesystem, S3, and GCS) for transcripts, prompts, and context.
 - Updated DevQL Getting Started documentation with expanded field references and query examples.
+- Improved the version command and added a `bitloops --version --check` flag to check for the latest version.
+- Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the user-home config file (`~/.bitloops/config.json`).
+- Updated Readme documentation
+- Add documetnation around Contributing, Security & Code of Conduct
 
 ### Changed
 
 - Added self-hosted runners
+- Manual commit checkpoint flows are now fully DB-driven and trailer-free, including temporary/committed checkpoint writes, checkpoint read paths, and `post_commit()` mapping via `commit_checkpoints`; legacy git-based checkpoint/shadow-branch storage paths and commit hook side effects have been removed.
 
 ## [0.0.10] - 2026-03-12
 

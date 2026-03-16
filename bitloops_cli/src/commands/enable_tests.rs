@@ -1,5 +1,6 @@
 use super::*;
 use crate::commands::{Cli, Commands};
+use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
 use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
@@ -28,6 +29,10 @@ fn setup_git_repo(dir: &TempDir) {
 
 fn with_repo_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
     with_cwd(path, f)
+}
+
+fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 fn run_enable_command(args: EnableArgs) -> Result<()> {
@@ -417,25 +422,23 @@ fn run_uninstall_force_removes_codex_hooks() {
     setup_git_repo(&dir);
     setup_settings(&dir, r#"{"enabled":true}"#);
 
-    with_repo_cwd(dir.path(), || {
-        HookSupport::install_hooks(&CodexAgent, false, false).unwrap();
-        assert!(
-            HookSupport::are_hooks_installed(&CodexAgent),
-            "codex hooks should be installed before uninstall"
-        );
+    codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+    assert!(
+        codex_hooks::are_hooks_installed_at(dir.path()),
+        "codex hooks should be installed before uninstall"
+    );
 
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        run_uninstall(dir.path(), &mut out, &mut err, true).unwrap();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    run_uninstall(dir.path(), &mut out, &mut err, true).unwrap();
 
-        assert!(
-            !HookSupport::are_hooks_installed(&CodexAgent),
-            "codex hooks should be removed"
-        );
+    assert!(
+        !codex_hooks::are_hooks_installed_at(dir.path()),
+        "codex hooks should be removed"
+    );
 
-        let output = String::from_utf8(out).unwrap();
-        assert!(output.contains("Removed Codex CLI hooks"), "{output}");
-    });
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("Removed Codex CLI hooks"), "{output}");
 }
 
 #[test]
@@ -479,7 +482,24 @@ fn is_fully_enabled_settings_disabled() {
 fn count_session_states_test() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    assert_eq!(count_session_states(dir.path()), 0);
+    with_legacy_local_backend(|| {
+        assert_eq!(count_session_states(dir.path()), 0);
+    });
+}
+
+#[test]
+fn count_session_states_includes_legacy_invalid_json_file() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    let backend = crate::engine::session::local_backend::LocalFileBackend::new(dir.path());
+    let sessions_dir = backend.sessions_dir();
+    fs::create_dir_all(&sessions_dir).unwrap();
+    fs::write(sessions_dir.join("legacy-invalid.json"), "{not-json").unwrap();
+
+    with_legacy_local_backend(|| {
+        assert_eq!(count_session_states(dir.path()), 0);
+    });
 }
 
 #[test]
@@ -818,7 +838,7 @@ fn initialized_agents_detects_claude_and_cursor() {
     with_repo_cwd(dir.path(), || {
         claude_hooks::install_hooks(dir.path(), false).unwrap();
         HookSupport::install_hooks(&CursorAgent, false, false).unwrap();
-        HookSupport::install_hooks(&CodexAgent, false, false).unwrap();
+        codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
 
         let agents = initialized_agents(dir.path());
         assert!(agents.contains(&"claude-code".to_string()));

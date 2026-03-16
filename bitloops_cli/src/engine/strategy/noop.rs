@@ -1,7 +1,5 @@
 //! No-op strategy — does nothing. Used in tests and as a placeholder.
 
-use std::path::Path;
-
 use anyhow::Result;
 
 use super::{StepContext, Strategy, TaskStepContext};
@@ -22,19 +20,39 @@ impl Strategy for NoOpStrategy {
         Ok(())
     }
 
-    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
-        Ok(())
-    }
-
-    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
-        Ok(())
-    }
-
     fn post_commit(&self) -> Result<()> {
         Ok(())
     }
+}
 
-    fn pre_push(&self, _remote: &str) -> Result<()> {
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn noop_strategy_accepts_all_strategy_operations() {
+        let strategy = NoOpStrategy;
+
+        assert_eq!(strategy.name(), "noop");
+        strategy
+            .save_step(&StepContext::default())
+            .expect("save_step should be a no-op");
+        strategy
+            .save_task_step(&TaskStepContext::default())
+            .expect("save_task_step should be a no-op");
+        strategy
+            .prepare_commit_msg(Path::new("/tmp/ignored"), Some("message"))
+            .expect("prepare_commit_msg should be a no-op");
+        strategy
+            .commit_msg(Path::new("/tmp/ignored"))
+            .expect("commit_msg should be a no-op");
+        strategy
+            .post_commit()
+            .expect("post_commit should be a no-op");
+        strategy
+            .pre_push("origin")
+            .expect("pre_push should be a no-op");
     }
 }

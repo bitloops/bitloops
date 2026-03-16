@@ -3,6 +3,7 @@ use super::root::{
     run_curl_bash_post_install_command_with_io, write_completion, write_help, write_version,
 };
 use super::{Cli, Commands};
+use crate::branding::bitloops_wordmark;
 use crate::test_support::process_state::with_env_vars;
 use clap::{Command, CommandFactory, Parser};
 use std::io::Cursor;
@@ -210,6 +211,55 @@ fn TestRootCommand_ParseConnectionStatusFlag() {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestRootCommand_ParseVersionFlag() {
+    let parsed = Cli::try_parse_from(["bitloops", "--version"])
+        .expect("root invocation with --version should parse");
+    assert!(parsed.version, "--version should set the version flag");
+    assert!(
+        !parsed.check,
+        "--check should remain false when not explicitly provided"
+    );
+    assert!(
+        parsed.command.is_none(),
+        "--version should work without subcommands"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ParseVersionFlagWithCheck() {
+    let parsed = Cli::try_parse_from(["bitloops", "--version", "--check"])
+        .expect("root invocation with --version --check should parse");
+    assert!(parsed.version, "--version should be set");
+    assert!(parsed.check, "--check should be set");
+    assert!(
+        parsed.command.is_none(),
+        "--version --check should not require a subcommand"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_CheckFlagRequiresVersionFlag() {
+    assert!(
+        Cli::try_parse_from(["bitloops", "--check"]).is_err(),
+        "--check should be rejected without --version"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_VersionSubcommandSupportsCheckFlag() {
+    let parsed = Cli::try_parse_from(["bitloops", "version", "--check"])
+        .expect("version subcommand should parse with --check");
+    let Some(Commands::Version(args)) = parsed.command else {
+        panic!("expected version subcommand");
+    };
+    assert!(args.check, "version subcommand should capture --check");
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestRootCommand_ConnectionStatusFlagCannotBeCombinedWithSubcommand() {
     let parsed = Cli::try_parse_from(["bitloops", "--connection-status", "status"])
         .expect("parser should allow global flag before subcommands");
@@ -403,22 +453,47 @@ fn TestRootCommand_CurlBashPostInstall_UnsupportedShellIsBestEffort() {
 #[test]
 #[allow(non_snake_case)]
 fn TestRootCommand_VersionOutput() {
-    let mut out = Vec::new();
-    write_version(
-        &mut out,
-        "dev",
-        "unknown",
-        "rustc 1.89.0 (example)",
-        "darwin",
-        "arm64",
-    )
-    .expect("version output should render");
+    with_env_vars(&[("NO_COLOR", Some("1"))], || {
+        let mut out = Vec::new();
+        write_version(
+            &mut out,
+            "0.0.10",
+            "8f3c9c2abcdef",
+            "aarch64-apple-darwin",
+            "2026-03-11",
+        )
+        .expect("version output should render");
 
-    let rendered = String::from_utf8(out).expect("version output utf8");
-    assert_eq!(
-        rendered,
-        "Bitloops CLI dev (unknown)\nRust version: rustc 1.89.0 (example)\nOS/Arch: darwin/arm64\n"
-    );
+        let rendered = String::from_utf8(out).expect("version output utf8");
+        assert!(
+            !rendered.contains("\u{1b}["),
+            "NO_COLOR should disable ANSI colour output"
+        );
+        assert!(
+            rendered.contains(&bitloops_wordmark()),
+            "version output should include the brand mark"
+        );
+        assert!(
+            rendered.contains("Bitloops CLI v0.0.10\n"),
+            "version output should include the formatted version header"
+        );
+        assert!(
+            rendered.contains("───────────────────\n"),
+            "version output should include the divider line"
+        );
+        assert!(
+            rendered.contains("commit: 8f3c9c2\n"),
+            "version output should print the short commit hash"
+        );
+        assert!(
+            rendered.contains("target: aarch64-apple-darwin\n"),
+            "version output should include the full target triple"
+        );
+        assert!(
+            rendered.contains("built: 2026-03-11\n"),
+            "version output should include build date"
+        );
+    });
 }
 
 #[test]

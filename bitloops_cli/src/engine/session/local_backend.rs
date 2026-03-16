@@ -4,6 +4,9 @@
 //!   `<git-common-dir>/bitloops-sessions/<session_id>.json`   — session state
 //!   `.bitloops/tmp/pre-prompt-<session_id>.json` — pre-prompt state
 //!   `.bitloops/tmp/pre-task-<tool_use_id>.json`   — pre-task marker
+//!
+//! Legacy compatibility backend. Non-test runtime only falls back to this backend
+//! when `BITLOOPS_ENABLE_LEGACY_LOCAL_BACKEND=1` is set.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,6 +106,10 @@ impl LocalFileBackend {
 }
 
 impl SessionBackend for LocalFileBackend {
+    fn list_sessions(&self) -> Result<Vec<SessionState>> {
+        LocalFileBackend::list_sessions(self)
+    }
+
     fn load_session(&self, session_id: &str) -> Result<Option<SessionState>> {
         validate_session_id(session_id)?;
         let path = self.session_path(session_id);
@@ -122,6 +129,13 @@ impl SessionBackend for LocalFileBackend {
         validate_session_id(&state.session_id)?;
         let path = self.session_path(&state.session_id);
         write_json(&path, state)
+    }
+
+    fn delete_session(&self, session_id: &str) -> Result<()> {
+        validate_session_id(session_id)?;
+        let path = self.session_path(session_id);
+        remove_if_exists(&path)
+            .with_context(|| format!("deleting session state: {}", path.display()))
     }
 
     fn load_pre_prompt(&self, session_id: &str) -> Result<Option<PrePromptState>> {
@@ -664,5 +678,16 @@ mod tests {
         // No sessions saved → directory won't exist.
         let sessions = backend.list_sessions().unwrap();
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn delete_session_removes_saved_state() {
+        let (_dir, backend) = setup();
+        let state = sample_state("sess-delete");
+        backend.save_session(&state).unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_some());
+
+        backend.delete_session("sess-delete").unwrap();
+        assert!(backend.load_session("sess-delete").unwrap().is_none());
     }
 }

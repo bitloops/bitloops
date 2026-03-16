@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -10,14 +10,19 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::devql_config::DevqlFileConfig;
+use crate::devql_config::{
+    DevqlBackendConfig, DevqlFileConfig, EventsBackendConfig, EventsProvider,
+    RelationalBackendConfig, RelationalProvider, resolve_devql_backend_config,
+    resolve_devql_semantic_config,
+};
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
+use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_committed, read_session_content, run_git,
+    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
+    read_session_content, run_git,
 };
-use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use crate::terminal::db_status_table::print_db_status_table;
 
 #[derive(Debug, Clone)]
@@ -38,11 +43,16 @@ pub struct DevqlConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: String,
+    pub(crate) semantic_provider: Option<String>,
+    pub(crate) semantic_model: Option<String>,
+    pub(crate) semantic_api_key: Option<String>,
+    pub(crate) semantic_base_url: Option<String>,
 }
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Self {
         let file_cfg = DevqlFileConfig::load();
+        let semantic_cfg = resolve_devql_semantic_config();
         Self {
             repo_root,
             repo,
@@ -68,6 +78,10 @@ impl DevqlConfig {
                 .filter(|s| !s.trim().is_empty())
                 .or(file_cfg.clickhouse_database)
                 .unwrap_or_else(|| "default".to_string()),
+            semantic_provider: semantic_cfg.semantic_provider,
+            semantic_model: semantic_cfg.semantic_model,
+            semantic_api_key: semantic_cfg.semantic_api_key,
+            semantic_base_url: semantic_cfg.semantic_base_url,
         }
     }
 
@@ -85,82 +99,14 @@ impl DevqlConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-struct DevqlConnectionConfig {
-    pg_dsn: Option<String>,
-    clickhouse_url: String,
-    clickhouse_user: Option<String>,
-    clickhouse_password: Option<String>,
-    clickhouse_database: String,
-}
-
-impl DevqlConnectionConfig {
-    fn from_env() -> Self {
-        let file_cfg = DevqlFileConfig::load();
-        Self {
-            pg_dsn: env::var("BITLOOPS_DEVQL_PG_DSN")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.pg_dsn),
-            clickhouse_url: env::var("BITLOOPS_DEVQL_CH_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_url)
-                .unwrap_or_else(|| "http://localhost:8123".to_string()),
-            clickhouse_user: env::var("BITLOOPS_DEVQL_CH_USER")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_user),
-            clickhouse_password: env::var("BITLOOPS_DEVQL_CH_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_password),
-            clickhouse_database: env::var("BITLOOPS_DEVQL_CH_DATABASE")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_database)
-                .unwrap_or_else(|| "default".to_string()),
-        }
-    }
-
-    fn clickhouse_endpoint(&self) -> String {
-        let base = self.clickhouse_url.trim_end_matches('/');
-        format!("{base}/?database={}", self.clickhouse_database)
-    }
-}
+const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
+const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
+const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
+const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 
 pub async fn run_connection_status() -> Result<()> {
-    let cfg = DevqlConnectionConfig::from_env();
-    let mut rows = Vec::new();
-
-    let postgres_status = match cfg.pg_dsn.as_deref() {
-        Some(dsn) => match check_postgres_connection(dsn).await {
-            Ok(_) => DatabaseConnectionStatus::Connected,
-            Err(err) => classify_connection_error(&err.to_string()),
-        },
-        None => DatabaseConnectionStatus::NotConfigured,
-    };
-    rows.push(DatabaseStatusRow {
-        db: "Postgres",
-        status: postgres_status,
-    });
-
-    let clickhouse_endpoint = cfg.clickhouse_endpoint();
-    let clickhouse_status = match run_clickhouse_sql_http(
-        &clickhouse_endpoint,
-        cfg.clickhouse_user.as_deref(),
-        cfg.clickhouse_password.as_deref(),
-        "SELECT 1 FORMAT TabSeparated",
-    )
-    .await
-    {
-        Ok(_) => DatabaseConnectionStatus::Connected,
-        Err(err) => classify_connection_error(&err.to_string()),
-    };
-    rows.push(DatabaseStatusRow {
-        db: "ClickHouse",
-        status: clickhouse_status,
-    });
+    let cfg = resolve_devql_backend_config()?;
+    let rows = collect_connection_status_rows(&cfg).await;
 
     print_db_status_table(&rows);
 
@@ -170,6 +116,86 @@ pub async fn run_connection_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn collect_connection_status_rows(cfg: &DevqlBackendConfig) -> Vec<DatabaseStatusRow> {
+    vec![
+        DatabaseStatusRow {
+            db: relational_status_label(&cfg.relational),
+            status: relational_connection_status(&cfg.relational).await,
+        },
+        DatabaseStatusRow {
+            db: events_status_label(&cfg.events),
+            status: events_connection_status(&cfg.events).await,
+        },
+    ]
+}
+
+fn relational_status_label(cfg: &RelationalBackendConfig) -> &'static str {
+    match cfg.provider {
+        RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
+        RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
+    }
+}
+
+fn events_status_label(cfg: &EventsBackendConfig) -> &'static str {
+    match cfg.provider {
+        EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
+        EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
+    }
+}
+
+async fn relational_connection_status(cfg: &RelationalBackendConfig) -> DatabaseConnectionStatus {
+    match cfg.provider {
+        RelationalProvider::Sqlite => match cfg.resolve_sqlite_db_path() {
+            Ok(path) => match check_sqlite_connection(&path).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            },
+            Err(err) => classify_connection_error(&err.to_string()),
+        },
+        RelationalProvider::Postgres => match cfg.postgres_dsn.as_deref() {
+            Some(dsn) => match check_postgres_connection(dsn).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            },
+            None => DatabaseConnectionStatus::NotConfigured,
+        },
+    }
+}
+
+async fn events_connection_status(cfg: &EventsBackendConfig) -> DatabaseConnectionStatus {
+    match cfg.provider {
+        EventsProvider::DuckDb => {
+            let duckdb_path = cfg.duckdb_path_or_default();
+            match check_duckdb_connection(&duckdb_path).await {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
+        EventsProvider::ClickHouse => {
+            let clickhouse_url = cfg
+                .clickhouse_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:8123".to_string());
+            let clickhouse_database = cfg
+                .clickhouse_database
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            let clickhouse_endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
+            match run_clickhouse_sql_http(
+                &clickhouse_endpoint,
+                cfg.clickhouse_user.as_deref(),
+                cfg.clickhouse_password.as_deref(),
+                "SELECT 1 FORMAT TabSeparated",
+            )
+            .await
+            {
+                Ok(_) => DatabaseConnectionStatus::Connected,
+                Err(err) => classify_connection_error(&err.to_string()),
+            }
+        }
+    }
 }
 
 async fn check_postgres_connection(dsn: &str) -> Result<()> {
@@ -189,6 +215,55 @@ async fn check_postgres_connection(dsn: &str) -> Result<()> {
     Ok(())
 }
 
+async fn check_sqlite_connection(path: &Path) -> Result<()> {
+    let db_path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+
+        let value: i32 = conn
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .context("running SQLite health query `SELECT 1`")?;
+        if value != 1 {
+            bail!("unexpected SQLite health query result: {value}");
+        }
+
+        Ok(())
+    })
+    .await
+    .context("joining SQLite health query task")?
+}
+
+async fn check_duckdb_connection(path: &Path) -> Result<()> {
+    let db_path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = duckdb::Connection::open(&db_path)
+            .with_context(|| format!("opening DuckDB events database at {}", db_path.display()))?;
+        conn.execute_batch("SELECT 1")
+            .context("running DuckDB health query `SELECT 1`")?;
+        Ok(())
+    })
+    .await
+    .context("joining DuckDB health query task")?
+}
+
+fn clickhouse_endpoint(url: &str, database: &str) -> String {
+    let base = url.trim_end_matches('/');
+    format!("{base}/?database={database}")
+}
+
+fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
+    semantic::SemanticSummaryProviderConfig {
+        semantic_provider: cfg.semantic_provider.clone(),
+        semantic_model: cfg.semantic_model.clone(),
+        semantic_api_key: cfg.semantic_api_key.clone(),
+        semantic_base_url: cfg.semantic_base_url.clone(),
+    }
+}
+
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     init_clickhouse_schema(cfg).await?;
@@ -202,6 +277,8 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
+        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if init {
         init_clickhouse_schema(cfg).await?;
@@ -261,6 +338,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             let Some(blob_sha) = blob_sha else {
                 continue;
             };
+            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
             upsert_file_state_row(cfg, &pg_client, &commit_sha, &normalized_path, &blob_sha)
                 .await?;
@@ -280,18 +358,39 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &file_artefact,
             )
             .await?;
+            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                &pg_client,
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs = semantic::build_semantic_feature_inputs_from_artefacts(
+                &pre_stage_artefacts,
+                &content,
+            );
+            let semantic_feature_stats = upsert_semantic_feature_rows(
+                &pg_client,
+                &semantic_feature_inputs,
+                Arc::clone(&summary_provider),
+            )
+            .await?;
             counters.artefacts_upserted += 1;
+            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
         counters.checkpoints_processed += 1;
     }
 
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
-        counters.checkpoints_without_commit
+        counters.checkpoints_without_commit,
+        counters.semantic_feature_rows_upserted,
+        counters.semantic_feature_rows_skipped
     );
     Ok(())
 }
@@ -345,6 +444,8 @@ include!("ingestion/artefact_identity.rs");
 include!("ingestion/checkpoint.rs");
 // ingestion: file & language artefact DB upserts
 include!("ingestion/artefact_persistence.rs");
+// ingestion: Stage 1 semantic persistence
+include!("ingestion/semantic_features_persistence.rs");
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)
@@ -369,7 +470,7 @@ include!("db_utils.rs");
 
 #[cfg(test)]
 fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {
-    semantic_symbol_id_for_artefact(item, None)
+    structural_symbol_id_for_artefact(item, None)
 }
 
 #[cfg(test)]
