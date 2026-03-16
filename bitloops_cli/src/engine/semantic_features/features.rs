@@ -84,7 +84,7 @@ mod tests {
                 "async getById(id: string, opts: Map<string, Vec<i32>>): Promise<User>".to_string(),
             ),
             body: "return db.users.findById(id);".to_string(),
-            doc_comment: None,
+            docstring: None,
             parent_kind: Some("class".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
