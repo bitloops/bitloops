@@ -388,8 +388,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
-        counters.checkpoints_without_commit
-        ,
+        counters.checkpoints_without_commit,
         counters.semantic_feature_rows_upserted,
         counters.semantic_feature_rows_skipped
     );
