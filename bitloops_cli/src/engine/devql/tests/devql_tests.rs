@@ -1961,7 +1961,7 @@ fn factorial(n: u64) -> u64 {
 }
 
 #[test]
-fn semantic_symbol_id_is_stable_for_positional_impl_names() {
+fn symbol_id_is_stable_when_impl_block_moves_lines() {
     let original = JsTsArtefact {
         canonical_kind: None,
         language_kind: "impl_item".to_string(),
@@ -1985,8 +1985,8 @@ fn semantic_symbol_id_is_stable_for_positional_impl_names() {
     };
 
     assert_eq!(
-        semantic_symbol_id_for_artefact(&original, None),
-        semantic_symbol_id_for_artefact(&moved, None)
+        structural_symbol_id_for_artefact(&original, None),
+        structural_symbol_id_for_artefact(&moved, None)
     );
 }
 
@@ -2065,8 +2065,8 @@ impl Service for Repo {
         .iter()
         .find(|artefact| artefact.language_kind == "impl_item")
         .expect("expected impl artefact in moved ingest");
-    let original_impl_symbol_id = semantic_symbol_id_for_artefact(original_impl, None);
-    let moved_impl_symbol_id = semantic_symbol_id_for_artefact(moved_impl, None);
+    let original_impl_symbol_id = structural_symbol_id_for_artefact(original_impl, None);
+    let moved_impl_symbol_id = structural_symbol_id_for_artefact(moved_impl, None);
     assert_eq!(original_impl_symbol_id, moved_impl_symbol_id);
 
     let original_method = original_artefacts
@@ -2083,9 +2083,9 @@ impl Service for Repo {
         .expect("expected run method in moved ingest");
 
     let original_method_symbol_id =
-        semantic_symbol_id_for_artefact(original_method, Some(&original_impl_symbol_id));
+        structural_symbol_id_for_artefact(original_method, Some(&original_impl_symbol_id));
     let moved_method_symbol_id =
-        semantic_symbol_id_for_artefact(moved_method, Some(&moved_impl_symbol_id));
+        structural_symbol_id_for_artefact(moved_method, Some(&moved_impl_symbol_id));
 
     assert_eq!(original_method_symbol_id, moved_method_symbol_id);
     assert_ne!(
