@@ -101,7 +101,7 @@ async fn init_postgres_semantic_features_schema(pg_client: &tokio_postgres::Clie
 }
 
 async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
-    sqlite_exec_path(sqlite_path, semantic_features_sqlite_schema_sql()).await
+    sqlite_exec_path_allow_create(sqlite_path, semantic_features_sqlite_schema_sql()).await
 }
 
 async fn load_pre_stage_artefacts_for_blob(

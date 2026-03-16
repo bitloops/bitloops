@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS checkpoint_events_repo_commit_idx
 ON checkpoint_events (repo_id, commit_sha);
 "#;
 
-    duckdb_exec_path(&events_cfg.duckdb_path_or_default(), sql)
+    duckdb_exec_path_allow_create(&events_cfg.duckdb_path_or_default(), sql)
         .await
         .context("creating DuckDB checkpoint_events table")?;
     Ok(())

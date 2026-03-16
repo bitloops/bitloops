@@ -28,5 +28,5 @@ pub(crate) fn init_test_repo(repo_root: &Path, branch: &str, user_name: &str, us
 }
 
 pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
-    repo_root.join(paths::BITLOOPS_DIR).join("blobs")
+    paths::default_blob_store_path(repo_root)
 }

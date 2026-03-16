@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -10,11 +9,6 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
-use crate::devql_config::{
-    DevqlBackendConfig, DevqlFileConfig, EventsBackendConfig, EventsProvider,
-    RelationalBackendConfig, RelationalProvider, resolve_devql_backend_config,
-    resolve_devql_semantic_config,
-};
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
@@ -22,6 +16,11 @@ use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_session_content, run_git,
+};
+use crate::store_config::{
+    EventsBackendConfig, EventsProvider, RelationalBackendConfig, RelationalProvider,
+    StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
+    resolve_store_semantic_config,
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
@@ -50,39 +49,29 @@ pub struct DevqlConfig {
 }
 
 impl DevqlConfig {
-    pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Self {
-        let file_cfg = DevqlFileConfig::load();
-        let semantic_cfg = resolve_devql_semantic_config();
-        Self {
+    pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
+        let backend_cfg = resolve_store_backend_config_for_repo(&repo_root)
+            .context("resolving backend config for DevQL runtime")?;
+        let semantic_cfg = resolve_store_semantic_config();
+        Ok(Self {
             repo_root,
             repo,
-            pg_dsn: env::var("BITLOOPS_DEVQL_PG_DSN")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.pg_dsn),
-            clickhouse_url: env::var("BITLOOPS_DEVQL_CH_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_url)
+            pg_dsn: backend_cfg.relational.postgres_dsn,
+            clickhouse_url: backend_cfg
+                .events
+                .clickhouse_url
                 .unwrap_or_else(|| "http://localhost:8123".to_string()),
-            clickhouse_user: env::var("BITLOOPS_DEVQL_CH_USER")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_user),
-            clickhouse_password: env::var("BITLOOPS_DEVQL_CH_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_password),
-            clickhouse_database: env::var("BITLOOPS_DEVQL_CH_DATABASE")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file_cfg.clickhouse_database)
+            clickhouse_user: backend_cfg.events.clickhouse_user,
+            clickhouse_password: backend_cfg.events.clickhouse_password,
+            clickhouse_database: backend_cfg
+                .events
+                .clickhouse_database
                 .unwrap_or_else(|| "default".to_string()),
             semantic_provider: semantic_cfg.semantic_provider,
             semantic_model: semantic_cfg.semantic_model,
             semantic_api_key: semantic_cfg.semantic_api_key,
             semantic_base_url: semantic_cfg.semantic_base_url,
-        }
+        })
     }
 
     fn clickhouse_endpoint(&self) -> String {
@@ -98,7 +87,7 @@ const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
 
 pub async fn run_connection_status() -> Result<()> {
-    let cfg = resolve_devql_backend_config()?;
+    let cfg = resolve_store_backend_config()?;
     let rows = collect_connection_status_rows(&cfg).await;
 
     print_db_status_table(&rows);
@@ -111,7 +100,7 @@ pub async fn run_connection_status() -> Result<()> {
     Ok(())
 }
 
-async fn collect_connection_status_rows(cfg: &DevqlBackendConfig) -> Vec<DatabaseStatusRow> {
+async fn collect_connection_status_rows(cfg: &StoreBackendConfig) -> Vec<DatabaseStatusRow> {
     vec![
         DatabaseStatusRow {
             db: relational_status_label(&cfg.relational),
@@ -233,6 +222,12 @@ async fn check_sqlite_connection(path: &Path) -> Result<()> {
 async fn check_duckdb_connection(path: &Path) -> Result<()> {
     let db_path = path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
+        if !db_path.is_file() {
+            bail!(
+                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
         let conn = duckdb::Connection::open(&db_path)
             .with_context(|| format!("opening DuckDB events database at {}", db_path.display()))?;
         conn.execute_batch("SELECT 1")
@@ -330,13 +325,13 @@ fn require_postgres_dsn<'a>(
         .or(cfg.pg_dsn.as_deref())
         .ok_or_else(|| {
             anyhow!(
-                "{DEVQL_POSTGRES_DSN_REQUIRED_PREFIX}: `{command}` requires `devql.relational.postgres_dsn` (or legacy `BITLOOPS_DEVQL_PG_DSN`) when `devql.relational.provider=postgres`"
+                "{DEVQL_POSTGRES_DSN_REQUIRED_PREFIX}: `{command}` requires `stores.relational.postgres_dsn` when `stores.relational.provider=postgres`"
             )
         })
 }
 
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
-    let backends = resolve_devql_backend_config()
+    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql init`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql init").await?;
 
@@ -355,7 +350,7 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
-    let backends = resolve_devql_backend_config()
+    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
@@ -506,13 +501,13 @@ pub async fn run_query(cfg: &DevqlConfig, query: &str, compact: bool) -> Result<
 #[allow(dead_code)] // Compiled in both bin/lib crates; used by lib hook runtime path.
 pub async fn execute_query_json_for_repo_root(repo_root: &Path, query: &str) -> Result<Value> {
     let repo = resolve_repo_identity(repo_root)?;
-    let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo);
+    let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo)?;
     execute_query_json(&cfg, query).await
 }
 
 async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let backends = resolve_devql_backend_config()
+    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql query`")?;
     let relational = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None

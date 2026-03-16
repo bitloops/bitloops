@@ -13,8 +13,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
-use crate::devql_config::{BlobStorageConfig, BlobStorageProvider, DevqlBackendConfig};
 use crate::engine::db::SqliteConnectionPool;
+use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreBackendConfig};
 
 thread_local! {
     static BLOB_SYNC_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -106,7 +106,7 @@ pub fn build_blob_key(
 }
 
 pub fn create_blob_store_from_backend_config(
-    cfg: &DevqlBackendConfig,
+    cfg: &StoreBackendConfig,
 ) -> Result<Box<dyn BlobStore>> {
     create_blob_store(&cfg.blobs)
 }

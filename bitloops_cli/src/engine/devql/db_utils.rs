@@ -191,14 +191,29 @@ fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
 }
 
 async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
+    duckdb_exec_path_inner(path, sql, false).await
+}
+
+async fn duckdb_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
+    duckdb_exec_path_inner(path, sql, true).await
+}
+
+async fn duckdb_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        if let Some(parent) = db_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
+        if allow_create {
+            if let Some(parent) = db_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
+            }
+        } else if !db_path.is_file() {
+            bail!(
+                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
         }
         let conn = duckdb::Connection::open(&db_path)
             .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
@@ -211,17 +226,39 @@ async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
 }
 
 async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
+    sqlite_exec_path_inner(path, sql, false).await
+}
+
+async fn sqlite_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
+    sqlite_exec_path_inner(path, sql, true).await
+}
+
+async fn sqlite_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        if let Some(parent) = db_path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating SQLite directory {}", parent.display()))?;
+        if allow_create {
+            if let Some(parent) = db_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating SQLite directory {}", parent.display()))?;
+            }
+        } else if !db_path.is_file() {
+            bail!(
+                "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
         }
-        let conn = rusqlite::Connection::open(&db_path)
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        let conn = if allow_create {
+            rusqlite::Connection::open(&db_path)
+        } else {
+            rusqlite::Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            )
+        }
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(30))
             .context("setting SQLite busy timeout")?;
         conn.execute_batch(&statement)
@@ -236,15 +273,20 @@ async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+        if !db_path.is_file() {
+            bail!(
+                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
         let conn = duckdb::Connection::open(&db_path)
             .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
         let mut stmt = conn.prepare(&query).context("preparing DuckDB query")?;
-        let column_names = stmt
-            .column_names()
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect::<Vec<_>>();
         let mut rows = stmt.query([]).context("executing DuckDB query")?;
+        let column_names = rows
+            .as_ref()
+            .map(|statement| statement.column_names())
+            .unwrap_or_default();
         let mut out = Vec::new();
 
         while let Some(row) = rows.next().context("iterating DuckDB query rows")? {
@@ -269,7 +311,16 @@ async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
-        let conn = rusqlite::Connection::open(&db_path)
+        if !db_path.is_file() {
+            bail!(
+                "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(30))
             .context("setting SQLite busy timeout")?;

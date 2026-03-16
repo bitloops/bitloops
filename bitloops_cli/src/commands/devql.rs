@@ -64,7 +64,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 
     let repo_root = paths::repo_root()?;
     let repo = resolve_repo_identity(&repo_root)?;
-    let cfg = DevqlConfig::from_env(repo_root, repo);
+    let cfg = DevqlConfig::from_env(repo_root, repo)?;
 
     match command {
         DevqlCommand::Init(_) => run_init(&cfg).await,

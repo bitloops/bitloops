@@ -421,7 +421,7 @@ fn open_commit_checkpoint_mapping_db(
 ) -> Result<(crate::engine::db::SqliteConnectionPool, String)> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
         .context("resolving SQLite path for commit_checkpoints")?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening SQLite for commit_checkpoints")?;
     sqlite
         .initialise_checkpoint_schema()

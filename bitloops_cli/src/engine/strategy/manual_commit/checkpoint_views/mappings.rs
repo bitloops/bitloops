@@ -1,6 +1,6 @@
 pub fn read_commit_checkpoint_mappings(repo_root: &Path) -> Result<std::collections::HashMap<String, String>> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening SQLite database for commit-checkpoint mappings")?;
     sqlite
         .initialise_checkpoint_schema()

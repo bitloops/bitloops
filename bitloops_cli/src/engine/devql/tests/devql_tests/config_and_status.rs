@@ -27,14 +27,20 @@ fn deterministic_uuid_is_stable() {
 #[test]
 fn devql_file_config_parses_nested_block() {
     let value = serde_json::json!({
-        "devql": {
-            "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops",
-            "clickhouse_url": "http://localhost:8123",
-            "clickhouse_database": "default"
+        "stores": {
+            "relational": {
+                "provider": "postgres",
+                "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops"
+            },
+            "event": {
+                "provider": "clickhouse",
+                "clickhouse_url": "http://localhost:8123",
+                "clickhouse_database": "default"
+            }
         }
     });
 
-    let cfg = DevqlFileConfig::from_json_value(&value);
+    let cfg = StoreFileConfig::from_json_value(&value);
     assert_eq!(
         cfg.pg_dsn.as_deref(),
         Some("postgres://user:pass@localhost:5432/bitloops")
@@ -44,14 +50,20 @@ fn devql_file_config_parses_nested_block() {
 }
 
 #[test]
-fn devql_file_config_parses_top_level_env_keys() {
+fn devql_file_config_parses_root_store_keys_without_wrapper() {
     let value = serde_json::json!({
-        "BITLOOPS_DEVQL_PG_DSN": "postgres://x/y",
-        "BITLOOPS_DEVQL_CH_URL": "http://ch:8123",
-        "BITLOOPS_DEVQL_CH_DATABASE": "analytics"
+        "relational": {
+            "provider": "postgres",
+            "postgres_dsn": "postgres://x/y"
+        },
+        "event": {
+            "provider": "clickhouse",
+            "clickhouse_url": "http://ch:8123",
+            "clickhouse_database": "analytics"
+        }
     });
 
-    let cfg = DevqlFileConfig::from_json_value(&value);
+    let cfg = StoreFileConfig::from_json_value(&value);
     assert_eq!(cfg.pg_dsn.as_deref(), Some("postgres://x/y"));
     assert_eq!(cfg.clickhouse_url.as_deref(), Some("http://ch:8123"));
     assert_eq!(cfg.clickhouse_database.as_deref(), Some("analytics"));
@@ -133,4 +145,3 @@ fn build_path_candidates_includes_variants() {
     assert!(candidates.contains(&"./index.ts".to_string()));
     assert!(candidates.contains(&"index.ts".to_string()));
 }
-

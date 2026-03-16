@@ -7,10 +7,9 @@ use serde::de::DeserializeOwned;
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
 use super::state::{PrePromptState, PreTaskState, SessionState};
-use crate::devql_config::{resolve_devql_backend_config, resolve_sqlite_db_path};
 use crate::engine::db::SqliteConnectionPool;
-use crate::engine::paths;
 use crate::engine::validation::validators::{validate_session_id, validate_tool_use_id};
+use crate::store_config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
 
 pub struct DbSessionBackend {
     repo_id: String,
@@ -30,7 +29,7 @@ impl DbSessionBackend {
     }
 
     pub fn from_sqlite_path(repo_id: impl Into<String>, sqlite_path: PathBuf) -> Result<Self> {
-        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        let sqlite = SqliteConnectionPool::connect_existing(sqlite_path)?;
         Self::new(repo_id, sqlite)
     }
 
@@ -408,17 +407,14 @@ impl SessionBackend for DbSessionBackend {
 }
 
 fn resolve_repo_scoped_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg =
-        resolve_devql_backend_config().context("resolving DevQL backend config for session DB")?;
+    let cfg = resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving backend config for session DB")?;
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return resolve_sqlite_db_path(Some(path))
+        return resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .context("resolving configured SQLite path for session DB");
     }
 
-    Ok(repo_root
-        .join(paths::BITLOOPS_DIR)
-        .join("devql")
-        .join("relational.db"))
+    Ok(crate::engine::paths::default_relational_db_path(repo_root))
 }
 
 fn parse_json_column<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T> {
@@ -458,6 +454,7 @@ mod tests {
     fn setup(repo_id: &str) -> (TempDir, DbSessionBackend) {
         let dir = tempfile::tempdir().unwrap();
         let sqlite_path = dir.path().join("relational.sqlite");
+        let _ = rusqlite::Connection::open(&sqlite_path).expect("create sqlite file for tests");
         let backend = DbSessionBackend::from_sqlite_path(repo_id.to_string(), sqlite_path).unwrap();
         (dir, backend)
     }

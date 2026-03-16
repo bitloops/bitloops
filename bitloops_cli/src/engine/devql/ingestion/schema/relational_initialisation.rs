@@ -1,8 +1,8 @@
 async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
-    sqlite_exec_path(sqlite_path, sqlite_schema_sql())
+    sqlite_exec_path_allow_create(sqlite_path, sqlite_schema_sql())
         .await
         .context("creating SQLite relational DevQL tables")?;
-    sqlite_exec_path(sqlite_path, checkpoint_schema_sql_sqlite())
+    sqlite_exec_path_allow_create(sqlite_path, checkpoint_schema_sql_sqlite())
         .await
         .context("creating SQLite checkpoint migration tables")?;
     init_sqlite_semantic_features_schema(sqlite_path)

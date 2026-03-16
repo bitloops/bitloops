@@ -8,8 +8,7 @@ use serde_json::Value;
 use tokio::runtime::Builder;
 use tokio::task;
 
-const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str =
-    "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations";
+const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str = "Postgres DSN is required for Postgres operations";
 const DEVQL_PG_DSN_REQUIRED_NEW_PREFIX: &str =
     crate::engine::devql::DEVQL_POSTGRES_DSN_REQUIRED_PREFIX;
 
@@ -329,7 +328,7 @@ mod tests {
     #[test]
     fn missing_pg_dsn_error_is_detected() {
         let err = anyhow!(
-            "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
+            "Postgres DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
         );
         assert!(is_prefetch_backend_not_available_error(&err));
     }

@@ -1,7 +1,7 @@
 use clap::Parser;
 
-pub use bitloops_cli::devql_config;
 pub use bitloops_cli::engine;
+pub use bitloops_cli::store_config;
 mod branding;
 mod commands;
 mod server;

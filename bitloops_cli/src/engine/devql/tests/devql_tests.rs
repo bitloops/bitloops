@@ -1,6 +1,6 @@
 use super::*;
 use crate::commands::devql::DevqlCommand;
-use crate::devql_config::{BlobStorageConfig, BlobStorageProvider};
+use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use clap::Parser;
 use serde_json::json;
@@ -37,8 +37,8 @@ fn test_cfg_with_repo_id(repo_suffix: &str, dsn: &str) -> DevqlConfig {
     cfg
 }
 
-fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> DevqlBackendConfig {
-    DevqlBackendConfig {
+fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> StoreBackendConfig {
+    StoreBackendConfig {
         relational: RelationalBackendConfig {
             provider: RelationalProvider::Sqlite,
             sqlite_path,
@@ -137,16 +137,13 @@ fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoi
 }
 
 fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
-    let cfg =
-        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::devql_config::resolve_sqlite_db_path(Some(path))
+        crate::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
-        repo_root
-            .join(crate::engine::paths::BITLOOPS_DIR)
-            .join("devql")
-            .join("relational.db")
+        crate::engine::paths::default_relational_db_path(repo_root)
     }
 }
 
