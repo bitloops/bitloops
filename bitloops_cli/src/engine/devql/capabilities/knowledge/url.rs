@@ -3,9 +3,7 @@ use regex::Regex;
 use reqwest::Url;
 use std::sync::OnceLock;
 
-use super::types::{
-    KnowledgeLocator, KnowledgeProvider, KnowledgeSourceKind, ParsedKnowledgeUrl,
-};
+use super::types::{KnowledgeLocator, KnowledgeProvider, KnowledgeSourceKind, ParsedKnowledgeUrl};
 
 pub fn parse_knowledge_url(raw: &str) -> Result<ParsedKnowledgeUrl> {
     let trimmed = raw.trim();
@@ -13,7 +11,8 @@ pub fn parse_knowledge_url(raw: &str) -> Result<ParsedKnowledgeUrl> {
         bail!("knowledge URL must not be empty");
     }
 
-    let mut url = Url::parse(trimmed).with_context(|| format!("invalid knowledge URL `{trimmed}`"))?;
+    let mut url =
+        Url::parse(trimmed).with_context(|| format!("invalid knowledge URL `{trimmed}`"))?;
     url.set_query(None);
     url.set_fragment(None);
 
@@ -183,12 +182,14 @@ mod tests {
 
     #[test]
     fn parses_github_pr_url_and_strips_query_fragment() {
-        let parsed = parse_knowledge_url(
-            "https://github.com/bitloops/bitloops/pull/137/?foo=bar#section",
-        )
-        .expect("github pull request");
+        let parsed =
+            parse_knowledge_url("https://github.com/bitloops/bitloops/pull/137/?foo=bar#section")
+                .expect("github pull request");
         assert_eq!(parsed.source_kind, KnowledgeSourceKind::GithubPullRequest);
-        assert_eq!(parsed.canonical_url, "https://github.com/bitloops/bitloops/pull/137");
+        assert_eq!(
+            parsed.canonical_url,
+            "https://github.com/bitloops/bitloops/pull/137"
+        );
     }
 
     #[test]
@@ -197,7 +198,10 @@ mod tests {
             .expect("jira issue");
         assert_eq!(parsed.provider, KnowledgeProvider::Jira);
         assert_eq!(parsed.source_kind, KnowledgeSourceKind::JiraIssue);
-        assert_eq!(parsed.canonical_external_id, "jira://bitloops.atlassian.net/CLI-1370");
+        assert_eq!(
+            parsed.canonical_external_id,
+            "jira://bitloops.atlassian.net/CLI-1370"
+        );
     }
 
     #[test]

@@ -4,12 +4,14 @@ use serde_json::json;
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::RepoIdentity;
 use crate::engine::strategy::manual_commit::run_git;
-use crate::store_config::{resolve_provider_config_for_repo, resolve_store_backend_config_for_repo};
+use crate::store_config::{
+    resolve_provider_config_for_repo, resolve_store_backend_config_for_repo,
+};
 
+use super::provenance::build_provenance;
 use super::providers::{
     ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient, KnowledgeProviderClient,
 };
-use super::provenance::build_provenance;
 use super::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentVersionRow,
     KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
@@ -18,8 +20,7 @@ use super::storage::{
 };
 use super::types::{
     BoxFuture, IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeHostContext,
-    KnowledgeItemStatus, KnowledgeProvider, KnowledgeVersionStatus,
-    format_knowledge_add_result,
+    KnowledgeItemStatus, KnowledgeProvider, KnowledgeVersionStatus, format_knowledge_add_result,
 };
 use super::url::parse_knowledge_url;
 
@@ -100,9 +101,7 @@ impl KnowledgeCapability for KnowledgePlugin {
             let existing_item = host
                 .relational_store
                 .find_item(&host.repo.repo_id, &source_id)?;
-            let existing_version = host
-                .document_store
-                .has_document_version(&item_id, &hash)?;
+            let existing_version = host.document_store.has_document_version(&item_id, &hash)?;
             let item_status = if existing_item.is_some() {
                 KnowledgeItemStatus::Reused
             } else {
@@ -135,24 +134,28 @@ impl KnowledgeCapability for KnowledgePlugin {
                 provenance_json: provenance_json.clone(),
             };
 
-            let relation_row = request.commit.as_ref().map(|commit| KnowledgeRelationAssertionRow {
-                relation_assertion_id: relation_assertion_id(
-                    &item_id,
-                    &current_document_version_id,
-                    "commit",
-                    commit,
-                    "manual_commit_flag",
-                ),
-                repo_id: host.repo.repo_id.clone(),
-                knowledge_item_id: item_id.clone(),
-                source_document_version_id: current_document_version_id.clone(),
-                target_type: "commit".to_string(),
-                target_id: commit.clone(),
-                relation_type: "associated_with".to_string(),
-                association_method: "manual_commit_flag".to_string(),
-                confidence: 1.0,
-                provenance_json: provenance_json.clone(),
-            });
+            let relation_row =
+                request
+                    .commit
+                    .as_ref()
+                    .map(|commit| KnowledgeRelationAssertionRow {
+                        relation_assertion_id: relation_assertion_id(
+                            &item_id,
+                            &current_document_version_id,
+                            "commit",
+                            commit,
+                            "manual_commit_flag",
+                        ),
+                        repo_id: host.repo.repo_id.clone(),
+                        knowledge_item_id: item_id.clone(),
+                        source_document_version_id: current_document_version_id.clone(),
+                        target_type: "commit".to_string(),
+                        target_id: commit.clone(),
+                        relation_type: "associated_with".to_string(),
+                        association_method: "manual_commit_flag".to_string(),
+                        confidence: 1.0,
+                        provenance_json: provenance_json.clone(),
+                    });
 
             let mut written_payload = None;
             let mut inserted_document_version = None;
@@ -242,13 +245,17 @@ pub async fn run_add_command(
     Ok(())
 }
 
-pub fn build_host_context(repo_root: &std::path::Path, repo: &RepoIdentity) -> Result<KnowledgeHostContext> {
+pub fn build_host_context(
+    repo_root: &std::path::Path,
+    repo: &RepoIdentity,
+) -> Result<KnowledgeHostContext> {
     let backends = resolve_store_backend_config_for_repo(repo_root)?;
     let provider_config = resolve_provider_config_for_repo(repo_root)?;
     let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
     let relational_store =
         SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
-    let document_store = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
+    let document_store =
+        DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
     let payload_store = BlobKnowledgePayloadStore::from_backend_config(repo_root, &backends)?;
 
     Ok(KnowledgeHostContext {

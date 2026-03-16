@@ -144,9 +144,7 @@ pub struct KnowledgeHostContext {
 
 pub fn format_knowledge_add_result(result: &IngestKnowledgeResult) -> String {
     let status = match (&result.item_status, &result.version_status) {
-        (KnowledgeItemStatus::Created, KnowledgeVersionStatus::Created) => {
-            "new item, new version"
-        }
+        (KnowledgeItemStatus::Created, KnowledgeVersionStatus::Created) => "new item, new version",
         (KnowledgeItemStatus::Created, KnowledgeVersionStatus::Reused) => {
             "new item, reused version"
         }

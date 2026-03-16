@@ -59,8 +59,7 @@ impl BlobStore for LocalBlobStore {
         if !path.exists() {
             return Ok(());
         }
-        fs::remove_file(&path)
-            .with_context(|| format!("deleting blob file {}", path.display()))?;
+        fs::remove_file(&path).with_context(|| format!("deleting blob file {}", path.display()))?;
         Ok(())
     }
 }

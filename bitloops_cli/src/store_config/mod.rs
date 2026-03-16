@@ -412,7 +412,10 @@ fn resolve_store_backend_config_with(file_cfg: StoreFileConfig) -> Result<StoreB
     })
 }
 
-fn resolve_provider_config_from_value_with<F>(value: &Value, env_lookup: F) -> Result<ProviderConfig>
+fn resolve_provider_config_from_value_with<F>(
+    value: &Value,
+    env_lookup: F,
+) -> Result<ProviderConfig>
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -503,8 +506,7 @@ where
         .get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing `{section}.{key}`"))?;
-    resolve_provider_string(raw, env_lookup)
-        .with_context(|| format!("resolving `{section}.{key}`"))
+    resolve_provider_string(raw, env_lookup).with_context(|| format!("resolving `{section}.{key}`"))
 }
 
 fn resolve_provider_string<F>(raw: &str, env_lookup: &F) -> Result<String>
@@ -520,8 +522,8 @@ where
         .strip_prefix("${")
         .and_then(|value| value.strip_suffix('}'))
     {
-        let env_value = env_lookup(key)
-            .ok_or_else(|| anyhow!("environment variable `{key}` is not set"))?;
+        let env_value =
+            env_lookup(key).ok_or_else(|| anyhow!("environment variable `{key}` is not set"))?;
         let env_trimmed = env_value.trim();
         if env_trimmed.is_empty() {
             bail!("environment variable `{key}` is empty");

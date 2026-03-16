@@ -89,7 +89,10 @@ pub(crate) fn build_github_document(
     payload: Value,
 ) -> Result<FetchedKnowledgeDocument> {
     if parsed.source_kind == KnowledgeSourceKind::GithubIssue
-        && payload.get("pull_request").and_then(Value::as_object).is_some()
+        && payload
+            .get("pull_request")
+            .and_then(Value::as_object)
+            .is_some()
     {
         bail!("GitHub issue URL resolved to a pull request payload");
     }

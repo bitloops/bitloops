@@ -1,6 +1,6 @@
 mod plugin;
-mod providers;
 mod provenance;
+mod providers;
 mod storage;
 mod types;
 mod url;

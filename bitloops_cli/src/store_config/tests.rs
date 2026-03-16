@@ -175,8 +175,7 @@ fn provider_config_rejects_missing_env_value() {
         }
     });
 
-    let err =
-        resolve_provider_config_for_tests(&value, &[]).expect_err("missing env should fail");
+    let err = resolve_provider_config_for_tests(&value, &[]).expect_err("missing env should fail");
     assert!(err.to_string().contains("providers.github.token"));
 }
 

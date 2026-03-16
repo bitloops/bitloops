@@ -9,26 +9,23 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::providers::{
-    KnowledgeProviderClient, build_confluence_document, build_github_document,
-    build_jira_document,
+    KnowledgeProviderClient, build_confluence_document, build_github_document, build_jira_document,
 };
-use super::storage::{
-    content_hash, knowledge_payload_key, serialize_payload,
-};
+use super::storage::{content_hash, knowledge_payload_key, serialize_payload};
 use super::types::{
     BoxFuture, FetchedKnowledgeDocument, IngestKnowledgeRequest, KnowledgeHostContext,
     KnowledgePayloadData, KnowledgeSourceKind,
 };
 use super::{KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result};
+use crate::engine::db::SqliteConnectionPool;
+use crate::engine::devql::capabilities::knowledge::storage::{
+    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+};
+use crate::engine::devql::resolve_repo_identity;
 use crate::store_config::{
     AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
     EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig,
-};
-use crate::engine::db::SqliteConnectionPool;
-use crate::engine::devql::resolve_repo_identity;
-use crate::engine::devql::capabilities::knowledge::storage::{
-    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
@@ -123,8 +120,7 @@ fn github_provider_maps_pull_request_payload() -> Result<()> {
 
 #[test]
 fn jira_provider_maps_issue_payload() -> Result<()> {
-    let parsed =
-        super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
     let document = build_jira_document(
         &parsed,
         json!({
@@ -190,11 +186,8 @@ async fn plugin_persists_repository_scoped_knowledge_and_dispatches_to_github() 
     let jira_calls = jira.calls.clone();
     let confluence = StubClient::new(vec![]);
     let confluence_calls = confluence.calls.clone();
-    let plugin = KnowledgePlugin::with_clients(
-        Box::new(github),
-        Box::new(jira),
-        Box::new(confluence),
-    );
+    let plugin =
+        KnowledgePlugin::with_clients(Box::new(github), Box::new(jira), Box::new(confluence));
 
     let result = plugin
         .ingest_source(
@@ -234,11 +227,8 @@ async fn plugin_dispatches_to_github_pull_request_handler() -> Result<()> {
     let jira_calls = jira.calls.clone();
     let confluence = StubClient::new(vec![]);
     let confluence_calls = confluence.calls.clone();
-    let plugin = KnowledgePlugin::with_clients(
-        Box::new(github),
-        Box::new(jira),
-        Box::new(confluence),
-    );
+    let plugin =
+        KnowledgePlugin::with_clients(Box::new(github), Box::new(jira), Box::new(confluence));
 
     let result = plugin
         .ingest_source(
@@ -251,7 +241,10 @@ async fn plugin_dispatches_to_github_pull_request_handler() -> Result<()> {
         .await?;
 
     assert_eq!(result.provider, "github");
-    assert_eq!(result.source_kind, KnowledgeSourceKind::GithubPullRequest.as_str());
+    assert_eq!(
+        result.source_kind,
+        KnowledgeSourceKind::GithubPullRequest.as_str()
+    );
     assert_eq!(github_calls.load(Ordering::SeqCst), 1);
     assert_eq!(jira_calls.load(Ordering::SeqCst), 0);
     assert_eq!(confluence_calls.load(Ordering::SeqCst), 0);
@@ -271,11 +264,8 @@ async fn plugin_dispatches_to_jira_handler() -> Result<()> {
     let jira_calls = jira.calls.clone();
     let confluence = StubClient::new(vec![]);
     let confluence_calls = confluence.calls.clone();
-    let plugin = KnowledgePlugin::with_clients(
-        Box::new(github),
-        Box::new(jira),
-        Box::new(confluence),
-    );
+    let plugin =
+        KnowledgePlugin::with_clients(Box::new(github), Box::new(jira), Box::new(confluence));
 
     let result = plugin
         .ingest_source(
@@ -308,11 +298,8 @@ async fn plugin_dispatches_to_confluence_handler() -> Result<()> {
         Some("Page body"),
     ))]);
     let confluence_calls = confluence.calls.clone();
-    let plugin = KnowledgePlugin::with_clients(
-        Box::new(github),
-        Box::new(jira),
-        Box::new(confluence),
-    );
+    let plugin =
+        KnowledgePlugin::with_clients(Box::new(github), Box::new(jira), Box::new(confluence));
 
     let result = plugin
         .ingest_source(
@@ -326,7 +313,10 @@ async fn plugin_dispatches_to_confluence_handler() -> Result<()> {
         .await?;
 
     assert_eq!(result.provider, "confluence");
-    assert_eq!(result.source_kind, KnowledgeSourceKind::ConfluencePage.as_str());
+    assert_eq!(
+        result.source_kind,
+        KnowledgeSourceKind::ConfluencePage.as_str()
+    );
     assert_eq!(github_calls.load(Ordering::SeqCst), 0);
     assert_eq!(jira_calls.load(Ordering::SeqCst), 0);
     assert_eq!(confluence_calls.load(Ordering::SeqCst), 1);
@@ -368,8 +358,14 @@ async fn plugin_reuses_item_and_version_for_duplicate_content() -> Result<()> {
 
     assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
     assert_eq!(first.document_version_id, second.document_version_id);
-    assert_eq!(second.item_status, super::types::KnowledgeItemStatus::Reused);
-    assert_eq!(second.version_status, super::types::KnowledgeVersionStatus::Reused);
+    assert_eq!(
+        second.item_status,
+        super::types::KnowledgeItemStatus::Reused
+    );
+    assert_eq!(
+        second.version_status,
+        super::types::KnowledgeVersionStatus::Reused
+    );
     assert_eq!(duckdb_document_count(&duckdb_path(&host))?, 1);
     Ok(())
 }
@@ -408,7 +404,10 @@ async fn plugin_creates_new_version_when_payload_changes() -> Result<()> {
 
     assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
     assert_ne!(first.document_version_id, second.document_version_id);
-    assert_eq!(second.version_status, super::types::KnowledgeVersionStatus::Created);
+    assert_eq!(
+        second.version_status,
+        super::types::KnowledgeVersionStatus::Created
+    );
     assert_eq!(duckdb_document_count(&duckdb_path(&host))?, 2);
     Ok(())
 }
@@ -419,10 +418,9 @@ async fn plugin_creates_commit_relation_when_commit_flag_present() -> Result<()>
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
     let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
     let plugin = KnowledgePlugin::with_clients(
-        Box::new(StubClient::new(vec![StubResponse::Document(sample_document(
-            "Issue one",
-            Some("Issue body"),
-        ))])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
         Box::new(StubClient::new(vec![])),
         Box::new(StubClient::new(vec![])),
     );
@@ -572,17 +570,26 @@ fn format_result_renders_expected_summary() {
     assert!(rendered.contains("association: none"));
 }
 
-fn build_test_host(temp: &TempDir, provider_config: ProviderConfig) -> Result<KnowledgeHostContext> {
+fn build_test_host(
+    temp: &TempDir,
+    provider_config: ProviderConfig,
+) -> Result<KnowledgeHostContext> {
     let repo_root = temp.path().join("repo");
     fs::create_dir_all(&repo_root)?;
-    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops-test@example.com");
+    init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
     git_ok(&repo_root, &["commit", "--allow-empty", "-m", "initial"]);
     let repo = resolve_repo_identity(&repo_root)?;
     let backends = test_backends(temp);
     let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
     let relational_store =
         SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
-    let document_store = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
+    let document_store =
+        DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
     let payload_store = BlobKnowledgePayloadStore::from_backend_config(&repo_root, &backends)?;
 
     Ok(KnowledgeHostContext {
@@ -618,12 +625,22 @@ fn test_backends(temp: &TempDir) -> StoreBackendConfig {
     StoreBackendConfig {
         relational: RelationalBackendConfig {
             provider: RelationalProvider::Sqlite,
-            sqlite_path: Some(temp.path().join("relational.db").to_string_lossy().to_string()),
+            sqlite_path: Some(
+                temp.path()
+                    .join("relational.db")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             postgres_dsn: None,
         },
         events: EventsBackendConfig {
             provider: EventsProvider::DuckDb,
-            duckdb_path: Some(temp.path().join("events.duckdb").to_string_lossy().to_string()),
+            duckdb_path: Some(
+                temp.path()
+                    .join("events.duckdb")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             clickhouse_url: None,
             clickhouse_user: None,
             clickhouse_password: None,

@@ -159,8 +159,12 @@ impl DuckdbKnowledgeDocumentStore {
 
     pub fn initialise_schema(&self) -> Result<()> {
         ensure_parent_dir(&self.path)?;
-        let conn = duckdb::Connection::open(&self.path)
-            .with_context(|| format!("opening DuckDB knowledge database at {}", self.path.display()))?;
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB knowledge database at {}",
+                self.path.display()
+            )
+        })?;
         conn.execute_batch(knowledge_schema_sql_duckdb())
             .context("initialising DuckDB knowledge schema")
     }
@@ -171,8 +175,12 @@ impl DuckdbKnowledgeDocumentStore {
         content_hash: &str,
     ) -> Result<Option<String>> {
         ensure_parent_dir(&self.path)?;
-        let conn = duckdb::Connection::open(&self.path)
-            .with_context(|| format!("opening DuckDB knowledge database at {}", self.path.display()))?;
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB knowledge database at {}",
+                self.path.display()
+            )
+        })?;
         let mut stmt = conn
             .prepare(
                 "SELECT document_version_id
@@ -194,8 +202,12 @@ impl DuckdbKnowledgeDocumentStore {
 
     pub fn insert_document_version(&self, row: &KnowledgeDocumentVersionRow) -> Result<()> {
         ensure_parent_dir(&self.path)?;
-        let conn = duckdb::Connection::open(&self.path)
-            .with_context(|| format!("opening DuckDB knowledge database at {}", self.path.display()))?;
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB knowledge database at {}",
+                self.path.display()
+            )
+        })?;
         conn.execute(
             "INSERT INTO knowledge_document_versions (
                 document_version_id, knowledge_item_id, provider, source_kind, content_hash,
@@ -228,8 +240,12 @@ impl DuckdbKnowledgeDocumentStore {
 
     pub fn delete_document_version(&self, document_version_id: &str) -> Result<()> {
         ensure_parent_dir(&self.path)?;
-        let conn = duckdb::Connection::open(&self.path)
-            .with_context(|| format!("opening DuckDB knowledge database at {}", self.path.display()))?;
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB knowledge database at {}",
+                self.path.display()
+            )
+        })?;
         conn.execute(
             "DELETE FROM knowledge_document_versions WHERE document_version_id = ?",
             duckdb::params![document_version_id],
@@ -303,7 +319,9 @@ pub fn knowledge_item_id(repo_id: &str, knowledge_source_id: &str) -> String {
 }
 
 pub fn document_version_id(knowledge_item_id: &str, content_hash: &str) -> String {
-    deterministic_uuid(&format!("knowledge-version://{knowledge_item_id}/{content_hash}"))
+    deterministic_uuid(&format!(
+        "knowledge-version://{knowledge_item_id}/{content_hash}"
+    ))
 }
 
 pub fn relation_assertion_id(
@@ -436,12 +454,22 @@ mod tests {
         let backends = StoreBackendConfig {
             relational: RelationalBackendConfig {
                 provider: RelationalProvider::Sqlite,
-                sqlite_path: Some(temp.path().join("relational.db").to_string_lossy().to_string()),
+                sqlite_path: Some(
+                    temp.path()
+                        .join("relational.db")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
                 postgres_dsn: None,
             },
             events: EventsBackendConfig {
                 provider: EventsProvider::DuckDb,
-                duckdb_path: Some(temp.path().join("events.duckdb").to_string_lossy().to_string()),
+                duckdb_path: Some(
+                    temp.path()
+                        .join("events.duckdb")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
                 clickhouse_url: None,
                 clickhouse_user: None,
                 clickhouse_password: None,
@@ -467,6 +495,10 @@ mod tests {
         assert!(store.payload_exists(&payload.storage_path).expect("exists"));
 
         store.delete_payload(&payload).expect("delete payload");
-        assert!(!store.payload_exists(&payload.storage_path).expect("exists after delete"));
+        assert!(
+            !store
+                .payload_exists(&payload.storage_path)
+                .expect("exists after delete")
+        );
     }
 }
