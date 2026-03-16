@@ -9,9 +9,8 @@ use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
 use crate::devql_config::dashboard_use_bitloops_local;
 use crate::engine::paths;
 use crate::engine::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_committed_info, run_git,
+    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed_info, run_git,
 };
-use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -360,9 +359,7 @@ pub(super) fn build_branch_commit_log_args(
     let mut args = vec![
         "log".to_string(),
         branch_ref.to_string(),
-        format!(
-            "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%ct%x1f%s%x1f%(trailers:key={CHECKPOINT_TRAILER_KEY},valueonly=true,separator=%x00)%x1e"
-        ),
+        "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%ct%x1f%s%x1e".to_string(),
         "--max-count".to_string(),
         max_count.max(1).to_string(),
         "--no-color".to_string(),
@@ -405,19 +402,12 @@ pub(super) fn parse_branch_commit_log(raw: &str) -> Vec<DashboardCommitNode> {
         let Some(message) = parts.next().map(str::trim) else {
             continue;
         };
-        let trailer_raw = parts.next().unwrap_or("");
 
         if sha.is_empty() {
             continue;
         }
 
         let timestamp = timestamp_raw.parse::<i64>().unwrap_or(0);
-        let checkpoint_id = trailer_raw
-            .split('\x00')
-            .map(str::trim)
-            .find(|candidate| is_valid_checkpoint_id(candidate))
-            .unwrap_or("")
-            .to_string();
 
         nodes.push(DashboardCommitNode {
             sha: sha.to_string(),
@@ -430,7 +420,7 @@ pub(super) fn parse_branch_commit_log(raw: &str) -> Vec<DashboardCommitNode> {
             author_email: author_email.to_string(),
             timestamp,
             message: message.to_string(),
-            checkpoint_id,
+            checkpoint_id: String::new(),
         });
     }
 
@@ -495,7 +485,27 @@ pub(super) fn walk_branch_commits_with_checkpoints(
     let args = build_branch_commit_log_args(branch_ref, from_unix, to_unix, max_count);
     let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
     let raw = run_git(repo_root, &args_ref)?;
-    Ok(parse_branch_commit_log(&raw))
+    let mut commits = parse_branch_commit_log(&raw);
+    attach_checkpoint_ids_from_db(repo_root, &mut commits)?;
+    Ok(commits)
+}
+
+fn attach_checkpoint_ids_from_db(
+    repo_root: &Path,
+    commits: &mut [DashboardCommitNode],
+) -> Result<()> {
+    let mappings = read_commit_checkpoint_mappings(repo_root)
+        .context("reading commit_checkpoints mappings for dashboard commit walk")?;
+    if mappings.is_empty() {
+        return Ok(());
+    }
+
+    for commit in commits {
+        if let Some(checkpoint_id) = mappings.get(&commit.sha) {
+            commit.checkpoint_id = checkpoint_id.clone();
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn paginate<T: Clone>(items: &[T], page: ApiPage) -> Vec<T> {

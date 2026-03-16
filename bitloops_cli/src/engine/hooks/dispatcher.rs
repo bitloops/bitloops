@@ -22,7 +22,7 @@ use crate::engine::lifecycle::adapters::{
 use crate::engine::logging;
 use crate::engine::paths;
 use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::engine::settings;
@@ -262,7 +262,7 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
 }
 
 fn find_most_recent_session_id(repo_root: &Path) -> String {
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     let sessions = backend.list_sessions().unwrap_or_default();
     crate::engine::session::state::find_most_recent_session(&sessions, &repo_root.to_string_lossy())
         .map(|s| s.session_id)
@@ -366,7 +366,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
 
     match agent {
         HooksAgent::ClaudeCode(cc) => {
-            let backend = LocalFileBackend::new(&repo_root);
+            let backend = create_session_backend_or_local(&repo_root);
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
@@ -382,14 +382,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::SessionStart => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-start input")?;
-                        handle_session_start(input, &backend, Some(&repo_root))
+                        handle_session_start(input, backend.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::UserPromptSubmit => {
                         let input: UserPromptSubmitInput = serde_json::from_str(&stdin)
                             .context("parsing user-prompt-submit input")?;
                         handle_user_prompt_submit_with_strategy(
                             input,
-                            &backend,
+                            backend.as_ref(),
                             strategy.as_ref(),
                             Some(&repo_root),
                         )
@@ -397,33 +397,43 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::Stop => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing stop input")?;
-                        handle_stop(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_stop(input, backend.as_ref(), strategy.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::SessionEnd => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-end input")?;
-                        handle_session_end(input, &backend)
+                        handle_session_end(input, backend.as_ref())
                     }
                     ClaudeCodeHookVerb::PreTask => {
                         let input: TaskHookInput =
                             serde_json::from_str(&stdin).context("parsing pre-task input")?;
-                        handle_pre_task(input, &backend, Some(&repo_root))
+                        handle_pre_task(input, backend.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::PostTask => {
                         let input: PostTaskInput =
                             serde_json::from_str(&stdin).context("parsing post-task input")?;
-                        handle_post_task(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_post_task(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        )
                     }
                     ClaudeCodeHookVerb::PostTodo => {
                         let input: PostTodoInput =
                             serde_json::from_str(&stdin).context("parsing post-todo input")?;
-                        handle_post_todo(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_post_todo(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        )
                     }
                 },
             )
         }
         HooksAgent::Codex(codex) => {
-            let backend = LocalFileBackend::new(&repo_root);
+            let backend = create_session_backend_or_local(&repo_root);
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
@@ -455,11 +465,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     };
                     match codex.verb {
                         CodexHookVerb::SessionStart => {
-                            handle_session_start_codex(input, &backend, Some(&repo_root))
+                            handle_session_start_codex(input, backend.as_ref(), Some(&repo_root))
                         }
-                        CodexHookVerb::Stop => {
-                            handle_stop_codex(input, &backend, strategy.as_ref(), Some(&repo_root))
-                        }
+                        CodexHookVerb::Stop => handle_stop_codex(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        ),
                     }
                 },
             )
@@ -478,7 +491,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
         HooksAgent::Cursor(cursor) => {
             let hook_name = cursor.verb.hook_name();
             let stdin = read_stdin()?;
-            let backend = LocalFileBackend::new(&repo_root);
+            let backend = create_session_backend_or_local(&repo_root);
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
@@ -491,7 +504,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     dispatch_cursor_hook(
                         &cursor.verb,
                         &stdin,
-                        &backend,
+                        backend.as_ref(),
                         strategy.as_ref(),
                         &repo_root,
                         hook_name,

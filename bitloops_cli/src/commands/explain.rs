@@ -1,9 +1,9 @@
 use crate::engine::paths;
 use crate::engine::strategy::manual_commit::{
-    get_checkpoint_author, list_committed, parse_checkpoint_id, read_committed,
+    get_checkpoint_author, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_latest_session_content, read_session_content_by_id, run_git,
 };
-use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, parse_metadata, parse_session};
+use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use anyhow::{Result, anyhow, bail};
 use clap::Args;
 use serde_json::Value;

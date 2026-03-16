@@ -8,6 +8,7 @@ use std::sync::{OnceLock, RwLock};
 // Directory constants.
 pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TMP_DIR: &str = ".bitloops/tmp";
+// Legacy compatibility path used by git-backed checkpoint metadata.
 pub const BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
 
 // Metadata file names.
@@ -15,6 +16,7 @@ pub const CONTEXT_FILE_NAME: &str = "context.md";
 pub const PROMPT_FILE_NAME: &str = "prompt.txt";
 pub const SUMMARY_FILE_NAME: &str = "summary.txt";
 pub const TRANSCRIPT_FILE_NAME: &str = "full.jsonl";
+// Legacy transcript filename used by git-backed metadata checkpoints.
 pub const TRANSCRIPT_FILE_NAME_LEGACY: &str = "full.log";
 pub const METADATA_FILE_NAME: &str = "metadata.json";
 pub const CHECKPOINT_FILE_NAME: &str = "checkpoint.json";
@@ -22,7 +24,7 @@ pub const CONTENT_HASH_FILE_NAME: &str = "content_hash.txt";
 pub const EXPORT_DATA_FILE_NAME: &str = "export.json";
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
-// Canonical metadata branch used by the Rust CLI.
+// Legacy metadata branch used by git-backed checkpoint storage.
 pub const METADATA_BRANCH_NAME: &str = "bitloops/checkpoints/v1";
 
 #[derive(Clone)]

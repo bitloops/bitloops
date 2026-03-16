@@ -50,7 +50,7 @@ fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
     signature
 }
 
-fn semantic_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option<&str>) -> String {
+fn structural_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option<&str>) -> String {
     deterministic_uuid(&format!(
         "{}|{}|{}|{}|{}|{}",
         source_path_from_symbol_fqn(&item.symbol_fqn),

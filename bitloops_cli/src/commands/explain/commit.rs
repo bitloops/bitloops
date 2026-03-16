@@ -30,13 +30,14 @@ pub(crate) fn run_explain_commit_in(
         .map_err(|_| anyhow!("commit not found: {commit_ref}"))?;
     let sha = sha.trim().to_string();
 
-    let msg = run_git(repo_root, &["show", "-s", "--format=%B", &sha])?;
-    let cp_id = parse_checkpoint_id(&msg);
+    let cp_id = read_commit_checkpoint_mappings(repo_root)?
+        .get(&sha)
+        .cloned();
 
     let Some(cp_id) = cp_id else {
         let short_sha = &sha[..sha.len().min(7)];
         return Ok(format!(
-            "No associated Bitloops checkpoint\n\nCommit {short_sha} does not have a {CHECKPOINT_TRAILER_KEY} trailer.\nThis commit was not created during a Bitloops session, or the trailer was removed.\n"
+            "No associated Bitloops checkpoint\n\nCommit {short_sha} does not have a checkpoint mapping in local storage.\nThis commit may not have been captured by Bitloops, or ingestion is out of date.\n"
         ));
     };
 
@@ -142,6 +143,7 @@ fn extract_assistant_response(value: &Value) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn commit_trailer_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
     commit.trailers.iter().any(|(key, value)| {
         key.eq_ignore_ascii_case(CHECKPOINT_TRAILER_KEY) && value == checkpoint_id

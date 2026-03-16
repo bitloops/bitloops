@@ -178,7 +178,7 @@ fn delete_shadow_branches(repo_root: &Path, branches: &[String]) -> (Vec<String>
 }
 
 fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root.to_path_buf());
     let states = backend.list_sessions()?;
     if states.is_empty() {
         return Ok(vec![]);
@@ -191,10 +191,15 @@ fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
         .filter(|sid| !sid.is_empty())
         .collect();
 
-    let shadow_branch_set: std::collections::HashSet<String> = list_shadow_branches(repo_root)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let legacy_shadow_branches_enabled = crate::engine::session::legacy_local_backend_enabled();
+    let shadow_branch_set: std::collections::HashSet<String> = if legacy_shadow_branches_enabled {
+        list_shadow_branches(repo_root)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
 
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -208,15 +213,22 @@ fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
         }
 
         let has_checkpoints = sessions_with_checkpoints.contains(&state.session_id);
-        let expected_branch =
-            expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-        let has_shadow_branch =
-            !expected_branch.is_empty() && shadow_branch_set.contains(&expected_branch);
+        let has_shadow_branch = if legacy_shadow_branches_enabled {
+            let expected_branch =
+                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
+            !expected_branch.is_empty() && shadow_branch_set.contains(&expected_branch)
+        } else {
+            false
+        };
 
         if !has_checkpoints && !has_shadow_branch {
             orphaned.push(CleanupItem {
                 id: state.session_id,
-                reason: "no checkpoints or shadow branch found".to_string(),
+                reason: if legacy_shadow_branches_enabled {
+                    "no checkpoints or shadow branch found".to_string()
+                } else {
+                    "no checkpoints found".to_string()
+                },
             });
         }
     }
@@ -225,6 +237,9 @@ fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
 }
 
 pub fn list_shadow_branches_for_cleanup(repo_root: &Path) -> Result<Vec<String>> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return Ok(vec![]);
+    }
     list_shadow_branches(repo_root)
 }
 
@@ -232,6 +247,9 @@ pub fn delete_shadow_branches_for_cleanup(
     repo_root: &Path,
     branches: &[String],
 ) -> (Vec<String>, Vec<String>) {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return (vec![], vec![]);
+    }
     delete_shadow_branches(repo_root, branches)
 }
 
@@ -522,33 +540,6 @@ fn build_tree_with_explicit_paths(
 
     let tree = run_git_env(repo_root, &["write-tree"], &[("GIT_INDEX_FILE", &idx_path)])?;
     Ok(tree)
-}
-
-/// Pushes `bitloops/checkpoints/v1` with `--no-verify` to prevent recursive pre-push hooks.
-fn push_checkpoints_branch_no_verify(repo_root: &Path, remote: &str) -> Result<()> {
-    let output = new_git_command()
-        .args(["push", "--no-verify", remote, paths::METADATA_BRANCH_NAME])
-        .current_dir(repo_root)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| {
-            format!(
-                "running git push --no-verify {remote} {}",
-                paths::METADATA_BRANCH_NAME
-            )
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "git push --no-verify {} {} failed ({}): {}",
-            remote,
-            paths::METADATA_BRANCH_NAME,
-            output.status,
-            stderr.trim()
-        );
-    }
-    Ok(())
 }
 
 /// Returns `(modified, new_files, deleted)` from `git status --porcelain`.

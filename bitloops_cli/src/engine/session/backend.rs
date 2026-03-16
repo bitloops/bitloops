@@ -6,15 +6,22 @@ use super::state::{PrePromptState, PreTaskState, SessionState};
 
 /// Storage interface for session lifecycle data.
 ///
-/// Production code uses `LocalFileBackend`; tests inject this directly.
+/// Production code uses `DbSessionBackend` by default.
+/// `LocalFileBackend` is legacy compatibility storage.
 pub trait SessionBackend: Send + Sync {
     // ── Session state (<git-common-dir>/bitloops-sessions/<id>.json) ─────
+
+    /// Return all persisted session states.
+    fn list_sessions(&self) -> Result<Vec<SessionState>>;
 
     /// Load session state. Returns `None` if no state file exists yet.
     fn load_session(&self, session_id: &str) -> Result<Option<SessionState>>;
 
     /// Persist session state (creates parent directories if needed).
     fn save_session(&self, state: &SessionState) -> Result<()>;
+
+    /// Delete session state (no-op if already absent).
+    fn delete_session(&self, session_id: &str) -> Result<()>;
 
     // ── Pre-prompt state (.bitloops/tmp/pre-prompt-<id>.json) ────────────
 
@@ -41,4 +48,48 @@ pub trait SessionBackend: Send + Sync {
     /// Scan for any active pre-task marker and return its `tool_use_id`.
     /// Returns `None` if no marker is found (i.e. not inside a subagent turn).
     fn find_active_pre_task(&self) -> Result<Option<String>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::session::local_backend::LocalFileBackend;
+    use crate::engine::session::phase::SessionPhase;
+    use tempfile::TempDir;
+
+    #[test]
+    fn list_sessions_is_available_via_trait_object() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+
+        let backend: Box<dyn SessionBackend> = Box::new(LocalFileBackend::new(dir.path()));
+        let session = SessionState {
+            session_id: "session-trait-object".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        };
+        backend.save_session(&session).unwrap();
+
+        let sessions = backend.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "session-trait-object");
+    }
+
+    #[test]
+    fn delete_session_is_available_via_trait_object() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+
+        let backend: Box<dyn SessionBackend> = Box::new(LocalFileBackend::new(dir.path()));
+        let session = SessionState {
+            session_id: "session-delete-trait-object".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        };
+        backend.save_session(&session).unwrap();
+        assert!(backend.load_session(&session.session_id).unwrap().is_some());
+
+        backend.delete_session(&session.session_id).unwrap();
+        assert!(backend.load_session(&session.session_id).unwrap().is_none());
+    }
 }
