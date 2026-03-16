@@ -1,7 +1,12 @@
 #[test]
 fn get_git_author_from_repo_global_fallback() {
     let home = tempfile::tempdir().unwrap();
-    with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
+    with_env_vars(
+        &[
+            ("HOME", Some(home.path().to_string_lossy().as_ref())),
+            (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
+        ],
+        || {
         fs::write(
             home.path().join(".gitconfig"),
             "[user]\n\tname = Global Author\n\temail = global@test.com\n",
@@ -21,13 +26,19 @@ fn get_git_author_from_repo_global_fallback() {
         let (name, email) = author.unwrap();
         assert_eq!(name, "Global Author");
         assert_eq!(email, "global@test.com");
-    });
+    },
+    );
 }
 
 #[test]
 fn get_git_author_from_repo_no_config() {
     let home = tempfile::tempdir().unwrap();
-    with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
+    with_env_vars(
+        &[
+            ("HOME", Some(home.path().to_string_lossy().as_ref())),
+            (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
+        ],
+        || {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
         run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
@@ -41,7 +52,8 @@ fn get_git_author_from_repo_no_config() {
         let (name, email) = author.unwrap();
         assert_eq!(name, "Unknown");
         assert_eq!(email, "unknown@local");
-    });
+    },
+    );
 }
 
 #[test]
@@ -232,4 +244,3 @@ fn commit_msg_is_noop_for_real_message() {
     let content = fs::read_to_string(&msg_file).unwrap();
     assert_eq!(content, msg, "commit message should be unchanged");
 }
-

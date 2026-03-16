@@ -5,7 +5,9 @@ use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
-use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
+use crate::test_support::process_state::{
+    ALLOW_HOST_GIT_CONFIG_ENV, git_command, with_git_env_cleared,
+};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -281,8 +283,12 @@ fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
 
 fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {
     let disk_path = committed_checkpoint_blob_root(repo_root).join(storage_path);
-    std::fs::read(&disk_path)
-        .unwrap_or_else(|err| panic!("failed reading blob payload at {}: {err}", disk_path.display()))
+    std::fs::read(&disk_path).unwrap_or_else(|err| {
+        panic!(
+            "failed reading blob payload at {}: {err}",
+            disk_path.display()
+        )
+    })
 }
 
 fn query_checkpoint_session_content_hash(
