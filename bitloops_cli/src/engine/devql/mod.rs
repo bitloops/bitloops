@@ -424,7 +424,7 @@ include!("db_utils.rs");
 
 #[cfg(test)]
 fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {
-    semantic_symbol_id_for_artefact(item, None)
+    structural_symbol_id_for_artefact(item, None)
 }
 
 #[cfg(test)]

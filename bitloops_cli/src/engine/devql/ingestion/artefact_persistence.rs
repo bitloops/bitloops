@@ -177,7 +177,7 @@ fn build_symbol_records(
             .as_ref()
             .and_then(|fqn| symbol_to_symbol_id.get(fqn))
             .map(String::as_str);
-        let symbol_id = semantic_symbol_id_for_artefact(item, semantic_parent_symbol_id);
+        let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
         let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
         let content_hash = deterministic_uuid(&format!(
             "{}|{}|{}|{}|{}|{}",
