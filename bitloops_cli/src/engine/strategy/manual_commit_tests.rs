@@ -5,14 +5,24 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
+fn isolated_git_command(repo_root: &Path) -> std::process::Command {
+    let global_config = repo_root.join(".bitloops-test-global.gitconfig");
+    if !global_config.exists() {
+        fs::write(&global_config, "").expect("create isolated git config");
+    }
+
+    let mut cmd = git_command();
+    cmd.current_dir(repo_root)
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd
+}
+
 /// Creates a real git repository with an initial commit for testing.
 fn setup_git_repo(dir: &TempDir) -> String {
     let run = |args: &[&str]| {
-        let out = git_command()
+        let out = isolated_git_command(dir.path())
             .args(args)
-            .current_dir(dir.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(
@@ -30,11 +40,8 @@ fn setup_git_repo(dir: &TempDir) -> String {
     run(&["add", "."]);
     run(&["commit", "--allow-empty", "-m", "initial"]);
     // Return HEAD hash.
-    let out = git_command()
+    let out = isolated_git_command(dir.path())
         .args(["rev-parse", "HEAD"])
-        .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .unwrap();
     assert!(
@@ -49,9 +56,8 @@ fn setup_git_repo(dir: &TempDir) -> String {
 /// Creates a git repo with no commits.
 fn setup_empty_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = git_command()
+        let out = isolated_git_command(dir.path())
             .args(args)
-            .current_dir(dir.path())
             .output()
             .unwrap();
         assert!(
@@ -68,7 +74,18 @@ fn setup_empty_git_repo(dir: &TempDir) {
 }
 
 fn git_ok(repo_root: &Path, args: &[&str]) -> String {
-    run_git(repo_root, args).unwrap_or_else(|e| panic!("git {:?} failed: {e}", args))
+    let out = isolated_git_command(repo_root)
+        .args(args)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to start git {:?}: {err}", args));
+    assert!(
+        out.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
