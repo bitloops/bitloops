@@ -33,10 +33,9 @@ impl KnowledgeProviderClient for ConfluenceKnowledgeClient {
         host: &'a KnowledgeHostContext,
     ) -> BoxFuture<'a, Result<FetchedKnowledgeDocument>> {
         Box::pin(async move {
-            let confluence =
-                host.provider_config.confluence.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("missing `knowledge.providers.confluence` configuration")
-                })?;
+            let confluence = host.provider_config.confluence.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("missing `knowledge.providers.confluence` configuration")
+            })?;
 
             let KnowledgeLocator::ConfluencePage { site, page_id } = &parsed.locator else {
                 bail!("Confluence client received non-Confluence locator");

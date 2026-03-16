@@ -33,13 +33,9 @@ impl KnowledgeProviderClient for GitHubKnowledgeClient {
         host: &'a KnowledgeHostContext,
     ) -> BoxFuture<'a, Result<FetchedKnowledgeDocument>> {
         Box::pin(async move {
-            let github = host
-                .provider_config
-                .github
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("missing `knowledge.providers.github` configuration")
-                })?;
+            let github = host.provider_config.github.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("missing `knowledge.providers.github` configuration")
+            })?;
 
             let endpoint = match &parsed.locator {
                 KnowledgeLocator::GithubIssue {

@@ -31,13 +31,9 @@ impl KnowledgeProviderClient for JiraKnowledgeClient {
         host: &'a KnowledgeHostContext,
     ) -> BoxFuture<'a, Result<FetchedKnowledgeDocument>> {
         Box::pin(async move {
-            let jira = host
-                .provider_config
-                .jira
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("missing `knowledge.providers.jira` configuration")
-                })?;
+            let jira = host.provider_config.jira.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("missing `knowledge.providers.jira` configuration")
+            })?;
 
             let KnowledgeLocator::JiraIssue { site, key } = &parsed.locator else {
                 bail!("Jira client received non-Jira locator");

@@ -442,11 +442,7 @@ where
             .get("jira")
             .and_then(Value::as_object)
             .map(|jira| {
-                parse_atlassian_provider_config(
-                    jira,
-                    &env_lookup,
-                    "knowledge.providers.jira",
-                )
+                parse_atlassian_provider_config(jira, &env_lookup, "knowledge.providers.jira")
             })
             .transpose()?,
         confluence: providers
