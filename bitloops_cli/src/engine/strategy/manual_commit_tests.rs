@@ -1,7 +1,8 @@
 use super::*;
 use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
 use crate::test_support::process_state::{
-    git_command, isolated_git_command, with_env_var, with_git_env_cleared,
+    ALLOW_HOST_GIT_CONFIG_ENV, git_command, isolated_git_command, with_env_vars,
+    with_git_env_cleared,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
@@ -4501,7 +4502,12 @@ fn update_committed_uses_correct_author() {
 
     for case in cases {
         let home = tempfile::tempdir().unwrap();
-        with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
+        with_env_vars(
+            &[
+                ("HOME", Some(home.path().to_string_lossy().as_ref())),
+                (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
+            ],
+            || {
             let mut global_cfg = String::from("[user]\n");
             if let Some(name) = case.global_name {
                 global_cfg.push_str(&format!("\tname = {name}\n"));
@@ -4565,14 +4571,20 @@ fn update_committed_uses_correct_author() {
                 "email mismatch for case '{}'",
                 case.name
             );
-        });
+        },
+        );
     }
 }
 
 #[test]
 fn get_git_author_from_repo_global_fallback() {
     let home = tempfile::tempdir().unwrap();
-    with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
+    with_env_vars(
+        &[
+            ("HOME", Some(home.path().to_string_lossy().as_ref())),
+            (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
+        ],
+        || {
         fs::write(
             home.path().join(".gitconfig"),
             "[user]\n\tname = Global Author\n\temail = global@test.com\n",
@@ -4592,13 +4604,19 @@ fn get_git_author_from_repo_global_fallback() {
         let (name, email) = author.unwrap();
         assert_eq!(name, "Global Author");
         assert_eq!(email, "global@test.com");
-    });
+    },
+    );
 }
 
 #[test]
 fn get_git_author_from_repo_no_config() {
     let home = tempfile::tempdir().unwrap();
-    with_env_var("HOME", Some(home.path().to_string_lossy().as_ref()), || {
+    with_env_vars(
+        &[
+            ("HOME", Some(home.path().to_string_lossy().as_ref())),
+            (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
+        ],
+        || {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
         run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
@@ -4612,7 +4630,8 @@ fn get_git_author_from_repo_no_config() {
         let (name, email) = author.unwrap();
         assert_eq!(name, "Unknown");
         assert_eq!(email, "unknown@local");
-    });
+    },
+    );
 }
 
 #[test]

@@ -1,5 +1,7 @@
 use super::*;
-use crate::test_support::process_state::{isolated_git_command, with_cwd, with_process_state};
+use crate::test_support::process_state::{
+    ALLOW_HOST_GIT_CONFIG_ENV, isolated_git_command, with_cwd, with_process_state,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -44,6 +46,7 @@ fn with_repo_cwd_and_temp_home<F: FnOnce(&Path)>(repo: &Path, home: &Path, f: F)
         Some(repo),
         &[
             ("HOME", Some(home_owned.as_str())),
+            (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
             ("XDG_CONFIG_HOME", None),
         ],
         || f(repo),

@@ -21,6 +21,7 @@ pub(crate) const GIT_ENV_KEYS: [&str; 12] = [
     "GIT_CONFIG_SYSTEM",
     "GIT_CONFIG_NOSYSTEM",
 ];
+pub(crate) const ALLOW_HOST_GIT_CONFIG_ENV: &str = "BITLOOPS_TEST_ALLOW_HOST_GIT_CONFIG";
 
 fn process_state_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -33,9 +34,24 @@ pub(crate) fn strip_inherited_git_env(cmd: &mut Command) {
     }
 }
 
+fn isolated_git_config_path(scope: &str) -> PathBuf {
+    let config_dir = env::temp_dir().join("bitloops-test-git-config");
+    fs::create_dir_all(&config_dir).expect("create isolated git config dir");
+    let path = config_dir.join(format!("{scope}-{}.gitconfig", std::process::id()));
+    if !path.exists() {
+        fs::write(&path, "").expect("create isolated git config");
+    }
+    path
+}
+
 pub(crate) fn git_command() -> Command {
     let mut cmd = Command::new("git");
     strip_inherited_git_env(&mut cmd);
+    if env::var_os(ALLOW_HOST_GIT_CONFIG_ENV).is_none() {
+        let global_config = isolated_git_config_path("default");
+        cmd.env("GIT_CONFIG_GLOBAL", global_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+    }
     cmd
 }
 
@@ -44,15 +60,7 @@ pub(crate) fn isolated_git_command(repo_root: &Path) -> Command {
     repo_root.hash(&mut hasher);
     let repo_hash = hasher.finish();
 
-    let config_dir = env::temp_dir().join("bitloops-test-git-config");
-    fs::create_dir_all(&config_dir).expect("create isolated git config dir");
-    let global_config = config_dir.join(format!(
-        "global-{}-{repo_hash:016x}.gitconfig",
-        std::process::id()
-    ));
-    if !global_config.exists() {
-        fs::write(&global_config, "").expect("create isolated git config");
-    }
+    let global_config = isolated_git_config_path(&format!("repo-{repo_hash:016x}"));
 
     let mut cmd = git_command();
     cmd.current_dir(repo_root)
