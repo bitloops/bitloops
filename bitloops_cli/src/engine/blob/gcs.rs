@@ -5,8 +5,8 @@ use object_store::ObjectStore;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::path::Path as ObjectStorePath;
 
-use crate::devql_config::BlobStorageConfig;
 use crate::engine::blob::{BlobStore, block_on_blob, normalize_blob_key};
+use crate::store_config::BlobStorageConfig;
 
 #[derive(Debug, Clone)]
 pub struct GcsBlobStore {
@@ -82,7 +82,7 @@ impl BlobStore for GcsBlobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::devql_config::BlobStorageProvider;
+    use crate::store_config::BlobStorageProvider;
 
     fn base_config() -> BlobStorageConfig {
         BlobStorageConfig {

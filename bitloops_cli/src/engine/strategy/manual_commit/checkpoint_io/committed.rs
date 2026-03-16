@@ -6,36 +6,18 @@ struct CheckpointStorageContext {
 }
 
 fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorageContext> {
-    let cfg = crate::devql_config::resolve_devql_backend_config()
-        .context("resolving DevQL backend config for committed checkpoints")?;
+    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving backend config for committed checkpoints")?;
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening committed checkpoint SQLite database")?;
     sqlite
         .initialise_checkpoint_schema()
         .context("initialising committed checkpoint schema")?;
 
-    let mut blob_cfg = cfg.blobs.clone();
-    if matches!(
-        blob_cfg.provider,
-        crate::devql_config::BlobStorageProvider::Local
-    ) && blob_cfg
-        .local_path
-        .as_deref()
-        .map(str::trim)
-        .map(|value| value.is_empty())
-        .unwrap_or(true)
-        && cfg.relational.sqlite_path.is_none()
-    {
-        // Keep implicit local blob storage colocated with repo-local SQLite storage.
-        let repo_blob_root = repo_root
-            .join(crate::engine::paths::BITLOOPS_DIR)
-            .join("blobs");
-        blob_cfg.local_path = Some(repo_blob_root.to_string_lossy().to_string());
-    }
-
-    let resolved_blob_store = crate::engine::blob::create_blob_store_with_backend(&blob_cfg)
-        .context("initialising blob storage for committed checkpoints")?;
+    let resolved_blob_store =
+        crate::engine::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
+            .context("initialising blob storage for committed checkpoints")?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for committed checkpoints")?

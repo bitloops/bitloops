@@ -8,8 +8,9 @@ use serde_json::Value;
 use tokio::runtime::Builder;
 use tokio::task;
 
-const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str =
-    "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations";
+const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str = "Postgres DSN is required for Postgres operations";
+const DEVQL_PG_DSN_REQUIRED_NEW_PREFIX: &str =
+    crate::engine::devql::DEVQL_POSTGRES_DSN_REQUIRED_PREFIX;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryTarget {
@@ -42,7 +43,7 @@ pub fn prefetch_for_prompt(
     let query = build_devql_history_query(&primary_target);
     let rows = match run_devql_query(repo_root, &query) {
         Ok(rows) => rows,
-        Err(err) if is_missing_pg_dsn_error(&err) => return Ok(None),
+        Err(err) if is_prefetch_backend_not_available_error(&err) => return Ok(None),
         Err(err) => return Err(err),
     };
 
@@ -55,11 +56,11 @@ pub fn prefetch_for_prompt(
     }))
 }
 
-fn is_missing_pg_dsn_error(err: &anyhow::Error) -> bool {
+fn is_prefetch_backend_not_available_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
-        cause
-            .to_string()
-            .contains(DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX)
+        let message = cause.to_string();
+        message.contains(DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX)
+            || message.contains(DEVQL_PG_DSN_REQUIRED_NEW_PREFIX)
     })
 }
 
@@ -327,14 +328,14 @@ mod tests {
     #[test]
     fn missing_pg_dsn_error_is_detected() {
         let err = anyhow!(
-            "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
+            "Postgres DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
         );
-        assert!(is_missing_pg_dsn_error(&err));
+        assert!(is_prefetch_backend_not_available_error(&err));
     }
 
     #[test]
     fn non_pg_dsn_errors_are_not_detected() {
         let err = anyhow!("connection refused");
-        assert!(!is_missing_pg_dsn_error(&err));
+        assert!(!is_prefetch_backend_not_available_error(&err));
     }
 }

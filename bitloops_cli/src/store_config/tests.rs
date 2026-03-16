@@ -1,8 +1,9 @@
 use super::*;
+use crate::test_support::process_state::with_cwd;
 
 #[test]
-fn backend_config_defaults_to_sqlite_and_duckdb() {
-    let cfg = resolve_devql_backend_config_for_tests(DevqlFileConfig::default(), &[]).expect("cfg");
+fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
+    let cfg = resolve_store_backend_config_for_tests(StoreFileConfig::default()).expect("cfg");
 
     assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
     assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
@@ -13,17 +14,28 @@ fn backend_config_defaults_to_sqlite_and_duckdb() {
 }
 
 #[test]
-fn backend_config_infers_legacy_postgres_clickhouse() {
+fn backend_config_reads_store_blocks_from_repo_config_shape() {
     let value = serde_json::json!({
-        "devql": {
-            "postgres_dsn": "postgres://u:p@localhost:5432/bitloops",
-            "clickhouse_url": "http://localhost:8123",
-            "clickhouse_database": "bitloops"
+        "stores": {
+            "relational": {
+                "provider": "postgres",
+                "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
+            },
+            "event": {
+                "provider": "clickhouse",
+                "clickhouse_url": "http://localhost:8123",
+                "clickhouse_database": "bitloops"
+            },
+            "blob": {
+                "provider": "gcs",
+                "gcs_bucket": "bucket-a",
+                "gcs_credentials_path": "/tmp/gcs.json"
+            }
         }
     });
-    let file_cfg = DevqlFileConfig::from_json_value(&value);
+    let file_cfg = StoreFileConfig::from_json_value(&value);
 
-    let cfg = resolve_devql_backend_config_for_tests(file_cfg, &[]).expect("cfg");
+    let cfg = resolve_store_backend_config_for_tests(file_cfg).expect("cfg");
     assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
     assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
     assert_eq!(
@@ -35,94 +47,44 @@ fn backend_config_infers_legacy_postgres_clickhouse() {
         Some("http://localhost:8123")
     );
     assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
-}
-
-#[test]
-fn backend_config_honors_env_over_file_precedence() {
-    let value = serde_json::json!({
-        "devql": {
-            "relational": {
-                "provider": "sqlite",
-                "sqlite_path": "/tmp/from-file.sqlite"
-            },
-            "events": {
-                "provider": "duckdb",
-                "duckdb_path": "/tmp/from-file.duckdb"
-            },
-            "blobs": {
-                "provider": "gcs",
-                "gcs_bucket": "file-gcs-bucket",
-                "gcs_credentials_path": "/tmp/file-gcs-creds.json"
-            },
-            "postgres_dsn": "postgres://file-only",
-            "clickhouse_url": "http://file-clickhouse:8123"
-        }
-    });
-    let file_cfg = DevqlFileConfig::from_json_value(&value);
-    let env = [
-        (ENV_RELATIONAL_PROVIDER, "postgres"),
-        (ENV_EVENTS_PROVIDER, "clickhouse"),
-        (ENV_POSTGRES_DSN, "postgres://env-only"),
-        (ENV_CLICKHOUSE_URL, "http://env-clickhouse:8123"),
-        (ENV_CLICKHOUSE_DATABASE, "analytics"),
-        (ENV_BLOB_STORAGE_PROVIDER, "s3"),
-        (ENV_BLOB_S3_BUCKET, "env-s3-bucket"),
-        (ENV_BLOB_S3_REGION, "eu-west-1"),
-        (ENV_BLOB_S3_ACCESS_KEY_ID, "env-access-key"),
-        (ENV_BLOB_S3_SECRET_ACCESS_KEY, "env-secret-key"),
-    ];
-
-    let cfg = resolve_devql_backend_config_for_tests(file_cfg, &env).expect("cfg");
-    assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
-    assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+    assert_eq!(cfg.blobs.provider, BlobStorageProvider::Gcs);
+    assert_eq!(cfg.blobs.gcs_bucket.as_deref(), Some("bucket-a"));
     assert_eq!(
-        cfg.relational.postgres_dsn.as_deref(),
-        Some("postgres://env-only")
-    );
-    assert_eq!(
-        cfg.events.clickhouse_url.as_deref(),
-        Some("http://env-clickhouse:8123")
-    );
-    assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("analytics"));
-    assert_eq!(cfg.blobs.provider, BlobStorageProvider::S3);
-    assert_eq!(cfg.blobs.s3_bucket.as_deref(), Some("env-s3-bucket"));
-    assert_eq!(cfg.blobs.s3_region.as_deref(), Some("eu-west-1"));
-    assert_eq!(
-        cfg.blobs.s3_access_key_id.as_deref(),
-        Some("env-access-key")
-    );
-    assert_eq!(
-        cfg.blobs.s3_secret_access_key.as_deref(),
-        Some("env-secret-key")
+        cfg.blobs.gcs_credentials_path.as_deref(),
+        Some("/tmp/gcs.json")
     );
 }
 
 #[test]
 fn backend_config_rejects_invalid_provider_values() {
-    let env = [
-        (ENV_RELATIONAL_PROVIDER, "mysql"),
-        (ENV_EVENTS_PROVIDER, "kafka"),
-    ];
-    let err = resolve_devql_backend_config_for_tests(DevqlFileConfig::default(), &env)
-        .expect_err("invalid provider must fail");
+    let value = serde_json::json!({
+        "stores": {
+            "relational": { "provider": "mysql" },
+            "event": { "provider": "kafka" }
+        }
+    });
+    let file_cfg = StoreFileConfig::from_json_value(&value);
+
+    let err =
+        resolve_store_backend_config_for_tests(file_cfg).expect_err("invalid providers must fail");
 
     let message = err.to_string();
-    assert!(message.contains("unsupported devql"));
+    assert!(message.contains("unsupported"));
 }
 
 #[test]
-fn semantic_config_reads_values_from_devql_file() {
+fn semantic_config_reads_values_from_semantic_block() {
     let value = serde_json::json!({
-        "devql": {
-            "semantic_provider": "openai",
-            "semantic_model": "gpt-4.1-mini",
-            "semantic_api_key": "file-key",
-            "semantic_base_url": "http://localhost:11434/v1/chat/completions"
+        "semantic": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "api_key": "file-key",
+            "base_url": "http://localhost:11434/v1/chat/completions"
         }
     });
-    let file_cfg = DevqlFileConfig::from_json_value(&value);
+    let file_cfg = StoreFileConfig::from_json_value(&value);
 
-    let cfg = resolve_devql_semantic_config_for_tests(file_cfg, &[]);
+    let cfg = resolve_store_semantic_config_for_tests(file_cfg, &[]);
     assert_eq!(cfg.semantic_provider.as_deref(), Some("openai"));
     assert_eq!(cfg.semantic_model.as_deref(), Some("gpt-4.1-mini"));
     assert_eq!(cfg.semantic_api_key.as_deref(), Some("file-key"));
@@ -135,13 +97,13 @@ fn semantic_config_reads_values_from_devql_file() {
 #[test]
 fn semantic_config_honors_env_over_file_precedence() {
     let value = serde_json::json!({
-        "devql": {
-            "semantic_provider": "openai",
-            "semantic_model": "gpt-4.1-mini",
-            "semantic_api_key": "file-key"
+        "semantic": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "api_key": "file-key"
         }
     });
-    let file_cfg = DevqlFileConfig::from_json_value(&value);
+    let file_cfg = StoreFileConfig::from_json_value(&value);
     let env = [
         (ENV_SEMANTIC_PROVIDER, "openai_compatible"),
         (ENV_SEMANTIC_MODEL, "qwen2.5-coder"),
@@ -152,7 +114,7 @@ fn semantic_config_honors_env_over_file_precedence() {
         ),
     ];
 
-    let cfg = resolve_devql_semantic_config_for_tests(file_cfg, &env);
+    let cfg = resolve_store_semantic_config_for_tests(file_cfg, &env);
     assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
     assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
     assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
@@ -163,7 +125,7 @@ fn semantic_config_honors_env_over_file_precedence() {
 }
 
 #[test]
-fn events_backend_duckdb_path_defaults_under_bitloops_directory() {
+fn events_backend_duckdb_path_defaults_under_repo_store_directory() {
     let events = EventsBackendConfig {
         provider: EventsProvider::DuckDb,
         duckdb_path: None,
@@ -176,8 +138,8 @@ fn events_backend_duckdb_path_defaults_under_bitloops_directory() {
     let resolved = events.duckdb_path_or_default();
     let rendered = resolved.to_string_lossy();
     assert!(
-        rendered.ends_with(".bitloops/devql/events.duckdb")
-            || rendered.ends_with(".bitloops\\devql\\events.duckdb")
+        rendered.ends_with(".bitloops/stores/event/events.duckdb")
+            || rendered.ends_with(".bitloops\\stores\\event\\events.duckdb")
     );
 }
 
@@ -206,6 +168,20 @@ fn sqlite_path_resolution_uses_explicit_path() {
 }
 
 #[test]
+fn sqlite_path_resolution_resolves_relative_path_against_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    with_cwd(temp.path(), || {
+        let resolved = resolve_sqlite_db_path(Some("data/relational.sqlite"))
+            .expect("relative sqlite path should resolve");
+        assert!(
+            resolved.ends_with(Path::new("data").join("relational.sqlite")),
+            "expected repo-relative sqlite path, got {}",
+            resolved.display()
+        );
+    });
+}
+
+#[test]
 fn sqlite_path_resolution_expands_tilde_prefix() {
     let Some(home) = user_home_dir() else {
         return;
@@ -220,19 +196,22 @@ fn sqlite_path_resolution_expands_tilde_prefix() {
 fn sqlite_path_resolution_expands_windows_tilde_prefix_with_windows_home() {
     let windows_home = Path::new(r"C:\Users\bitloops");
 
-    let expanded = expand_home_prefix_with(r"~\.bitloops\devql\relational.db", Some(windows_home))
-        .expect("windows-style tilde sqlite path should resolve");
+    let expanded = expand_home_prefix_with(
+        r"~\.bitloops\stores\relational\relational.db",
+        Some(windows_home),
+    )
+    .expect("windows-style tilde sqlite path should resolve");
 
     assert_eq!(
         PathBuf::from(expanded),
-        windows_home.join(r".bitloops\devql\relational.db")
+        windows_home.join(r".bitloops\stores\relational\relational.db")
     );
 }
 
 #[test]
 fn blob_local_path_resolution_uses_explicit_path() {
-    let resolved = resolve_blob_local_path(Some("/tmp/bitloops-blobs"))
-        .expect("explicit blob path should resolve");
+    let resolved =
+        resolve_blob_local_path(Some("/tmp/bitloops-blobs")).expect("explicit blob path");
     assert_eq!(resolved, PathBuf::from("/tmp/bitloops-blobs"));
 }
 
@@ -248,7 +227,7 @@ fn blob_local_path_resolution_expands_tilde_prefix() {
 }
 
 #[test]
-fn blob_local_path_resolution_defaults_under_bitloops_directory() {
+fn blob_local_path_resolution_defaults_under_repo_store_directory() {
     let blobs = BlobStorageConfig {
         provider: BlobStorageProvider::Local,
         local_path: None,
@@ -264,7 +243,10 @@ fn blob_local_path_resolution_defaults_under_bitloops_directory() {
         .local_path_or_default()
         .expect("default local blob path");
     let rendered = resolved.to_string_lossy();
-    assert!(rendered.ends_with(".bitloops/blobs") || rendered.ends_with(".bitloops\\blobs"));
+    assert!(
+        rendered.ends_with(".bitloops/stores/blob")
+            || rendered.ends_with(".bitloops\\stores\\blob")
+    );
 }
 
 #[test]
@@ -282,8 +264,10 @@ fn dashboard_file_config_reads_use_bitloops_local_flag() {
 #[test]
 fn dashboard_file_config_defaults_when_dashboard_block_missing() {
     let value = serde_json::json!({
-        "devql": {
-            "relational_provider": "sqlite"
+        "stores": {
+            "relational": {
+                "provider": "sqlite"
+            }
         }
     });
 

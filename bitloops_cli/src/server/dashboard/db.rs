@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
 use tokio_postgres::NoTls;
 
-use crate::devql_config::{
-    DevqlBackendConfig, EventsProvider, RelationalProvider, resolve_devql_backend_config,
+use crate::store_config::{
+    EventsProvider, RelationalProvider, StoreBackendConfig, resolve_store_backend_config,
 };
 
 const POSTGRES_POOL_SIZE: usize = 4;
@@ -290,7 +290,7 @@ impl fmt::Debug for SqlitePool {
 
 impl SqlitePool {
     async fn connect(db_path: PathBuf) -> Result<Self> {
-        ensure_sqlite_parent_dir(&db_path)?;
+        ensure_sqlite_file_exists(&db_path)?;
         let pool = Self { db_path };
         let _ = pool.ping_inner().await?;
         Ok(pool)
@@ -316,21 +316,52 @@ impl RelationalHealthStore for SqlitePool {
     }
 }
 
-fn ensure_sqlite_parent_dir(db_path: &Path) -> Result<()> {
-    let parent = db_path
-        .parent()
-        .filter(|candidate| !candidate.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating SQLite parent directory {}", parent.display()))?;
+fn ensure_sqlite_file_exists(db_path: &Path) -> Result<()> {
+    if db_path.is_file() {
+        return Ok(());
     }
-    Ok(())
+
+    bail!(
+        "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
+        db_path.display()
+    );
+}
+
+fn ensure_duckdb_file_exists(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+
+    bail!(
+        "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+        path.display()
+    );
+}
+
+fn open_duckdb_connection_existing(path: &Path) -> Result<duckdb::Connection> {
+    ensure_duckdb_file_exists(path)?;
+    duckdb::Connection::open(path)
+        .with_context(|| format!("opening DuckDB events database at {}", path.display()))
+}
+
+fn open_duckdb_connection_for_health(path: &Path) -> Result<duckdb::Connection> {
+    ensure_duckdb_file_exists(path)?;
+    duckdb::Connection::open(path).with_context(|| {
+        format!(
+            "opening DuckDB events database for health check at {}",
+            path.display()
+        )
+    })
+}
+
+fn open_sqlite_connection_existing(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_file_exists(db_path)?;
+    rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))
 }
 
 fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
-    ensure_sqlite_parent_dir(db_path)?;
-    let conn = rusqlite::Connection::open(db_path)
-        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+    let conn = open_sqlite_connection_existing(db_path)?;
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
     Ok(conn)
@@ -426,19 +457,7 @@ impl DuckDbPool {
     async fn connect(path: PathBuf) -> Result<Self> {
         let connect_path = path.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            if let Some(parent) = connect_path.parent()
-                && !parent.as_os_str().is_empty()
-            {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
-            }
-
-            let conn = duckdb::Connection::open(&connect_path).with_context(|| {
-                format!(
-                    "opening DuckDB events database at {}",
-                    connect_path.display()
-                )
-            })?;
+            let conn = open_duckdb_connection_existing(&connect_path)?;
             conn.execute_batch("SELECT 1")
                 .context("running initial DuckDB connectivity check")?;
             Ok(())
@@ -452,12 +471,7 @@ impl DuckDbPool {
     async fn ping(&self) -> Result<i32> {
         let path = self.path.clone();
         tokio::task::spawn_blocking(move || -> Result<i32> {
-            let conn = duckdb::Connection::open(&path).with_context(|| {
-                format!(
-                    "opening DuckDB events database for health check at {}",
-                    path.display()
-                )
-            })?;
+            let conn = open_duckdb_connection_for_health(&path)?;
             let mut stmt = conn
                 .prepare("SELECT 1")
                 .context("preparing DuckDB health query")?;
@@ -496,13 +510,13 @@ impl ClickHouseConfig {
 
 #[derive(Debug, Clone)]
 struct DashboardDbConfig {
-    backends: DevqlBackendConfig,
+    backends: StoreBackendConfig,
 }
 
 impl DashboardDbConfig {
     fn from_env() -> Result<Self> {
         Ok(Self {
-            backends: resolve_devql_backend_config()?,
+            backends: resolve_store_backend_config()?,
         })
     }
 
