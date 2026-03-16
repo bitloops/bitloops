@@ -211,9 +211,10 @@ mod tests {
         assert!(envs.iter().any(|(key, value)| {
             *key == "GIT_CONFIG_GLOBAL" && value.ends_with(".bitloops-test-global.gitconfig")
         }));
-        assert!(envs
-            .iter()
-            .any(|(key, value)| *key == "GIT_CONFIG_NOSYSTEM" && *value == "1"));
+        assert!(
+            envs.iter()
+                .any(|(key, value)| *key == "GIT_CONFIG_NOSYSTEM" && *value == "1")
+        );
     }
 
     #[test]
