@@ -4508,70 +4508,70 @@ fn update_committed_uses_correct_author() {
                 (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
             ],
             || {
-            let mut global_cfg = String::from("[user]\n");
-            if let Some(name) = case.global_name {
-                global_cfg.push_str(&format!("\tname = {name}\n"));
-            }
-            if let Some(email) = case.global_email {
-                global_cfg.push_str(&format!("\temail = {email}\n"));
-            }
-            fs::write(home.path().join(".gitconfig"), global_cfg).unwrap();
+                let mut global_cfg = String::from("[user]\n");
+                if let Some(name) = case.global_name {
+                    global_cfg.push_str(&format!("\tname = {name}\n"));
+                }
+                if let Some(email) = case.global_email {
+                    global_cfg.push_str(&format!("\temail = {email}\n"));
+                }
+                fs::write(home.path().join(".gitconfig"), global_cfg).unwrap();
 
-            let dir = tempfile::tempdir().unwrap();
-            setup_git_repo(&dir);
-            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
-            if let Some(name) = case.local_name {
-                run_git(dir.path(), &["config", "user.name", name]).unwrap();
-            }
-            if let Some(email) = case.local_email {
-                run_git(dir.path(), &["config", "user.email", email]).unwrap();
-            }
+                let dir = tempfile::tempdir().unwrap();
+                setup_git_repo(&dir);
+                run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
+                run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
+                if let Some(name) = case.local_name {
+                    run_git(dir.path(), &["config", "user.name", name]).unwrap();
+                }
+                if let Some(email) = case.local_email {
+                    run_git(dir.path(), &["config", "user.email", email]).unwrap();
+                }
 
-            let cp = "a1b2c3d4e5f6";
-            setup_update_committed_fixture_with_sessions(&dir, cp, &["session-001"]);
+                let cp = "a1b2c3d4e5f6";
+                setup_update_committed_fixture_with_sessions(&dir, cp, &["session-001"]);
 
-            let result = update_committed(
-                dir.path(),
-                UpdateCommittedOptions {
-                    checkpoint_id: cp.to_string(),
-                    session_id: "session-001".to_string(),
-                    transcript: Some(b"full transcript\n".to_vec()),
-                    prompts: None,
-                    context: None,
-                    agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
-                },
-            );
-            assert!(
-                result.is_ok(),
-                "expected update_committed to succeed for case '{}': {result:?}",
-                case.name
-            );
+                let result = update_committed(
+                    dir.path(),
+                    UpdateCommittedOptions {
+                        checkpoint_id: cp.to_string(),
+                        session_id: "session-001".to_string(),
+                        transcript: Some(b"full transcript\n".to_vec()),
+                        prompts: None,
+                        context: None,
+                        agent: AGENT_TYPE_CLAUDE_CODE.to_string(),
+                    },
+                );
+                assert!(
+                    result.is_ok(),
+                    "expected update_committed to succeed for case '{}': {result:?}",
+                    case.name
+                );
 
-            let author_line = run_git(
-                dir.path(),
-                &[
-                    "log",
-                    "-1",
-                    "--format=%an|%ae",
-                    &format!("refs/heads/{}", paths::METADATA_BRANCH_NAME),
-                ],
-            )
-            .unwrap();
-            let mut parts = author_line.split('|');
-            let got_name = parts.next().unwrap_or_default().trim();
-            let got_email = parts.next().unwrap_or_default().trim();
-            assert_eq!(
-                got_name, case.want_name,
-                "name mismatch for case '{}'",
-                case.name
-            );
-            assert_eq!(
-                got_email, case.want_email,
-                "email mismatch for case '{}'",
-                case.name
-            );
-        },
+                let author_line = run_git(
+                    dir.path(),
+                    &[
+                        "log",
+                        "-1",
+                        "--format=%an|%ae",
+                        &format!("refs/heads/{}", paths::METADATA_BRANCH_NAME),
+                    ],
+                )
+                .unwrap();
+                let mut parts = author_line.split('|');
+                let got_name = parts.next().unwrap_or_default().trim();
+                let got_email = parts.next().unwrap_or_default().trim();
+                assert_eq!(
+                    got_name, case.want_name,
+                    "name mismatch for case '{}'",
+                    case.name
+                );
+                assert_eq!(
+                    got_email, case.want_email,
+                    "email mismatch for case '{}'",
+                    case.name
+                );
+            },
         );
     }
 }
@@ -4585,26 +4585,26 @@ fn get_git_author_from_repo_global_fallback() {
             (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
         ],
         || {
-        fs::write(
-            home.path().join(".gitconfig"),
-            "[user]\n\tname = Global Author\n\temail = global@test.com\n",
-        )
-        .unwrap();
+            fs::write(
+                home.path().join(".gitconfig"),
+                "[user]\n\tname = Global Author\n\temail = global@test.com\n",
+            )
+            .unwrap();
 
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
-        run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-        run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
+            let dir = tempfile::tempdir().unwrap();
+            setup_git_repo(&dir);
+            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
+            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
 
-        let author = get_git_author_from_repo(dir.path());
-        assert!(
-            author.is_ok(),
-            "expected global git config fallback, got {author:?}"
-        );
-        let (name, email) = author.unwrap();
-        assert_eq!(name, "Global Author");
-        assert_eq!(email, "global@test.com");
-    },
+            let author = get_git_author_from_repo(dir.path());
+            assert!(
+                author.is_ok(),
+                "expected global git config fallback, got {author:?}"
+            );
+            let (name, email) = author.unwrap();
+            assert_eq!(name, "Global Author");
+            assert_eq!(email, "global@test.com");
+        },
     );
 }
 
@@ -4617,20 +4617,20 @@ fn get_git_author_from_repo_no_config() {
             (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
         ],
         || {
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
-        run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-        run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
+            let dir = tempfile::tempdir().unwrap();
+            setup_git_repo(&dir);
+            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
+            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
 
-        let author = get_git_author_from_repo(dir.path());
-        assert!(
-            author.is_ok(),
-            "expected defaults when no git config exists, got {author:?}"
-        );
-        let (name, email) = author.unwrap();
-        assert_eq!(name, "Unknown");
-        assert_eq!(email, "unknown@local");
-    },
+            let author = get_git_author_from_repo(dir.path());
+            assert!(
+                author.is_ok(),
+                "expected defaults when no git config exists, got {author:?}"
+            );
+            let (name, email) = author.unwrap();
+            assert_eq!(name, "Unknown");
+            assert_eq!(email, "unknown@local");
+        },
     );
 }
 
