@@ -5,9 +5,9 @@ on:
     branches:
       - main
     paths:
-      - 'bitloops_cli/**'
-      - 'scripts/check-rust-file-size.sh'
-      - '.github/workflows/ci.yml'
+      - "bitloops_cli/**"
+      - "scripts/check-rust-file-size.sh"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ permissions:
 jobs:
   rust-file-size:
     name: Rust File Size
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - name: Install ripgrep
@@ -24,7 +24,7 @@ jobs:
         run: bash scripts/check-rust-file-size.sh
   test:
     name: Test compile (Ubuntu)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 

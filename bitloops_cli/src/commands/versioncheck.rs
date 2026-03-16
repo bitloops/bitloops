@@ -243,6 +243,40 @@ pub fn check_and_notify(w: &mut dyn Write, current_version: &str) {
     }
 }
 
+pub fn check_now(w: &mut dyn Write, current_version: &str) {
+    if current_version.trim().is_empty() {
+        let _ = writeln!(
+            w,
+            "Unable to check for updates: current version is unknown."
+        );
+        return;
+    }
+
+    if let Err(err) = ensure_global_config_dir() {
+        let _ = writeln!(w, "Unable to check for updates: {err}");
+        return;
+    }
+
+    let latest_version = match fetch_latest_version() {
+        Ok(version) => version,
+        Err(err) => {
+            let _ = writeln!(w, "Unable to check for updates: {err}");
+            return;
+        }
+    };
+
+    let cache = VersionCache {
+        last_check_time_secs: current_time_secs(),
+    };
+    let _ = save_cache(&cache);
+
+    if is_outdated(current_version, &latest_version) {
+        print_notification(w, current_version, &latest_version);
+    } else {
+        let _ = writeln!(w, "Bitloops CLI is up to date (v{current_version}).");
+    }
+}
+
 fn print_notification(w: &mut dyn Write, current: &str, latest: &str) {
     let _ = write!(
         w,

@@ -23,12 +23,67 @@ pub struct DashboardArgs {
     pub bundle_dir: Option<PathBuf>,
 }
 
-pub async fn run(args: DashboardArgs) -> Result<()> {
-    crate::server::dashboard::run(crate::server::dashboard::DashboardServerConfig {
+fn build_server_config(args: DashboardArgs) -> crate::server::dashboard::DashboardServerConfig {
+    crate::server::dashboard::DashboardServerConfig {
         host: args.host,
         port: args.port,
         no_open: args.no_open,
         bundle_dir: args.bundle_dir,
-    })
-    .await
+    }
+}
+
+pub async fn run(args: DashboardArgs) -> Result<()> {
+    crate::server::dashboard::run(build_server_config(args)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::{Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn dashboard_cli_maps_bundle_alias_into_server_config() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "dashboard",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "6100",
+            "--no-open",
+            "--bundle",
+            "/tmp/custom-bundle",
+        ])
+        .expect("dashboard invocation should parse");
+
+        let Some(Commands::Dashboard(args)) = parsed.command else {
+            panic!("expected dashboard command");
+        };
+
+        let config = build_server_config(args);
+        assert_eq!(config.host.as_deref(), Some("0.0.0.0"));
+        assert_eq!(config.port, 6100);
+        assert!(config.no_open);
+        assert_eq!(config.bundle_dir, Some(PathBuf::from("/tmp/custom-bundle")));
+    }
+
+    #[test]
+    fn dashboard_cli_defaults_track_server_defaults() {
+        let parsed = Cli::try_parse_from(["bitloops", "dashboard"])
+            .expect("dashboard invocation should parse");
+
+        let Some(Commands::Dashboard(args)) = parsed.command else {
+            panic!("expected dashboard command");
+        };
+
+        assert_eq!(args.port, DEFAULT_DASHBOARD_PORT);
+        assert_eq!(
+            DEFAULT_DASHBOARD_PORT,
+            crate::server::dashboard::DEFAULT_DASHBOARD_PORT
+        );
+        assert!(args.host.is_none());
+        assert!(args.bundle_dir.is_none());
+        assert!(!args.no_open);
+    }
 }

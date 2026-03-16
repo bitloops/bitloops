@@ -1,3 +1,4 @@
+pub mod branding;
 pub mod commands;
 pub mod devql_config;
 pub mod engine;

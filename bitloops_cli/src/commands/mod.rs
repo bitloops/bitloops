@@ -23,9 +23,18 @@ pub mod versioncheck;
     version,
     about = root::ROOT_SHORT_ABOUT,
     long_about = root::ROOT_LONG_ABOUT,
+    disable_version_flag = true,
     disable_help_subcommand = true
 )]
 pub struct Cli {
+    /// Show build information.
+    #[arg(long = "version", short = 'V', default_value_t = false)]
+    pub version: bool,
+
+    /// Check for updates (only valid with --version).
+    #[arg(long = "check", requires = "version", default_value_t = false)]
+    pub check: bool,
+
     /// Check backend connectivity for configured relational/events providers.
     #[arg(long = "connection-status", global = true, default_value_t = false)]
     pub connection_status: bool,
@@ -58,7 +67,7 @@ pub enum Commands {
     #[command(hide = true)]
     Hooks(crate::engine::hooks::dispatcher::HooksArgs),
     /// Show build information.
-    Version,
+    Version(root::VersionArgs),
     /// Explain a session, commit, or checkpoint
     Explain(explain::ExplainArgs),
     /// Hidden debug commands for troubleshooting.
@@ -97,6 +106,19 @@ impl std::error::Error for SilentError {}
 pub async fn run(cli: Cli) -> Result<()> {
     let strategy_registry = crate::engine::strategy::registry::StrategyRegistry::builtin();
 
+    if cli.version {
+        if cli.command.is_some() {
+            bail!("`--version` cannot be combined with a subcommand");
+        }
+        if cli.connection_status {
+            bail!("`--version` cannot be combined with `--connection-status`");
+        }
+
+        let result = root::run_version_command(cli.check);
+        root::run_persistent_post_run(&[], "version");
+        return result;
+    }
+
     if cli.connection_status {
         if cli.command.is_some() {
             bail!("`--connection-status` cannot be combined with a subcommand");
@@ -126,7 +148,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Hooks(args) => {
             crate::engine::hooks::dispatcher::run(args, &strategy_registry).await
         }
-        Commands::Version => root::run_version_command(),
+        Commands::Version(args) => root::run_version_command(args.check),
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,

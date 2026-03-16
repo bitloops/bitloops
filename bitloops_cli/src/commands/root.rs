@@ -9,8 +9,8 @@ use std::env;
 use std::io::BufRead;
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::Command as ProcessCommand;
 
+use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 use crate::commands::{clean, doctor, enable, reset, resume, versioncheck};
 use crate::engine::settings::{self, BitloopsSettings};
 
@@ -104,6 +104,13 @@ pub struct CompletionArgs {
     pub shell: CompletionShell,
 }
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct VersionArgs {
+    /// Check for updates now.
+    #[arg(long, default_value_t = false)]
+    pub check: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TelemetryEvent {
     pub command: String,
@@ -119,6 +126,16 @@ pub(crate) fn build_version() -> &'static str {
 
 pub(crate) fn build_commit() -> &'static str {
     option_env!("BITLOOPS_BUILD_COMMIT").unwrap_or("unknown")
+}
+
+pub(crate) fn build_target() -> &'static str {
+    option_env!("BITLOOPS_BUILD_TARGET")
+        .or(option_env!("TARGET"))
+        .unwrap_or("unknown")
+}
+
+pub(crate) fn build_date() -> &'static str {
+    option_env!("BITLOOPS_BUILD_DATE").unwrap_or("unknown")
 }
 
 /// Returns true when the executed command or any ancestor is hidden.
@@ -210,7 +227,7 @@ pub(crate) fn command_name(command: &crate::commands::Commands) -> &'static str 
         crate::commands::Commands::Status(_) => "status",
         crate::commands::Commands::Dashboard(_) => "dashboard",
         crate::commands::Commands::Hooks(_) => "hooks",
-        crate::commands::Commands::Version => "version",
+        crate::commands::Commands::Version(_) => "version",
         crate::commands::Commands::Explain(_) => "explain",
         crate::commands::Commands::Debug(_) => "debug",
         crate::commands::Commands::Devql(_) => "devql",
@@ -369,18 +386,27 @@ pub fn run_completion_command(args: &CompletionArgs) -> Result<()> {
     write_completion(&mut out, args.shell)
 }
 
-pub fn run_version_command() -> Result<()> {
-    let runtime = runtime_version_string();
+pub fn run_version_command(check_for_updates: bool) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     write_version(
         &mut out,
         build_version(),
         build_commit(),
-        &runtime,
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    )
+        build_target(),
+        build_date(),
+    )?;
+
+    if check_for_updates {
+        versioncheck::check_now(&mut out, version_for_update_check());
+    } else {
+        writeln!(
+            out,
+            "Run `bitloops --version --check` to check for updates."
+        )?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -475,32 +501,58 @@ fn write_node(w: &mut dyn Write, cmd: &Command, indent: &str, is_last: bool) -> 
     write_children(w, cmd, &child_indent)
 }
 
-fn runtime_version_string() -> String {
-    let output = ProcessCommand::new("rustc").arg("--version").output();
-    let Ok(output) = output else {
+const VERSION_DIVIDER: &str = "───────────────────";
+
+fn pretty_version(version: &str) -> String {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
         return "unknown".to_string();
-    };
-    if !output.status.success() {
+    }
+    if trimmed == "dev" {
+        return format!("v{}", env!("CARGO_PKG_VERSION"));
+    }
+    if trimmed.starts_with('v') {
+        return trimmed.to_string();
+    }
+    format!("v{trimmed}")
+}
+
+fn short_commit(commit: &str) -> String {
+    let trimmed = commit.trim();
+    if trimmed.is_empty() {
         return "unknown".to_string();
     }
 
-    String::from_utf8(output.stdout)
-        .map(|value| value.trim().to_string())
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+    trimmed.chars().take(7).collect()
+}
+
+fn version_for_update_check() -> &'static str {
+    let version = build_version();
+    if version == "dev" {
+        env!("CARGO_PKG_VERSION")
+    } else {
+        version
+    }
 }
 
 pub(crate) fn write_version(
     w: &mut dyn Write,
     version: &str,
     commit: &str,
-    runtime: &str,
-    os: &str,
-    arch: &str,
+    target: &str,
+    built: &str,
 ) -> Result<()> {
-    writeln!(w, "Bitloops CLI {version} ({commit})")?;
-    writeln!(w, "Rust version: {runtime}")?;
-    writeln!(w, "OS/Arch: {os}/{arch}")?;
+    writeln!(w)?;
+    writeln!(
+        w,
+        "{}",
+        color_hex_if_enabled(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX)
+    )?;
+    writeln!(w, "Bitloops CLI {}", pretty_version(version))?;
+    writeln!(w, "{VERSION_DIVIDER}")?;
+    writeln!(w, "commit: {}", short_commit(commit))?;
+    writeln!(w, "target: {}", target.trim())?;
+    writeln!(w, "built: {}", built.trim())?;
+    writeln!(w)?;
     Ok(())
 }

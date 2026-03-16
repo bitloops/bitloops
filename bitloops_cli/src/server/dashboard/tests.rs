@@ -6,7 +6,7 @@ use super::{
     branch_is_excluded, browser_host_for_url, build_branch_commit_log_args, canonical_agent_key,
     dashboard_user, default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url,
     has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
-    select_host_with_probe,
+    select_host_with_dashboard_preference,
 };
 use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, git_command};
@@ -441,20 +441,20 @@ async fn request_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
 }
 
 #[test]
-fn select_host_prefers_bitloops_local_when_probe_succeeds() {
-    let selected = select_host_with_probe(None, |host| host == "bitloops.local");
+fn select_host_prefers_bitloops_local_when_config_enabled() {
+    let selected = select_host_with_dashboard_preference(None, true);
     assert_eq!(selected, "bitloops.local");
 }
 
 #[test]
-fn select_host_falls_back_to_localhost_when_probe_fails() {
-    let selected = select_host_with_probe(None, |_| false);
+fn select_host_falls_back_to_localhost_when_config_disabled() {
+    let selected = select_host_with_dashboard_preference(None, false);
     assert_eq!(selected, "127.0.0.1");
 }
 
 #[test]
 fn select_host_respects_explicit_host() {
-    let selected = select_host_with_probe(Some("localhost"), |_| false);
+    let selected = select_host_with_dashboard_preference(Some("localhost"), true);
     assert_eq!(selected, "localhost");
 }
 
