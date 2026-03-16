@@ -48,19 +48,21 @@ Important:
       "local_path": ".bitloops/stores/blob"
     }
   },
-  "providers": {
-    "github": {
-      "token": "${GITHUB_TOKEN}"
-    },
-    "jira": {
-      "site_url": "https://bitloops.atlassian.net",
-      "email": "${ATLASSIAN_EMAIL}",
-      "token": "${ATLASSIAN_TOKEN}"
-    },
-    "confluence": {
-      "site_url": "https://bitloops.atlassian.net",
-      "email": "${ATLASSIAN_EMAIL}",
-      "token": "${ATLASSIAN_TOKEN}"
+  "knowledge": {
+    "providers": {
+      "github": {
+        "token": "${GITHUB_TOKEN}"
+      },
+      "jira": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_TOKEN}"
+      },
+      "confluence": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_TOKEN}"
+      }
     }
   },
   "semantic": {
@@ -98,19 +100,19 @@ Important:
 
 ### Knowledge provider keys
 
-These live under the top-level `providers` object.
+These live under `knowledge.providers`.
 
 | Key                             | Type   | Default | Notes                                                                                       |
 | ------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------- |
-| `providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                           |
-| `providers.jira.site_url`       | string | none    | Required for Jira issue knowledge ingestion. Must match the Atlassian site in the URL.      |
-| `providers.jira.email`          | string | none    | Required for Jira basic auth.                                                               |
-| `providers.jira.token`          | string | none    | Required for Jira basic auth.                                                               |
-| `providers.confluence.site_url` | string | none    | Required for Confluence page knowledge ingestion. Must match the Atlassian site in the URL. |
-| `providers.confluence.email`    | string | none    | Required for Confluence basic auth.                                                         |
-| `providers.confluence.token`    | string | none    | Required for Confluence basic auth.                                                         |
+| `knowledge.providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                           |
+| `knowledge.providers.jira.site_url`       | string | none    | Required for Jira issue knowledge ingestion. Must match the Atlassian site in the URL.      |
+| `knowledge.providers.jira.email`          | string | none    | Required for Jira basic auth.                                                               |
+| `knowledge.providers.jira.token`          | string | none    | Required for Jira basic auth.                                                               |
+| `knowledge.providers.confluence.site_url` | string | none    | Required for Confluence page knowledge ingestion. Must match the Atlassian site in the URL. |
+| `knowledge.providers.confluence.email`    | string | none    | Required for Confluence basic auth.                                                         |
+| `knowledge.providers.confluence.token`    | string | none    | Required for Confluence basic auth.                                                         |
 
-Provider values support `${ENV_VAR}` interpolation in `<repo>/.bitloops/config.json`. That interpolation is intentionally limited to the `providers` block.
+Provider values support `${ENV_VAR}` interpolation in `<repo>/.bitloops/config.json`. That interpolation is intentionally limited to `knowledge.providers`.
 
 ### Semantic keys
 

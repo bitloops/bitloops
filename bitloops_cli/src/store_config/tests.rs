@@ -95,7 +95,7 @@ fn semantic_config_reads_values_from_semantic_block() {
 }
 
 #[test]
-fn provider_config_defaults_when_block_missing() {
+fn store_provider_config_defaults_when_block_missing() {
     let value = serde_json::json!({
         "stores": {
             "relational": { "provider": "sqlite" }
@@ -107,9 +107,10 @@ fn provider_config_defaults_when_block_missing() {
 }
 
 #[test]
-fn provider_config_reads_literal_values() {
+fn knowledge_config_providers_reads_literal_values() {
     let value = serde_json::json!({
-        "providers": {
+        "knowledge": {
+            "providers": {
             "github": { "token": "gh-token" },
             "jira": {
                 "site_url": "https://bitloops.atlassian.net",
@@ -120,6 +121,7 @@ fn provider_config_reads_literal_values() {
                 "site_url": "https://bitloops.atlassian.net",
                 "email": "docs@example.com",
                 "token": "confluence-token"
+            }
             }
         }
     });
@@ -150,10 +152,12 @@ fn provider_config_reads_literal_values() {
 }
 
 #[test]
-fn provider_config_resolves_env_indirection() {
+fn knowledge_config_providers_resolves_env_indirection() {
     let value = serde_json::json!({
-        "providers": {
+        "knowledge": {
+            "providers": {
             "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+            }
         }
     });
 
@@ -168,31 +172,38 @@ fn provider_config_resolves_env_indirection() {
 }
 
 #[test]
-fn provider_config_rejects_missing_env_value() {
+fn knowledge_config_providers_rejects_missing_env_value() {
     let value = serde_json::json!({
-        "providers": {
+        "knowledge": {
+            "providers": {
             "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+            }
         }
     });
 
     let err = resolve_provider_config_for_tests(&value, &[]).expect_err("missing env should fail");
-    assert!(err.to_string().contains("providers.github.token"));
+    assert!(err.to_string().contains("knowledge.providers.github.token"));
 }
 
 #[test]
-fn provider_config_rejects_missing_required_field() {
+fn knowledge_config_providers_rejects_missing_required_field() {
     let value = serde_json::json!({
-        "providers": {
+        "knowledge": {
+            "providers": {
             "jira": {
                 "site_url": "https://bitloops.atlassian.net",
                 "email": "jira@example.com"
+            }
             }
         }
     });
 
     let err = resolve_provider_config_for_tests(&value, &[])
         .expect_err("missing provider field should fail");
-    assert!(err.to_string().contains("missing `providers.jira.token`"));
+    assert!(
+        err.to_string()
+            .contains("missing `knowledge.providers.jira.token`")
+    );
 }
 
 #[test]

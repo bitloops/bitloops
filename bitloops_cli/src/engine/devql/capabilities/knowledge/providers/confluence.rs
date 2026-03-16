@@ -35,7 +35,7 @@ impl KnowledgeProviderClient for ConfluenceKnowledgeClient {
         Box::pin(async move {
             let confluence =
                 host.provider_config.confluence.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("missing `providers.confluence` configuration")
+                    anyhow::anyhow!("missing `knowledge.providers.confluence` configuration")
                 })?;
 
             let KnowledgeLocator::ConfluencePage { site, page_id } = &parsed.locator else {
@@ -44,7 +44,7 @@ impl KnowledgeProviderClient for ConfluenceKnowledgeClient {
 
             if site.trim_end_matches('/') != confluence.site_url.trim_end_matches('/') {
                 bail!(
-                    "Confluence URL site `{}` does not match configured providers.confluence.site_url `{}`",
+                    "Confluence URL site `{}` does not match configured knowledge.providers.confluence.site_url `{}`",
                     site,
                     confluence.site_url
                 );

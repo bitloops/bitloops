@@ -35,7 +35,9 @@ impl KnowledgeProviderClient for JiraKnowledgeClient {
                 .provider_config
                 .jira
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing `providers.jira` configuration"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing `knowledge.providers.jira` configuration")
+                })?;
 
             let KnowledgeLocator::JiraIssue { site, key } = &parsed.locator else {
                 bail!("Jira client received non-Jira locator");
@@ -43,7 +45,7 @@ impl KnowledgeProviderClient for JiraKnowledgeClient {
 
             if site.trim_end_matches('/') != jira.site_url.trim_end_matches('/') {
                 bail!(
-                    "Jira URL site `{}` does not match configured providers.jira.site_url `{}`",
+                    "Jira URL site `{}` does not match configured knowledge.providers.jira.site_url `{}`",
                     site,
                     jira.site_url
                 );

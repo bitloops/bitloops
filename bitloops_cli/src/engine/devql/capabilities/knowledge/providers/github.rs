@@ -37,7 +37,9 @@ impl KnowledgeProviderClient for GitHubKnowledgeClient {
                 .provider_config
                 .github
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing `providers.github` configuration"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing `knowledge.providers.github` configuration")
+                })?;
 
             let endpoint = match &parsed.locator {
                 KnowledgeLocator::GithubIssue {

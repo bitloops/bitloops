@@ -17,6 +17,7 @@ const EVENT_CONFIG_KEY: &str = "event";
 const EVENTS_CONFIG_KEY: &str = "events";
 const BLOB_CONFIG_KEY: &str = "blob";
 const BLOBS_CONFIG_KEY: &str = "blobs";
+const KNOWLEDGE_CONFIG_KEY: &str = "knowledge";
 const PROVIDERS_CONFIG_KEY: &str = "providers";
 const SEMANTIC_CONFIG_KEY: &str = "semantic";
 const DASHBOARD_CONFIG_KEY: &str = "dashboard";
@@ -422,7 +423,12 @@ where
     let Some(root) = value.as_object() else {
         return Ok(ProviderConfig::default());
     };
-    let Some(providers) = root.get(PROVIDERS_CONFIG_KEY).and_then(Value::as_object) else {
+    let Some(providers) = root
+        .get(KNOWLEDGE_CONFIG_KEY)
+        .and_then(Value::as_object)
+        .and_then(|knowledge| knowledge.get(PROVIDERS_CONFIG_KEY))
+        .and_then(Value::as_object)
+    else {
         return Ok(ProviderConfig::default());
     };
 
@@ -435,13 +441,23 @@ where
         jira: providers
             .get("jira")
             .and_then(Value::as_object)
-            .map(|jira| parse_atlassian_provider_config(jira, &env_lookup, "providers.jira"))
+            .map(|jira| {
+                parse_atlassian_provider_config(
+                    jira,
+                    &env_lookup,
+                    "knowledge.providers.jira",
+                )
+            })
             .transpose()?,
         confluence: providers
             .get("confluence")
             .and_then(Value::as_object)
             .map(|confluence| {
-                parse_atlassian_provider_config(confluence, &env_lookup, "providers.confluence")
+                parse_atlassian_provider_config(
+                    confluence,
+                    &env_lookup,
+                    "knowledge.providers.confluence",
+                )
             })
             .transpose()?,
     })
@@ -474,7 +490,12 @@ where
     F: Fn(&str) -> Option<String>,
 {
     Ok(GithubProviderConfig {
-        token: resolve_required_provider_string(map, "token", env_lookup, "providers.github")?,
+        token: resolve_required_provider_string(
+            map,
+            "token",
+            env_lookup,
+            "knowledge.providers.github",
+        )?,
     })
 }
 
