@@ -91,25 +91,6 @@ fn read_transcript_with_retry(transcript_path: &str) -> Option<String> {
     }
 }
 
-/// Reads transcript content stored in the shadow branch tree.
-///
-/// Uses `git show <ref>:.bitloops/metadata/<session_id>/full.jsonl`.
-///
-fn extract_transcript_from_shadow(
-    repo_root: &Path,
-    shadow_ref: &str,
-    session_id: &str,
-) -> Option<String> {
-    let path = format!(
-        "{}/{}",
-        paths::session_metadata_dir_from_session_id(session_id),
-        paths::TRANSCRIPT_FILE_NAME
-    );
-    run_git(repo_root, &["show", &format!("{shadow_ref}:{path}")])
-        .ok()
-        .filter(|s| !s.is_empty())
-}
-
 /// Falls back to reading the transcript from the metadata directory on disk.
 fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<String> {
     let path = repo_root
@@ -261,44 +242,16 @@ pub fn parse_checkpoint_id(message: &str) -> Option<String> {
 }
 
 /// Returns the `Bitloops-Checkpoint: <id>` trailer from the HEAD commit, if present.
+#[allow(dead_code)]
 fn get_checkpoint_id_from_head(repo_root: &Path) -> Result<Option<String>> {
     let body = run_git(repo_root, &["cat-file", "commit", "HEAD"])?;
     Ok(parse_checkpoint_id(&body))
 }
 
-/// Returns `true` if the message has any non-comment, non-trailer lines.
-fn has_user_content(message: &str) -> bool {
-    let trailer_prefix = format!("{CHECKPOINT_TRAILER_KEY}:");
-    for line in message.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if t.starts_with('#') {
-            continue;
-        }
-        if t.starts_with(trailer_prefix.as_str()) {
-            continue;
-        }
-        return true;
-    }
-    false
-}
-
-/// Removes the `Bitloops-Checkpoint:` trailer line from a message.
-fn strip_checkpoint_trailer(message: &str) -> String {
-    let trailer_prefix = format!("{CHECKPOINT_TRAILER_KEY}:");
-    message
-        .lines()
-        .filter(|l| !l.trim().starts_with(trailer_prefix.as_str()))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Appends `\n\nBitloops-Checkpoint: <id>\n` to the message.
+#[cfg(test)]
 fn add_checkpoint_trailer(message: &str, id: &str) -> String {
     let trailer = format!("{CHECKPOINT_TRAILER_KEY}: {id}");
     let trimmed = message.trim_end_matches('\n');
     format!("{trimmed}\n\n{trailer}\n")
 }
-

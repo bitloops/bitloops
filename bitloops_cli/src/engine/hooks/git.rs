@@ -11,7 +11,7 @@ use clap::{Args, Subcommand};
 
 use crate::engine::logging;
 use crate::engine::paths;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::find_most_recent_session;
 use crate::engine::settings;
 
@@ -20,7 +20,7 @@ use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::registry::{self, StrategyRegistry};
 
 fn init_hook_logging(repo_root: &std::path::Path) -> Box<dyn FnOnce()> {
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     let sessions = backend.list_sessions().unwrap_or_default();
     let session_id = find_most_recent_session(&sessions, &repo_root.to_string_lossy())
         .map(|s| s.session_id)
@@ -188,6 +188,7 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
 mod tests {
     use super::*;
     use crate::engine::session::backend::SessionBackend;
+    use crate::engine::session::local_backend::LocalFileBackend;
     use crate::engine::session::phase::SessionPhase;
     use crate::engine::session::state::SessionState;
     use crate::engine::strategy::registry::StrategyRegistry;

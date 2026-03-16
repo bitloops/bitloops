@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
@@ -8,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::engine::agent::agent_display_name;
-use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase as RuntimeSessionPhase;
 use crate::engine::session::state::SessionState as RuntimeSessionState;
+use crate::engine::session::{SessionBackend, create_session_backend_or_local};
 use crate::engine::settings;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 
@@ -116,7 +115,7 @@ pub fn classify_session(
 
 pub fn run_doctor(force: bool) -> Result<()> {
     let repo_root = crate::engine::paths::repo_root()?;
-    let backend = LocalFileBackend::new(&repo_root);
+    let backend = create_session_backend_or_local(&repo_root);
     let states = backend.list_sessions()?;
     let mut out = io::stdout().lock();
     let mut err = io::stderr().lock();
@@ -165,7 +164,7 @@ pub fn run_doctor(force: bool) -> Result<()> {
                     )?,
                 }
             } else {
-                match discard_session(&repo_root, &backend, &state, &stuck_session) {
+                match discard_session(&repo_root, backend.as_ref(), &state, &stuck_session) {
                     Ok(()) => writeln!(out, "  -> Discarded session {}\n", state.session_id)?,
                     Err(e) => writeln!(
                         err,
@@ -191,7 +190,9 @@ pub fn run_doctor(force: bool) -> Result<()> {
                 }
             }
             "discard" => {
-                if let Err(e) = discard_session(&repo_root, &backend, &state, &stuck_session) {
+                if let Err(e) =
+                    discard_session(&repo_root, backend.as_ref(), &state, &stuck_session)
+                {
                     writeln!(
                         err,
                         "Warning: failed to discard session {}: {}",
@@ -342,6 +343,10 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
+    if !crate::engine::session::legacy_local_backend_enabled() {
+        return vec![];
+    }
+
     let mut all = Vec::<String>::new();
     for pattern in ["bitloops/*"] {
         let output = Command::new("git")
@@ -423,17 +428,13 @@ fn condense_session(repo_root: &Path, session_id: &str) -> Result<()> {
 
 fn discard_session(
     repo_root: &Path,
-    backend: &LocalFileBackend,
+    backend: &dyn SessionBackend,
     state: &RuntimeSessionState,
     stuck: &StuckSession,
 ) -> Result<()> {
-    let state_path = backend
-        .sessions_dir()
-        .join(format!("{}.json", state.session_id));
-    if state_path.exists() {
-        fs::remove_file(&state_path)
-            .with_context(|| format!("removing session state {}", state_path.display()))?;
-    }
+    backend
+        .delete_session(&state.session_id)
+        .with_context(|| format!("removing session state {}", state.session_id))?;
 
     if stuck.has_shadow_branch
         && can_delete_shadow_branch(backend, &stuck.shadow_branch, &state.session_id)?
@@ -460,7 +461,7 @@ fn discard_session(
 }
 
 fn can_delete_shadow_branch(
-    backend: &LocalFileBackend,
+    backend: &dyn SessionBackend,
     shadow_branch: &str,
     exclude_session_id: &str,
 ) -> Result<bool> {

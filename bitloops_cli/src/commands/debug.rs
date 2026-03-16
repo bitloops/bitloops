@@ -7,8 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Subcommand};
 
 use crate::engine::paths;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::find_most_recent_session;
 use crate::engine::settings;
 use crate::engine::transcript::parse::parse_from_file_at_line;
@@ -82,7 +81,7 @@ fn run_auto_commit(args: &DebugAutoCommitArgs) -> Result<()> {
     }
 
     writeln!(out, "=== Session State ===")?;
-    let backend = LocalFileBackend::new(&repo_root);
+    let backend = create_session_backend_or_local(&repo_root);
     let sessions = backend.list_sessions().unwrap_or_default();
     let current_session = find_most_recent_session(&sessions, &repo_root.to_string_lossy());
 

@@ -22,18 +22,8 @@ pub fn append_transcript_section(
     }
 }
 
-pub fn count_lines(content: &[u8]) -> usize {
-    if content.is_empty() {
-        return 0;
-    }
-    content.iter().filter(|b| **b == b'\n').count() + 1
-}
-
-pub fn transcript_offset(transcript_bytes: &[u8], _agent_type: AgentType) -> usize {
-    count_lines(transcript_bytes)
-}
-
 // CLI-856 / CLI-857 / CLI-850: git traversal + branch discovery stubs
+#[cfg(test)]
 pub fn get_associated_commits(
     commits: &[CommitNode],
     checkpoint_id: &str,
@@ -62,6 +52,59 @@ pub fn get_associated_commits(
                 break;
             }
             if commit_trailer_matches(current, checkpoint_id) {
+                collected.push((current.timestamp, to_associated_commit(current)));
+            }
+
+            let Some(parent) = current.parents.first() else {
+                break;
+            };
+            let Some(parent_commit) = commit_map.get(parent.as_str()) else {
+                break;
+            };
+            current = parent_commit;
+        }
+    }
+
+    collected.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(collected.into_iter().map(|(_, commit)| commit).collect())
+}
+
+pub fn get_associated_commits_from_db(
+    repo_root: &std::path::Path,
+    commits: &[CommitNode],
+    checkpoint_id: &str,
+    search_all: bool,
+) -> Result<Vec<AssociatedCommit>> {
+    if checkpoint_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let checkpoint_map = read_commit_checkpoint_mappings(repo_root)?;
+    let mut collected: Vec<(i64, AssociatedCommit)> = Vec::new();
+    let commit_map: HashMap<&str, &CommitNode> =
+        commits.iter().map(|c| (c.sha.as_str(), c)).collect();
+
+    let commit_matches = |commit: &CommitNode| {
+        checkpoint_map
+            .get(commit.sha.as_str())
+            .is_some_and(|mapped| mapped == checkpoint_id)
+    };
+
+    if search_all || commits.iter().all(|commit| commit.parents.is_empty()) {
+        for commit in commits {
+            if commit_matches(commit) {
+                collected.push((commit.timestamp, to_associated_commit(commit)));
+            }
+        }
+    } else if let Some(head) = commits.iter().max_by_key(|commit| commit.timestamp) {
+        let mut current = head;
+        let mut visited: HashSet<&str> = HashSet::new();
+
+        loop {
+            if !visited.insert(current.sha.as_str()) {
+                break;
+            }
+            if commit_matches(current) {
                 collected.push((current.timestamp, to_associated_commit(current)));
             }
 
@@ -361,7 +404,7 @@ fn build_runtime_session_info(
     Some((session, details))
 }
 
-/// Real implementation: reads committed checkpoints from git + shadow branches.
+/// Real implementation: reads committed checkpoints from git commit graph + DB checkpoint mappings.
 pub fn get_branch_checkpoints_real(
     repo_root: &std::path::Path,
     limit: usize,
@@ -377,6 +420,7 @@ pub fn get_branch_checkpoints_real(
         .iter()
         .map(|c| (c.checkpoint_id.clone(), c))
         .collect();
+    let commit_checkpoint_map = read_commit_checkpoint_mappings(repo_root)?;
 
     // Unlimited walk on default branch, capped on feature branches.
     let graph_limit = if is_default { 0 } else { COMMIT_SCAN_LIMIT };
@@ -405,7 +449,7 @@ pub fn get_branch_checkpoints_real(
 
     let mut points: Vec<RewindPoint> = Vec::new();
     for commit in &walk_commits {
-        let Some(cp_id) = commit.trailers.get(CHECKPOINT_TRAILER_KEY) else {
+        let Some(cp_id) = commit_checkpoint_map.get(&commit.sha) else {
             continue;
         };
         if !committed_map.contains_key(cp_id.as_str()) {
@@ -443,10 +487,6 @@ pub fn get_branch_checkpoints_real(
         });
     }
 
-    // Also gather temporary (shadow-branch) checkpoints.
-    let temp = get_reachable_temporary_checkpoints_shell(repo_root, &commits, is_default);
-    points.extend(temp);
-
     points.sort_by(|a, b| b.date.cmp(&a.date));
     if limit > 0 && points.len() > limit {
         points.truncate(limit);
@@ -455,6 +495,7 @@ pub fn get_branch_checkpoints_real(
     Ok(points)
 }
 
+#[allow(dead_code)]
 /// Try to gather temporary (shadow-branch) checkpoints from real git branches.
 fn get_reachable_temporary_checkpoints_shell(
     repo_root: &std::path::Path,

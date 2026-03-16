@@ -1,6 +1,6 @@
 [package]
 name = "bitloops_cli"
-version = "0.0.10"
+version = "0.1.0"
 edition = "2024"
 
 [lib]
@@ -37,6 +37,7 @@ semver = "1"
 tar = "0.4"
 zstd = "0.13"
 duckdb = { version = "1", features = ["bundled"] }
+object_store = { version = "0.12.4", features = ["aws", "gcp"] }
 
 [dev-dependencies]
 cucumber = "0.22.1"

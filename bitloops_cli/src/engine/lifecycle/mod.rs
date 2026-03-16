@@ -6,8 +6,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::engine::agent::TranscriptPositionProvider;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
@@ -337,7 +336,7 @@ pub fn handle_lifecycle_turn_end(
         .unwrap_or_else(|_| Path::new(&event.session_ref).to_path_buf());
     let transcript_ref_str = transcript_ref_canon.to_string_lossy().to_string();
 
-    let backend = LocalFileBackend::new(&repo_root);
+    let backend = create_session_backend_or_local(&repo_root);
     let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
     let lifecycle_pre = pre_prompt.as_ref().map(|p| PrePromptState {
         transcript_offset: p.transcript_offset as usize,
@@ -528,7 +527,7 @@ pub fn handle_lifecycle_compaction(
         }
     };
 
-    let backend = LocalFileBackend::new(&repo_root);
+    let backend = create_session_backend_or_local(&repo_root);
     match backend.load_session(&event.session_id) {
         Ok(Some(mut state)) => {
             let context = SessionTransitionContext {
@@ -601,7 +600,7 @@ pub fn capture_pre_prompt_state(
     }
 
     let transcript_offset = agent.get_transcript_position(session_ref)?;
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

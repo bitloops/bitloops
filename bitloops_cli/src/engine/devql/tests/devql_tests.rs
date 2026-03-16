@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::devql::DevqlCommand;
-use crate::test_support::process_state::git_command;
+use crate::devql_config::{BlobStorageConfig, BlobStorageProvider};
+use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use clap::Parser;
 use serde_json::json;
 use std::env;
@@ -47,6 +48,16 @@ fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> Devq
             clickhouse_password: None,
             clickhouse_database: None,
         },
+        blobs: BlobStorageConfig {
+            provider: BlobStorageProvider::Local,
+            local_path: None,
+            s3_bucket: None,
+            s3_region: None,
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            gcs_bucket: None,
+            gcs_credentials_path: None,
+        },
     }
 }
 
@@ -62,33 +73,50 @@ fn create_duckdb_db(path: &Path) {
         .expect("validate duckdb db file");
 }
 
-fn git_ok(repo_root: &Path, args: &[&str]) -> String {
-    let out = git_command()
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .unwrap_or_else(|err| panic!("failed to start git {:?}: {err}", args));
-    assert!(
-        out.status.success(),
-        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-        args,
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
 fn seed_git_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
-    git_ok(dir.path(), &["init"]);
-    git_ok(dir.path(), &["checkout", "-B", "main"]);
-    git_ok(dir.path(), &["config", "user.name", "Bitloops Test"]);
-    git_ok(
+    init_test_repo(
         dir.path(),
-        &["config", "user.email", "bitloops-test@example.com"],
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
     );
     git_ok(dir.path(), &["commit", "--allow-empty", "-m", "initial"]);
     dir
+}
+
+fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![commit_sha, checkpoint_id, repo_id.as_str()],
+            )?;
+            Ok(())
+        })
+        .expect("insert commit-checkpoint mapping");
+}
+
+fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+    let cfg =
+        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        crate::devql_config::resolve_sqlite_db_path(Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        repo_root
+            .join(crate::engine::paths::BITLOOPS_DIR)
+            .join("devql")
+            .join("relational.db")
+    }
 }
 
 fn status_for(rows: &[DatabaseStatusRow], label: &'static str) -> DatabaseConnectionStatus {
@@ -417,43 +445,22 @@ fn default_branch_name_uses_current_branch_and_falls_back_to_main() {
 }
 
 #[test]
-fn collect_checkpoint_commit_map_prefers_newest_valid_checkpoint_commit() {
+fn collect_checkpoint_commit_map_prefers_newest_db_mapped_checkpoint_commit() {
     let repo = seed_git_repo();
     let checkpoint_id = "aabbccddeeff";
 
     git_ok(
         repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "older checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}"),
-        ],
+        &["commit", "--allow-empty", "-m", "older checkpoint"],
     );
+    let older_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     git_ok(
         repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "ignored invalid checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: not-valid"),
-        ],
+        &["commit", "--allow-empty", "-m", "newest checkpoint"],
     );
-    git_ok(
-        repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "newest checkpoint",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}"),
-        ],
-    );
+    let newest_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &older_sha, checkpoint_id);
+    insert_commit_checkpoint_mapping(repo.path(), &newest_sha, checkpoint_id);
 
     let checkpoint_map =
         collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");
@@ -464,6 +471,35 @@ fn collect_checkpoint_commit_map_prefers_newest_valid_checkpoint_commit() {
         .expect("checkpoint should be present");
     assert_eq!(info.subject, "newest checkpoint");
     assert!(!info.commit_sha.is_empty());
+    assert!(info.commit_unix > 0);
+}
+
+#[test]
+fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
+    let repo = seed_git_repo();
+    let checkpoint_id = "b0b1b2b3b4b5";
+
+    git_ok(
+        repo.path(),
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "checkpoint without trailer",
+        ],
+    );
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);
+
+    let checkpoint_map =
+        collect_checkpoint_commit_map(repo.path()).expect("checkpoint commit map should build");
+
+    assert_eq!(checkpoint_map.len(), 1);
+    let info = checkpoint_map
+        .get(checkpoint_id)
+        .expect("checkpoint should be present");
+    assert_eq!(info.commit_sha, commit_sha);
+    assert_eq!(info.subject, "checkpoint without trailer");
     assert!(info.commit_unix > 0);
 }
 
@@ -2996,4 +3032,28 @@ VALUES ('{}', '{}', 'blob-exports', '{}', '{}', 'exports', 'typescript', '{{\"ex
         count, 2,
         "expected alias-distinct export edges to survive dedup"
     );
+}
+
+#[test]
+fn postgres_schema_sql_includes_checkpoint_migration_tables() {
+    let schema = format!(
+        "{}\n{}",
+        postgres_schema_sql(),
+        checkpoint_schema_sql_postgres()
+    );
+    for table in [
+        "sessions",
+        "temporary_checkpoints",
+        "checkpoints",
+        "checkpoint_sessions",
+        "commit_checkpoints",
+        "pre_prompt_states",
+        "pre_task_markers",
+        "checkpoint_blobs",
+    ] {
+        assert!(
+            schema.contains(&format!("CREATE TABLE IF NOT EXISTS {table}")),
+            "expected checkpoint table `{table}` in postgres schema"
+        );
+    }
 }

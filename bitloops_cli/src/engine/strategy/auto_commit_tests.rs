@@ -3,8 +3,7 @@ use std::fs;
 use tempfile::TempDir;
 
 use crate::engine::paths;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::strategy::manual_commit::run_git;
 use crate::engine::trailers::{
     METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
@@ -485,7 +484,7 @@ fn auto_commit_initialize_session_creates_session_state() {
     SessionInitializer::initialize_session(&strategy, session_id, "claude-code", "", "")
         .expect("initialize_session should run");
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let state = backend
         .load_session(session_id)
         .expect("load_session")

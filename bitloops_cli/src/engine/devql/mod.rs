@@ -18,9 +18,9 @@ use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
 use crate::engine::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_committed, read_session_content, run_git,
+    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
+    read_session_content, run_git,
 };
-use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use crate::terminal::db_status_table::print_db_status_table;
 
 #[derive(Debug, Clone)]
