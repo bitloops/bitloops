@@ -6,6 +6,8 @@ struct IngestionCounters {
     events_inserted: usize,
     artefacts_upserted: usize,
     checkpoints_without_commit: usize,
+    semantic_feature_rows_upserted: usize,
+    semantic_feature_rows_skipped: usize,
 }
 
 #[derive(Debug, Clone)]

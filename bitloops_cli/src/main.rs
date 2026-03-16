@@ -1,9 +1,9 @@
 use clap::Parser;
 
+pub use bitloops_cli::devql_config;
 pub use bitloops_cli::engine;
 mod branding;
 mod commands;
-mod devql_config;
 mod server;
 
 #[cfg(test)]

@@ -25,6 +25,10 @@ const ENV_CLICKHOUSE_URL: &str = "BITLOOPS_DEVQL_CH_URL";
 const ENV_CLICKHOUSE_USER: &str = "BITLOOPS_DEVQL_CH_USER";
 const ENV_CLICKHOUSE_PASSWORD: &str = "BITLOOPS_DEVQL_CH_PASSWORD";
 const ENV_CLICKHOUSE_DATABASE: &str = "BITLOOPS_DEVQL_CH_DATABASE";
+const ENV_SEMANTIC_PROVIDER: &str = "BITLOOPS_DEVQL_SEMANTIC_PROVIDER";
+const ENV_SEMANTIC_MODEL: &str = "BITLOOPS_DEVQL_SEMANTIC_MODEL";
+const ENV_SEMANTIC_API_KEY: &str = "BITLOOPS_DEVQL_SEMANTIC_API_KEY";
+const ENV_SEMANTIC_BASE_URL: &str = "BITLOOPS_DEVQL_SEMANTIC_BASE_URL";
 const ENV_BLOB_STORAGE_PROVIDER: &str = "BITLOOPS_DEVQL_BLOB_PROVIDER";
 const ENV_BLOB_LOCAL_PATH: &str = "BITLOOPS_DEVQL_BLOB_LOCAL_PATH";
 const ENV_BLOB_S3_BUCKET: &str = "BITLOOPS_DEVQL_BLOB_S3_BUCKET";
@@ -80,6 +84,14 @@ pub struct DevqlBackendConfig {
     pub blobs: BlobStorageConfig,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DevqlSemanticConfig {
+    pub semantic_provider: Option<String>,
+    pub semantic_model: Option<String>,
+    pub semantic_api_key: Option<String>,
+    pub semantic_base_url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationalBackendConfig {
     pub provider: RelationalProvider,
@@ -128,6 +140,19 @@ impl EventsBackendConfig {
             }
         }
     }
+
+    pub fn clickhouse_endpoint(&self) -> String {
+        let base = self
+            .clickhouse_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:8123".to_string());
+        let database = self
+            .clickhouse_database
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let base = base.trim_end_matches('/');
+        format!("{base}/?database={database}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +185,10 @@ pub struct DevqlFileConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: Option<String>,
+    pub(crate) semantic_provider: Option<String>,
+    pub(crate) semantic_model: Option<String>,
+    pub(crate) semantic_api_key: Option<String>,
+    pub(crate) semantic_base_url: Option<String>,
     pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
@@ -257,6 +286,10 @@ impl DevqlFileConfig {
                     ],
                 )
             }),
+            semantic_provider: read_any_string(root, &["semantic_provider", ENV_SEMANTIC_PROVIDER]),
+            semantic_model: read_any_string(root, &["semantic_model", ENV_SEMANTIC_MODEL]),
+            semantic_api_key: read_any_string(root, &["semantic_api_key", ENV_SEMANTIC_API_KEY]),
+            semantic_base_url: read_any_string(root, &["semantic_base_url", ENV_SEMANTIC_BASE_URL]),
             blob_provider: read_any_string_opt(
                 blobs,
                 &["provider", "blob_provider", ENV_BLOB_STORAGE_PROVIDER],
@@ -342,6 +375,11 @@ pub fn dashboard_use_bitloops_local() -> bool {
 pub fn resolve_devql_backend_config() -> Result<DevqlBackendConfig> {
     let file_cfg = DevqlFileConfig::load();
     resolve_devql_backend_config_with(file_cfg, |key| env::var(key).ok())
+}
+
+pub fn resolve_devql_semantic_config() -> DevqlSemanticConfig {
+    let file_cfg = DevqlFileConfig::load();
+    resolve_devql_semantic_config_with(file_cfg, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -469,6 +507,25 @@ where
             gcs_credentials_path: blob_gcs_credentials_path,
         },
     })
+}
+
+fn resolve_devql_semantic_config_with<F>(
+    file_cfg: DevqlFileConfig,
+    env_lookup: F,
+) -> DevqlSemanticConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    DevqlSemanticConfig {
+        semantic_provider: read_non_empty_env(&env_lookup, ENV_SEMANTIC_PROVIDER)
+            .or(file_cfg.semantic_provider),
+        semantic_model: read_non_empty_env(&env_lookup, ENV_SEMANTIC_MODEL)
+            .or(file_cfg.semantic_model),
+        semantic_api_key: read_non_empty_env(&env_lookup, ENV_SEMANTIC_API_KEY)
+            .or(file_cfg.semantic_api_key),
+        semantic_base_url: read_non_empty_env(&env_lookup, ENV_SEMANTIC_BASE_URL)
+            .or(file_cfg.semantic_base_url),
+    }
 }
 
 fn user_home_config_path() -> Option<PathBuf> {
@@ -633,6 +690,22 @@ pub(crate) fn resolve_devql_backend_config_for_tests(
 }
 
 #[cfg(test)]
+pub(crate) fn resolve_devql_semantic_config_for_tests(
+    file_cfg: DevqlFileConfig,
+    env: &[(&str, &str)],
+) -> DevqlSemanticConfig {
+    resolve_devql_semantic_config_with(file_cfg, |key| {
+        env.iter().find_map(|(k, v)| {
+            if *k == key {
+                Some((*v).to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -745,6 +818,58 @@ mod tests {
 
         let message = err.to_string();
         assert!(message.contains("unsupported devql"));
+    }
+
+    #[test]
+    fn semantic_config_reads_values_from_devql_file() {
+        let value = serde_json::json!({
+            "devql": {
+                "semantic_provider": "openai",
+                "semantic_model": "gpt-4.1-mini",
+                "semantic_api_key": "file-key",
+                "semantic_base_url": "http://localhost:11434/v1/chat/completions"
+            }
+        });
+        let file_cfg = DevqlFileConfig::from_json_value(&value);
+
+        let cfg = resolve_devql_semantic_config_for_tests(file_cfg, &[]);
+        assert_eq!(cfg.semantic_provider.as_deref(), Some("openai"));
+        assert_eq!(cfg.semantic_model.as_deref(), Some("gpt-4.1-mini"));
+        assert_eq!(cfg.semantic_api_key.as_deref(), Some("file-key"));
+        assert_eq!(
+            cfg.semantic_base_url.as_deref(),
+            Some("http://localhost:11434/v1/chat/completions")
+        );
+    }
+
+    #[test]
+    fn semantic_config_honors_env_over_file_precedence() {
+        let value = serde_json::json!({
+            "devql": {
+                "semantic_provider": "openai",
+                "semantic_model": "gpt-4.1-mini",
+                "semantic_api_key": "file-key"
+            }
+        });
+        let file_cfg = DevqlFileConfig::from_json_value(&value);
+        let env = [
+            (ENV_SEMANTIC_PROVIDER, "openai_compatible"),
+            (ENV_SEMANTIC_MODEL, "qwen2.5-coder"),
+            (ENV_SEMANTIC_API_KEY, "env-key"),
+            (
+                ENV_SEMANTIC_BASE_URL,
+                "http://localhost:11434/v1/chat/completions",
+            ),
+        ];
+
+        let cfg = resolve_devql_semantic_config_for_tests(file_cfg, &env);
+        assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
+        assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
+        assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
+        assert_eq!(
+            cfg.semantic_base_url.as_deref(),
+            Some("http://localhost:11434/v1/chat/completions")
+        );
     }
 
     #[test]

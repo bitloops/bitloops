@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -13,10 +13,12 @@ use tokio_postgres::{NoTls, config::SslMode};
 use crate::devql_config::{
     DevqlBackendConfig, DevqlFileConfig, EventsBackendConfig, EventsProvider,
     RelationalBackendConfig, RelationalProvider, resolve_devql_backend_config,
+    resolve_devql_semantic_config,
 };
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
+use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_session_content, run_git,
@@ -41,11 +43,16 @@ pub struct DevqlConfig {
     pub(crate) clickhouse_user: Option<String>,
     pub(crate) clickhouse_password: Option<String>,
     pub(crate) clickhouse_database: String,
+    pub(crate) semantic_provider: Option<String>,
+    pub(crate) semantic_model: Option<String>,
+    pub(crate) semantic_api_key: Option<String>,
+    pub(crate) semantic_base_url: Option<String>,
 }
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Self {
         let file_cfg = DevqlFileConfig::load();
+        let semantic_cfg = resolve_devql_semantic_config();
         Self {
             repo_root,
             repo,
@@ -71,6 +78,10 @@ impl DevqlConfig {
                 .filter(|s| !s.trim().is_empty())
                 .or(file_cfg.clickhouse_database)
                 .unwrap_or_else(|| "default".to_string()),
+            semantic_provider: semantic_cfg.semantic_provider,
+            semantic_model: semantic_cfg.semantic_model,
+            semantic_api_key: semantic_cfg.semantic_api_key,
+            semantic_base_url: semantic_cfg.semantic_base_url,
         }
     }
 
@@ -244,6 +255,15 @@ fn clickhouse_endpoint(url: &str, database: &str) -> String {
     format!("{base}/?database={database}")
 }
 
+fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
+    semantic::SemanticSummaryProviderConfig {
+        semantic_provider: cfg.semantic_provider.clone(),
+        semantic_model: cfg.semantic_model.clone(),
+        semantic_api_key: cfg.semantic_api_key.clone(),
+        semantic_base_url: cfg.semantic_base_url.clone(),
+    }
+}
+
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     init_clickhouse_schema(cfg).await?;
@@ -257,6 +277,8 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
+        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if init {
         init_clickhouse_schema(cfg).await?;
@@ -316,6 +338,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             let Some(blob_sha) = blob_sha else {
                 continue;
             };
+            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
             upsert_file_state_row(cfg, &pg_client, &commit_sha, &normalized_path, &blob_sha)
                 .await?;
@@ -335,18 +358,39 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &file_artefact,
             )
             .await?;
+            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                &pg_client,
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs = semantic::build_semantic_feature_inputs_from_artefacts(
+                &pre_stage_artefacts,
+                &content,
+            );
+            let semantic_feature_stats = upsert_semantic_feature_rows(
+                &pg_client,
+                &semantic_feature_inputs,
+                Arc::clone(&summary_provider),
+            )
+            .await?;
             counters.artefacts_upserted += 1;
+            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
         counters.checkpoints_processed += 1;
     }
 
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
-        counters.checkpoints_without_commit
+        counters.checkpoints_without_commit,
+        counters.semantic_feature_rows_upserted,
+        counters.semantic_feature_rows_skipped
     );
     Ok(())
 }
@@ -400,6 +444,8 @@ include!("ingestion/artefact_identity.rs");
 include!("ingestion/checkpoint.rs");
 // ingestion: file & language artefact DB upserts
 include!("ingestion/artefact_persistence.rs");
+// ingestion: Stage 1 semantic persistence
+include!("ingestion/semantic_features_persistence.rs");
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)

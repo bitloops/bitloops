@@ -84,6 +84,10 @@ impl DevqlBddWorld {
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: "default".to_string(),
+            semantic_provider: None,
+            semantic_model: None,
+            semantic_api_key: None,
+            semantic_base_url: None,
         }
     }
 
