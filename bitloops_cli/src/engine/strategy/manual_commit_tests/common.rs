@@ -6,7 +6,7 @@ use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::test_support::process_state::{
-    ALLOW_HOST_GIT_CONFIG_ENV, git_command, with_git_env_cleared,
+    ALLOW_HOST_GIT_CONFIG_ENV, git_command, with_env_vars, with_git_env_cleared,
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
