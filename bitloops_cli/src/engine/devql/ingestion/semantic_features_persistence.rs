@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     repo_id TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
     semantic_features_input_hash TEXT NOT NULL,
-    doc_comment_summary TEXT,
+    docstring_summary TEXT,
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
@@ -36,8 +36,30 @@ ON symbol_features (repo_id, blob_sha);
 "#
 }
 
+fn semantic_features_postgres_upgrade_sql() -> &'static str {
+    r#"
+ALTER TABLE symbol_semantics ADD COLUMN IF NOT EXISTS docstring_summary TEXT;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'symbol_semantics'
+          AND column_name = 'doc_comment_summary'
+    ) THEN
+        UPDATE symbol_semantics
+        SET docstring_summary = doc_comment_summary
+        WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL;
+    END IF;
+END $$;
+"#
+}
+
 async fn init_postgres_semantic_features_schema(pg_client: &tokio_postgres::Client) -> Result<()> {
-    postgres_exec(pg_client, semantic_features_postgres_schema_sql()).await
+    postgres_exec(pg_client, semantic_features_postgres_schema_sql()).await?;
+    postgres_exec(pg_client, semantic_features_postgres_upgrade_sql()).await
 }
 
 async fn load_pre_stage_artefacts_for_blob(
@@ -104,7 +126,7 @@ fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -
         "SELECT artefact_id, symbol_id, repo_id, blob_sha, path, language, \
 COALESCE(canonical_kind, COALESCE(language_kind, 'symbol')) AS canonical_kind, \
 COALESCE(language_kind, COALESCE(canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, docstring AS doc_comment, content_hash \
+COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, docstring, content_hash \
 FROM artefacts \
 WHERE repo_id = '{repo_id}' AND blob_sha = '{blob_sha}' AND path = '{path}' \
 ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
@@ -154,7 +176,7 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     let semantics = &rows.semantics;
     let features = &rows.features;
 
-    let doc_comment_summary_expr = sql_optional_string(semantics.doc_comment_summary.as_deref());
+    let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
     let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
     let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
@@ -164,9 +186,9 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     let context_tokens_expr = sql_jsonb_string(&features.context_tokens)?;
 
     Ok(format!(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, doc_comment_summary, llm_summary, template_summary, summary, confidence, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {doc_comment_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, doc_comment_summary = EXCLUDED.doc_comment_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now(); \
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now(); \
 INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
 VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
@@ -174,7 +196,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
         input_hash = esc_pg(&rows.semantic_features_input_hash),
-        doc_comment_summary = doc_comment_summary_expr,
+        docstring_summary = docstring_summary_expr,
         llm_summary = llm_summary_expr,
         template_summary = esc_pg(&semantics.template_summary),
         summary = esc_pg(&semantics.summary),
@@ -228,7 +250,7 @@ mod semantic_feature_persistence_tests {
                 name: "getById".to_string(),
                 signature: Some("async getById(id: string): Promise<User | null>".to_string()),
                 body: "return repo.findById(id);".to_string(),
-                doc_comment: Some("Fetches O'Brien by id.".to_string()),
+                docstring: Some("Fetches O'Brien by id.".to_string()),
                 parent_kind: Some("class".to_string()),
                 content_hash: Some("hash-1".to_string()),
             },
@@ -241,6 +263,14 @@ mod semantic_feature_persistence_tests {
         let schema = semantic_features_postgres_schema_sql();
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS symbol_semantics"));
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS symbol_features"));
+        assert!(schema.contains("docstring_summary TEXT"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_upgrade_sql_backfills_legacy_doc_comment_summary() {
+        let sql = semantic_features_postgres_upgrade_sql();
+        assert!(sql.contains("ADD COLUMN IF NOT EXISTS docstring_summary TEXT"));
+        assert!(sql.contains("doc_comment_summary"));
     }
 
     #[test]
@@ -249,7 +279,7 @@ mod semantic_feature_persistence_tests {
         assert!(sql.contains("repo_id = 'repo''1'"));
         assert!(sql.contains("blob_sha = 'blob''1'"));
         assert!(sql.contains("path = 'src/o''brien.ts'"));
-        assert!(sql.contains("docstring AS doc_comment"));
+        assert!(sql.contains("signature, docstring, content_hash"));
     }
 
     #[test]
@@ -271,7 +301,7 @@ mod semantic_feature_persistence_tests {
         let sql = build_semantic_persist_rows_sql(&sample_semantic_rows()).expect("persist SQL");
         assert!(sql.contains("INSERT INTO symbol_semantics"));
         assert!(sql.contains("INSERT INTO symbol_features"));
-        assert!(sql.contains("doc_comment_summary"));
+        assert!(sql.contains("docstring_summary"));
         assert!(sql.contains("Fetches O''Brien by id."));
         assert!(sql.contains("::jsonb"));
     }

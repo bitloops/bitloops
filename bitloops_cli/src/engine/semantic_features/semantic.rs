@@ -123,7 +123,7 @@ path: {path}\n\
 symbol_fqn: {symbol_fqn}\n\
 name: {name}\n\
 signature: {signature}\n\
-doc_comment: {doc_comment}\n\
+docstring: {docstring}\n\
 parent_kind: {parent_kind}\n\
 body:\n{body}",
         language = input.language,
@@ -133,7 +133,7 @@ body:\n{body}",
         symbol_fqn = input.symbol_fqn,
         name = input.name,
         signature = input.signature.as_deref().unwrap_or(""),
-        doc_comment = input.doc_comment.as_deref().unwrap_or(""),
+        docstring = input.docstring.as_deref().unwrap_or(""),
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
         body = body,
     )
@@ -192,7 +192,7 @@ pub struct SymbolSemanticsRow {
     pub artefact_id: String,
     pub repo_id: String,
     pub blob_sha: String,
-    pub doc_comment_summary: Option<String>,
+    pub docstring_summary: Option<String>,
     pub llm_summary: Option<String>,
     pub template_summary: String,
     pub summary: String,
@@ -203,7 +203,7 @@ pub(super) fn build_semantics_row(
     input: &SemanticFeatureInput,
     summary_provider: &dyn SemanticSummaryProvider,
 ) -> SymbolSemanticsRow {
-    let doc_comment_summary = extract_summary_from_doc_comment(input.doc_comment.as_deref());
+    let docstring_summary = extract_summary_from_docstring(input.docstring.as_deref());
     let llm_candidate = summary_provider.generate(input);
     let llm_summary = llm_candidate
         .as_ref()
@@ -220,14 +220,14 @@ pub(super) fn build_semantics_row(
 
     // Persist every candidate, then synthesize a single canonical summary for Stage 3 and
     // other downstream consumers. Template stays as stable scaffolding, LLM adds the current
-    // behavioral description when available, and doc comments remain a fallback/supporting hint.
+    // behavioral description when available, and docstrings remain a fallback/supporting hint.
     let summary = synthesize_summary(
         &template_summary,
-        doc_comment_summary.as_deref(),
+        docstring_summary.as_deref(),
         valid_llm_summary.as_deref(),
     );
     let confidence = synthesize_summary_confidence(
-        doc_comment_summary.as_deref(),
+        docstring_summary.as_deref(),
         valid_llm_summary.as_deref(),
         llm_confidence,
     );
@@ -236,7 +236,7 @@ pub(super) fn build_semantics_row(
         artefact_id: input.artefact_id.clone(),
         repo_id: input.repo_id.clone(),
         blob_sha: input.blob_sha.clone(),
-        doc_comment_summary,
+        docstring_summary,
         llm_summary,
         template_summary,
         summary,
@@ -245,8 +245,8 @@ pub(super) fn build_semantics_row(
     }
 }
 
-fn extract_summary_from_doc_comment(comment: Option<&str>) -> Option<String> {
-    let normalized = normalize_summary_text(comment?);
+fn extract_summary_from_docstring(docstring: Option<&str>) -> Option<String> {
+    let normalized = normalize_summary_text(docstring?);
     if normalized.is_empty() {
         return None;
     }
@@ -270,10 +270,10 @@ pub(super) fn normalize_summary_text(summary: &str) -> String {
 
 fn synthesize_summary(
     template_summary: &str,
-    doc_comment_summary: Option<&str>,
+    docstring_summary: Option<&str>,
     llm_summary: Option<&str>,
 ) -> String {
-    let detail_summary = llm_summary.or(doc_comment_summary);
+    let detail_summary = llm_summary.or(docstring_summary);
     let Some(detail_summary) = detail_summary else {
         return template_summary.to_string();
     };
@@ -288,21 +288,21 @@ fn synthesize_summary(
 }
 
 fn synthesize_summary_confidence(
-    doc_comment_summary: Option<&str>,
+    docstring_summary: Option<&str>,
     llm_summary: Option<&str>,
     llm_confidence: Option<f32>,
 ) -> f32 {
     match llm_summary {
         Some(llm_summary) => {
             let mut confidence = llm_confidence.unwrap_or(0.75_f32).clamp(0.0, 1.0);
-            if let Some(doc_comment_summary) = doc_comment_summary
-                && summaries_have_meaningful_overlap(doc_comment_summary, llm_summary)
+            if let Some(docstring_summary) = docstring_summary
+                && summaries_have_meaningful_overlap(docstring_summary, llm_summary)
             {
                 confidence = (confidence + 0.08_f32).min(0.95_f32);
             }
             confidence
         }
-        None if doc_comment_summary.is_some() => 0.68_f32,
+        None if docstring_summary.is_some() => 0.68_f32,
         None => 0.35_f32,
     }
 }
@@ -412,7 +412,7 @@ mod tests {
             name: name.to_string(),
             signature: Some(format!("function {name}()")),
             body: "return value;".to_string(),
-            doc_comment: None,
+            docstring: None,
             parent_kind: Some("module".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
@@ -442,11 +442,11 @@ mod tests {
     #[test]
     fn semantic_features_prompt_includes_context_and_truncates_body() {
         let mut input = sample_input("function", "normalizeEmail");
-        input.doc_comment = Some("// Normalizes email.".to_string());
+        input.docstring = Some("// Normalizes email.".to_string());
         input.body = "x".repeat(MAX_SUMMARY_BODY_CHARS + 50);
 
         let prompt = build_semantic_summary_prompt(&input);
-        assert!(prompt.contains("doc_comment: // Normalizes email."));
+        assert!(prompt.contains("docstring: // Normalizes email."));
         let body_section = prompt
             .split("body:\n")
             .nth(1)
@@ -455,10 +455,10 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_extract_summary_from_doc_comment_keeps_first_sentence() {
-        let comment = "Normalize email addresses before persistence. Keeps casing stable.";
+    fn semantic_features_extract_summary_from_docstring_keeps_first_sentence() {
+        let docstring = "Normalize email addresses before persistence. Keeps casing stable.";
 
-        let summary = extract_summary_from_doc_comment(Some(comment));
+        let summary = extract_summary_from_docstring(Some(docstring));
         assert_eq!(
             summary.as_deref(),
             Some("Normalize email addresses before persistence.")
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_synthesize_summary_uses_doc_comment_when_llm_missing() {
+    fn semantic_features_synthesize_summary_uses_docstring_when_llm_missing() {
         let summary = synthesize_summary(
             "Function normalize email.",
             Some("Normalize email addresses before persistence."),

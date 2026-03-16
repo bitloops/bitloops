@@ -20,7 +20,7 @@ pub use self::semantic::{
 };
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
-const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v1";
+const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v2";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
@@ -50,8 +50,8 @@ pub struct PreStageArtefactRow {
     pub end_byte: Option<i32>,
     #[serde(default)]
     pub signature: Option<String>,
-    #[serde(default)]
-    pub doc_comment: Option<String>,
+    #[serde(default, alias = "doc_comment")]
+    pub docstring: Option<String>,
     #[serde(default)]
     pub content_hash: Option<String>,
 }
@@ -70,7 +70,7 @@ pub struct SemanticFeatureInput {
     pub name: String,
     pub signature: Option<String>,
     pub body: String,
-    pub doc_comment: Option<String>,
+    pub docstring: Option<String>,
     pub parent_kind: Option<String>,
     pub content_hash: Option<String>,
 }
@@ -136,7 +136,7 @@ fn build_semantic_feature_input_from_artefact(
         name,
         signature: row.signature.clone(),
         body,
-        doc_comment: row.doc_comment.clone(),
+        docstring: row.docstring.clone(),
         parent_kind: parent.map(|parent_row| parent_row.canonical_kind.clone()),
         content_hash: row.content_hash.clone(),
     }
@@ -220,8 +220,8 @@ pub fn build_semantic_feature_input_hash(
             "name": normalize_name(&input.name),
             "signature": input.signature.as_deref().map(normalize_signature),
             "body_tokens": build_body_tokens(&input.body),
-            "doc_comment": input
-                .doc_comment
+            "docstring": input
+                .docstring
                 .as_deref()
                 .map(normalize_summary_text)
                 .filter(|value| !value.is_empty()),
@@ -272,7 +272,7 @@ mod tests {
             start_byte: None,
             end_byte: None,
             signature: Some("async getById(id: string): Promise<User> {".to_string()),
-            doc_comment: Some("Fetch a user by id.".to_string()),
+            docstring: Some("Fetch a user by id.".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
     }
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_input_hash_changes_when_doc_comment_changes() {
+    fn semantic_features_input_hash_changes_when_docstring_changes() {
         let base = SemanticFeatureInput {
             artefact_id: "artefact-1".to_string(),
             symbol_id: Some("symbol-1".to_string()),
@@ -308,12 +308,12 @@ mod tests {
             name: "normalizeEmail".to_string(),
             signature: Some("export function normalizeEmail(email: string): string {".to_string()),
             body: "return email.trim().toLowerCase();".to_string(),
-            doc_comment: Some("Normalize email addresses.".to_string()),
+            docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
             content_hash: Some("hash-1".to_string()),
         };
         let mut changed = base.clone();
-        changed.doc_comment = Some("Normalizes email for storage.".to_string());
+        changed.docstring = Some("Normalizes email for storage.".to_string());
 
         assert_ne!(
             build_semantic_feature_input_hash(&base, &semantic::NoopSemanticSummaryProvider),
@@ -350,7 +350,7 @@ mod tests {
             name: "normalizeEmail".to_string(),
             signature: Some("export function normalizeEmail(email: string): string {".to_string()),
             body: "return email.trim().toLowerCase();".to_string(),
-            doc_comment: Some("Normalize email addresses.".to_string()),
+            docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
             content_hash: Some("hash-1".to_string()),
         };
