@@ -240,7 +240,7 @@ mod tests {
             global_config_path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("global-") && name.ends_with(".gitconfig"))
+                .is_some_and(|name| name.starts_with("repo-") && name.ends_with(".gitconfig"))
         );
         assert!(
             envs.iter()
