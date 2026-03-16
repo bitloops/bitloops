@@ -1,6 +1,8 @@
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -38,7 +40,16 @@ pub(crate) fn git_command() -> Command {
 }
 
 pub(crate) fn isolated_git_command(repo_root: &Path) -> Command {
-    let global_config = repo_root.join(".bitloops-test-global.gitconfig");
+    let mut hasher = DefaultHasher::new();
+    repo_root.hash(&mut hasher);
+    let repo_hash = hasher.finish();
+
+    let config_dir = env::temp_dir().join("bitloops-test-git-config");
+    fs::create_dir_all(&config_dir).expect("create isolated git config dir");
+    let global_config = config_dir.join(format!(
+        "global-{}-{repo_hash:016x}.gitconfig",
+        std::process::id()
+    ));
     if !global_config.exists() {
         fs::write(&global_config, "").expect("create isolated git config");
     }
