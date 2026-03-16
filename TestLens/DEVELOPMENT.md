@@ -21,6 +21,8 @@ Production artefacts are seeded first; test artefacts/links/runs are discovered 
 - DB (default): `./testlens.db`
 - TypeScript fixture repo: `./testlens-fixture`
 - Rust fixture repo: `./testlens-fixture-rust`
+- Real Rust workspace fixture repo: `./75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5`
+- Real Rust workspace fixture commit: `75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5`
 - LCOV output: `./testlens-fixture/coverage/lcov.info`
 - Jest JSON output: `./test-results.json`
 
@@ -74,7 +76,7 @@ Notes:
   - `scripts/init-fixture-db.sh` = `init` + `ingest-production-artefacts`
   - `scripts/ingest-fixture-coverage.sh` = Jest run + `ingest-tests` + `ingest-coverage` + `ingest-results`
 
-### 3.2 Rust Target Fixture
+### 3.2 Rust Target Fixture (Compact Coverage Flow)
 
 This flow exercises the Rust-first target fixture and validates production discovery, test discovery, static linkage, and query behavior.
 
@@ -126,6 +128,86 @@ Rust fixture notes:
 - `cargo llvm-cov --lcov` is the documented Rust coverage-generation path for the fixture.
 - `ingest-results` is currently Jest JSON based, so it is part of the TypeScript/Jest flow, not the Rust fixture flow.
 
+### 3.3 Real Rust Workspace Fixture (Agent Story Quickstart)
+
+This flow uses the real Ruff workspace fixture at commit `75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5`.
+It is the best local path for exercising the agent-helpful stories that are already ready now:
+
+- Scenario 1 / 10: pre-change safety assessment and deciding whether to add tests first
+- Scenario 2 / 8: understanding what tests exist and what local test style looks like
+- Scenario 6: spotting effectively untested code
+- Scenario 9: suppressing weaker cross-cutting links by default
+
+On March 16, 2026, a fresh local run against this fixture produced:
+
+- `873` test suites
+- `4859` test scenarios
+- `64760` links
+- `enumeration: source-only` with explicit timeout notes from Cargo list commands
+
+Reference:
+
+- `docs/validation/agent_user_stories_ready_now.md`
+- `docs/quickstart_ruff_fixture.md`
+
+From repo root:
+
+```bash
+cargo install --path . --force
+
+# 0) Reset DB (recommended for a clean run)
+rm -f ./target/ruff-real-project.db
+
+# 1) Initialize schema only
+testlens init --db ./target/ruff-real-project.db
+
+# 2) Ingest production artefacts from the real workspace
+testlens ingest-production-artefacts --db ./target/ruff-real-project.db --repo-dir ./75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5
+
+# 3) Build Rust test suite/scenario artefacts and static links
+testlens ingest-tests --db ./target/ruff-real-project.db --repo-dir ./75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5
+
+# Optional: verify that the workspace produced test links
+sqlite3 ./target/ruff-real-project.db "select count(*) from artefacts where commit_sha='75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5' and canonical_kind='test_suite';"
+sqlite3 ./target/ruff-real-project.db "select count(*) from artefacts where commit_sha='75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5' and canonical_kind='test_scenario';"
+sqlite3 ./target/ruff-real-project.db "select count(*) from test_links where commit_sha='75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5';"
+```
+
+Query the real workspace by user story:
+
+```bash
+# Scenario 1 / 10: Is this artefact safe to change before editing?
+testlens query --db ./target/ruff-real-project.db --artefact RootDatabase.upcast --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view summary
+testlens query --db ./target/ruff-real-project.db --artefact string_dot_format_extra_positional_arguments --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view summary
+
+# Scenario 2 / 8: Which concrete tests cover this artefact, and what naming/style do they use?
+testlens query --db ./target/ruff-real-project.db --artefact RootDatabase.upcast --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view tests
+testlens query --db ./target/ruff-real-project.db --artefact string_dot_format_extra_positional_arguments --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view tests --min-strength 0.0
+
+# Scenario 9: Show the weaker links that are hidden by the default min-strength filter
+testlens query --db ./target/ruff-real-project.db --artefact RootDatabase.upcast --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view tests --min-strength 0.0
+
+# Cross-cutting example: inspect a noisy artefact with many linked tests
+testlens query --db ./target/ruff-real-project.db --artefact LineColumn.default --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view tests
+
+# Benchmark residuals: helper-level artefacts that still have no direct linked tests
+testlens query --db ./target/ruff-real-project.db --artefact remove_unused_positional_arguments_from_format_call --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view summary
+testlens query --db ./target/ruff-real-project.db --artefact transform_expression --commit 75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5 --view summary
+```
+
+Real workspace notes:
+
+- This flow is verified for multi-crate Rust workspace discovery, source-discovered Rust test linkage, and static query stories.
+- The current Ruff fixture run produces production artefacts, Rust test artefacts, and static links without assuming repo-root `src/`.
+- Rust test ingestion now supports inline `src/**.rs` test modules and parameterized `#[test_case(...)]` scenarios on the synthetic Ruff-style acceptance fixture.
+- `RootDatabase.upcast` currently returns `partially_tested` with `9` linked tests on the March 16, 2026 validation run.
+- `string_dot_format_extra_positional_arguments` currently returns `partially_tested` with the expected F523 harness case plus a linked doctest.
+- `RootDatabase.new` is no longer a good untested example on the current run; it now returns `partially_tested` with `4` linked tests.
+- `LineColumn.default` is a good stress case for cross-cutting or noisy results because it currently links to many tests.
+- Large workspaces like Ruff may fall back to `enumeration: source-only` when `cargo test -- --list` or `cargo test --doc -- --list` time out. That degraded mode is explicit in CLI output and does not block source-discovered ingestion.
+- Residual benchmark gap: helper-level artefacts such as `remove_unused_positional_arguments_from_format_call` and `transform_expression` still do not link directly from the current static model.
+- Keep the compact Rust fixture above for the documented LCOV flow until Rust coverage ingestion is validated on this larger workspace.
+
 ## 4) CLI Commands
 
 - `testlens init`
@@ -172,7 +254,7 @@ Precondition:
 
 - Production artefacts must already exist in `artefacts` for the same `--commit`
   (typically via `ingest-production-artefacts`).
-- `ingest-tests` resolves `repo_id` from production rows under `src/%`; if missing, ingestion fails.
+- `ingest-tests` resolves `repo_id` from previously ingested production rows for the same commit; if none exist, ingestion fails.
 
 Discovery rules:
 

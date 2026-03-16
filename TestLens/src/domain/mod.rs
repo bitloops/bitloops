@@ -21,6 +21,7 @@ pub struct ProductionArtefact {
     pub artefact_id: String,
     pub symbol_fqn: String,
     pub path: String,
+    pub start_line: i64,
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,5 @@
 TestLens Roadmap
-Date: 2026-03-13
+Date: 2026-03-16
 
 Policy
 - Every newly added feature must ship with both:
@@ -67,6 +67,55 @@ Roadmap
 - Document prototype transport, thresholds, and deferred decision areas
 - Jira alignment:
   - `CLI-1352`
+
+[done] Rust inline and parameterized test linkage
+- Discover Rust inline `#[cfg(test)]` modules under `src/**.rs` without materializing non-test source files as test artefacts
+- Recognize parameterized Rust test attributes such as `#[test_case(...)]`
+- Expand parameterized test attributes into case-level test scenarios
+- Link Ruff-style rule harness cases to the exercised rule function when tests pass enum-based rule selection through helper functions
+- Add BDD coverage and a real SQLite end-to-end acceptance path for the new Rust linkage shape
+- Status note:
+  - Code, unit tests, BDD coverage, and the synthetic Ruff-style full journey are green
+  - A fresh Ruff run on 2026-03-16 now links `string_dot_format_extra_positional_arguments` to the expected F523 harness case
+  - Remaining deeper helper attribution is tracked separately from test artefact detection completeness
+- Jira alignment:
+  - `CLI-1368`
+
+[done] Rust test declaration completeness
+- Extend Rust test artefact detection beyond plain `#[test]` and `#[test_case(...)]`
+- Cover other common Rust test declaration styles:
+  - `#[rstest]` with case/template-driven scenarios
+  - `#[wasm_bindgen_test]`
+  - property-test attributes and macro-generated tests such as `#[quickcheck]`, `#[quickcheck_macros::quickcheck]`, and `proptest!`
+  - doctests where they materially represent executable test scenarios for a production artefact
+- Keep non-test benches such as `criterion` / `divan` out of the test artefact model
+- Add BDD coverage plus a real SQLite acceptance journey that proves these patterns are discovered and queryable
+- Status note:
+  - `#[wasm_bindgen_test]`, macro-generated quickcheck, `#[rstest]`, `proptest!`, and rustdoc doctests now have unit, BDD, and SQLite-backed acceptance coverage
+  - Fresh Ruff validation on 2026-03-16 produced `929` test files, `873` suites, `4859` scenarios, and `64760` links from a clean DB
+  - Ruff currently degrades gracefully to `enumeration: source-only` because `cargo test -- --list` and `cargo test --doc -- --list` time out on the full workspace; ingestion still succeeds and benchmark-relevant rule-harness coverage is queryable
+- Jira alignment:
+  - `CLI-1369`
+
+[done] Rust test artefact detection completeness
+- Author a dedicated Rust detection PRD and baseline gap inventory
+- Land source-level support for `#[rstest]`, `proptest!`, and rustdoc doctests
+- Add hybrid Cargo / rustdoc enumeration and reconciliation with explicit degraded fallback
+- Re-run the full Ruff workspace from a fresh DB and validate benchmark-relevant query paths
+- Extend docs, quickstarts, traceability, and Jira so the rollout status is explicit
+- Status note:
+  - PRD: `docs/rust_test_detection_prd.md`
+  - Executable coverage: `features/cli_1381.feature` / `tests/e2e/cli_1381_gherkin.rs` and `features/rust_hybrid_detection_e2e.feature` / `tests/e2e/rust_hybrid_detection_e2e_gherkin.rs`
+  - Fresh Ruff validation confirms `string_dot_format_extra_positional_arguments` is now `partially_tested` with linked harness coverage; helper-level artefacts such as `remove_unused_positional_arguments_from_format_call` and `transform_expression` remain explicit residual gaps
+- Jira alignment:
+  - `CLI-1381`
+  - `CLI-1382`
+  - `CLI-1383`
+  - `CLI-1384`
+  - `CLI-1385`
+  - `CLI-1386`
+  - `CLI-1387`
+  - `CLI-1388`
 
 [later] Product tuning beyond the prototype
 - Empirically tune classification and verification thresholds on more repositories

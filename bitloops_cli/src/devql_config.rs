@@ -83,19 +83,6 @@ pub struct EventsBackendConfig {
 }
 
 impl EventsBackendConfig {
-    pub fn clickhouse_endpoint(&self) -> String {
-        let base = self
-            .clickhouse_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost:8123".to_string());
-        let database = self
-            .clickhouse_database
-            .clone()
-            .unwrap_or_else(|| "default".to_string());
-        let base = base.trim_end_matches('/');
-        format!("{base}/?database={database}")
-    }
-
     pub fn duckdb_path_or_default(&self) -> PathBuf {
         match self.duckdb_path.as_deref() {
             // For an explicitly configured path, preserve existing behavior:

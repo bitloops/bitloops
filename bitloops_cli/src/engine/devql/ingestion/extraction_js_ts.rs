@@ -1,5 +1,12 @@
 // JS/TS artefact extraction via tree-sitter.
 
+struct JsTsArtefactDescriptor<'a> {
+    language_kind: &'a str,
+    name: &'a str,
+    symbol_fqn: String,
+    parent_symbol_fqn: Option<String>,
+}
+
 fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
     Ok(extract_js_ts_artefacts_treesitter(content, path)?.unwrap_or_default())
 }
@@ -73,11 +80,12 @@ fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    path,
-                    node.kind(),
-                    name,
-                    format!("{path}::{name}"),
-                    None,
+                    JsTsArtefactDescriptor {
+                        language_kind: node.kind(),
+                        name,
+                        symbol_fqn: format!("{path}::{name}"),
+                        parent_symbol_fqn: None,
+                    },
                 );
             }
         }
@@ -91,11 +99,12 @@ fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    path,
-                    "class_declaration",
-                    name,
-                    class_fqn.clone(),
-                    None,
+                    JsTsArtefactDescriptor {
+                        language_kind: "class_declaration",
+                        name,
+                        symbol_fqn: class_fqn.clone(),
+                        parent_symbol_fqn: None,
+                    },
                 );
                 if let Some(body) = node.child_by_field_name("body") {
                     let mut cur = body.walk();
@@ -115,11 +124,12 @@ fn collect_js_ts_nodes_recursive(
                                         seen,
                                         child,
                                         content,
-                                        path,
-                                        language_kind,
-                                        name,
-                                        format!("{class_fqn}::{name}"),
-                                        Some(class_fqn.clone()),
+                                        JsTsArtefactDescriptor {
+                                            language_kind,
+                                            name,
+                                            symbol_fqn: format!("{class_fqn}::{name}"),
+                                            parent_symbol_fqn: Some(class_fqn.clone()),
+                                        },
                                     );
                                 }
                             }
@@ -132,11 +142,12 @@ fn collect_js_ts_nodes_recursive(
                                         seen,
                                         child,
                                         content,
-                                        path,
-                                        "public_field_definition",
-                                        name,
-                                        format!("{class_fqn}::{name}"),
-                                        Some(class_fqn.clone()),
+                                        JsTsArtefactDescriptor {
+                                            language_kind: "public_field_definition",
+                                            name,
+                                            symbol_fqn: format!("{class_fqn}::{name}"),
+                                            parent_symbol_fqn: Some(class_fqn.clone()),
+                                        },
                                     );
                                 }
                             }
@@ -156,11 +167,12 @@ fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    path,
-                    "variable_declarator",
-                    name,
-                    format!("{path}::{name}"),
-                    None,
+                    JsTsArtefactDescriptor {
+                        language_kind: "variable_declarator",
+                        name,
+                        symbol_fqn: format!("{path}::{name}"),
+                        parent_symbol_fqn: None,
+                    },
                 );
             }
         }
@@ -172,11 +184,12 @@ fn collect_js_ts_nodes_recursive(
                 seen,
                 node,
                 content,
-                path,
-                "import_statement",
-                &import_name,
-                format!("{path}::import::{import_name}"),
-                None,
+                JsTsArtefactDescriptor {
+                    language_kind: "import_statement",
+                    name: &import_name,
+                    symbol_fqn: format!("{path}::import::{import_name}"),
+                    parent_symbol_fqn: None,
+                },
             );
         }
         _ => {}
@@ -193,18 +206,18 @@ fn push_js_ts_artefact(
     seen: &mut HashSet<(String, String, i32)>,
     node: tree_sitter::Node,
     content: &str,
-    _path: &str,
-    language_kind: &str,
-    name: &str,
-    symbol_fqn: String,
-    parent_symbol_fqn: Option<String>,
+    descriptor: JsTsArtefactDescriptor<'_>,
 ) {
-    if name.is_empty() || !js_ts_supports_language_kind(language_kind) {
+    if descriptor.name.is_empty() || !js_ts_supports_language_kind(descriptor.language_kind) {
         return;
     }
 
     let start_line = node.start_position().row as i32 + 1;
-    if !seen.insert((language_kind.to_string(), name.to_string(), start_line)) {
+    if !seen.insert((
+        descriptor.language_kind.to_string(),
+        descriptor.name.to_string(),
+        start_line,
+    )) {
         return;
     }
 
@@ -217,11 +230,11 @@ fn push_js_ts_artefact(
         .to_string();
 
     out.push(JsTsArtefact {
-        canonical_kind: js_ts_canonical_kind(language_kind).map(str::to_string),
-        language_kind: language_kind.to_string(),
-        name: name.to_string(),
-        symbol_fqn,
-        parent_symbol_fqn,
+        canonical_kind: js_ts_canonical_kind(descriptor.language_kind).map(str::to_string),
+        language_kind: descriptor.language_kind.to_string(),
+        name: descriptor.name.to_string(),
+        symbol_fqn: descriptor.symbol_fqn,
+        parent_symbol_fqn: descriptor.parent_symbol_fqn,
         start_line,
         end_line: node.end_position().row as i32 + 1,
         start_byte: node.start_byte() as i32,

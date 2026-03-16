@@ -33,7 +33,7 @@ impl TestHarnessRepository for SqliteTestHarnessRepository {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT repo_id FROM artefacts WHERE commit_sha = ?1 AND path LIKE 'src/%' LIMIT 1",
+                "SELECT repo_id FROM artefacts WHERE commit_sha = ?1 AND canonical_kind NOT IN ('test_suite', 'test_scenario') LIMIT 1",
             )
             .context("failed preparing repo lookup query")?;
         let repo_id: String = stmt
@@ -52,10 +52,9 @@ impl TestHarnessRepository for SqliteTestHarnessRepository {
             .conn
             .prepare(
                 r#"
-SELECT artefact_id, symbol_fqn, path
+SELECT artefact_id, symbol_fqn, path, start_line
 FROM artefacts
 WHERE commit_sha = ?1
-  AND path LIKE 'src/%'
   AND canonical_kind IN ('function', 'method', 'class')
 "#,
             )
@@ -67,6 +66,7 @@ WHERE commit_sha = ?1
                     artefact_id: row.get(0)?,
                     symbol_fqn: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     path: row.get(2)?,
+                    start_line: row.get(3)?,
                 })
             })
             .context("failed querying production artefacts")?;
@@ -977,4 +977,83 @@ fn parse_grouped_ids(raw: Option<&str>) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(|item| item.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::SqliteTestHarnessRepository;
+    use crate::db::init_database;
+    use crate::domain::ArtefactRecord;
+    use crate::repository::TestHarnessRepository;
+
+    #[test]
+    fn load_repo_id_for_commit_supports_workspace_crate_paths() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let db_path = temp_dir.path().join("workspace-layout.db");
+        init_database(&db_path, false, "seed").expect("failed to initialize db");
+
+        let mut repository =
+            SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
+        repository
+            .replace_production_artefacts(
+                "commit-workspace",
+                &[ArtefactRecord {
+                    artefact_id: "file:workspace".to_string(),
+                    repo_id: "ruff-workspace".to_string(),
+                    commit_sha: "commit-workspace".to_string(),
+                    path: "crates/ruff/src/lib.rs".to_string(),
+                    language: "rust".to_string(),
+                    canonical_kind: "file".to_string(),
+                    language_kind: Some("source_file".to_string()),
+                    symbol_fqn: Some("crates/ruff/src/lib.rs".to_string()),
+                    parent_artefact_id: None,
+                    start_line: 1,
+                    end_line: 10,
+                    signature: None,
+                }],
+            )
+            .expect("replace production artefacts");
+
+        let repo_id = repository
+            .load_repo_id_for_commit("commit-workspace")
+            .expect("load repo id");
+        assert_eq!(repo_id, "ruff-workspace");
+    }
+
+    #[test]
+    fn load_production_artefacts_includes_workspace_crate_functions() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let db_path = temp_dir.path().join("workspace-functions.db");
+        init_database(&db_path, false, "seed").expect("failed to initialize db");
+
+        let mut repository =
+            SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
+        repository
+            .replace_production_artefacts(
+                "commit-workspace",
+                &[ArtefactRecord {
+                    artefact_id: "function:workspace".to_string(),
+                    repo_id: "ruff-workspace".to_string(),
+                    commit_sha: "commit-workspace".to_string(),
+                    path: "crates/ruff/src/version.rs".to_string(),
+                    language: "rust".to_string(),
+                    canonical_kind: "function".to_string(),
+                    language_kind: Some("function_item".to_string()),
+                    symbol_fqn: Some("crates/ruff/src/version.rs::version".to_string()),
+                    parent_artefact_id: None,
+                    start_line: 1,
+                    end_line: 5,
+                    signature: Some("pub fn version() -> String".to_string()),
+                }],
+            )
+            .expect("replace production artefacts");
+
+        let artefacts = repository
+            .load_production_artefacts("commit-workspace")
+            .expect("load production artefacts");
+        assert_eq!(artefacts.len(), 1);
+        assert_eq!(artefacts[0].artefact_id, "function:workspace");
+    }
 }

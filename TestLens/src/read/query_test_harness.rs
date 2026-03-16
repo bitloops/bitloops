@@ -217,10 +217,14 @@ fn build_query_payload<R: TestHarnessQueryRepository>(
             });
 
         let test_name = linked_test
-            .test_symbol_fqn
-            .as_deref()
-            .map(simple_symbol_name)
-            .or_else(|| linked_test.test_signature.clone())
+            .test_signature
+            .clone()
+            .or_else(|| {
+                linked_test
+                    .test_symbol_fqn
+                    .as_deref()
+                    .map(simple_symbol_name)
+            })
             .unwrap_or_else(|| linked_test.test_id.clone());
 
         all_covering_tests.push(CoveringTestOutput {
