@@ -1,0 +1,46 @@
+async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
+    sqlite_exec_path(sqlite_path, sqlite_schema_sql())
+        .await
+        .context("creating SQLite relational DevQL tables")?;
+    sqlite_exec_path(sqlite_path, checkpoint_schema_sql_sqlite())
+        .await
+        .context("creating SQLite checkpoint migration tables")?;
+    init_sqlite_semantic_features_schema(sqlite_path)
+        .await
+        .context("creating SQLite semantic feature tables")?;
+    Ok(())
+}
+
+async fn init_postgres_schema(
+    _cfg: &DevqlConfig,
+    pg_client: &tokio_postgres::Client,
+) -> Result<()> {
+    let sql = postgres_schema_sql();
+    postgres_exec(pg_client, sql)
+        .await
+        .context("creating Postgres DevQL tables")?;
+
+    let artefacts_alter_sql = artefacts_upgrade_sql();
+    postgres_exec(pg_client, artefacts_alter_sql)
+        .await
+        .context("updating Postgres artefacts columns for byte offsets/signature")?;
+
+    let artefact_edges_hardening_sql = artefact_edges_hardening_sql();
+    postgres_exec(pg_client, artefact_edges_hardening_sql)
+        .await
+        .context("updating Postgres artefact_edges constraints/indexes")?;
+
+    let current_state_hardening_sql = current_state_hardening_sql();
+    postgres_exec(pg_client, current_state_hardening_sql)
+        .await
+        .context("updating Postgres current-state DevQL tables")?;
+
+    init_postgres_semantic_features_schema(pg_client)
+        .await
+        .context("creating Postgres semantic feature tables")?;
+    let checkpoint_schema_sql = checkpoint_schema_sql_postgres();
+    postgres_exec(pg_client, checkpoint_schema_sql)
+        .await
+        .context("creating Postgres checkpoint migration tables")?;
+    Ok(())
+}

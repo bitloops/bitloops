@@ -85,14 +85,6 @@ impl DevqlConfig {
         }
     }
 
-    fn require_pg_dsn(&self) -> Result<&str> {
-        self.pg_dsn.as_deref().ok_or_else(|| {
-            anyhow!(
-                "BITLOOPS_DEVQL_PG_DSN is required for Postgres operations (example: postgres://user:pass@localhost:5432/bitloops)"
-            )
-        })
-    }
-
     fn clickhouse_endpoint(&self) -> String {
         let base = self.clickhouse_url.trim_end_matches('/');
         format!("{base}/?database={}", self.clickhouse_database)
@@ -103,6 +95,7 @@ const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
 const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
 const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
+pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
 
 pub async fn run_connection_status() -> Result<()> {
     let cfg = resolve_devql_backend_config()?;
@@ -255,6 +248,68 @@ fn clickhouse_endpoint(url: &str, database: &str) -> String {
     format!("{base}/?database={database}")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelationalDialect {
+    Postgres,
+    Sqlite,
+}
+
+#[derive(Debug)]
+enum RelationalStorage {
+    Postgres(tokio_postgres::Client),
+    Sqlite { path: PathBuf },
+}
+
+impl RelationalStorage {
+    async fn connect(
+        cfg: &DevqlConfig,
+        relational: &RelationalBackendConfig,
+        command: &str,
+    ) -> Result<Self> {
+        match relational.provider {
+            RelationalProvider::Postgres => {
+                let pg_dsn = require_postgres_dsn(cfg, relational, command)?;
+                let client = connect_postgres_client(pg_dsn).await?;
+                Ok(Self::Postgres(client))
+            }
+            RelationalProvider::Sqlite => {
+                let path = relational
+                    .resolve_sqlite_db_path()
+                    .with_context(|| format!("resolving SQLite path for `{command}`"))?;
+                Ok(Self::Sqlite { path })
+            }
+        }
+    }
+
+    fn dialect(&self) -> RelationalDialect {
+        match self {
+            Self::Postgres(_) => RelationalDialect::Postgres,
+            Self::Sqlite { .. } => RelationalDialect::Sqlite,
+        }
+    }
+
+    async fn exec(&self, sql: &str) -> Result<()> {
+        match self {
+            Self::Postgres(client) => postgres_exec(client, sql).await,
+            Self::Sqlite { path } => sqlite_exec_path(path, sql).await,
+        }
+    }
+
+    async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
+        match self {
+            Self::Postgres(client) => pg_query_rows(client, sql).await,
+            Self::Sqlite { path } => sqlite_query_rows_path(path, sql).await,
+        }
+    }
+}
+
+async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<()> {
+    match relational {
+        RelationalStorage::Postgres(client) => init_postgres_schema(cfg, client).await,
+        RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
+    }
+}
+
 fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
     semantic::SemanticSummaryProviderConfig {
         semantic_provider: cfg.semantic_provider.clone(),
@@ -264,10 +319,33 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
     }
 }
 
+fn require_postgres_dsn<'a>(
+    cfg: &'a DevqlConfig,
+    relational: &'a RelationalBackendConfig,
+    command: &str,
+) -> Result<&'a str> {
+    relational
+        .postgres_dsn
+        .as_deref()
+        .or(cfg.pg_dsn.as_deref())
+        .ok_or_else(|| {
+            anyhow!(
+                "{DEVQL_POSTGRES_DSN_REQUIRED_PREFIX}: `{command}` requires `devql.relational.postgres_dsn` (or legacy `BITLOOPS_DEVQL_PG_DSN`) when `devql.relational.provider=postgres`"
+            )
+        })
+}
+
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
-    let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
-    init_clickhouse_schema(cfg).await?;
-    init_postgres_schema(cfg, &pg_client).await?;
+    let backends = resolve_devql_backend_config()
+        .context("resolving DevQL backend config for `devql init`")?;
+    let relational = RelationalStorage::connect(cfg, &backends.relational, "devql init").await?;
+
+    match backends.events.provider {
+        EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
+        EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
+    }
+
+    init_relational_schema(cfg, &relational).await?;
 
     println!(
         "DevQL schema ready for repo {} ({})",
@@ -277,15 +355,21 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let backends = resolve_devql_backend_config()
+        .context("resolving DevQL backend config for `devql ingest`")?;
+    let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
+
     if init {
-        init_clickhouse_schema(cfg).await?;
-        init_postgres_schema(cfg, &pg_client).await?;
+        match backends.events.provider {
+            EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
+            EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
+        }
+        init_relational_schema(cfg, &relational).await?;
     }
 
-    ensure_repository_row(cfg, &pg_client).await?;
+    ensure_repository_row(cfg, &relational).await?;
 
     let mut checkpoints = list_committed(&cfg.repo_root)?;
     checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -294,7 +378,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     }
 
     let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
-    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg).await?;
+    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
 
     let mut counters = IngestionCounters::default();
 
@@ -309,7 +393,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         ));
 
         if !existing_event_ids.contains(&event_id) {
-            insert_checkpoint_event(cfg, &cp, &event_id, commit_info).await?;
+            insert_checkpoint_event(cfg, &backends.events, &cp, &event_id, commit_info).await?;
             existing_event_ids.insert(event_id);
             counters.events_inserted += 1;
         }
@@ -321,7 +405,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
 
         upsert_commit_row(
             cfg,
-            &pg_client,
+            &relational,
             &cp,
             commit_info.expect("commit_info exists when sha exists"),
         )
@@ -340,13 +424,25 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             };
             let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
 
-            upsert_file_state_row(cfg, &pg_client, &commit_sha, &normalized_path, &blob_sha)
-                .await?;
-            let file_artefact =
-                upsert_file_artefact_row(cfg, &pg_client, &normalized_path, &blob_sha).await?;
+            upsert_file_state_row(
+                &cfg.repo.repo_id,
+                &relational,
+                &commit_sha,
+                &normalized_path,
+                &blob_sha,
+            )
+            .await?;
+            let file_artefact = upsert_file_artefact_row(
+                &cfg.repo.repo_id,
+                &cfg.repo_root,
+                &relational,
+                &normalized_path,
+                &blob_sha,
+            )
+            .await?;
             upsert_language_artefacts(
                 cfg,
-                &pg_client,
+                &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
                     commit_unix: commit_info
@@ -358,8 +454,10 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &file_artefact,
             )
             .await?;
+            counters.artefacts_upserted += 1;
+
             let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
-                &pg_client,
+                &relational,
                 &cfg.repo.repo_id,
                 &blob_sha,
                 &normalized_path,
@@ -370,12 +468,11 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &content,
             );
             let semantic_feature_stats = upsert_semantic_feature_rows(
-                &pg_client,
+                &relational,
                 &semantic_feature_inputs,
                 Arc::clone(&summary_provider),
             )
             .await?;
-            counters.artefacts_upserted += 1;
             counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
             counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
@@ -415,12 +512,14 @@ pub async fn execute_query_json_for_repo_root(repo_root: &Path, query: &str) -> 
 
 async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let pg_client = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
+    let backends = resolve_devql_backend_config()
+        .context("resolving DevQL backend config for `devql query`")?;
+    let relational = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None
     } else {
-        Some(connect_postgres_client(cfg.require_pg_dsn()?).await?)
+        Some(RelationalStorage::connect(cfg, &backends.relational, "devql query").await?)
     };
-    let mut rows = execute_devql_query(cfg, &parsed, pg_client.as_ref()).await?;
+    let mut rows = execute_devql_query(cfg, &parsed, &backends.events, relational.as_ref()).await?;
 
     if !parsed.select_fields.is_empty() {
         rows = project_rows(rows, &parsed.select_fields);

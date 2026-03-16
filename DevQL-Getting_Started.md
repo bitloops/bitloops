@@ -14,6 +14,15 @@ Current runtime adapters are:
 - Relational: `sqlite` (default) and `postgres`
 - Events: `duckdb` (default) and `clickhouse`
 
+Current command support matrix:
+
+- `devql connection-status` and dashboard DB health checks support all configured providers.
+- `devql init` supports configured providers, including defaults (`relational.provider=sqlite`, `events.provider=duckdb`).
+- `devql ingest` supports configured events and relational providers (`duckdb`/`clickhouse` + `sqlite`/`postgres`).
+- `devql query` supports:
+  - `checkpoints()`/`telemetry()` on `events.provider=duckdb` or `events.provider=clickhouse`
+  - `artefacts()`/`deps()`/`chatHistory()` on `relational.provider=sqlite` or `relational.provider=postgres`
+
 Config precedence is:
 
 1. Environment variables
@@ -24,6 +33,12 @@ Legacy keys remain supported for backward compatibility:
 
 - `postgres_dsn`, `clickhouse_url`, `clickhouse_user`, `clickhouse_password`, `clickhouse_database`
 - `BITLOOPS_DEVQL_PG_DSN`, `BITLOOPS_DEVQL_CH_*`
+
+Notes:
+
+- Legacy support exists so older user configs do not break immediately.
+- If provider keys are not set, legacy Postgres/ClickHouse keys can still imply provider selection.
+- Prefer the nested `devql.relational.*` and `devql.events.*` keys for new setups.
 
 ## 0) (Optional) Run Postgres and ClickHouse with docker
 
@@ -121,8 +136,8 @@ cargo run -- devql init
 ```
 
 What this does:
-- Creates required tables for the configured providers.
-- With defaults, this initializes the local SQLite relational DB.
+- Creates DevQL schema for configured providers.
+- With defaults, this initialises SQLite relational + checkpoint/session tables and DuckDB `checkpoint_events`.
 
 ## 4) Ingest checkpoint + artefact data
 
@@ -132,8 +147,8 @@ cargo run -- devql ingest
 
 What this does:
 - Reads committed checkpoints from the repo.
-- Writes checkpoint events to the events backend (`duckdb` by default, or `clickhouse` if configured).
-- Writes repository/commit/file/artefact rows to the relational backend (`sqlite` by default, or `postgres`).
+- Writes checkpoint events to the configured events backend (`duckdb` by default, or `clickhouse`).
+- Writes repository/commit/file/artefact rows to the configured relational backend (`sqlite` by default, or `postgres`).
 
 Optional flags:
 
@@ -185,7 +200,7 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 What this does:
 - Parses the DevQL pipeline.
 - Routes checkpoint/telemetry stages to the configured events backend (`duckdb` or `clickhouse`).
-- Routes artefact stages to the relational backend (`sqlite` by default, or `postgres`).
+- Routes artefact stages to the configured relational backend (`sqlite` or `postgres`).
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
 - Prints JSON output.
 

@@ -190,6 +190,202 @@ fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
     }
 }
 
+async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
+    let db_path = path.to_path_buf();
+    let statement = sql.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
+        }
+        let conn = duckdb::Connection::open(&db_path)
+            .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
+        conn.execute_batch(&statement)
+            .context("executing DuckDB statements")?;
+        Ok(())
+    })
+    .await
+    .context("joining DuckDB execute task")?
+}
+
+async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
+    let db_path = path.to_path_buf();
+    let statement = sql.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if let Some(parent) = db_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating SQLite directory {}", parent.display()))?;
+        }
+        let conn = rusqlite::Connection::open(&db_path)
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(30))
+            .context("setting SQLite busy timeout")?;
+        conn.execute_batch(&statement)
+            .context("executing SQLite statements")?;
+        Ok(())
+    })
+    .await
+    .context("joining SQLite execute task")?
+}
+
+async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+    let db_path = path.to_path_buf();
+    let query = sql.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+        let conn = duckdb::Connection::open(&db_path)
+            .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
+        let mut stmt = conn.prepare(&query).context("preparing DuckDB query")?;
+        let column_names = stmt
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let mut rows = stmt.query([]).context("executing DuckDB query")?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next().context("iterating DuckDB query rows")? {
+            let mut obj = serde_json::Map::new();
+            for (idx, column_name) in column_names.iter().enumerate() {
+                let value_ref = row.get_ref(idx).with_context(|| {
+                    format!("reading DuckDB value for column index {idx} (`{column_name}`)")
+                })?;
+                let owned: duckdb::types::Value = value_ref.to_owned();
+                obj.insert(column_name.clone(), duckdb_value_to_json(owned));
+            }
+            out.push(Value::Object(obj));
+        }
+
+        Ok(out)
+    })
+    .await
+    .context("joining DuckDB query task")?
+}
+
+async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+    let db_path = path.to_path_buf();
+    let query = sql.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+        let conn = rusqlite::Connection::open(&db_path)
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(30))
+            .context("setting SQLite busy timeout")?;
+        let mut stmt = conn.prepare(&query).context("preparing SQLite query")?;
+        let column_names = stmt
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let mut rows = stmt.query([]).context("executing SQLite query")?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next().context("iterating SQLite query rows")? {
+            let mut obj = serde_json::Map::new();
+            for (idx, column_name) in column_names.iter().enumerate() {
+                let value_ref = row.get_ref(idx).with_context(|| {
+                    format!("reading SQLite value for column index {idx} (`{column_name}`)")
+                })?;
+                obj.insert(column_name.clone(), sqlite_value_to_json(value_ref));
+            }
+            out.push(Value::Object(obj));
+        }
+
+        Ok(out)
+    })
+    .await
+    .context("joining SQLite query task")?
+}
+
+fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
+    use rusqlite::types::ValueRef as SqlValueRef;
+    match value {
+        SqlValueRef::Null => Value::Null,
+        SqlValueRef::Integer(v) => Value::from(v),
+        SqlValueRef::Real(v) => serde_json::Number::from_f64(v)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        SqlValueRef::Text(bytes) => Value::String(String::from_utf8_lossy(bytes).to_string()),
+        SqlValueRef::Blob(bytes) => Value::String(
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
+    }
+}
+
+fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
+    use duckdb::types::Value as DuckValue;
+    match value {
+        DuckValue::Null => Value::Null,
+        DuckValue::Boolean(v) => Value::Bool(v),
+        DuckValue::TinyInt(v) => Value::from(v),
+        DuckValue::SmallInt(v) => Value::from(v),
+        DuckValue::Int(v) => Value::from(v),
+        DuckValue::BigInt(v) => Value::from(v),
+        DuckValue::HugeInt(v) => Value::String(v.to_string()),
+        DuckValue::UTinyInt(v) => Value::from(v),
+        DuckValue::USmallInt(v) => Value::from(v),
+        DuckValue::UInt(v) => Value::from(v),
+        DuckValue::UBigInt(v) => Value::from(v),
+        DuckValue::Float(v) => serde_json::Number::from_f64(v as f64)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        DuckValue::Double(v) => serde_json::Number::from_f64(v)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        DuckValue::Decimal(v) => Value::String(v.to_string()),
+        DuckValue::Timestamp(_, v) => Value::from(v),
+        DuckValue::Text(v) => Value::String(v),
+        DuckValue::Blob(bytes) => Value::String(
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
+        DuckValue::Date32(v) => Value::from(v),
+        DuckValue::Time64(_, v) => Value::from(v),
+        DuckValue::Interval {
+            months,
+            days,
+            nanos,
+        } => serde_json::json!({
+            "months": months,
+            "days": days,
+            "nanos": nanos
+        }),
+        DuckValue::List(values) | DuckValue::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(duckdb_value_to_json)
+                .collect::<Vec<_>>(),
+        ),
+        DuckValue::Enum(v) => Value::String(v),
+        DuckValue::Struct(fields) => {
+            let mut obj = serde_json::Map::new();
+            for (key, field_value) in fields.iter() {
+                obj.insert(key.clone(), duckdb_value_to_json(field_value.clone()));
+            }
+            Value::Object(obj)
+        }
+        DuckValue::Map(entries) => Value::Array(
+            entries
+                .iter()
+                .map(|(key, value)| {
+                    serde_json::json!({
+                        "key": duckdb_value_to_json(key.clone()),
+                        "value": duckdb_value_to_json(value.clone())
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        DuckValue::Union(v) => duckdb_value_to_json(*v),
+    }
+}
+
 fn esc_pg(value: &str) -> String {
     value.replace('\'', "''")
 }

@@ -2,7 +2,7 @@
 
 async fn ensure_repository_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
 ) -> Result<()> {
     let sql = format!(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) VALUES ('{}', '{}', '{}', '{}', '{}') \
@@ -13,7 +13,7 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
         esc_pg(&cfg.repo.name),
         esc_pg(&default_branch_name(&cfg.repo_root))
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 fn default_branch_name(repo_root: &Path) -> String {
@@ -112,79 +112,212 @@ fn checkpoint_commit_info_from_sha(
     })
 }
 
-async fn fetch_existing_checkpoint_event_ids(cfg: &DevqlConfig) -> Result<HashSet<String>> {
-    let sql = format!(
-        "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}' FORMAT JSON",
-        esc_ch(&cfg.repo.repo_id)
-    );
+#[derive(Debug, Clone)]
+struct CheckpointEventsStore {
+    inner: CheckpointEventsStoreInner,
+}
 
-    let mut out = HashSet::new();
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    if let Some(rows) = data.as_array() {
-        for row in rows {
-            if let Some(id) = row.get("event_id").and_then(Value::as_str) {
-                out.insert(id.to_string());
+#[derive(Debug, Clone)]
+enum CheckpointEventsStoreInner {
+    ClickHouse {
+        endpoint: String,
+        user: Option<String>,
+        password: Option<String>,
+    },
+    DuckDb {
+        path: PathBuf,
+    },
+}
+
+impl CheckpointEventsStore {
+    fn from_config(cfg: &DevqlConfig, events_cfg: &EventsBackendConfig) -> Self {
+        match events_cfg.provider {
+            EventsProvider::ClickHouse => Self {
+                inner: CheckpointEventsStoreInner::ClickHouse {
+                    endpoint: cfg.clickhouse_endpoint(),
+                    user: cfg.clickhouse_user.clone(),
+                    password: cfg.clickhouse_password.clone(),
+                },
+            },
+            EventsProvider::DuckDb => Self {
+                inner: CheckpointEventsStoreInner::DuckDb {
+                    path: events_cfg.duckdb_path_or_default(),
+                },
+            },
+        }
+    }
+
+    async fn fetch_existing_event_ids(&self, repo_id: &str) -> Result<HashSet<String>> {
+        match &self.inner {
+            CheckpointEventsStoreInner::ClickHouse {
+                endpoint,
+                user,
+                password,
+            } => {
+                let sql = format!(
+                    "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}' FORMAT JSON",
+                    esc_ch(repo_id)
+                );
+                let raw = run_clickhouse_sql_http(
+                    endpoint,
+                    user.as_deref(),
+                    password.as_deref(),
+                    &sql,
+                )
+                .await?;
+                let parsed: Value = serde_json::from_str(raw.trim()).with_context(|| {
+                    format!("parsing ClickHouse JSON response: {}", truncate_for_error(&raw))
+                })?;
+                let mut out = HashSet::new();
+                if let Some(rows) = parsed.get("data").and_then(Value::as_array) {
+                    for row in rows {
+                        if let Some(id) = row.get("event_id").and_then(Value::as_str) {
+                            out.insert(id.to_string());
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            CheckpointEventsStoreInner::DuckDb { path } => {
+                let sql = format!(
+                    "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}'",
+                    esc_pg(repo_id)
+                );
+                let rows = duckdb_query_rows_path(path, &sql).await?;
+                Ok(rows
+                    .into_iter()
+                    .filter_map(|row| {
+                        row.get("event_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect())
             }
         }
     }
-    Ok(out)
+
+    async fn insert_checkpoint_event(
+        &self,
+        repo_id: &str,
+        cp: &CommittedInfo,
+        event_id: &str,
+        commit_info: Option<&CheckpointCommitInfo>,
+    ) -> Result<()> {
+        let event_time = checkpoint_event_time_rfc3339(cp, commit_info);
+        let commit_sha = commit_info
+            .map(|info| info.commit_sha.as_str())
+            .unwrap_or_default();
+        let payload = json!({
+            "checkpoints_count": cp.checkpoints_count,
+            "session_count": cp.session_count,
+            "token_usage": cp.token_usage,
+        });
+        let payload_json = serde_json::to_string(&payload)?;
+        let files_touched_json = serde_json::to_string(&cp.files_touched)?;
+
+        match &self.inner {
+            CheckpointEventsStoreInner::ClickHouse {
+                endpoint,
+                user,
+                password,
+            } => {
+                let files_touched = format_ch_array(&cp.files_touched);
+                let sql = format!(
+                    "INSERT INTO checkpoint_events (event_id, event_time, repo_id, checkpoint_id, session_id, commit_sha, branch, event_type, agent, strategy, files_touched, payload) \
+VALUES ('{}', coalesce(parseDateTime64BestEffortOrNull('{}'), now64(3)), '{}', '{}', '{}', '{}', '{}', 'checkpoint_committed', '{}', '{}', {}, '{}')",
+                    esc_ch(event_id),
+                    esc_ch(&event_time),
+                    esc_ch(repo_id),
+                    esc_ch(&cp.checkpoint_id),
+                    esc_ch(&cp.session_id),
+                    esc_ch(commit_sha),
+                    esc_ch(&cp.branch),
+                    esc_ch(&cp.agent),
+                    esc_ch(&cp.strategy),
+                    files_touched,
+                    esc_ch(&payload_json),
+                );
+                run_clickhouse_sql_http(endpoint, user.as_deref(), password.as_deref(), &sql)
+                    .await
+                    .map(|_| ())
+            }
+            CheckpointEventsStoreInner::DuckDb { path } => {
+                let sql = format!(
+                    "INSERT INTO checkpoint_events (event_id, event_time, repo_id, checkpoint_id, session_id, commit_sha, branch, event_type, agent, strategy, files_touched, payload) \
+SELECT '{event_id}', '{event_time}', '{repo_id}', '{checkpoint_id}', '{session_id}', '{commit_sha}', '{branch}', 'checkpoint_committed', '{agent}', '{strategy}', '{files_touched}', '{payload}' \
+WHERE NOT EXISTS (SELECT 1 FROM checkpoint_events WHERE event_id = '{event_id}')",
+                    event_id = esc_pg(event_id),
+                    event_time = esc_pg(&event_time),
+                    repo_id = esc_pg(repo_id),
+                    checkpoint_id = esc_pg(&cp.checkpoint_id),
+                    session_id = esc_pg(&cp.session_id),
+                    commit_sha = esc_pg(commit_sha),
+                    branch = esc_pg(&cp.branch),
+                    agent = esc_pg(&cp.agent),
+                    strategy = esc_pg(&cp.strategy),
+                    files_touched = esc_pg(&files_touched_json),
+                    payload = esc_pg(&payload_json),
+                );
+                duckdb_exec_path(path, &sql).await
+            }
+        }
+    }
+}
+
+fn checkpoint_event_time_rfc3339(
+    cp: &CommittedInfo,
+    commit_info: Option<&CheckpointCommitInfo>,
+) -> String {
+    let created_at = cp.created_at.trim();
+    if !created_at.is_empty() {
+        return created_at.to_string();
+    }
+
+    if let Some(info) = commit_info {
+        return info.commit_unix.to_string();
+    }
+
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+async fn fetch_existing_checkpoint_event_ids(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+) -> Result<HashSet<String>> {
+    CheckpointEventsStore::from_config(cfg, events_cfg)
+        .fetch_existing_event_ids(&cfg.repo.repo_id)
+        .await
 }
 
 async fn insert_checkpoint_event(
     cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     cp: &CommittedInfo,
     event_id: &str,
     commit_info: Option<&CheckpointCommitInfo>,
 ) -> Result<()> {
-    let event_time_expr = if !cp.created_at.trim().is_empty() {
-        format!(
-            "coalesce(parseDateTime64BestEffortOrNull('{}'), now64(3))",
-            esc_ch(cp.created_at.trim())
-        )
-    } else if let Some(info) = commit_info {
-        format!("toDateTime64({}, 3, 'UTC')", info.commit_unix)
-    } else {
-        "now64(3)".to_string()
-    };
-
-    let commit_sha = commit_info
-        .map(|info| info.commit_sha.as_str())
-        .unwrap_or_default();
-
-    let payload = json!({
-        "checkpoints_count": cp.checkpoints_count,
-        "session_count": cp.session_count,
-        "token_usage": cp.token_usage,
-    });
-
-    let files_touched = format_ch_array(&cp.files_touched);
-    let sql = format!(
-        "INSERT INTO checkpoint_events (event_id, event_time, repo_id, checkpoint_id, session_id, commit_sha, branch, event_type, agent, strategy, files_touched, payload) \
-VALUES ('{}', {}, '{}', '{}', '{}', '{}', '{}', 'checkpoint_committed', '{}', '{}', {}, '{}')",
-        esc_ch(event_id),
-        event_time_expr,
-        esc_ch(&cfg.repo.repo_id),
-        esc_ch(&cp.checkpoint_id),
-        esc_ch(&cp.session_id),
-        esc_ch(commit_sha),
-        esc_ch(&cp.branch),
-        esc_ch(&cp.agent),
-        esc_ch(&cp.strategy),
-        files_touched,
-        esc_ch(&serde_json::to_string(&payload)?),
-    );
-
-    clickhouse_exec(cfg, &sql).await.map(|_| ())
+    CheckpointEventsStore::from_config(cfg, events_cfg)
+        .insert_checkpoint_event(&cfg.repo.repo_id, cp, event_id, commit_info)
+        .await
 }
 
 async fn upsert_commit_row(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     cp: &CommittedInfo,
     commit_info: &CheckpointCommitInfo,
 ) -> Result<()> {
+    let committed_at_sql = match relational.dialect() {
+        RelationalDialect::Postgres => format!("to_timestamp({})", commit_info.commit_unix),
+        RelationalDialect::Sqlite => {
+            format!("datetime({}, 'unixepoch')", commit_info.commit_unix)
+        }
+    };
     let sql = format!(
-        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', to_timestamp({})) \
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) VALUES ('{}', '{}', '{}', '{}', '{}', {}) \
 ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name = EXCLUDED.author_name, author_email = EXCLUDED.author_email, commit_message = EXCLUDED.commit_message, committed_at = EXCLUDED.committed_at",
         esc_pg(&commit_info.commit_sha),
         esc_pg(&cfg.repo.repo_id),
@@ -195,8 +328,8 @@ ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name =
         } else {
             &commit_info.subject
         }),
-        commit_info.commit_unix,
+        committed_at_sql,
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }

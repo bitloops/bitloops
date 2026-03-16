@@ -16,13 +16,13 @@ pub struct DevqlArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevqlCommand {
-    /// Create ClickHouse/Postgres schema required by DevQL MVP.
+    /// Create schema for configured relational/events backends.
     Init(DevqlInitArgs),
-    /// Ingest checkpoint/event data into ClickHouse and file artefacts into Postgres.
+    /// Ingest checkpoint/events and relational artefacts for configured backends.
     Ingest(DevqlIngestArgs),
-    /// Execute an MVP DevQL query.
+    /// Execute a DevQL query.
     Query(DevqlQueryArgs),
-    /// Check backend connectivity for Postgres and ClickHouse.
+    /// Check backend connectivity for configured relational/events providers.
     ConnectionStatus(DevqlConnectionStatusArgs),
 }
 
