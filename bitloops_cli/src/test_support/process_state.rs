@@ -219,9 +219,21 @@ mod tests {
             .filter_map(|(key, value)| Some((key.to_str()?, value?.to_str()?)))
             .collect::<Vec<_>>();
 
-        assert!(envs.iter().any(|(key, value)| {
-            *key == "GIT_CONFIG_GLOBAL" && value.ends_with(".bitloops-test-global.gitconfig")
-        }));
+        let global_config = envs
+            .iter()
+            .find_map(|(key, value)| (*key == "GIT_CONFIG_GLOBAL").then_some(*value))
+            .expect("GIT_CONFIG_GLOBAL should be set");
+        let global_config_path = PathBuf::from(global_config);
+
+        assert!(global_config_path.exists());
+        assert!(global_config_path.starts_with(env::temp_dir()));
+        assert!(!global_config_path.starts_with(dir.path()));
+        assert!(
+            global_config_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("global-") && name.ends_with(".gitconfig"))
+        );
         assert!(
             envs.iter()
                 .any(|(key, value)| *key == "GIT_CONFIG_NOSYSTEM" && *value == "1")
