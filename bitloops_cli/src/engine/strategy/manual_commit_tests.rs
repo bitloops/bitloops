@@ -1,22 +1,11 @@
 use super::*;
 use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
-use crate::test_support::process_state::{git_command, with_env_var, with_git_env_cleared};
+use crate::test_support::process_state::{
+    git_command, isolated_git_command, with_env_var, with_git_env_cleared,
+};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
-
-fn isolated_git_command(repo_root: &Path) -> std::process::Command {
-    let global_config = repo_root.join(".bitloops-test-global.gitconfig");
-    if !global_config.exists() {
-        fs::write(&global_config, "").expect("create isolated git config");
-    }
-
-    let mut cmd = git_command();
-    cmd.current_dir(repo_root)
-        .env("GIT_CONFIG_GLOBAL", &global_config)
-        .env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd
-}
 
 /// Creates a real git repository with an initial commit for testing.
 fn setup_git_repo(dir: &TempDir) -> String {

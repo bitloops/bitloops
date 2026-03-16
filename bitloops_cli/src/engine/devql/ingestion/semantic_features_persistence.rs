@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     summary TEXT NOT NULL,
     confidence REAL NOT NULL,
     source_model TEXT,
-    generated_at TIMESTAMPTZ DEFAULT now()
+    generated_at DATETIME DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
     parent_kind TEXT,
     context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
-    generated_at TIMESTAMPTZ DEFAULT now()
+    generated_at DATETIME DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
@@ -46,8 +46,11 @@ async fn load_pre_stage_artefacts_for_blob(
     blob_sha: &str,
     path: &str,
 ) -> Result<Vec<semantic::PreStageArtefactRow>> {
-    let rows = pg_query_rows(pg_client, &build_semantic_get_artefacts_sql(repo_id, blob_sha, path))
-        .await?;
+    let rows = pg_query_rows(
+        pg_client,
+        &build_semantic_get_artefacts_sql(repo_id, blob_sha, path),
+    )
+    .await?;
     parse_semantic_artefact_rows(rows)
 }
 

@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -33,6 +34,19 @@ pub(crate) fn strip_inherited_git_env(cmd: &mut Command) {
 pub(crate) fn git_command() -> Command {
     let mut cmd = Command::new("git");
     strip_inherited_git_env(&mut cmd);
+    cmd
+}
+
+pub(crate) fn isolated_git_command(repo_root: &Path) -> Command {
+    let global_config = repo_root.join(".bitloops-test-global.gitconfig");
+    if !global_config.exists() {
+        fs::write(&global_config, "").expect("create isolated git config");
+    }
+
+    let mut cmd = git_command();
+    cmd.current_dir(repo_root)
+        .env("GIT_CONFIG_GLOBAL", &global_config)
+        .env("GIT_CONFIG_NOSYSTEM", "1");
     cmd
 }
 
@@ -183,6 +197,23 @@ mod tests {
     fn git_command_sets_program_to_git() {
         let cmd = git_command();
         assert_eq!(cmd.get_program(), OsStr::new("git"));
+    }
+
+    #[test]
+    fn isolated_git_command_sets_empty_global_config_and_disables_system_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = isolated_git_command(dir.path());
+        let envs = cmd
+            .get_envs()
+            .filter_map(|(key, value)| Some((key.to_str()?, value?.to_str()?)))
+            .collect::<Vec<_>>();
+
+        assert!(envs.iter().any(|(key, value)| {
+            *key == "GIT_CONFIG_GLOBAL" && value.ends_with(".bitloops-test-global.gitconfig")
+        }));
+        assert!(envs
+            .iter()
+            .any(|(key, value)| *key == "GIT_CONFIG_NOSYSTEM" && *value == "1"));
     }
 
     #[test]

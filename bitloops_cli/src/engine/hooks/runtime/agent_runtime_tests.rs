@@ -14,7 +14,7 @@ use crate::engine::strategy::noop::NoOpStrategy;
 use crate::engine::strategy::registry;
 use crate::engine::strategy::{StepContext, TaskStepContext};
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
+use crate::test_support::process_state::{git_command, isolated_git_command, with_cwd, with_process_state};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -30,11 +30,8 @@ fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = git_command()
+        let out = isolated_git_command(dir.path())
             .args(args)
-            .current_dir(dir.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .unwrap();
         assert!(out.status.success(), "git {:?} failed", args);
@@ -48,11 +45,8 @@ fn setup_git_repo(dir: &TempDir) {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = git_command()
+    let out = isolated_git_command(dir)
         .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .unwrap();
     assert!(out.status.success(), "git {:?} failed", args);

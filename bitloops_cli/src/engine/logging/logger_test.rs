@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{with_cwd, with_process_state};
+use crate::test_support::process_state::{isolated_git_command, with_cwd, with_process_state};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -28,14 +28,14 @@ impl TestWorkspace {
 }
 
 fn run_cmd(dir: &Path, name: &str, args: &[&str]) {
-    let mut cmd = Command::new(name);
-    cmd.args(args).current_dir(dir).stdin(Stdio::null());
-
-    // For git commands, avoid reading system/global config files
-    if name == "git" {
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null");
-    }
+    let mut cmd = if name == "git" {
+        isolated_git_command(dir)
+    } else {
+        let mut cmd = Command::new(name);
+        cmd.current_dir(dir);
+        cmd
+    };
+    cmd.args(args).stdin(Stdio::null());
 
     let output = cmd.output().expect("execute command");
     assert!(
