@@ -14,7 +14,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 mod capture;
 
 const WATCHER_PID_FILE_NAME: &str = "devql-watcher.pid";
-const WATCHER_BINARY_NAME: &str = "bitloops-devql-watcher";
+const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -230,30 +230,10 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
 
 fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {
     let current_exe = std::env::current_exe().context("resolving current executable for watcher")?;
-    let watcher_bin = current_exe.with_file_name(watcher_binary_file_name());
-
-    let mut command = if watcher_bin.is_file() {
-        Command::new(watcher_bin)
-    } else {
-        let mut fallback = Command::new(current_exe);
-        fallback.arg("__devql-watcher");
-        fallback
-    };
-
+    let mut command = Command::new(current_exe);
+    command.arg(WATCHER_COMMAND_NAME);
     command.arg("--repo-root").arg(repo_root);
     Ok(command)
-}
-
-fn watcher_binary_file_name() -> &'static str {
-    #[cfg(windows)]
-    {
-        "bitloops-devql-watcher.exe"
-    }
-
-    #[cfg(not(windows))]
-    {
-        WATCHER_BINARY_NAME
-    }
 }
 
 fn ensure_watcher_pid_parent_dir(pid_file: &Path) -> Result<()> {

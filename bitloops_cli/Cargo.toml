@@ -10,10 +10,6 @@ path = "src/lib.rs"
 name = "bitloops"
 path = "src/main.rs"
 
-[[bin]]
-name = "bitloops-devql-watcher"
-path = "src/bin/devql_watcher.rs"
-
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
