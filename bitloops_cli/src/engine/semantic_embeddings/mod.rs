@@ -125,7 +125,6 @@ pub fn build_symbol_embedding_inputs(
 ) -> Vec<SymbolEmbeddingInput> {
     inputs
         .iter()
-        .filter(|input| should_embed_kind(&input.canonical_kind))
         .filter_map(|input| {
             let summary = summary_by_artefact_id
                 .get(&input.artefact_id)?
@@ -153,26 +152,6 @@ pub fn build_symbol_embedding_inputs(
             })
         })
         .collect()
-}
-
-pub fn should_embed_kind(kind: &str) -> bool {
-    matches!(
-        kind.to_ascii_lowercase().as_str(),
-        "file"
-            | "module"
-            | "function"
-            | "method"
-            | "interface"
-            | "enum"
-            | "constructor"
-            | "class"
-            | "class_declaration"
-            | "type"
-            | "struct_item"
-            | "trait_item"
-            | "mod_item"
-            | "test"
-    )
 }
 
 pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
