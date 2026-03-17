@@ -42,8 +42,8 @@ struct PersistedEdgeRecord {
 }
 
 async fn upsert_file_state_row(
-    cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    repo_id: &str,
+    relational: &RelationalStorage,
     commit_sha: &str,
     path: &str,
     blob_sha: &str,
@@ -51,13 +51,13 @@ async fn upsert_file_state_row(
     let sql = format!(
         "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}', '{}', '{}', '{}') \
 ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha",
-        esc_pg(&cfg.repo.repo_id),
+        esc_pg(repo_id),
         esc_pg(commit_sha),
         esc_pg(path),
         esc_pg(blob_sha),
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 fn sql_nullable_text(value: Option<&str>) -> String {
@@ -66,6 +66,15 @@ fn sql_nullable_text(value: Option<&str>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
+fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> String {
+    let raw = esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()));
+    match relational.dialect() {
+        RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
+        RelationalDialect::Sqlite => format!("'{raw}'"),
+    }
+}
+
+#[cfg(test)]
 fn sql_jsonb_text_array(values: &[String]) -> String {
     format!(
         "'{}'::jsonb",
@@ -73,29 +82,43 @@ fn sql_jsonb_text_array(values: &[String]) -> String {
     )
 }
 
+fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
+    let raw = esc_pg(&value.to_string());
+    match relational.dialect() {
+        RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
+        RelationalDialect::Sqlite => format!("'{raw}'"),
+    }
+}
+
+fn sql_now(relational: &RelationalStorage) -> &'static str {
+    match relational.dialect() {
+        RelationalDialect::Postgres => "now()",
+        RelationalDialect::Sqlite => "datetime('now')",
+    }
+}
+
 fn is_supported_symbol_language(language: &str) -> bool {
     matches!(language, "typescript" | "javascript" | "rust")
 }
 
 async fn upsert_file_artefact_row(
-    cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    repo_id: &str,
+    repo_root: &Path,
+    relational: &RelationalStorage,
     path: &str,
     blob_sha: &str,
 ) -> Result<FileArtefactRow> {
     let symbol_id = file_symbol_id(path);
-    let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
+    let artefact_id = revision_artefact_id(repo_id, blob_sha, &symbol_id);
     let language = detect_language(path);
-    let line_count = git_blob_line_count(&cfg.repo_root, blob_sha)
-        .unwrap_or(1)
-        .max(1);
-    let blob_content = git_blob_content(&cfg.repo_root, blob_sha);
+    let line_count = git_blob_line_count(repo_root, blob_sha).unwrap_or(1).max(1);
+    let blob_content = git_blob_content(repo_root, blob_sha);
     let byte_count = blob_content
         .as_ref()
         .map(|content| content.len() as i32)
         .unwrap_or(0)
         .max(0);
-    let modifiers_sql = "'[]'::jsonb".to_string();
+    let modifiers_sql = sql_json_text_array(relational, &[]);
     let file_docstring = if language == "rust" {
         blob_content
             .as_deref()
@@ -111,7 +134,7 @@ VALUES ('{}', '{}', '{}', '{}', '{}', '{}', 'file', 'file', '{}', NULL, 1, {}, 0
 ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash",
         esc_pg(&artefact_id),
         esc_pg(&symbol_id),
-        esc_pg(&cfg.repo.repo_id),
+        esc_pg(repo_id),
         esc_pg(blob_sha),
         esc_pg(path),
         esc_pg(&language),
@@ -123,7 +146,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
         esc_pg(blob_sha),
     );
 
-    postgres_exec(pg_client, &sql).await?;
+    relational.exec(&sql).await?;
     Ok(FileArtefactRow {
         artefact_id,
         symbol_id,
@@ -228,7 +251,7 @@ fn build_symbol_records(
 
 async fn persist_historical_artefact(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
     blob_sha: &str,
     language: &str,
@@ -237,7 +260,7 @@ async fn persist_historical_artefact(
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
     let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
-    let modifiers_sql = sql_jsonb_text_array(&record.modifiers);
+    let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     let sql = format!(
         "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
@@ -263,12 +286,12 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
         esc_pg(&record.content_hash),
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn upsert_current_artefact(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     language: &str,
     record: &PersistedArtefactRecord,
@@ -277,12 +300,13 @@ async fn upsert_current_artefact(
     let parent_symbol_sql = sql_nullable_text(record.parent_symbol_id.as_deref());
     let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
-    let modifiers_sql = sql_jsonb_text_array(&record.modifiers);
+    let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
+    let now_sql = sql_now(relational);
     let sql = format!(
         "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', now()) \
-ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = now()",
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}) \
+ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = {}",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(&record.symbol_id),
         esc_pg(&record.artefact_id),
@@ -303,9 +327,11 @@ ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_i
         modifiers_sql,
         docstring_sql,
         esc_pg(&record.content_hash),
+        now_sql,
+        now_sql,
     );
 
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 fn build_historical_edge_records(
@@ -366,7 +392,7 @@ fn build_historical_edge_records(
 
 async fn persist_historical_edge(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     blob_sha: &str,
     record: &PersistedEdgeRecord,
 ) -> Result<()> {
@@ -380,7 +406,7 @@ async fn persist_historical_edge(
         .end_line
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let metadata_sql = format!("'{}'::jsonb", esc_pg(&record.metadata.to_string()));
+    let metadata_sql = sql_json_value(relational, &record.metadata);
 
     let sql = format!(
         "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata) \
@@ -398,21 +424,26 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLU
         end_line_sql,
         metadata_sql,
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn load_current_file_state(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
 ) -> Result<Option<(String, i64)>> {
+    let committed_at_unix_expr = match relational.dialect() {
+        RelationalDialect::Postgres => "EXTRACT(EPOCH FROM committed_at)::BIGINT".to_string(),
+        RelationalDialect::Sqlite => "CAST(strftime('%s', committed_at) AS INTEGER)".to_string(),
+    };
     let sql = format!(
-        "SELECT commit_sha, EXTRACT(EPOCH FROM committed_at)::BIGINT AS committed_at_unix \
+        "SELECT commit_sha, {} AS committed_at_unix \
 FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
+        committed_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
         esc_pg(path),
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational.query_rows(&sql).await?;
     let Some(row) = rows.first() else {
         return Ok(None);
     };
@@ -441,25 +472,32 @@ fn incoming_revision_is_newer(existing: Option<(String, i64)>, commit_sha: &str,
 
 async fn upsert_current_file_state(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rev: &FileRevision<'_>,
 ) -> Result<()> {
+    let committed_at_sql = match relational.dialect() {
+        RelationalDialect::Postgres => format!("to_timestamp({})", rev.commit_unix),
+        RelationalDialect::Sqlite => format!("datetime({}, 'unixepoch')", rev.commit_unix),
+    };
+    let now_sql = sql_now(relational);
     let sql = format!(
         "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', to_timestamp({}), now()) \
-ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, committed_at = EXCLUDED.committed_at, updated_at = now()",
+VALUES ('{}', '{}', '{}', '{}', {}, {}) \
+ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, committed_at = EXCLUDED.committed_at, updated_at = {}",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(rev.path),
         esc_pg(rev.commit_sha),
         esc_pg(rev.blob_sha),
-        rev.commit_unix,
+        committed_at_sql,
+        now_sql,
+        now_sql,
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn load_current_symbol_ids_for_path(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
 ) -> Result<HashSet<String>> {
     let sql = format!(
@@ -467,7 +505,7 @@ async fn load_current_symbol_ids_for_path(
         esc_pg(&cfg.repo.repo_id),
         esc_pg(path),
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| row.get("symbol_id").and_then(Value::as_str).map(str::to_string))
@@ -476,7 +514,7 @@ async fn load_current_symbol_ids_for_path(
 
 async fn delete_current_artefacts_for_path_symbols(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
     symbol_ids: &HashSet<String>,
 ) -> Result<()> {
@@ -491,12 +529,12 @@ async fn delete_current_artefacts_for_path_symbols(
         esc_pg(path),
         sql_string_list_pg(symbol_ids.as_slice()),
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn delete_current_outgoing_edges_for_path(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
 ) -> Result<()> {
     let sql = format!(
@@ -504,12 +542,12 @@ async fn delete_current_outgoing_edges_for_path(
         esc_pg(&cfg.repo.repo_id),
         esc_pg(path),
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn load_current_external_target_lookup(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     path: &str,
     refs: &HashSet<String>,
 ) -> Result<HashMap<String, (String, String)>> {
@@ -525,7 +563,7 @@ WHERE repo_id = '{}' AND path <> '{}' AND symbol_fqn IN ({})",
         esc_pg(path),
         sql_string_list_pg(ref_values.as_slice()),
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational.query_rows(&sql).await?;
 
     let mut out = HashMap::new();
     for row in rows {
@@ -619,7 +657,7 @@ fn build_current_edge_records(
 
 async fn upsert_current_edge(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     record: &PersistedEdgeRecord,
 ) -> Result<()> {
@@ -634,12 +672,13 @@ async fn upsert_current_edge(
         .end_line
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let metadata_sql = format!("'{}'::jsonb", esc_pg(&record.metadata.to_string()));
+    let metadata_sql = sql_json_value(relational, &record.metadata);
+    let now_sql = sql_now(relational);
 
     let sql = format!(
         "INSERT INTO artefact_edges_current (edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, now()) \
-ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = now()",
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {}) \
+ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = {}",
         esc_pg(&record.edge_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(rev.commit_sha),
@@ -655,39 +694,48 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXC
         start_line_sql,
         end_line_sql,
         metadata_sql,
+        now_sql,
+        now_sql,
     );
-    postgres_exec(pg_client, &sql).await
+    relational.exec(&sql).await
 }
 
 async fn repair_inbound_current_edges(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     refreshed_symbol_ids: &HashSet<String>,
     deleted_symbol_ids: &HashSet<String>,
 ) -> Result<()> {
+    let now_sql = sql_now(relational);
     if !refreshed_symbol_ids.is_empty() {
         let refreshed_symbol_ids = refreshed_symbol_ids.iter().cloned().collect::<Vec<_>>();
         let sql = format!(
-            "UPDATE artefact_edges_current e \
-SET to_artefact_id = a.artefact_id, updated_at = now() \
-FROM artefacts_current a \
-WHERE e.repo_id = '{}' AND a.repo_id = e.repo_id AND e.to_symbol_id = a.symbol_id AND e.to_symbol_id IN ({})",
+            "UPDATE artefact_edges_current \
+SET to_artefact_id = (
+    SELECT a.artefact_id
+    FROM artefacts_current a
+    WHERE a.repo_id = artefact_edges_current.repo_id
+      AND a.symbol_id = artefact_edges_current.to_symbol_id
+), updated_at = {} \
+WHERE repo_id = '{}' AND to_symbol_id IN ({})",
+            now_sql,
             esc_pg(&cfg.repo.repo_id),
             sql_string_list_pg(refreshed_symbol_ids.as_slice()),
         );
-        postgres_exec(pg_client, &sql).await?;
+        relational.exec(&sql).await?;
     }
 
     if !deleted_symbol_ids.is_empty() {
         let deleted_symbol_ids = deleted_symbol_ids.iter().cloned().collect::<Vec<_>>();
         let sql = format!(
             "UPDATE artefact_edges_current \
-SET to_symbol_id = NULL, to_artefact_id = NULL, updated_at = now() \
+SET to_symbol_id = NULL, to_artefact_id = NULL, updated_at = {} \
 WHERE repo_id = '{}' AND to_symbol_id IN ({})",
+            now_sql,
             esc_pg(&cfg.repo.repo_id),
             sql_string_list_pg(deleted_symbol_ids.as_slice()),
         );
-        postgres_exec(pg_client, &sql).await?;
+        relational.exec(&sql).await?;
     }
 
     Ok(())
@@ -695,20 +743,20 @@ WHERE repo_id = '{}' AND to_symbol_id IN ({})",
 
 async fn refresh_current_state_for_path(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
     file_docstring: Option<String>,
     symbol_records: &[PersistedArtefactRecord],
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
-    let existing = load_current_file_state(cfg, pg_client, rev.path).await?;
+    let existing = load_current_file_state(cfg, relational, rev.path).await?;
     if !incoming_revision_is_newer(existing, rev.commit_sha, rev.commit_unix) {
         return Ok(());
     }
 
-    let old_symbol_ids = load_current_symbol_ids_for_path(cfg, pg_client, rev.path).await?;
-    upsert_current_file_state(cfg, pg_client, rev).await?;
+    let old_symbol_ids = load_current_symbol_ids_for_path(cfg, relational, rev.path).await?;
+    upsert_current_file_state(cfg, relational, rev).await?;
 
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
     all_records.push(build_file_current_record(
@@ -721,7 +769,7 @@ async fn refresh_current_state_for_path(
 
     let mut current_by_fqn = HashMap::new();
     for record in &all_records {
-        upsert_current_artefact(cfg, pg_client, rev, &file_artefact.language, record).await?;
+        upsert_current_artefact(cfg, relational, rev, &file_artefact.language, record).await?;
         current_by_fqn.insert(record.symbol_fqn.clone(), record.clone());
     }
 
@@ -739,7 +787,7 @@ async fn refresh_current_state_for_path(
         .filter_map(|edge| edge.to_symbol_ref.clone().or_else(|| edge.to_target_symbol_fqn.clone()))
         .collect::<HashSet<_>>();
     let external_targets =
-        load_current_external_target_lookup(cfg, pg_client, rev.path, &target_refs).await?;
+        load_current_external_target_lookup(cfg, relational, rev.path, &target_refs).await?;
     let current_edge_records = build_current_edge_records(
         cfg,
         rev.commit_sha,
@@ -750,19 +798,20 @@ async fn refresh_current_state_for_path(
         &external_targets,
     );
 
-    delete_current_outgoing_edges_for_path(cfg, pg_client, rev.path).await?;
+    delete_current_outgoing_edges_for_path(cfg, relational, rev.path).await?;
     for record in &current_edge_records {
-        upsert_current_edge(cfg, pg_client, rev, record).await?;
+        upsert_current_edge(cfg, relational, rev, record).await?;
     }
 
-    delete_current_artefacts_for_path_symbols(cfg, pg_client, rev.path, &deleted_symbol_ids).await?;
-    repair_inbound_current_edges(cfg, pg_client, &new_symbol_ids, &deleted_symbol_ids).await?;
+    delete_current_artefacts_for_path_symbols(cfg, relational, rev.path, &deleted_symbol_ids)
+        .await?;
+    repair_inbound_current_edges(cfg, relational, &new_symbol_ids, &deleted_symbol_ids).await?;
     Ok(())
 }
 
 async fn upsert_language_artefacts(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
 ) -> Result<()> {
@@ -794,7 +843,7 @@ async fn upsert_language_artefacts(
     for record in &symbol_records {
         persist_historical_artefact(
             cfg,
-            pg_client,
+            relational,
             rev.path,
             rev.blob_sha,
             &file_artefact.language,
@@ -824,12 +873,12 @@ async fn upsert_language_artefacts(
         &historical_lookup,
     );
     for record in &historical_edge_records {
-        persist_historical_edge(cfg, pg_client, rev.blob_sha, record).await?;
+        persist_historical_edge(cfg, relational, rev.blob_sha, record).await?;
     }
 
     refresh_current_state_for_path(
         cfg,
-        pg_client,
+        relational,
         rev,
         file_artefact,
         file_docstring,

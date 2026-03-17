@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::devql_config::BlobStorageConfig;
 use crate::engine::blob::{BlobStore, normalize_blob_key};
+use crate::store_config::BlobStorageConfig;
 
 #[derive(Debug, Clone)]
 pub struct LocalBlobStore {

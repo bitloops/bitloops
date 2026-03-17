@@ -18,17 +18,14 @@ struct TemporaryCheckpointRecord {
 }
 
 fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg = crate::devql_config::resolve_devql_backend_config()
-        .context("resolving DevQL backend config for temporary checkpoints")?;
+    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving backend config for temporary checkpoints")?;
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return crate::devql_config::resolve_sqlite_db_path(Some(path))
+        return crate::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .context("resolving configured SQLite path for temporary checkpoints");
     }
 
-    Ok(repo_root
-        .join(paths::BITLOOPS_DIR)
-        .join("devql")
-        .join("relational.db"))
+    Ok(paths::default_relational_db_path(repo_root))
 }
 
 fn insert_temporary_checkpoint_record(
@@ -36,7 +33,7 @@ fn insert_temporary_checkpoint_record(
     record: &TemporaryCheckpointRecord,
 ) -> Result<()> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening temporary checkpoint SQLite database")?;
     sqlite
         .initialise_checkpoint_schema()
@@ -98,7 +95,7 @@ fn latest_temporary_checkpoint_tree_hash(repo_root: &Path, session_id: &str) -> 
     use rusqlite::OptionalExtension;
 
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root).ok()?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path).ok()?;
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
     sqlite.initialise_checkpoint_schema().ok()?;
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
         .ok()?

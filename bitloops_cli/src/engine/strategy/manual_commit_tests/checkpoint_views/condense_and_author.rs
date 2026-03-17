@@ -293,6 +293,7 @@ fn get_checkpoint_author_no_sessions_branch() {
         .output()
         .unwrap();
     assert!(init.status.success());
+    ensure_test_store_backends(dir.path());
 
     let result = get_checkpoint_author(dir.path(), "aabbccddeeff");
     assert!(

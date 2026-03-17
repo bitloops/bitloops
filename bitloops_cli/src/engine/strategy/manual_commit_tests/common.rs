@@ -15,6 +15,40 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
+fn ensure_test_store_backends(repo_root: &Path) {
+    let sqlite_path = paths::default_relational_db_path(repo_root);
+    if let Some(parent) = sqlite_path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let sqlite = SqliteConnectionPool::connect(sqlite_path).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+
+    let duckdb_path = paths::default_events_db_path(repo_root);
+    if let Some(parent) = duckdb_path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let duckdb = duckdb::Connection::open(duckdb_path).unwrap();
+    duckdb.execute_batch(
+        "CREATE TABLE IF NOT EXISTS checkpoint_events (
+            event_id VARCHAR PRIMARY KEY,
+            event_time VARCHAR,
+            repo_id VARCHAR,
+            checkpoint_id VARCHAR,
+            session_id VARCHAR,
+            commit_sha VARCHAR,
+            branch VARCHAR,
+            event_type VARCHAR,
+            agent VARCHAR,
+            strategy VARCHAR,
+            files_touched VARCHAR,
+            payload VARCHAR
+        );",
+    )
+    .unwrap();
+
+    fs::create_dir_all(paths::default_blob_store_path(repo_root)).unwrap();
+}
+
 /// Creates a real git repository with an initial commit for testing.
 fn setup_git_repo(dir: &TempDir) -> String {
     let run = |args: &[&str]| {
@@ -35,6 +69,7 @@ fn setup_git_repo(dir: &TempDir) -> String {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
+    ensure_test_store_backends(dir.path());
     fs::write(dir.path().join("README.md"), "initial content").unwrap();
     run(&["add", "."]);
     run(&["commit", "--allow-empty", "-m", "initial"]);
@@ -73,6 +108,7 @@ fn setup_empty_git_repo(dir: &TempDir) {
     run(&["config", "user.email", "t@t.com"]);
     run(&["config", "user.name", "Test"]);
     run(&["config", "commit.gpgsign", "false"]);
+    ensure_test_store_backends(dir.path());
 }
 
 fn session_backend(repo_root: &Path) -> Box<dyn SessionBackend> {
@@ -172,10 +208,7 @@ fn git_ok(repo_root: &Path, args: &[&str]) -> String {
 }
 
 fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(paths::BITLOOPS_DIR)
-        .join("devql")
-        .join("relational.db")
+    paths::default_relational_db_path(repo_root)
 }
 
 fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
@@ -278,7 +311,7 @@ struct CheckpointBlobRow {
 }
 
 fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
-    repo_root.join(paths::BITLOOPS_DIR).join("blobs")
+    paths::default_blob_store_path(repo_root)
 }
 
 fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {

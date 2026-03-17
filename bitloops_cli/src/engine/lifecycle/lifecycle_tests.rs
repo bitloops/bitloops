@@ -24,6 +24,7 @@ use super::{
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
+use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -67,6 +68,7 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
+    ensure_test_store_backends(dir.path());
 }
 
 // CLI-866

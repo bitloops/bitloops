@@ -35,6 +35,40 @@ fn init_repo(repo: &Path) {
     fs::write(repo.join("README.md"), "dashboard e2e\n").expect("write readme");
     run_git(repo, &["add", "README.md"]);
     run_git(repo, &["commit", "-m", "init"]);
+    ensure_dashboard_store_files(repo);
+}
+
+fn ensure_dashboard_store_files(repo_root: &Path) {
+    let cfg = bitloops_cli::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+
+    if cfg.relational.provider == bitloops_cli::store_config::RelationalProvider::Sqlite {
+        let sqlite_path = if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+        };
+        let sqlite = bitloops_cli::engine::db::SqliteConnectionPool::connect(sqlite_path)
+            .expect("create relational sqlite file");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
+    }
+
+    if cfg.events.provider == bitloops_cli::store_config::EventsProvider::DuckDb {
+        let duckdb_path = if let Some(path) = cfg.events.duckdb_path.as_deref() {
+            bitloops_cli::store_config::resolve_duckdb_db_path_for_repo(repo_root, Some(path))
+        } else {
+            bitloops_cli::engine::paths::default_events_db_path(repo_root)
+        };
+        if let Some(parent) = duckdb_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).expect("create duckdb parent");
+        }
+        let _conn = duckdb::Connection::open(duckdb_path).expect("create events duckdb file");
+    }
 }
 
 fn pick_port() -> u16 {

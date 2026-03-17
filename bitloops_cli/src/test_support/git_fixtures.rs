@@ -28,5 +28,26 @@ pub(crate) fn init_test_repo(repo_root: &Path, branch: &str, user_name: &str, us
 }
 
 pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
-    repo_root.join(paths::BITLOOPS_DIR).join("blobs")
+    paths::default_blob_store_path(repo_root)
+}
+
+#[allow(dead_code)]
+pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
+    let sqlite_path = paths::default_relational_db_path(repo_root);
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+        .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+
+    let duckdb_path = paths::default_events_db_path(repo_root);
+    if let Some(parent) = duckdb_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create duckdb parent");
+    }
+    let _conn = duckdb::Connection::open(duckdb_path).expect("create events duckdb file");
+
+    std::fs::create_dir_all(paths::default_blob_store_path(repo_root))
+        .expect("create local blob store directory");
 }

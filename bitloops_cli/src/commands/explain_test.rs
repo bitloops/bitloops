@@ -15,6 +15,7 @@ fn setup_git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     run_git_cmd(&root, &["config", "user.name", "Test"]);
     run_git_cmd(&root, &["config", "user.email", "test@example.com"]);
     run_git_cmd(&root, &["config", "commit.gpgsign", "false"]);
+    ensure_relational_store_file(&root);
     (tmp, root)
 }
 
@@ -56,17 +57,23 @@ fn make_checkpoint_commit(
 }
 
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
-    let cfg =
-        crate::devql_config::resolve_devql_backend_config().expect("resolve devql backend config");
+    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        crate::devql_config::resolve_sqlite_db_path(Some(path))
+        crate::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
-        repo_root
-            .join(crate::engine::paths::BITLOOPS_DIR)
-            .join("devql")
-            .join("relational.db")
+        crate::engine::paths::default_relational_db_path(repo_root)
     }
+}
+
+fn ensure_relational_store_file(repo_root: &std::path::Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let sqlite =
+        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
 }
 
 fn insert_commit_checkpoint_mapping(

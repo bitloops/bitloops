@@ -1,7 +1,8 @@
 async fn execute_devql_query(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: Option<&tokio_postgres::Client>,
+    events_cfg: &EventsBackendConfig,
+    relational: Option<&RelationalStorage>,
 ) -> Result<Vec<Value>> {
     if (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
         && (parsed.file.is_some() || parsed.files_path.is_some() || parsed.has_artefacts_stage)
@@ -72,11 +73,14 @@ async fn execute_devql_query(
     }
 
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
-        return execute_clickhouse_pipeline(cfg, parsed).await;
+        return match events_cfg.provider {
+            EventsProvider::ClickHouse => execute_clickhouse_pipeline(cfg, parsed).await,
+            EventsProvider::DuckDb => execute_duckdb_pipeline(cfg, events_cfg, parsed).await,
+        };
     }
 
-    let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
-    execute_postgres_pipeline(cfg, parsed, pg_client).await
+    let relational = relational.ok_or_else(|| anyhow!("relational storage is required"))?;
+    execute_relational_pipeline(cfg, events_cfg, parsed, relational).await
 }
 
 fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
@@ -159,34 +163,147 @@ async fn execute_clickhouse_pipeline(
     Ok(data.as_array().cloned().unwrap_or_default())
 }
 
-async fn execute_postgres_pipeline(
+fn normalise_duckdb_event_row(row: Value) -> Value {
+    let Some(mut obj) = row.as_object().cloned() else {
+        return row;
+    };
+
+    if let Some(files_touched_raw) = obj.get("files_touched").and_then(Value::as_str)
+        && let Ok(files_touched) = serde_json::from_str::<Value>(files_touched_raw)
+    {
+        obj.insert("files_touched".to_string(), files_touched);
+    }
+
+    if let Some(payload_raw) = obj.get("payload").and_then(Value::as_str)
+        && let Ok(payload) = serde_json::from_str::<Value>(payload_raw)
+    {
+        obj.insert("payload".to_string(), payload);
+    }
+
+    Value::Object(obj)
+}
+
+fn normalise_relational_result_row(row: Value) -> Value {
+    let Some(mut obj) = row.as_object().cloned() else {
+        return row;
+    };
+
+    for key in ["modifiers", "metadata"] {
+        if let Some(raw) = obj.get(key).and_then(Value::as_str)
+            && let Ok(parsed) = serde_json::from_str::<Value>(raw)
+        {
+            obj.insert(key.to_string(), parsed);
+        }
+    }
+
+    Value::Object(obj)
+}
+
+async fn execute_duckdb_pipeline(
     cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: &tokio_postgres::Client,
 ) -> Result<Vec<Value>> {
-    let _ = cfg.require_pg_dsn()?;
+    let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
+    let duckdb_path = events_cfg.duckdb_path_or_default();
+
+    if parsed.has_checkpoints_stage {
+        let mut conditions = vec![
+            format!("repo_id = '{}'", esc_pg(&repo_id)),
+            "event_type = 'checkpoint_committed'".to_string(),
+        ];
+        if let Some(agent) = parsed.checkpoints.agent.as_deref() {
+            conditions.push(format!("agent = '{}'", esc_pg(agent)));
+        }
+        if let Some(since) = parsed.checkpoints.since.as_deref() {
+            conditions.push(format!("event_time >= '{}'", esc_pg(since)));
+        }
+
+        let sql = format!(
+            "SELECT checkpoint_id, \
+max(event_time) AS created_at, \
+arg_max(agent, event_time) AS agent, \
+arg_max(commit_sha, event_time) AS commit_sha, \
+arg_max(branch, event_time) AS branch, \
+arg_max(strategy, event_time) AS strategy, \
+arg_max(files_touched, event_time) AS files_touched \
+FROM checkpoint_events WHERE {} GROUP BY checkpoint_id ORDER BY created_at DESC LIMIT {}",
+            conditions.join(" AND "),
+            parsed.limit.max(1)
+        );
+        let rows = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+        return Ok(rows
+            .into_iter()
+            .map(normalise_duckdb_event_row)
+            .collect::<Vec<_>>());
+    }
+
+    let mut conditions = vec![format!("repo_id = '{}'", esc_pg(&repo_id))];
+    if let Some(event_type) = parsed.telemetry.event_type.as_deref() {
+        conditions.push(format!("event_type = '{}'", esc_pg(event_type)));
+    }
+    if let Some(agent) = parsed.telemetry.agent.as_deref() {
+        conditions.push(format!("agent = '{}'", esc_pg(agent)));
+    }
+    if let Some(since) = parsed.telemetry.since.as_deref() {
+        conditions.push(format!("event_time >= '{}'", esc_pg(since)));
+    }
+
+    let sql = format!(
+        "SELECT event_time, event_type, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT {}",
+        conditions.join(" AND "),
+        parsed.limit.max(1)
+    );
+
+    let rows = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+    Ok(rows
+        .into_iter()
+        .map(normalise_duckdb_event_row)
+        .collect::<Vec<_>>())
+}
+
+async fn execute_relational_pipeline(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+    parsed: &ParsedDevqlQuery,
+    relational: &RelationalStorage,
+) -> Result<Vec<Value>> {
     let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
 
     if parsed.has_deps_stage {
-        return execute_postgres_deps_pipeline(cfg, parsed, pg_client, &repo_id).await;
+        return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
     }
 
     if parsed.has_semantic_neighbors_stage {
-        return execute_postgres_semantic_neighbors_pipeline(cfg, parsed, pg_client, &repo_id).await;
+        return execute_relational_semantic_neighbors_pipeline(
+            cfg,
+            events_cfg,
+            parsed,
+            relational,
+            &repo_id,
+        )
+        .await;
     }
 
-    let sql = build_postgres_artefacts_query(cfg, parsed, Some(pg_client), &repo_id).await?;
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
+        .await?;
+    let rows = relational
+        .query_rows(&sql)
+        .await?
+        .into_iter()
+        .map(normalise_relational_result_row)
+        .collect::<Vec<_>>();
     if parsed.has_chat_history_stage {
-        return attach_chat_history_to_artefacts(cfg, pg_client, &repo_id, rows).await;
+        return attach_chat_history_to_artefacts(cfg, events_cfg, relational, &repo_id, rows).await;
     }
     Ok(rows)
 }
 
-async fn build_postgres_artefacts_query(
+async fn build_relational_artefacts_query(
     cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: Option<&tokio_postgres::Client>,
+    relational: Option<&RelationalStorage>,
     repo_id: &str,
 ) -> Result<String> {
     let use_historical_tables = parsed.as_of.is_some();
@@ -245,10 +362,11 @@ async fn build_postgres_artefacts_query(
     }
 
     if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
-        let pg_client = pg_client.ok_or_else(|| anyhow!("Postgres client is required"))?;
+        let relational = relational.ok_or_else(|| anyhow!("relational storage is required"))?;
         let blob_shas = blob_shas_changed_in_events(
             cfg,
-            pg_client,
+            events_cfg,
+            relational,
             repo_id,
             parsed.artefacts.agent.as_deref(),
             parsed.artefacts.since.as_deref(),
@@ -279,30 +397,43 @@ LIMIT {}",
     Ok(sql)
 }
 
-async fn execute_postgres_deps_pipeline(
+async fn execute_relational_deps_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<Vec<Value>> {
-    let sql = build_postgres_deps_query(cfg, parsed, repo_id)?;
-    pg_query_rows(pg_client, &sql).await
+    let sql = build_relational_deps_query(cfg, parsed, repo_id, relational.dialect())?;
+    Ok(relational
+        .query_rows(&sql)
+        .await?
+        .into_iter()
+        .map(normalise_relational_result_row)
+        .collect::<Vec<_>>())
 }
 
-async fn execute_postgres_semantic_neighbors_pipeline(
+async fn execute_relational_semantic_neighbors_pipeline(
     cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<Vec<Value>> {
+    if relational.dialect() != RelationalDialect::Postgres {
+        bail!(
+            "semanticNeighbors() currently requires Postgres relational storage because SQLite vector search is not supported yet."
+        );
+    }
+
     let mut source_query = parsed.clone();
     source_query.has_semantic_neighbors_stage = false;
     source_query.has_chat_history_stage = false;
     source_query.limit = 1;
 
     let source_sql =
-        build_postgres_artefacts_query(cfg, &source_query, Some(pg_client), repo_id).await?;
-    let source_rows = pg_query_rows(pg_client, &source_sql).await?;
+        build_relational_artefacts_query(cfg, events_cfg, &source_query, Some(relational), repo_id)
+            .await?;
+    let source_rows = relational.query_rows(&source_sql).await?;
     let Some(source) = source_rows.first() else {
         return Ok(vec![]);
     };
@@ -310,8 +441,8 @@ async fn execute_postgres_semantic_neighbors_pipeline(
         bail!("semanticNeighbors() source artefact did not include artefact_id");
     };
 
-    let source_embedding = load_symbol_embedding_source_metadata(pg_client, repo_id, source_artefact_id)
-        .await?;
+    let source_embedding =
+        load_symbol_embedding_source_metadata(relational, repo_id, source_artefact_id).await?;
     if source_embedding.is_none() {
         bail!(
             "semanticNeighbors() requires Stage 2 embeddings for the source artefact. Configure BITLOOPS_DEVQL_EMBEDDING_PROVIDER and re-run `bitloops devql ingest`."
@@ -319,50 +450,81 @@ async fn execute_postgres_semantic_neighbors_pipeline(
     }
 
     let sql = build_postgres_semantic_neighbors_sql(repo_id, source_artefact_id, parsed.limit);
-    pg_query_rows(pg_client, &sql).await
+    relational.query_rows(&sql).await
 }
 
 async fn blob_shas_changed_in_events(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    events_cfg: &EventsBackendConfig,
+    relational: &RelationalStorage,
     repo_id: &str,
     agent: Option<&str>,
     since: Option<&str>,
 ) -> Result<Vec<String>> {
-    let mut conditions = vec![
-        format!("repo_id = '{}'", esc_ch(repo_id)),
-        "event_type = 'checkpoint_committed'".to_string(),
-        "commit_sha != ''".to_string(),
-    ];
+    let commit_shas = match events_cfg.provider {
+        EventsProvider::ClickHouse => {
+            let mut conditions = vec![
+                format!("repo_id = '{}'", esc_ch(repo_id)),
+                "event_type = 'checkpoint_committed'".to_string(),
+                "commit_sha != ''".to_string(),
+            ];
 
-    if let Some(agent) = agent {
-        conditions.push(format!("agent = '{}'", esc_ch(agent)));
-    }
-    if let Some(since) = since {
-        conditions.push(format!(
-            "event_time >= parseDateTime64BestEffortOrZero('{}')",
-            esc_ch(since)
-        ));
-    }
+            if let Some(agent) = agent {
+                conditions.push(format!("agent = '{}'", esc_ch(agent)));
+            }
+            if let Some(since) = since {
+                conditions.push(format!(
+                    "event_time >= parseDateTime64BestEffortOrZero('{}')",
+                    esc_ch(since)
+                ));
+            }
 
-    let sql = format!(
-        "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000 FORMAT JSON",
-        conditions.join(" AND ")
-    );
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    let commit_shas = data
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|row| {
-            row.get("commit_sha")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .collect::<Vec<_>>();
+            let sql = format!(
+                "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000 FORMAT JSON",
+                conditions.join(" AND ")
+            );
+            let data = clickhouse_query_data(cfg, &sql).await?;
+            data.as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|row| {
+                    row.get("commit_sha")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        }
+        EventsProvider::DuckDb => {
+            let mut conditions = vec![
+                format!("repo_id = '{}'", esc_pg(repo_id)),
+                "event_type = 'checkpoint_committed'".to_string(),
+                "commit_sha <> ''".to_string(),
+            ];
+            if let Some(agent) = agent {
+                conditions.push(format!("agent = '{}'", esc_pg(agent)));
+            }
+            if let Some(since) = since {
+                conditions.push(format!("event_time >= '{}'", esc_pg(since)));
+            }
+            let sql = format!(
+                "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000",
+                conditions.join(" AND ")
+            );
+            let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
+            rows.into_iter()
+                .filter_map(|row| {
+                    row.get("commit_sha")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        }
+    };
 
     if commit_shas.is_empty() {
         return Ok(vec![]);
@@ -373,7 +535,7 @@ async fn blob_shas_changed_in_events(
         esc_pg(repo_id),
         sql_string_list_pg(&commit_shas),
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -388,7 +550,8 @@ async fn blob_shas_changed_in_events(
 
 async fn attach_chat_history_to_artefacts(
     cfg: &DevqlConfig,
-    pg_client: &tokio_postgres::Client,
+    events_cfg: &EventsBackendConfig,
+    relational: &RelationalStorage,
     repo_id: &str,
     rows: Vec<Value>,
 ) -> Result<Vec<Value>> {
@@ -421,8 +584,10 @@ async fn attach_chat_history_to_artefacts(
             cached.clone()
         } else {
             let commit_shas =
-                commit_shas_for_artefact_blob(pg_client, repo_id, &path, &blob_sha).await?;
-            let events = checkpoint_events_for_commits(cfg, repo_id, &path, &commit_shas).await?;
+                commit_shas_for_artefact_blob(relational, repo_id, &path, &blob_sha).await?;
+            let events =
+                checkpoint_events_for_commits(cfg, events_cfg, repo_id, &path, &commit_shas)
+                    .await?;
             let mut history_entries = Vec::with_capacity(events.len());
 
             for event in events {
@@ -465,7 +630,7 @@ async fn attach_chat_history_to_artefacts(
 }
 
 async fn commit_shas_for_artefact_blob(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     repo_id: &str,
     path: &str,
     blob_sha: &str,
@@ -478,7 +643,7 @@ async fn commit_shas_for_artefact_blob(
         esc_pg(blob_sha),
         path_clause
     );
-    let rows = pg_query_rows(pg_client, &sql).await?;
+    let rows = relational.query_rows(&sql).await?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
@@ -493,6 +658,7 @@ async fn commit_shas_for_artefact_blob(
 
 async fn checkpoint_events_for_commits(
     cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
     repo_id: &str,
     path: &str,
     commit_shas: &[String],
@@ -501,34 +667,76 @@ async fn checkpoint_events_for_commits(
         return Ok(vec![]);
     }
 
-    let path_candidates = build_path_candidates(path);
-    let path_has_clause = if path_candidates.is_empty() {
-        None
-    } else {
-        Some(
-            path_candidates
-                .iter()
-                .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
-                .collect::<Vec<_>>()
-                .join(" OR "),
-        )
-    };
+    match events_cfg.provider {
+        EventsProvider::ClickHouse => {
+            let path_candidates = build_path_candidates(path);
+            let path_has_clause = if path_candidates.is_empty() {
+                None
+            } else {
+                Some(
+                    path_candidates
+                        .iter()
+                        .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
+                        .collect::<Vec<_>>()
+                        .join(" OR "),
+                )
+            };
 
-    let mut conditions = vec![
-        format!("repo_id = '{}'", esc_ch(repo_id)),
-        "event_type = 'checkpoint_committed'".to_string(),
-        format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
-    ];
-    if let Some(path_has_clause) = path_has_clause {
-        conditions.push(format!("({path_has_clause})"));
+            let mut conditions = vec![
+                format!("repo_id = '{}'", esc_ch(repo_id)),
+                "event_type = 'checkpoint_committed'".to_string(),
+                format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
+            ];
+            if let Some(path_has_clause) = path_has_clause {
+                conditions.push(format!("({path_has_clause})"));
+            }
+
+            let sql = format!(
+                "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
+                conditions.join(" AND ")
+            );
+            let data = clickhouse_query_data(cfg, &sql).await?;
+            Ok(data.as_array().cloned().unwrap_or_default())
+        }
+        EventsProvider::DuckDb => {
+            let path_candidates = build_path_candidates(path);
+            let path_has_clause = if path_candidates.is_empty() {
+                None
+            } else {
+                Some(
+                    path_candidates
+                        .iter()
+                        .map(|candidate| {
+                            format!(
+                                "files_touched LIKE '%\"{}\"%'",
+                                esc_pg(candidate).replace('%', "\\%")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" OR "),
+                )
+            };
+
+            let mut conditions = vec![
+                format!("repo_id = '{}'", esc_pg(repo_id)),
+                "event_type = 'checkpoint_committed'".to_string(),
+                format!("commit_sha IN ({})", sql_string_list_pg(commit_shas)),
+            ];
+            if let Some(path_has_clause) = path_has_clause {
+                conditions.push(format!("({path_has_clause})"));
+            }
+
+            let sql = format!(
+                "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200",
+                conditions.join(" AND ")
+            );
+            let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
+            Ok(rows
+                .into_iter()
+                .map(normalise_duckdb_event_row)
+                .collect::<Vec<_>>())
+        }
     }
-
-    let sql = format!(
-        "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
-        conditions.join(" AND ")
-    );
-    let data = clickhouse_query_data(cfg, &sql).await?;
-    Ok(data.as_array().cloned().unwrap_or_default())
 }
 
 fn session_chat_payload(

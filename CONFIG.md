@@ -1,39 +1,52 @@
 # Configuration Reference
 
-This file documents the user-facing configuration values used by Bitloops CLI.
+This file documents user-facing configuration for Bitloops CLI.
 
 Scope:
-- Runtime config files
+- Repository runtime config
 - Repository settings
-- Supported `BITLOOPS_*` environment variables
+- Supported runtime `BITLOOPS_*` environment variables
 - Build-time dashboard URL config
 
 Test-only env vars are intentionally excluded.
 
-## 1) Global user config (`~/.bitloops/config.json`)
+## 1) Repository runtime config (`<repo>/.bitloops/config.json`)
 
 Primary use:
-- DevQL backend/provider selection
+- Storage backend/provider selection (relational DB, event DB, blob store)
+- Semantic feature provider settings
 - Dashboard host preference
 
-DevQL precedence:
-1. Environment variables
-2. `~/.bitloops/config.json`
-3. Built-in defaults
+Store configuration precedence:
+1. Explicit values in `<repo>/.bitloops/config.json`
+2. Built-in defaults under `<repo>/.bitloops/stores`
 
-### Recommended DevQL shape
+Important:
+- This shape is **not** backwards-compatible with legacy `devql.*` keys.
+- Global user config at `~/.bitloops/config.json` is not used for store backends.
+
+### Recommended config shape
 
 ```json
 {
-  "devql": {
+  "stores": {
     "relational": {
       "provider": "sqlite",
-      "sqlite_path": "~/.bitloops/devql/relational.db"
+      "sqlite_path": ".bitloops/stores/relational/relational.db"
     },
-    "events": {
+    "event": {
       "provider": "duckdb",
-      "duckdb_path": "~/.bitloops/devql/events.duckdb"
+      "duckdb_path": ".bitloops/stores/event/events.duckdb"
+    },
+    "blob": {
+      "provider": "local",
+      "local_path": ".bitloops/stores/blob"
     }
+  },
+  "semantic": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "api_key": "YOUR_KEY"
   },
   "dashboard": {
     "use_bitloops_local": false
@@ -41,34 +54,36 @@ DevQL precedence:
 }
 ```
 
-### DevQL keys
+### Store keys
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `devql.relational.provider` | `sqlite` \| `postgres` | `sqlite` | If omitted and Postgres DSN is present, provider is inferred as `postgres`. |
-| `devql.relational.sqlite_path` | string | `~/.bitloops/devql/relational.db` | `~` is expanded to the user home directory. |
-| `devql.relational.postgres_dsn` | string | none | Required when using `postgres` relational provider. |
-| `devql.events.provider` | `duckdb` \| `clickhouse` | `duckdb` | If omitted and any ClickHouse key is present, provider is inferred as `clickhouse`. |
-| `devql.events.duckdb_path` | string | `~/.bitloops/devql/events.duckdb` | `~` is expanded to the user home directory. |
-| `devql.events.clickhouse_url` | string | none | For legacy `devql` command paths, fallback is `http://localhost:8123` if unset. |
-| `devql.events.clickhouse_user` | string | none | Optional. |
-| `devql.events.clickhouse_password` | string | none | Optional. |
-| `devql.events.clickhouse_database` | string | none | For legacy `devql` command paths, fallback is `default` if unset. |
+| `stores.relational.provider` | `sqlite` \| `postgres` | `sqlite` | Selects relational backend. |
+| `stores.relational.sqlite_path` | string | `<repo>/.bitloops/stores/relational/relational.db` | Used when provider is `sqlite`. Relative paths are resolved from repo root. `~` is expanded. |
+| `stores.relational.postgres_dsn` | string | none | Required when provider is `postgres`. |
+| `stores.event.provider` | `duckdb` \| `clickhouse` | `duckdb` | Selects event backend. |
+| `stores.event.duckdb_path` | string | `<repo>/.bitloops/stores/event/events.duckdb` | Used when provider is `duckdb`. Relative paths are resolved from repo root. `~` is expanded. |
+| `stores.event.clickhouse_url` | string | `http://localhost:8123` | Used when provider is `clickhouse`. |
+| `stores.event.clickhouse_user` | string | none | Optional ClickHouse username. |
+| `stores.event.clickhouse_password` | string | none | Optional ClickHouse password. |
+| `stores.event.clickhouse_database` | string | `default` | Optional ClickHouse database. |
+| `stores.blob.provider` | `local` \| `s3` \| `gcs` | `local` | Selects blob storage backend. |
+| `stores.blob.local_path` | string | `<repo>/.bitloops/stores/blob` | Used when provider is `local`. Relative paths are resolved from repo root. `~` is expanded. |
+| `stores.blob.s3_bucket` | string | none | Required when provider is `s3`. |
+| `stores.blob.s3_region` | string | none | Optional when provider is `s3`. |
+| `stores.blob.s3_access_key_id` | string | none | Optional static credentials for S3. |
+| `stores.blob.s3_secret_access_key` | string | none | Optional static credentials for S3. |
+| `stores.blob.gcs_bucket` | string | none | Required when provider is `gcs`. |
+| `stores.blob.gcs_credentials_path` | string | none | Optional path to GCS credentials JSON. |
 
-### Legacy/alias keys still accepted
+### Semantic keys
 
-The parser still accepts these aliases for backwards compatibility:
-- `postgres_dsn` or `pg_dsn`
-- `clickhouse_url` or `ch_url`
-- `clickhouse_user` or `ch_user`
-- `clickhouse_password` or `ch_password`
-- `clickhouse_database` or `ch_database`
-- `relational_provider`
-- `events_provider`
-- `sqlite_path`
-- `duckdb_path`
-
-These can appear under `devql`, and top-level fallback keys are also supported if `devql` is not present.
+| Key | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `semantic.provider` | string | none | Semantic provider identifier. |
+| `semantic.model` | string | none | Model name used by semantic features. |
+| `semantic.api_key` | string | none | Provider API key. |
+| `semantic.base_url` | string | none | Optional custom API base URL. |
 
 ### Dashboard key
 
@@ -106,19 +121,14 @@ Known `strategy_options` in code:
 
 ## 3) Runtime environment variables
 
-### DevQL override env vars
+### Semantic env vars
 
 | Variable | Purpose |
 | --- | --- |
-| `BITLOOPS_DEVQL_RELATIONAL_PROVIDER` | Overrides relational provider (`sqlite`/`postgres`). |
-| `BITLOOPS_DEVQL_EVENTS_PROVIDER` | Overrides events provider (`duckdb`/`clickhouse`). |
-| `BITLOOPS_DEVQL_SQLITE_PATH` | Overrides SQLite DB path. |
-| `BITLOOPS_DEVQL_DUCKDB_PATH` | Overrides DuckDB DB path. |
-| `BITLOOPS_DEVQL_PG_DSN` | Postgres DSN. |
-| `BITLOOPS_DEVQL_CH_URL` | ClickHouse URL. |
-| `BITLOOPS_DEVQL_CH_USER` | ClickHouse username. |
-| `BITLOOPS_DEVQL_CH_PASSWORD` | ClickHouse password. |
-| `BITLOOPS_DEVQL_CH_DATABASE` | ClickHouse database name. |
+| `BITLOOPS_DEVQL_SEMANTIC_PROVIDER` | Overrides `semantic.provider`. |
+| `BITLOOPS_DEVQL_SEMANTIC_MODEL` | Overrides `semantic.model`. |
+| `BITLOOPS_DEVQL_SEMANTIC_API_KEY` | Overrides `semantic.api_key`. |
+| `BITLOOPS_DEVQL_SEMANTIC_BASE_URL` | Overrides `semantic.base_url`. |
 
 ### Dashboard runtime env vars
 

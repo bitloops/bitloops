@@ -581,6 +581,7 @@ mod tests {
             "src/engine/agent/cursor/hooks.rs",
             "src/commands/enable.rs",
             "src/commands/init.rs",
+            "src/commands/init/tests.rs",
             "src/commands/root_test.rs",
         ];
         let mut violations = Vec::new();

@@ -32,7 +32,7 @@ async fn init_postgres_semantic_embeddings_schema(
 }
 
 async fn upsert_symbol_embedding_rows(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     embedding_provider: Arc<dyn EmbeddingProvider>,
 ) -> Result<semantic_embeddings::SymbolEmbeddingIngestionStats> {
@@ -45,14 +45,16 @@ async fn upsert_symbol_embedding_rows(
         .iter()
         .map(|input| input.artefact_id.clone())
         .collect::<Vec<_>>();
-    let summary_by_artefact_id = load_semantic_summary_map(pg_client, &artefact_ids).await?;
+    let summary_by_artefact_id = load_semantic_summary_map(relational, &artefact_ids).await?;
     let embedding_inputs =
         semantic_embeddings::build_symbol_embedding_inputs(inputs, &summary_by_artefact_id);
 
     for input in embedding_inputs {
-        let next_input_hash =
-            semantic_embeddings::build_symbol_embedding_input_hash(&input, embedding_provider.as_ref());
-        let state = load_symbol_embedding_index_state(pg_client, &input.artefact_id).await?;
+        let next_input_hash = semantic_embeddings::build_symbol_embedding_input_hash(
+            &input,
+            embedding_provider.as_ref(),
+        );
+        let state = load_symbol_embedding_index_state(relational, &input.artefact_id).await?;
         if !semantic_embeddings::symbol_embeddings_require_reindex(&state, &next_input_hash) {
             stats.skipped += 1;
             continue;
@@ -65,7 +67,7 @@ async fn upsert_symbol_embedding_rows(
         })
         .await
         .context("building semantic embedding row on blocking worker")??;
-        persist_symbol_embedding_row(pg_client, &row).await?;
+        persist_symbol_embedding_row(relational, &row).await?;
         stats.upserted += 1;
     }
 
@@ -73,30 +75,26 @@ async fn upsert_symbol_embedding_rows(
 }
 
 async fn load_symbol_embedding_index_state(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     artefact_id: &str,
 ) -> Result<semantic_embeddings::SymbolEmbeddingIndexState> {
-    let rows = pg_query_rows(
-        pg_client,
-        &build_symbol_embedding_index_state_sql(artefact_id),
-    )
-    .await?;
+    let rows = relational
+        .query_rows(&build_symbol_embedding_index_state_sql(artefact_id))
+        .await?;
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
 async fn load_semantic_summary_map(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     artefact_ids: &[String],
 ) -> Result<HashMap<String, String>> {
     if artefact_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let rows = pg_query_rows(
-        pg_client,
-        &build_semantic_summary_lookup_sql(artefact_ids),
-    )
-    .await?;
+    let rows = relational
+        .query_rows(&build_semantic_summary_lookup_sql(artefact_ids))
+        .await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
@@ -113,22 +111,20 @@ async fn load_semantic_summary_map(
 }
 
 async fn persist_symbol_embedding_row(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     row: &semantic_embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
-    postgres_exec(pg_client, &build_symbol_embedding_persist_sql(row)?).await
+    relational.exec(&build_symbol_embedding_persist_sql(row)?).await
 }
 
 async fn load_symbol_embedding_source_metadata(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     repo_id: &str,
     artefact_id: &str,
 ) -> Result<Option<Value>> {
-    let rows = pg_query_rows(
-        pg_client,
-        &build_symbol_embedding_source_metadata_sql(repo_id, artefact_id),
-    )
-    .await?;
+    let rows = relational
+        .query_rows(&build_symbol_embedding_source_metadata_sql(repo_id, artefact_id))
+        .await?;
     Ok(rows.into_iter().next())
 }
 
@@ -278,7 +274,10 @@ mod semantic_embedding_persistence_tests {
     #[test]
     fn semantic_embedding_state_parser_defaults_and_reads_hash() {
         let empty = parse_symbol_embedding_index_state_rows(&[]);
-        assert_eq!(empty, semantic_embeddings::SymbolEmbeddingIndexState::default());
+        assert_eq!(
+            empty,
+            semantic_embeddings::SymbolEmbeddingIndexState::default()
+        );
 
         let rows = vec![json!({ "embedding_hash": "hash-1" })];
         let parsed = parse_symbol_embedding_index_state_rows(&rows);
