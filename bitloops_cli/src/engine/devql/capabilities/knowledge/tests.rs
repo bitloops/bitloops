@@ -280,6 +280,7 @@ async fn github_client_rejects_non_github_locator() -> Result<()> {
 async fn jira_client_fetch_requires_provider_config() -> Result<()> {
     let temp = TempDir::new()?;
     let mut config = provider_config("https://bitloops.atlassian.net");
+    config.atlassian = None;
     config.jira = None;
     let host = build_test_host(&temp, config)?;
     let client = JiraKnowledgeClient::new()?;
@@ -291,6 +292,25 @@ async fn jira_client_fetch_requires_provider_config() -> Result<()> {
         .expect_err("missing jira config must fail");
 
     assert!(err.to_string().contains("knowledge.providers.jira"));
+    assert!(err.to_string().contains("knowledge.providers.atlassian"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn jira_client_fetch_uses_shared_atlassian_provider_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.jira = None;
+    let host = build_test_host(&temp, config)?;
+    let client = JiraKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("network should fail after shared Atlassian config is resolved");
+
+    assert!(!err.to_string().contains("missing Atlassian configuration"));
     Ok(())
 }
 
@@ -307,6 +327,28 @@ async fn jira_client_fetch_rejects_site_mismatch_before_network() -> Result<()> 
         .expect_err("site mismatch must fail");
 
     assert!(err.to_string().contains("does not match configured"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn jira_client_prefers_product_override_over_shared_atlassian() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.jira = Some(AtlassianProviderConfig {
+        site_url: "https://override.atlassian.net".to_string(),
+        email: "jira-override@example.com".to_string(),
+        token: "jira-override-token".to_string(),
+    });
+    let host = build_test_host(&temp, config)?;
+    let client = JiraKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("product-specific override should win and trigger mismatch");
+
+    assert!(err.to_string().contains("override.atlassian.net"));
     Ok(())
 }
 
@@ -330,6 +372,7 @@ async fn jira_client_rejects_non_jira_locator() -> Result<()> {
 async fn confluence_client_fetch_requires_provider_config() -> Result<()> {
     let temp = TempDir::new()?;
     let mut config = provider_config("https://bitloops.atlassian.net");
+    config.atlassian = None;
     config.confluence = None;
     let host = build_test_host(&temp, config)?;
     let client = ConfluenceKnowledgeClient::new()?;
@@ -343,6 +386,27 @@ async fn confluence_client_fetch_requires_provider_config() -> Result<()> {
         .expect_err("missing confluence config must fail");
 
     assert!(err.to_string().contains("knowledge.providers.confluence"));
+    assert!(err.to_string().contains("knowledge.providers.atlassian"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn confluence_client_fetch_uses_shared_atlassian_provider_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.confluence = None;
+    let host = build_test_host(&temp, config)?;
+    let client = ConfluenceKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url(
+        "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge",
+    )?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("network should fail after shared Atlassian config is resolved");
+
+    assert!(!err.to_string().contains("missing Atlassian configuration"));
     Ok(())
 }
 
@@ -361,6 +425,30 @@ async fn confluence_client_fetch_rejects_site_mismatch_before_network() -> Resul
         .expect_err("site mismatch must fail");
 
     assert!(err.to_string().contains("does not match configured"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn confluence_client_prefers_product_override_over_shared_atlassian() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.confluence = Some(AtlassianProviderConfig {
+        site_url: "https://override.atlassian.net".to_string(),
+        email: "docs-override@example.com".to_string(),
+        token: "docs-override-token".to_string(),
+    });
+    let host = build_test_host(&temp, config)?;
+    let client = ConfluenceKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url(
+        "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge",
+    )?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("product-specific override should win and trigger mismatch");
+
+    assert!(err.to_string().contains("override.atlassian.net"));
     Ok(())
 }
 
@@ -792,6 +880,7 @@ fn build_host_context_reads_repo_config() -> Result<()> {
 
     assert_eq!(host.repo.identity, repo.identity);
     assert!(host.provider_config.github.is_some());
+    assert!(host.provider_config.atlassian.is_some());
     assert!(host.provider_config.jira.is_some());
     assert!(host.provider_config.confluence.is_some());
     Ok(())
@@ -878,13 +967,15 @@ fn write_repo_config(
         .github
         .as_ref()
         .context("missing github config for test config")?;
-    let jira = provider_config
-        .jira
+    let atlassian = provider_config
+        .atlassian
         .as_ref()
+        .context("missing atlassian config for test config")?;
+    let jira = provider_config
+        .jira_config()
         .context("missing jira config for test config")?;
     let confluence = provider_config
-        .confluence
-        .as_ref()
+        .confluence_config()
         .context("missing confluence config for test config")?;
     let config_dir = repo_root.join(".bitloops");
     fs::create_dir_all(&config_dir)?;
@@ -910,6 +1001,11 @@ fn write_repo_config(
                     "github": {
                         "token": github.token,
                     },
+                    "atlassian": {
+                        "site_url": atlassian.site_url,
+                        "email": atlassian.email,
+                        "token": atlassian.token,
+                    },
                     "jira": {
                         "site_url": jira.site_url,
                         "email": jira.email,
@@ -932,6 +1028,11 @@ fn provider_config(base_url: &str) -> ProviderConfig {
     ProviderConfig {
         github: Some(crate::store_config::GithubProviderConfig {
             token: "gh-token".to_string(),
+        }),
+        atlassian: Some(AtlassianProviderConfig {
+            site_url: base_url.trim_end_matches('/').to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
         }),
         jira: Some(AtlassianProviderConfig {
             site_url: base_url.trim_end_matches('/').to_string(),

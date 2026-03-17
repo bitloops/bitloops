@@ -31,8 +31,10 @@ impl KnowledgeProviderClient for JiraKnowledgeClient {
         host: &'a KnowledgeHostContext,
     ) -> BoxFuture<'a, Result<FetchedKnowledgeDocument>> {
         Box::pin(async move {
-            let jira = host.provider_config.jira.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing `knowledge.providers.jira` configuration")
+            let jira = host.provider_config.jira_config().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing Atlassian configuration: expected `knowledge.providers.jira` or `knowledge.providers.atlassian`"
+                )
             })?;
 
             let KnowledgeLocator::JiraIssue { site, key } = &parsed.locator else {
@@ -41,7 +43,7 @@ impl KnowledgeProviderClient for JiraKnowledgeClient {
 
             if site.trim_end_matches('/') != jira.site_url.trim_end_matches('/') {
                 bail!(
-                    "Jira URL site `{}` does not match configured knowledge.providers.jira.site_url `{}`",
+                    "Jira URL site `{}` does not match configured Atlassian site_url `{}`",
                     site,
                     jira.site_url
                 );

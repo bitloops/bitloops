@@ -75,8 +75,19 @@ pub struct StoreBackendConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderConfig {
     pub github: Option<GithubProviderConfig>,
+    pub atlassian: Option<AtlassianProviderConfig>,
     pub jira: Option<AtlassianProviderConfig>,
     pub confluence: Option<AtlassianProviderConfig>,
+}
+
+impl ProviderConfig {
+    pub fn jira_config(&self) -> Option<&AtlassianProviderConfig> {
+        self.jira.as_ref().or(self.atlassian.as_ref())
+    }
+
+    pub fn confluence_config(&self) -> Option<&AtlassianProviderConfig> {
+        self.confluence.as_ref().or(self.atlassian.as_ref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,6 +448,17 @@ where
             .get("github")
             .and_then(Value::as_object)
             .map(|github| parse_github_provider_config(github, &env_lookup))
+            .transpose()?,
+        atlassian: providers
+            .get("atlassian")
+            .and_then(Value::as_object)
+            .map(|atlassian| {
+                parse_atlassian_provider_config(
+                    atlassian,
+                    &env_lookup,
+                    "knowledge.providers.atlassian",
+                )
+            })
             .transpose()?,
         jira: providers
             .get("jira")

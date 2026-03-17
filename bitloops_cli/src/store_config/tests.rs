@@ -155,6 +155,11 @@ fn knowledge_config_providers_reads_literal_values() {
         "knowledge": {
             "providers": {
                 "github": { "token": "gh-token" },
+                "atlassian": {
+                    "site_url": "https://shared.atlassian.net",
+                    "email": "shared@example.com",
+                    "token": "shared-token"
+                },
                 "jira": {
                     "site_url": "https://bitloops.atlassian.net",
                     "email": "jira@example.com",
@@ -177,6 +182,14 @@ fn knowledge_config_providers_reads_literal_values() {
         })
     );
     assert_eq!(
+        cfg.atlassian,
+        Some(AtlassianProviderConfig {
+            site_url: "https://shared.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        })
+    );
+    assert_eq!(
         cfg.jira,
         Some(AtlassianProviderConfig {
             site_url: "https://bitloops.atlassian.net".to_string(),
@@ -192,6 +205,33 @@ fn knowledge_config_providers_reads_literal_values() {
             token: "confluence-token".to_string(),
         })
     );
+}
+
+#[test]
+fn knowledge_config_providers_reads_shared_atlassian_values() {
+    let value = serde_json::json!({
+        "knowledge": {
+            "providers": {
+                "atlassian": {
+                    "site_url": "https://bitloops.atlassian.net",
+                    "email": "shared@example.com",
+                    "token": "shared-token"
+                }
+            }
+        }
+    });
+
+    let cfg = resolve_provider_config_for_tests(&value, &[]).expect("provider config");
+    assert_eq!(
+        cfg.atlassian,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        })
+    );
+    assert_eq!(cfg.jira, None);
+    assert_eq!(cfg.confluence, None);
 }
 
 #[test]
@@ -215,6 +255,39 @@ fn knowledge_config_providers_resolves_env_indirection() {
 }
 
 #[test]
+fn knowledge_config_providers_shared_atlassian_resolves_env_indirection() {
+    let value = serde_json::json!({
+        "knowledge": {
+            "providers": {
+                "atlassian": {
+                    "site_url": "${BITLOOPS_ATLASSIAN_URL}",
+                    "email": "${BITLOOPS_ATLASSIAN_EMAIL}",
+                    "token": "${BITLOOPS_ATLASSIAN_TOKEN}"
+                }
+            }
+        }
+    });
+
+    let cfg = resolve_provider_config_for_tests(
+        &value,
+        &[
+            ("BITLOOPS_ATLASSIAN_URL", "https://bitloops.atlassian.net"),
+            ("BITLOOPS_ATLASSIAN_EMAIL", "shared@example.com"),
+            ("BITLOOPS_ATLASSIAN_TOKEN", "shared-token"),
+        ],
+    )
+    .expect("provider config");
+    assert_eq!(
+        cfg.atlassian,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        })
+    );
+}
+
+#[test]
 fn knowledge_config_providers_rejects_missing_env_value() {
     let value = serde_json::json!({
         "knowledge": {
@@ -226,6 +299,27 @@ fn knowledge_config_providers_rejects_missing_env_value() {
 
     let err = resolve_provider_config_for_tests(&value, &[]).expect_err("missing env should fail");
     assert!(err.to_string().contains("knowledge.providers.github.token"));
+}
+
+#[test]
+fn knowledge_config_providers_rejects_missing_required_shared_atlassian_field() {
+    let value = serde_json::json!({
+        "knowledge": {
+            "providers": {
+                "atlassian": {
+                    "site_url": "https://bitloops.atlassian.net",
+                    "email": "shared@example.com"
+                }
+            }
+        }
+    });
+
+    let err = resolve_provider_config_for_tests(&value, &[])
+        .expect_err("missing provider field should fail");
+    assert!(
+        err.to_string()
+            .contains("missing `knowledge.providers.atlassian.token`")
+    );
 }
 
 #[test]
@@ -247,6 +341,48 @@ fn knowledge_config_providers_rejects_missing_required_field() {
         err.to_string()
             .contains("missing `knowledge.providers.jira.token`")
     );
+}
+
+#[test]
+fn knowledge_config_providers_jira_and_confluence_fall_back_to_shared_atlassian() {
+    let cfg = ProviderConfig {
+        github: None,
+        atlassian: Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        }),
+        jira: None,
+        confluence: None,
+    };
+
+    assert_eq!(cfg.jira_config(), cfg.atlassian.as_ref());
+    assert_eq!(cfg.confluence_config(), cfg.atlassian.as_ref());
+}
+
+#[test]
+fn knowledge_config_providers_product_overrides_win_over_shared_atlassian() {
+    let cfg = ProviderConfig {
+        github: None,
+        atlassian: Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        }),
+        jira: Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "jira@example.com".to_string(),
+            token: "jira-token".to_string(),
+        }),
+        confluence: Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "docs@example.com".to_string(),
+            token: "docs-token".to_string(),
+        }),
+    };
+
+    assert_eq!(cfg.jira_config(), cfg.jira.as_ref());
+    assert_eq!(cfg.confluence_config(), cfg.confluence.as_ref());
 }
 
 #[test]
@@ -289,6 +425,7 @@ fn knowledge_config_providers_reads_values_from_repo_config_file() {
             token: "gh-token".to_string(),
         })
     );
+    assert_eq!(cfg.atlassian, None);
     assert_eq!(
         cfg.jira,
         Some(AtlassianProviderConfig {
@@ -334,7 +471,45 @@ fn knowledge_config_providers_resolve_from_current_repo_root() {
         })
     );
     assert_eq!(cfg.github, None);
+    assert_eq!(cfg.atlassian, None);
     assert_eq!(cfg.jira, None);
+}
+
+#[test]
+fn knowledge_config_providers_reads_shared_atlassian_values_from_repo_config_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "knowledge": {
+                "providers": {
+                    "atlassian": {
+                        "site_url": "https://bitloops.atlassian.net",
+                        "email": "shared@example.com",
+                        "token": "shared-token"
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
+
+    assert_eq!(
+        cfg.atlassian,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "shared@example.com".to_string(),
+            token: "shared-token".to_string(),
+        })
+    );
+    assert_eq!(cfg.github, None);
+    assert_eq!(cfg.jira, None);
+    assert_eq!(cfg.confluence, None);
 }
 
 #[test]
