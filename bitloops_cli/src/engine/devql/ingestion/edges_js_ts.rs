@@ -40,13 +40,13 @@ fn extract_js_ts_dependency_edges(
             let module_ref = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Imports.as_str().to_string(),
+                    edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(module_ref.clone()),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"import_form": ImportForm::Binding.as_str()}),
+                    metadata: EdgeMetadata::import(ImportForm::Binding),
                 });
             }
             parse_import_clause_symbols(clause, &module_ref, &mut imported_symbol_refs);
@@ -57,13 +57,13 @@ fn extract_js_ts_dependency_edges(
             let module_ref = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Imports.as_str().to_string(),
+                    edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(module_ref),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"import_form": ImportForm::SideEffect.as_str()}),
+                    metadata: EdgeMetadata::import(ImportForm::SideEffect),
                 });
             }
             continue;
@@ -87,33 +87,33 @@ fn extract_js_ts_dependency_edges(
 
             if let Some(target_fqn) = callable_name_to_fqn.get(&name) {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Calls.as_str().to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: Some(target_fqn.clone()),
                     to_symbol_ref: None,
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form": CallForm::Identifier.as_str(),"resolution": Resolution::Local.as_str()}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Local),
                 });
             } else if let Some(import_ref) = imported_symbol_refs.get(&name) {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Calls.as_str().to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(import_ref.clone()),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form": CallForm::Identifier.as_str(),"resolution": Resolution::Import.as_str()}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Import),
                 });
             } else {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Calls.as_str().to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(format!("{path}::{name}")),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form": CallForm::Identifier.as_str(),"resolution": Resolution::Unresolved.as_str()}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Unresolved),
                 });
             }
         }
@@ -124,13 +124,13 @@ fn extract_js_ts_dependency_edges(
             };
             let name = name_m.as_str().to_string();
             edges.push(JsTsDependencyEdge {
-                edge_kind: EdgeKind::Calls.as_str().to_string(),
+                edge_kind: EdgeKind::Calls,
                 from_symbol_fqn: owner.symbol_fqn.clone(),
                 to_target_symbol_fqn: None,
                 to_symbol_ref: Some(format!("{path}::member::{name}")),
                 start_line: Some(line_no),
                 end_line: Some(line_no),
-                metadata: json!({"call_form": CallForm::Member.as_str(),"resolution": Resolution::Unresolved.as_str()}),
+                metadata: EdgeMetadata::call(CallForm::Member, Resolution::Unresolved),
             });
         }
 

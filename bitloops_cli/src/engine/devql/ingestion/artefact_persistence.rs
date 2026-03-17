@@ -368,7 +368,7 @@ fn build_historical_edge_records(
                 cfg.repo.repo_id,
                 blob_sha,
                 from_record.artefact_id,
-                edge.edge_kind,
+                edge.edge_kind.as_str(),
                 to_artefact_id.clone().unwrap_or_default(),
                 to_symbol_ref.clone().unwrap_or_default(),
                 edge.start_line.unwrap_or(-1),
@@ -379,11 +379,11 @@ fn build_historical_edge_records(
             to_symbol_id: resolved_target.map(|record| record.symbol_id.clone()),
             to_artefact_id,
             to_symbol_ref,
-            edge_kind: edge.edge_kind,
+            edge_kind: edge.edge_kind.as_str().to_string(),
             language: language.to_string(),
             start_line: edge.start_line,
             end_line: edge.end_line,
-            metadata: edge.metadata,
+            metadata: edge.metadata.to_value(),
         });
     }
 
@@ -624,7 +624,8 @@ fn build_current_edge_records(
             .as_ref()
             .map(|(_, artefact_id)| artefact_id.clone());
         let to_symbol_ref = fallback_ref.clone();
-        let metadata_key = edge.metadata.to_string();
+        let metadata = edge.metadata.to_value();
+        let metadata_key = metadata.to_string();
 
         out.push(PersistedEdgeRecord {
             edge_id: deterministic_uuid(&format!(
@@ -632,7 +633,7 @@ fn build_current_edge_records(
                 cfg.repo.repo_id,
                 commit_sha,
                 from_record.symbol_id,
-                edge.edge_kind,
+                edge.edge_kind.as_str(),
                 to_symbol_id.clone().unwrap_or_default(),
                 to_symbol_ref.clone().unwrap_or_default(),
                 edge.start_line.unwrap_or(-1),
@@ -644,11 +645,11 @@ fn build_current_edge_records(
             to_symbol_id,
             to_artefact_id,
             to_symbol_ref,
-            edge_kind: edge.edge_kind,
+            edge_kind: edge.edge_kind.as_str().to_string(),
             language: language.to_string(),
             start_line: edge.start_line,
             end_line: edge.end_line,
-            metadata: edge.metadata,
+            metadata,
         });
     }
 

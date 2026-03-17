@@ -51,8 +51,8 @@ struct TelemetryFilter {
 
 #[derive(Debug, Clone)]
 struct DepsFilter {
-    kind: Option<String>,
-    direction: String,
+    kind: Option<DepsKind>,
+    direction: DepsDirection,
     include_unresolved: bool,
 }
 
@@ -60,7 +60,7 @@ impl Default for DepsFilter {
     fn default() -> Self {
         Self {
             kind: None,
-            direction: "out".to_string(),
+            direction: DepsDirection::Out,
             include_unresolved: true,
         }
     }
@@ -158,13 +158,21 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         {
             let args = parse_named_args(inner)?;
             parsed.has_deps_stage = true;
-            parsed.deps.kind = args
-                .get("kind")
-                .and_then(|kind| DepsKind::from_str(kind))
-                .map(|kind| kind.as_str().to_string())
-                .or_else(|| args.get("kind").cloned());
+            if let Some(kind) = args.get("kind") {
+                parsed.deps.kind = Some(DepsKind::from_str(kind).ok_or_else(|| {
+                    anyhow!(
+                        "deps(kind:...) must be one of: {}",
+                        DepsKind::all_names().join(", ")
+                    )
+                })?);
+            }
             if let Some(direction) = args.get("direction") {
-                parsed.deps.direction = direction.clone();
+                parsed.deps.direction = DepsDirection::from_str(direction).ok_or_else(|| {
+                    anyhow!(
+                        "deps(direction:...) must be one of: {}",
+                        DepsDirection::all_names().join(", ")
+                    )
+                })?;
             }
             if let Some(include_unresolved) = args.get("include_unresolved") {
                 parsed.deps.include_unresolved = matches!(
@@ -249,22 +257,7 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 }
 
 fn validate_deps_filter(deps: &DepsFilter) -> Result<()> {
-    if let Some(kind) = deps.kind.as_deref() {
-        if DepsKind::from_str(kind).is_none() {
-            bail!(
-                "deps(kind:...) must be one of: {}",
-                DepsKind::all_names().join(", ")
-            );
-        }
-    }
-
-    if DepsDirection::from_str(&deps.direction).is_none() {
-        bail!(
-            "deps(direction:...) must be one of: {}",
-            DepsDirection::all_names().join(", ")
-        );
-    }
-
+    let _ = deps;
     Ok(())
 }
 

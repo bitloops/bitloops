@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum EdgeKind {
     Imports,
     Calls,
@@ -9,15 +9,6 @@ enum EdgeKind {
 }
 
 impl EdgeKind {
-    const ALL: [Self; 6] = [
-        Self::Imports,
-        Self::Calls,
-        Self::References,
-        Self::Extends,
-        Self::Implements,
-        Self::Exports,
-    ];
-
     const LEGACY_INHERITS: &'static str = "inherits";
 
     fn as_str(self) -> &'static str {
@@ -42,13 +33,21 @@ impl EdgeKind {
             _ => None,
         }
     }
+}
 
-    fn all_names() -> Vec<&'static str> {
-        Self::ALL.into_iter().map(Self::as_str).collect()
+impl PartialEq<&str> for EdgeKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl std::fmt::Display for EdgeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DepsKind {
     Imports,
     Calls,
@@ -90,12 +89,18 @@ impl DepsKind {
         }
     }
 
-    fn all_names() -> Vec<&'static str> {
-        Self::ALL.into_iter().map(Self::as_str).collect()
+    fn all_names() -> [&'static str; 6] {
+        Self::ALL.map(Self::as_str)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl PartialEq<&str> for DepsKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DepsDirection {
     Out,
     In,
@@ -122,12 +127,18 @@ impl DepsDirection {
         }
     }
 
-    fn all_names() -> Vec<&'static str> {
-        Self::ALL.into_iter().map(Self::as_str).collect()
+    fn all_names() -> [&'static str; 3] {
+        Self::ALL.map(Self::as_str)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl PartialEq<&str> for DepsDirection {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ImportForm {
     Binding,
     SideEffect,
@@ -140,9 +151,17 @@ impl ImportForm {
             Self::SideEffect => "side_effect",
         }
     }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "module" | "use" | "binding" => Some(Self::Binding),
+            "side_effect" => Some(Self::SideEffect),
+            _ => None,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RefKind {
     Type,
     Value,
@@ -157,7 +176,7 @@ impl RefKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CallForm {
     Identifier,
     Member,
@@ -180,7 +199,7 @@ impl CallForm {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Resolution {
     Local,
     Import,
@@ -201,7 +220,7 @@ impl Resolution {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExportForm {
     Declaration,
     Default,
@@ -239,12 +258,9 @@ fn normalise_edge_metadata(edge_kind: &str, metadata: &mut Value) {
     obj.remove("relation");
 
     if let Some(Value::String(import_form)) = obj.get_mut("import_form") {
-        let normalized = match import_form.as_str() {
-            "module" | "use" | "binding" => ImportForm::Binding.as_str(),
-            "side_effect" => ImportForm::SideEffect.as_str(),
-            other => other,
-        };
-        *import_form = normalized.to_string();
+        if let Some(normalized) = ImportForm::from_str(import_form) {
+            *import_form = normalized.as_str().to_string();
+        }
     }
 
     match EdgeKind::from_str(edge_kind) {

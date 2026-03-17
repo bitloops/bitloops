@@ -194,7 +194,7 @@ fn push_reference_edge(
     from_symbol_fqn: &str,
     name: &str,
     line_no: i32,
-    ref_kind: &str,
+    ref_kind: RefKind,
     lookup: &SymbolLookup,
 ) {
     let trimmed = name.trim();
@@ -204,9 +204,9 @@ fn push_reference_edge(
 
     let (to_target_symbol_fqn, to_symbol_ref, resolution) =
         if let Some(target_fqn) = lookup.local_targets.get(trimmed) {
-            (Some(target_fqn.clone()), None, "local")
+            (Some(target_fqn.clone()), None, Resolution::Local)
         } else if let Some(symbol_ref) = lookup.imported_symbol_refs.and_then(|m| m.get(trimmed)) {
-            (None, Some(symbol_ref.clone()), "import")
+            (None, Some(symbol_ref.clone()), Resolution::Import)
         } else {
             return;
         };
@@ -217,24 +217,21 @@ fn push_reference_edge(
         to_target_symbol_fqn.as_deref().unwrap_or(""),
         to_symbol_ref.as_deref().unwrap_or(""),
         line_no,
-        ref_kind,
-        resolution
+        ref_kind.as_str(),
+        resolution.as_str()
     );
     if !col.seen.insert(key) {
         return;
     }
 
     col.out.push(JsTsDependencyEdge {
-        edge_kind: EdgeKind::References.as_str().to_string(),
+        edge_kind: EdgeKind::References,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
         to_symbol_ref,
         start_line: Some(line_no),
         end_line: Some(line_no),
-        metadata: json!({
-            "ref_kind": ref_kind,
-            "resolution": resolution,
-        }),
+        metadata: EdgeMetadata::reference(ref_kind, resolution),
     });
 }
 
@@ -252,11 +249,11 @@ fn push_extends_edge(
 
     let (to_target_symbol_fqn, to_symbol_ref, resolution) =
         if let Some(target_fqn) = lookup.local_targets.get(trimmed) {
-            (Some(target_fqn.clone()), None, "local")
+            (Some(target_fqn.clone()), None, Resolution::Local)
         } else if let Some(symbol_ref) =
             lookup.imported_symbol_refs.and_then(|m| m.get(trimmed))
         {
-            (None, Some(symbol_ref.clone()), "import")
+            (None, Some(symbol_ref.clone()), Resolution::Import)
         } else {
             return;
         };
@@ -267,20 +264,20 @@ fn push_extends_edge(
         to_target_symbol_fqn.as_deref().unwrap_or(""),
         to_symbol_ref.as_deref().unwrap_or(""),
         line_no,
-        resolution
+        resolution.as_str()
     );
     if !col.seen.insert(key) {
         return;
     }
 
     col.out.push(JsTsDependencyEdge {
-        edge_kind: EdgeKind::Extends.as_str().to_string(),
+        edge_kind: EdgeKind::Extends,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
         to_symbol_ref,
         start_line: Some(line_no),
         end_line: Some(line_no),
-        metadata: json!({}),
+        metadata: EdgeMetadata::none(),
     });
 }
 

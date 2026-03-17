@@ -63,8 +63,8 @@ fn parse_devql_deps_stage_basic() {
     .unwrap();
 
     assert!(parsed.has_deps_stage);
-    assert_eq!(parsed.deps.kind.as_deref(), Some("calls"));
-    assert_eq!(parsed.deps.direction, "both");
+    assert_eq!(parsed.deps.kind, Some(DepsKind::Calls));
+    assert_eq!(parsed.deps.direction, DepsDirection::Both);
     assert!(!parsed.deps.include_unresolved);
     assert_eq!(parsed.limit, 25);
 }
@@ -98,14 +98,14 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
         ))
         .unwrap();
 
-        assert_eq!(parsed.deps.kind.as_deref(), Some(kind));
+        assert_eq!(parsed.deps.kind, DepsKind::from_str(kind));
     }
 
     let legacy = parse_devql_query(
         r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"inherits")->limit(5)"#,
     )
     .unwrap();
-    assert_eq!(legacy.deps.kind.as_deref(), Some("extends"));
+    assert_eq!(legacy.deps.kind, Some(DepsKind::Extends));
 }
 
 #[test]
@@ -361,13 +361,10 @@ fn build_postgres_deps_query_supports_symbol_fqn_filter() {
 
 #[test]
 fn build_postgres_deps_query_rejects_invalid_direction() {
-    let cfg = test_cfg();
-    let parsed = parse_devql_query(
+    let err = parse_devql_query(
         r#"repo("bitloops-cli")->artefacts()->deps(kind:"calls",direction:"sideways")->limit(5)"#,
     )
-    .unwrap();
-
-    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+    .unwrap_err();
     assert!(
         err.to_string()
             .contains("deps(direction:...) must be one of: out, in, both")
@@ -376,12 +373,9 @@ fn build_postgres_deps_query_rejects_invalid_direction() {
 
 #[test]
 fn build_postgres_deps_query_rejects_invalid_kind() {
-    let cfg = test_cfg();
-    let parsed =
+    let err =
         parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps(kind:"surprise")->limit(5)"#)
-            .unwrap();
-
-    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+            .unwrap_err();
     assert!(err.to_string().contains(
         "deps(kind:...) must be one of: imports, calls, references, extends, implements, exports"
     ));

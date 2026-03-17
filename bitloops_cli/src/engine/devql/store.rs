@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::store_config::RelationalBackendConfig;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use rusqlite::types::ValueRef;
 use serde_json::{Map, Value};
-use crate::store_config::RelationalBackendConfig;
 
 pub(crate) const SCOPE_COMMITTED: &str = "committed";
 pub(crate) const SCOPE_VISIBLE: &str = "visible";
@@ -106,8 +106,14 @@ impl RelationalStorage {
         Ok(())
     }
 
-    pub(crate) async fn delete_temporary_rows(&self, session_id: &str, repo_id: &str) -> Result<()> {
-        self.local.delete_temporary_rows(session_id, repo_id).await?;
+    pub(crate) async fn delete_temporary_rows(
+        &self,
+        session_id: &str,
+        repo_id: &str,
+    ) -> Result<()> {
+        self.local
+            .delete_temporary_rows(session_id, repo_id)
+            .await?;
         Ok(())
     }
 
@@ -158,7 +164,8 @@ pub(crate) fn create_devql_backends(cfg: &RelationalBackendConfig) -> Result<Rel
             if dsn.trim().is_empty() {
                 bail!("configured Postgres DSN is empty");
             }
-            Ok(Arc::new(PostgresDevqlBackend::new(dsn.to_string())) as Arc<dyn DevqlRelationalBackend>)
+            Ok(Arc::new(PostgresDevqlBackend::new(dsn.to_string()))
+                as Arc<dyn DevqlRelationalBackend>)
         })
         .transpose()?;
 
@@ -230,7 +237,10 @@ impl SqliteDevqlBackend {
         out = out.replace("::jsonb", "");
         out = out.replace("::BIGINT", "");
         out = out.replace("now()", "datetime('now')");
-        out = out.replace("EXTRACT(EPOCH FROM committed_at)", "strftime('%s', committed_at)");
+        out = out.replace(
+            "EXTRACT(EPOCH FROM committed_at)",
+            "strftime('%s', committed_at)",
+        );
 
         // Postgres to_timestamp(unix) -> SQLite datetime(unixepoch)
         while let Some(start) = out.find("to_timestamp(") {
@@ -240,7 +250,10 @@ impl SqliteDevqlBackend {
             };
             let expr = rest[..end_rel].trim();
             let replacement = format!("datetime({expr}, 'unixepoch')");
-            out.replace_range(start..start + "to_timestamp(".len() + end_rel + 1, &replacement);
+            out.replace_range(
+                start..start + "to_timestamp(".len() + end_rel + 1,
+                &replacement,
+            );
         }
 
         out
@@ -328,7 +341,6 @@ impl DevqlRelationalBackend for SqliteDevqlBackend {
 // ---------------------------------------------------------------------------
 // Postgres implementation
 // ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone)]
 pub(crate) struct PostgresDevqlBackend {
     dsn: String,

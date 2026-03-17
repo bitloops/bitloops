@@ -5,8 +5,8 @@ fn push_export_edge(
     from_symbol_fqn: &str,
     target: EdgeTarget,
     export_name: &str,
-    export_form: &str,
-    resolution: &str,
+    export_form: ExportForm,
+    resolution: Resolution,
 ) {
     let export_name = export_name.trim();
     if export_name.is_empty() {
@@ -19,24 +19,20 @@ fn push_export_edge(
         target.to_target_symbol_fqn.as_deref().unwrap_or(""),
         target.to_symbol_ref.as_deref().unwrap_or(""),
         export_name,
-        export_form
+        export_form.as_str()
     );
     if !col.seen.insert(key) {
         return;
     }
 
     col.out.push(JsTsDependencyEdge {
-        edge_kind: EdgeKind::Exports.as_str().to_string(),
+        edge_kind: EdgeKind::Exports,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: target.to_target_symbol_fqn,
         to_symbol_ref: target.to_symbol_ref,
         start_line: None,
         end_line: None,
-        metadata: json!({
-            "export_name": export_name,
-            "export_form": export_form,
-            "resolution": resolution,
-        }),
+        metadata: EdgeMetadata::export(export_name.to_string(), export_form, resolution),
     });
 }
 
@@ -45,7 +41,7 @@ fn resolve_js_ts_export_target(
     source_ref: Option<&str>,
     local_targets: &HashMap<String, String>,
     imported_symbol_refs: &HashMap<String, String>,
-) -> Option<(EdgeTarget, &'static str)> {
+) -> Option<(EdgeTarget, Resolution)> {
     let original_name = original_name.trim();
     if original_name.is_empty() {
         return None;
@@ -57,21 +53,21 @@ fn resolve_js_ts_export_target(
                 to_target_symbol_fqn: None,
                 to_symbol_ref: Some(format!("{source_ref}::{original_name}")),
             },
-            "re_export",
+            Resolution::ReExport,
         ));
     }
 
     if let Some(target_fqn) = local_targets.get(original_name) {
         return Some((
             EdgeTarget { to_target_symbol_fqn: Some(target_fqn.clone()), to_symbol_ref: None },
-            "local",
+            Resolution::Local,
         ));
     }
 
     if let Some(symbol_ref) = imported_symbol_refs.get(original_name) {
         return Some((
             EdgeTarget { to_target_symbol_fqn: None, to_symbol_ref: Some(symbol_ref.clone()) },
-            "import",
+            Resolution::Import,
         ));
     }
 
@@ -129,12 +125,12 @@ fn collect_js_ts_export_edges_recursive(
 
         if let Some(declaration) = node.child_by_field_name("declaration") {
             let export_form = if export_stmt_text.starts_with("export default") {
-                ExportForm::Default.as_str()
+                ExportForm::Default
             } else {
-                ExportForm::Declaration.as_str()
+                ExportForm::Declaration
             };
             for original_name in js_ts_exported_declaration_names(declaration, content) {
-                let export_name = if export_form == "default" {
+                let export_name = if export_form == ExportForm::Default {
                     "default"
                 } else {
                     original_name.as_str()
@@ -171,8 +167,8 @@ fn collect_js_ts_export_edges_recursive(
                     to_symbol_ref: source_ref.as_ref().map(|source| format!("{source}::*")),
                 },
                 "*",
-                ExportForm::ReExportAll.as_str(),
-                Resolution::ReExport.as_str(),
+                ExportForm::ReExportAll,
+                Resolution::ReExport,
             );
         }
 
@@ -191,7 +187,7 @@ fn collect_js_ts_export_edges_recursive(
                 path,
                 target,
                 ExportForm::Default.as_str(),
-                ExportForm::Default.as_str(),
+                ExportForm::Default,
                 resolution,
             );
         }
@@ -218,9 +214,9 @@ fn collect_js_ts_export_edges_recursive(
                             .map(|alias| strip_string_delimiters(&alias))
                             .unwrap_or_else(|| original_name.clone());
                         let export_form = if source_ref.is_some() {
-                            ExportForm::ReExport.as_str()
+                            ExportForm::ReExport
                         } else {
-                            ExportForm::Named.as_str()
+                            ExportForm::Named
                         };
 
                         if let Some((target, resolution)) =
@@ -259,8 +255,8 @@ fn collect_js_ts_export_edges_recursive(
                             to_symbol_ref: Some(format!("{source_ref}::*")),
                         },
                         &export_name,
-                        ExportForm::ReExportNamespace.as_str(),
-                        Resolution::ReExport.as_str(),
+                        ExportForm::ReExportNamespace,
+                        Resolution::ReExport,
                     );
                 }
                 _ => {}
@@ -397,7 +393,7 @@ fn collect_rust_use_export_entries(
 fn resolve_rust_export_target(
     export_path: &str,
     local_targets: &HashMap<String, String>,
-) -> Option<(EdgeTarget, &'static str)> {
+) -> Option<(EdgeTarget, Resolution)> {
     let export_path = export_path.trim();
     if export_path.is_empty() {
         return None;
@@ -414,7 +410,7 @@ fn resolve_rust_export_target(
     {
         return Some((
             EdgeTarget { to_target_symbol_fqn: Some(target_fqn.clone()), to_symbol_ref: None },
-            Resolution::Local.as_str(),
+            Resolution::Local,
         ));
     }
 
@@ -422,9 +418,9 @@ fn resolve_rust_export_target(
         || export_path.starts_with("super::")
         || export_path.contains("::")
     {
-        Resolution::External.as_str()
+        Resolution::External
     } else {
-        Resolution::Unresolved.as_str()
+        Resolution::Unresolved
     };
 
     Some((
@@ -454,7 +450,7 @@ fn collect_rust_export_edges_recursive(
                         path,
                         target,
                         &entry.export_name,
-                        ExportForm::PubUse.as_str(),
+                        ExportForm::PubUse,
                         resolution,
                     );
                 }

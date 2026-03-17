@@ -98,13 +98,13 @@ fn collect_rust_edges_recursive(
                 .to_string();
             if !cleaned.is_empty() {
                 ec.out.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Imports.as_str().to_string(),
+                    edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(cleaned),
                     start_line: Some(start_line),
                     end_line: Some(node.end_position().row as i32 + 1),
-                    metadata: json!({"import_form": ImportForm::Binding.as_str()}),
+                    metadata: EdgeMetadata::import(ImportForm::Binding),
                 });
             }
         }
@@ -148,13 +148,13 @@ fn collect_rust_edges_recursive(
                     let trait_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
                     if !trait_name.is_empty() {
                         ec.out.push(JsTsDependencyEdge {
-                            edge_kind: EdgeKind::Implements.as_str().to_string(),
+                            edge_kind: EdgeKind::Implements,
                             from_symbol_fqn: format!("{path}::impl@{start_line}"),
                             to_target_symbol_fqn: None,
                             to_symbol_ref: Some(trait_name),
                             start_line: Some(start_line),
                             end_line: Some(node.end_position().row as i32 + 1),
-                            metadata: json!({}),
+                            metadata: EdgeMetadata::none(),
                         });
                     }
             }
@@ -187,7 +187,7 @@ fn collect_rust_imported_symbol_refs(
     }
 }
 
-fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, &'static str)> {
+fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, CallForm)> {
     match node.kind() {
         "method_call_expression" => {
             let name_node = node
@@ -196,16 +196,16 @@ fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, &
             let target_name = rust_callable_name_from_text(
                 name_node.utf8_text(content.as_bytes()).ok()?.trim_end_matches('!'),
             )?;
-            Some((target_name, "method"))
+            Some((target_name, CallForm::Method))
         }
         "call_expression" => {
             let function_node = node.child_by_field_name("function")?;
             let function_text = function_node.utf8_text(content.as_bytes()).ok()?;
             let target_name = rust_callable_name_from_text(function_text)?;
             let call_form = if function_text.contains("::") {
-                "associated"
+                CallForm::Associated
             } else {
-                "function"
+                CallForm::Function
             };
             Some((target_name, call_form))
         }
@@ -213,7 +213,7 @@ fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, &
     }
 }
 
-fn rust_macro_target(node: tree_sitter::Node, content: &str) -> Option<(String, &'static str)> {
+fn rust_macro_target(node: tree_sitter::Node, content: &str) -> Option<(String, CallForm)> {
     let macro_node = node.child_by_field_name("macro")?;
     let target_name = rust_callable_name_from_text(
         macro_node
@@ -222,7 +222,7 @@ fn rust_macro_target(node: tree_sitter::Node, content: &str) -> Option<(String, 
             .trim()
             .trim_end_matches('!'),
     )?;
-    Some((target_name, "macro"))
+    Some((target_name, CallForm::Macro))
 }
 
 fn rust_callable_name_from_text(text: &str) -> Option<String> {
@@ -285,30 +285,37 @@ fn push_rust_call_edge(
     ec: &mut EdgeCollector<'_>,
     from_symbol_fqn: &str,
     target_name: &str,
-    call_form: &str,
+    call_form: CallForm,
     line_no: i32,
     ctx: &CallCtx<'_>,
     allow_unresolved: bool,
 ) {
     let resolution = if let Some(target_fqn) = ctx.callable_name_to_fqn.get(target_name) {
-        let key = format!("{from_symbol_fqn}|{target_fqn}|{line_no}|local|{call_form}");
+        let key = format!(
+            "{from_symbol_fqn}|{target_fqn}|{line_no}|{}|{}",
+            Resolution::Local.as_str(),
+            call_form.as_str()
+        );
         if !ec.seen.insert(key) {
             return;
         }
         ec.out.push(JsTsDependencyEdge {
-            edge_kind: EdgeKind::Calls.as_str().to_string(),
+            edge_kind: EdgeKind::Calls,
             from_symbol_fqn: from_symbol_fqn.to_string(),
             to_target_symbol_fqn: Some(target_fqn.clone()),
             to_symbol_ref: None,
             start_line: Some(line_no),
             end_line: Some(line_no),
-            metadata: json!({"call_form": call_form, "resolution": Resolution::Local.as_str()}),
+            metadata: EdgeMetadata::call(call_form, Resolution::Local),
         });
         return;
     } else if let Some(import_ref) = ctx.imported_symbol_refs.get(target_name) {
-        ("import", Some(import_ref.clone()))
+        (Resolution::Import, Some(import_ref.clone()))
     } else if allow_unresolved {
-        ("unresolved", Some(format!("{from_symbol_fqn}::{target_name}")))
+        (
+            Resolution::Unresolved,
+            Some(format!("{from_symbol_fqn}::{target_name}")),
+        )
     } else {
         return;
     };
@@ -317,17 +324,21 @@ fn push_rust_call_edge(
     let Some(to_symbol_ref) = to_symbol_ref else {
         return;
     };
-    let key = format!("{from_symbol_fqn}|{to_symbol_ref}|{line_no}|{resolution}|{call_form}");
+    let key = format!(
+        "{from_symbol_fqn}|{to_symbol_ref}|{line_no}|{}|{}",
+        resolution.as_str(),
+        call_form.as_str()
+    );
     if !ec.seen.insert(key) {
         return;
     }
     ec.out.push(JsTsDependencyEdge {
-        edge_kind: EdgeKind::Calls.as_str().to_string(),
+        edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: None,
         to_symbol_ref: Some(to_symbol_ref),
         start_line: Some(line_no),
         end_line: Some(line_no),
-        metadata: json!({"call_form": call_form, "resolution": resolution}),
+        metadata: EdgeMetadata::call(call_form, resolution),
     });
 }

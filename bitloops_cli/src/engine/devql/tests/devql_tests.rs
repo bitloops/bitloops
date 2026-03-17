@@ -5,7 +5,6 @@ use crate::test_support::process_state::enter_process_state;
 use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use clap::Parser;
-use serde_json::json;
 use std::env;
 use std::path::Path;
 use tempfile::{TempDir, tempdir};
@@ -205,13 +204,13 @@ fn test_symbol_record(
 
 fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> JsTsDependencyEdge {
     JsTsDependencyEdge {
-        edge_kind: "calls".to_string(),
+        edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: Some(target_symbol_fqn.to_string()),
         to_symbol_ref: Some(target_symbol_fqn.to_string()),
         start_line: Some(line),
         end_line: Some(line),
-        metadata: json!({ "resolution": "local" }),
+        metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Local),
     }
 }
 
@@ -221,13 +220,13 @@ fn test_unresolved_call_edge(
     line: i32,
 ) -> JsTsDependencyEdge {
     JsTsDependencyEdge {
-        edge_kind: "calls".to_string(),
+        edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: None,
         to_symbol_ref: Some(symbol_ref.to_string()),
         start_line: Some(line),
         end_line: Some(line),
-        metadata: json!({ "resolution": "unresolved" }),
+        metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Unresolved),
     }
 }
 

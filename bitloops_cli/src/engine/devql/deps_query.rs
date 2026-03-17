@@ -123,14 +123,8 @@ fn build_relational_deps_query(
             None => edge_filters.push("e.current_scope = 'committed'".to_string()),
         }
     }
-    if let Some(kind) = parsed.deps.kind.as_deref() {
-        let kind = DepsKind::from_str(kind)
-            .map(DepsKind::as_str)
-            .unwrap_or(kind);
-        edge_filters.push(format!(
-            "e.edge_kind = '{}'",
-            esc_pg(kind)
-        ));
+    if let Some(kind) = parsed.deps.kind {
+        edge_filters.push(format!("e.edge_kind = '{}'", esc_pg(kind.as_str())));
     }
     if !parsed.deps.include_unresolved {
         edge_filters.push("e.to_artefact_id IS NOT NULL".to_string());
@@ -148,8 +142,7 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
         }
     };
 
-    let direction = DepsDirection::from_str(&parsed.deps.direction).unwrap_or(DepsDirection::Out);
-    let sql = if direction == DepsDirection::In {
+    let sql = if parsed.deps.direction == DepsDirection::In {
         format!(
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
@@ -171,7 +164,7 @@ LIMIT {}",
             order_clause,
             parsed.limit.max(1)
         )
-    } else if direction == DepsDirection::Both {
+    } else if parsed.deps.direction == DepsDirection::Both {
         format!(
             "WITH out_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
