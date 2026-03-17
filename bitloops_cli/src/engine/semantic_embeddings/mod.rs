@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_inputs_filter_out_non_retrieval_kinds() {
+    fn symbol_embedding_inputs_include_all_summarized_kinds() {
         let inputs = vec![
             SemanticFeatureInput {
                 artefact_id: "function-1".to_string(),
@@ -360,6 +360,58 @@ mod tests {
                 "Function normalize email. Normalizes email addresses.".to_string(),
             ),
             ("import-1".to_string(), "Import statement.".to_string()),
+        ]);
+
+        let rows = build_symbol_embedding_inputs(&inputs, &summaries);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].artefact_id, "function-1");
+        assert_eq!(rows[1].artefact_id, "import-1");
+    }
+
+    #[test]
+    fn symbol_embedding_inputs_skip_missing_or_empty_summaries() {
+        let inputs = vec![
+            SemanticFeatureInput {
+                artefact_id: "function-1".to_string(),
+                symbol_id: None,
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                path: "src/services/user.ts".to_string(),
+                language: "typescript".to_string(),
+                canonical_kind: "function".to_string(),
+                language_kind: "function".to_string(),
+                symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+                name: "normalizeEmail".to_string(),
+                signature: None,
+                body: "return email;".to_string(),
+                docstring: None,
+                parent_kind: Some("file".to_string()),
+                content_hash: None,
+            },
+            SemanticFeatureInput {
+                artefact_id: "function-2".to_string(),
+                symbol_id: None,
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                path: "src/services/user.ts".to_string(),
+                language: "typescript".to_string(),
+                canonical_kind: "function".to_string(),
+                language_kind: "function".to_string(),
+                symbol_fqn: "src/services/user.ts::normalizeName".to_string(),
+                name: "normalizeName".to_string(),
+                signature: None,
+                body: "return name;".to_string(),
+                docstring: None,
+                parent_kind: Some("file".to_string()),
+                content_hash: None,
+            },
+        ];
+        let summaries = std::collections::HashMap::from([
+            (
+                "function-1".to_string(),
+                "Function normalize email. Normalizes email addresses.".to_string(),
+            ),
+            ("function-2".to_string(), "   ".to_string()),
         ]);
 
         let rows = build_symbol_embedding_inputs(&inputs, &summaries);
