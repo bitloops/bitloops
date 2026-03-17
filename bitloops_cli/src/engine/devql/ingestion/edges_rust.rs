@@ -45,7 +45,7 @@ fn extract_rust_dependency_edges(
     let (type_targets, value_targets) = rust_reference_target_maps(artefacts);
     let export_targets = top_level_export_target_map(artefacts);
     let mut seen_references = HashSet::new();
-    let mut seen_inherits = HashSet::new();
+    let mut seen_extends = HashSet::new();
     let mut seen_exports = HashSet::new();
     let empty_imports = HashMap::new();
     collect_rust_reference_edges_recursive(
@@ -59,11 +59,11 @@ fn extract_rust_dependency_edges(
         },
         &mut EdgeCollector { out: &mut edges, seen: &mut seen_references },
     );
-    collect_rust_inherits_edges_recursive(
+    collect_rust_extends_edges_recursive(
         root,
         content,
         &type_targets,
-        &mut seen_inherits,
+        &mut seen_extends,
         &mut edges,
     );
     collect_rust_export_edges_recursive(
@@ -98,13 +98,13 @@ fn collect_rust_edges_recursive(
                 .to_string();
             if !cleaned.is_empty() {
                 ec.out.push(JsTsDependencyEdge {
-                    edge_kind: "imports".to_string(),
+                    edge_kind: EdgeKind::Imports.as_str().to_string(),
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(cleaned),
                     start_line: Some(start_line),
                     end_line: Some(node.end_position().row as i32 + 1),
-                    metadata: json!({"import_form":"use"}),
+                    metadata: json!({"import_form": ImportForm::Binding.as_str()}),
                 });
             }
         }
@@ -148,13 +148,13 @@ fn collect_rust_edges_recursive(
                     let trait_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
                     if !trait_name.is_empty() {
                         ec.out.push(JsTsDependencyEdge {
-                            edge_kind: "implements".to_string(),
+                            edge_kind: EdgeKind::Implements.as_str().to_string(),
                             from_symbol_fqn: format!("{path}::impl@{start_line}"),
                             to_target_symbol_fqn: None,
                             to_symbol_ref: Some(trait_name),
                             start_line: Some(start_line),
                             end_line: Some(node.end_position().row as i32 + 1),
-                            metadata: json!({"relation":"trait_impl"}),
+                            metadata: json!({}),
                         });
                     }
             }
@@ -296,13 +296,13 @@ fn push_rust_call_edge(
             return;
         }
         ec.out.push(JsTsDependencyEdge {
-            edge_kind: "calls".to_string(),
+            edge_kind: EdgeKind::Calls.as_str().to_string(),
             from_symbol_fqn: from_symbol_fqn.to_string(),
             to_target_symbol_fqn: Some(target_fqn.clone()),
             to_symbol_ref: None,
             start_line: Some(line_no),
             end_line: Some(line_no),
-            metadata: json!({"call_form": call_form, "resolution":"local"}),
+            metadata: json!({"call_form": call_form, "resolution": Resolution::Local.as_str()}),
         });
         return;
     } else if let Some(import_ref) = ctx.imported_symbol_refs.get(target_name) {
@@ -322,7 +322,7 @@ fn push_rust_call_edge(
         return;
     }
     ec.out.push(JsTsDependencyEdge {
-        edge_kind: "calls".to_string(),
+        edge_kind: EdgeKind::Calls.as_str().to_string(),
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: None,
         to_symbol_ref: Some(to_symbol_ref),

@@ -225,7 +225,7 @@ fn push_reference_edge(
     }
 
     col.out.push(JsTsDependencyEdge {
-        edge_kind: "references".to_string(),
+        edge_kind: EdgeKind::References.as_str().to_string(),
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
         to_symbol_ref,
@@ -238,12 +238,11 @@ fn push_reference_edge(
     });
 }
 
-fn push_inherits_edge(
+fn push_extends_edge(
     col: &mut EdgeCollector,
     from_symbol_fqn: &str,
     name: &str,
     line_no: i32,
-    inherit_form: &str,
     lookup: &SymbolLookup,
 ) {
     let trimmed = name.trim();
@@ -275,16 +274,13 @@ fn push_inherits_edge(
     }
 
     col.out.push(JsTsDependencyEdge {
-        edge_kind: "inherits".to_string(),
+        edge_kind: EdgeKind::Extends.as_str().to_string(),
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
         to_symbol_ref,
         start_line: Some(line_no),
         end_line: Some(line_no),
-        metadata: json!({
-            "inherit_form": inherit_form,
-            "resolution": resolution,
-        }),
+        metadata: json!({}),
     });
 }
 

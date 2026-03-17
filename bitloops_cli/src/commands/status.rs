@@ -315,6 +315,8 @@ mod tests {
                 "user.name=Test User",
                 "-c",
                 "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
                 "commit",
                 "-m",
                 "initial commit",

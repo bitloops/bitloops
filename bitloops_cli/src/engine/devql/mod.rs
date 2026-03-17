@@ -527,6 +527,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
 }
 
 include!("canonical_mapping.rs");
+include!("vocab.rs");
 // ingestion: shared types
 include!("ingestion/types.rs");
 // ingestion: repo identity & git remote parsing

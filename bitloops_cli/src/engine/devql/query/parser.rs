@@ -158,7 +158,11 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         {
             let args = parse_named_args(inner)?;
             parsed.has_deps_stage = true;
-            parsed.deps.kind = args.get("kind").cloned();
+            parsed.deps.kind = args
+                .get("kind")
+                .and_then(|kind| DepsKind::from_str(kind))
+                .map(|kind| kind.as_str().to_string())
+                .or_else(|| args.get("kind").cloned());
             if let Some(direction) = args.get("direction") {
                 parsed.deps.direction = direction.clone();
             }
@@ -245,29 +249,20 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 }
 
 fn validate_deps_filter(deps: &DepsFilter) -> Result<()> {
-    const ALLOWED_KINDS: &[&str] = &[
-        "imports",
-        "calls",
-        "references",
-        "inherits",
-        "implements",
-        "exports",
-    ];
-    const ALLOWED_DIRECTIONS: &[&str] = &["out", "in", "both"];
-
     if let Some(kind) = deps.kind.as_deref() {
-        let normalized = kind.to_ascii_lowercase();
-        if !ALLOWED_KINDS.contains(&normalized.as_str()) {
+        if DepsKind::from_str(kind).is_none() {
             bail!(
                 "deps(kind:...) must be one of: {}",
-                ALLOWED_KINDS.join(", ")
+                DepsKind::all_names().join(", ")
             );
         }
     }
 
-    let direction = deps.direction.to_ascii_lowercase();
-    if !ALLOWED_DIRECTIONS.contains(&direction.as_str()) {
-        bail!("deps(direction:...) must be one of: out, in, both");
+    if DepsDirection::from_str(&deps.direction).is_none() {
+        bail!(
+            "deps(direction:...) must be one of: {}",
+            DepsDirection::all_names().join(", ")
+        );
     }
 
     Ok(())

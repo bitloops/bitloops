@@ -89,7 +89,7 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
         "imports",
         "calls",
         "references",
-        "inherits",
+        "extends",
         "implements",
         "exports",
     ] {
@@ -100,6 +100,12 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
 
         assert_eq!(parsed.deps.kind.as_deref(), Some(kind));
     }
+
+    let legacy = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"inherits")->limit(5)"#,
+    )
+    .unwrap();
+    assert_eq!(legacy.deps.kind.as_deref(), Some("extends"));
 }
 
 #[test]
@@ -377,7 +383,7 @@ fn build_postgres_deps_query_rejects_invalid_kind() {
 
     let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
     assert!(err.to_string().contains(
-        "deps(kind:...) must be one of: imports, calls, references, inherits, implements, exports"
+        "deps(kind:...) must be one of: imports, calls, references, extends, implements, exports"
     ));
 }
 
@@ -427,4 +433,3 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
             .contains("deps() cannot be combined with chatHistory()")
     );
 }
-

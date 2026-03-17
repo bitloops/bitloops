@@ -258,3 +258,71 @@ ON artefact_edges_current (
 );
 "#
 }
+
+fn edge_model_cleanup_postgres_sql() -> &'static str {
+    r#"
+UPDATE artefact_edges
+SET edge_kind = 'extends'
+WHERE edge_kind = 'inherits';
+
+UPDATE artefact_edges_current
+SET edge_kind = 'extends'
+WHERE edge_kind = 'inherits';
+
+UPDATE artefact_edges
+SET metadata = CASE
+    WHEN edge_kind IN ('extends', 'implements') THEN '{}'::jsonb
+    ELSE metadata - 'inherit_form' - 'relation'
+END
+WHERE metadata IS NOT NULL;
+
+UPDATE artefact_edges_current
+SET metadata = CASE
+    WHEN edge_kind IN ('extends', 'implements') THEN '{}'::jsonb
+    ELSE metadata - 'inherit_form' - 'relation'
+END
+WHERE metadata IS NOT NULL;
+
+UPDATE artefact_edges
+SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)
+WHERE metadata ->> 'import_form' IN ('module', 'use');
+
+UPDATE artefact_edges_current
+SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)
+WHERE metadata ->> 'import_form' IN ('module', 'use');
+"#
+}
+
+fn edge_model_cleanup_sqlite_sql() -> &'static str {
+    r#"
+UPDATE artefact_edges
+SET edge_kind = 'extends'
+WHERE edge_kind = 'inherits';
+
+UPDATE artefact_edges_current
+SET edge_kind = 'extends'
+WHERE edge_kind = 'inherits';
+
+UPDATE artefact_edges
+SET metadata = CASE
+    WHEN edge_kind IN ('extends', 'implements') THEN '{}'
+    ELSE json_remove(json_remove(COALESCE(metadata, '{}'), '$.inherit_form'), '$.relation')
+END
+WHERE metadata IS NOT NULL;
+
+UPDATE artefact_edges_current
+SET metadata = CASE
+    WHEN edge_kind IN ('extends', 'implements') THEN '{}'
+    ELSE json_remove(json_remove(COALESCE(metadata, '{}'), '$.inherit_form'), '$.relation')
+END
+WHERE metadata IS NOT NULL;
+
+UPDATE artefact_edges
+SET metadata = json_set(COALESCE(metadata, '{}'), '$.import_form', 'binding')
+WHERE json_extract(metadata, '$.import_form') IN ('module', 'use');
+
+UPDATE artefact_edges_current
+SET metadata = json_set(COALESCE(metadata, '{}'), '$.import_form', 'binding')
+WHERE json_extract(metadata, '$.import_form') IN ('module', 'use');
+"#
+}

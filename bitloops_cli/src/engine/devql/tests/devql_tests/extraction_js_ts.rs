@@ -335,7 +335,7 @@ function caller() {
     assert_eq!(
         edge_snapshot,
         vec![
-            "imports|src/sample.ts|-|./utils|1|module|-".to_string(),
+            "imports|src/sample.ts|-|./utils|1|binding|-".to_string(),
             "imports|src/sample.ts|-|./setup|2|side_effect|-".to_string(),
             "calls|src/sample.ts::caller|src/sample.ts::extHelper|-|7|-|local".to_string(),
             "calls|src/sample.ts::caller|-|./utils::default|8|-|import".to_string(),
@@ -393,7 +393,7 @@ function project(user: User): User {
 }
 
 #[test]
-fn extract_js_ts_dependency_edges_emit_inherits_for_extends_clauses() {
+fn extract_js_ts_dependency_edges_emit_extends_for_extends_clauses() {
     let content = r#"class BaseService {}
 class UserService extends BaseService {}
 
@@ -409,12 +409,12 @@ interface AdminShape extends UserShape {
     let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
 
     assert!(edges.iter().any(|edge| {
-        edge.edge_kind == "inherits"
+        edge.edge_kind == "extends"
             && edge.from_symbol_fqn == "src/sample.ts::UserService"
             && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::BaseService")
     }));
     assert!(edges.iter().any(|edge| {
-        edge.edge_kind == "inherits"
+        edge.edge_kind == "extends"
             && edge.from_symbol_fqn == "src/sample.ts::AdminShape"
             && edge.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::UserShape")
     }));
@@ -520,4 +520,3 @@ export { remoteFoo as remoteAlias } from "./remote";
         Some("re_export")
     );
 }
-
