@@ -473,4 +473,32 @@ mod tests {
             Some("jinaai/jina-embeddings-v2-base-code")
         );
     }
+
+    #[test]
+    fn symbol_embedding_provider_returns_none_when_disabled() {
+        let provider = build_symbol_embedding_provider(&EmbeddingProviderConfig {
+            embedding_provider: Some("disabled".to_string()),
+            embedding_model: None,
+            embedding_api_key: None,
+        })
+        .expect("disabled provider should not error");
+
+        assert!(provider.is_none());
+    }
+
+    #[test]
+    fn symbol_embedding_provider_requires_api_key_for_openai() {
+        let err = build_symbol_embedding_provider(&EmbeddingProviderConfig {
+            embedding_provider: Some("openai".to_string()),
+            embedding_model: Some("text-embedding-3-large".to_string()),
+            embedding_api_key: None,
+        })
+        .err()
+        .expect("openai provider without api key should fail");
+
+        assert!(
+            err.to_string()
+                .contains("BITLOOPS_DEVQL_EMBEDDING_API_KEY is required")
+        );
+    }
 }

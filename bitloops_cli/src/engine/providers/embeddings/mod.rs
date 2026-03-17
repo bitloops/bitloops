@@ -57,3 +57,31 @@ pub fn default_embedding_model(provider: &str) -> Option<&'static str> {
 pub fn embedding_provider_requires_api_key(provider: &str) -> bool {
     matches!(provider, "voyage" | "openai")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_provider_defaults_cover_local_and_hosted_models() {
+        assert_eq!(default_embedding_provider(), "local");
+        assert_eq!(
+            default_embedding_model("local"),
+            Some("jinaai/jina-embeddings-v2-base-code")
+        );
+        assert_eq!(
+            default_embedding_model("jina"),
+            Some("jinaai/jina-embeddings-v2-base-code")
+        );
+        assert_eq!(default_embedding_model("voyage"), Some("voyage-code-3"));
+        assert_eq!(default_embedding_model("openai"), None);
+    }
+
+    #[test]
+    fn embedding_provider_api_key_requirements_match_supported_http_providers() {
+        assert!(embedding_provider_requires_api_key("voyage"));
+        assert!(embedding_provider_requires_api_key("openai"));
+        assert!(!embedding_provider_requires_api_key("local"));
+        assert!(!embedding_provider_requires_api_key("jina"));
+    }
+}

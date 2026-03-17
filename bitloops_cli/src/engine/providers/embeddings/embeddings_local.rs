@@ -108,4 +108,14 @@ mod tests {
             EmbeddingModel::JinaEmbeddingsV2BaseCode
         ));
     }
+
+    #[test]
+    fn local_provider_rejects_unknown_models() {
+        let err = resolve_local_embedding_model("voyage-code-3")
+            .expect_err("unsupported model should fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported local embedding model")
+        );
+    }
 }
