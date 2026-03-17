@@ -231,6 +231,27 @@ async fn github_client_fetch_requires_provider_config() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn github_client_build_request_includes_required_headers() -> Result<()> {
+    let client = GitHubKnowledgeClient::new()?;
+    let request = client.build_request("https://api.github.com/repos/bitloops/bitloops/issues/42", "gh-token")?;
+
+    assert_eq!(
+        request.headers().get(reqwest::header::USER_AGENT),
+        Some(&reqwest::header::HeaderValue::from_static("bitloops-cli"))
+    );
+    assert_eq!(
+        request.headers().get(reqwest::header::ACCEPT),
+        Some(&reqwest::header::HeaderValue::from_static("application/vnd.github+json"))
+    );
+    let authorization = request
+        .headers()
+        .get(reqwest::header::AUTHORIZATION)
+        .expect("authorization header");
+    assert_eq!(authorization.to_str().expect("auth header str"), "Bearer gh-token");
+    Ok(())
+}
+
 #[tokio::test]
 async fn github_client_rejects_non_github_locator() -> Result<()> {
     let temp = TempDir::new()?;

@@ -9,6 +9,7 @@ use crate::engine::devql::capabilities::knowledge::types::{
 };
 
 const GITHUB_ACCEPT_HEADER: &str = "application/vnd.github+json";
+const GITHUB_USER_AGENT: &str = "bitloops-cli";
 
 pub struct GitHubKnowledgeClient {
     client: Client,
@@ -23,6 +24,16 @@ impl GitHubKnowledgeClient {
                 .context("building GitHub knowledge HTTP client")?,
             api_base_url: "https://api.github.com".to_string(),
         })
+    }
+
+    pub fn build_request(&self, endpoint: &str, token: &str) -> Result<reqwest::Request> {
+        self.client
+            .get(endpoint)
+            .bearer_auth(token)
+            .header(reqwest::header::ACCEPT, GITHUB_ACCEPT_HEADER)
+            .header(reqwest::header::USER_AGENT, GITHUB_USER_AGENT)
+            .build()
+            .context("building GitHub knowledge request")
     }
 }
 
@@ -57,12 +68,10 @@ impl KnowledgeProviderClient for GitHubKnowledgeClient {
                 _ => bail!("GitHub client received non-GitHub locator"),
             };
 
+            let request = self.build_request(&endpoint, &github.token)?;
             let response = self
                 .client
-                .get(endpoint)
-                .bearer_auth(&github.token)
-                .header(reqwest::header::ACCEPT, GITHUB_ACCEPT_HEADER)
-                .send()
+                .execute(request)
                 .await
                 .context("sending GitHub knowledge request")?;
 
