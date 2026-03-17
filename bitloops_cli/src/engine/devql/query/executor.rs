@@ -243,9 +243,8 @@ async fn execute_relational_pipeline(
         return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
     }
 
-    let sql =
-        build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
-            .await?;
+    let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
+        .await?;
     let rows = relational
         .query_rows(&sql)
         .await?
@@ -253,8 +252,7 @@ async fn execute_relational_pipeline(
         .map(normalise_relational_result_row)
         .collect::<Vec<_>>();
     if parsed.has_chat_history_stage {
-        return attach_chat_history_to_artefacts(cfg, events_cfg, relational, &repo_id, rows)
-            .await;
+        return attach_chat_history_to_artefacts(cfg, events_cfg, relational, &repo_id, rows).await;
     }
     Ok(rows)
 }

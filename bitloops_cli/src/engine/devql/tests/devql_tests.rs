@@ -27,6 +27,9 @@ fn test_cfg() -> DevqlConfig {
         semantic_model: None,
         semantic_api_key: None,
         semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
     }
 }
 
@@ -231,8 +234,10 @@ fn test_unresolved_call_edge(
 
 include!("devql_tests/core_and_ingestion.rs");
 include!("devql_tests/query_pipeline.rs");
+include!("devql_tests/query_executor.rs");
 include!("devql_tests/config_and_status.rs");
 include!("devql_tests/extraction_js_ts.rs");
 include!("devql_tests/extraction_rust.rs");
 include!("devql_tests/identity_and_schema.rs");
 include!("devql_tests/postgres_integration.rs");
+include!("devql_tests/semantic.rs");

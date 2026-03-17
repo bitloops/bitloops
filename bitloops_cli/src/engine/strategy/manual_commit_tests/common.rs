@@ -6,7 +6,7 @@ use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::state::{PrePromptState, PreTaskState, SessionState};
 use crate::test_support::process_state::{
-    ALLOW_HOST_GIT_CONFIG_ENV, git_command, with_env_vars, with_git_env_cleared,
+    ALLOW_HOST_GIT_CONFIG_ENV, isolated_git_command, with_env_vars, with_git_env_cleared,
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -52,11 +52,7 @@ fn ensure_test_store_backends(repo_root: &Path) {
 /// Creates a real git repository with an initial commit for testing.
 fn setup_git_repo(dir: &TempDir) -> String {
     let run = |args: &[&str]| {
-        let out = git_command()
-            .args(args)
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        let out = isolated_git_command(dir.path()).args(args).output().unwrap();
         assert!(
             out.status.success(),
             "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
@@ -74,9 +70,8 @@ fn setup_git_repo(dir: &TempDir) -> String {
     run(&["add", "."]);
     run(&["commit", "--allow-empty", "-m", "initial"]);
     // Return HEAD hash.
-    let out = git_command()
+    let out = isolated_git_command(dir.path())
         .args(["rev-parse", "HEAD"])
-        .current_dir(dir.path())
         .output()
         .unwrap();
     assert!(
@@ -91,11 +86,7 @@ fn setup_git_repo(dir: &TempDir) -> String {
 /// Creates a git repo with no commits.
 fn setup_empty_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = git_command()
-            .args(args)
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        let out = isolated_git_command(dir.path()).args(args).output().unwrap();
         assert!(
             out.status.success(),
             "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
