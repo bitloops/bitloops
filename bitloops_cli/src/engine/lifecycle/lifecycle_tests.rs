@@ -1,18 +1,20 @@
 use super::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, CLAUDE_HOOK_SESSION_END,
     CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP, CLAUDE_HOOK_USER_PROMPT_SUBMIT,
-    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, CURSOR_HOOK_BEFORE_SUBMIT_PROMPT,
-    CURSOR_HOOK_PRE_COMPACT, CURSOR_HOOK_SESSION_END, CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP,
-    CURSOR_HOOK_SUBAGENT_START, CURSOR_HOOK_SUBAGENT_STOP, GEMINI_HOOK_AFTER_AGENT,
-    GEMINI_HOOK_AFTER_MODEL, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_AGENT,
-    GEMINI_HOOK_BEFORE_MODEL, GEMINI_HOOK_BEFORE_TOOL, GEMINI_HOOK_BEFORE_TOOL_SELECTION,
-    GEMINI_HOOK_NOTIFICATION, GEMINI_HOOK_PRE_COMPRESS, GEMINI_HOOK_SESSION_END,
-    GEMINI_HOOK_SESSION_START, OPENCODE_HOOK_COMPACTION, OPENCODE_HOOK_SESSION_END,
-    OPENCODE_HOOK_SESSION_START, OPENCODE_HOOK_TURN_END, OPENCODE_HOOK_TURN_START,
+    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END,
+    COPILOT_HOOK_SESSION_START, COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+    CURSOR_HOOK_BEFORE_SUBMIT_PROMPT, CURSOR_HOOK_PRE_COMPACT, CURSOR_HOOK_SESSION_END,
+    CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP, CURSOR_HOOK_SUBAGENT_START,
+    CURSOR_HOOK_SUBAGENT_STOP, GEMINI_HOOK_AFTER_AGENT, GEMINI_HOOK_AFTER_MODEL,
+    GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_AGENT, GEMINI_HOOK_BEFORE_MODEL,
+    GEMINI_HOOK_BEFORE_TOOL, GEMINI_HOOK_BEFORE_TOOL_SELECTION, GEMINI_HOOK_NOTIFICATION,
+    GEMINI_HOOK_PRE_COMPRESS, GEMINI_HOOK_SESSION_END, GEMINI_HOOK_SESSION_START,
+    OPENCODE_HOOK_COMPACTION, OPENCODE_HOOK_SESSION_END, OPENCODE_HOOK_SESSION_START,
+    OPENCODE_HOOK_TURN_END, OPENCODE_HOOK_TURN_START,
 };
 use super::adapters::{
-    ClaudeCodeLifecycleAdapter, CodexLifecycleAdapter, CursorLifecycleAdapter,
-    GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
+    ClaudeCodeLifecycleAdapter, CodexLifecycleAdapter, CopilotCliLifecycleAdapter,
+    CursorLifecycleAdapter, GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
 };
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy,
@@ -21,9 +23,10 @@ use super::{
     handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::engine::session::create_session_backend_or_local;
+
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
+use crate::engine::session::create_session_backend_or_local;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
@@ -38,6 +41,7 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         prompt: String::from("hello"),
         tool_use_id: String::from("toolu_123"),
         subagent_id: String::from("subagent-1"),
+        model: String::new(),
     }
 }
 
@@ -106,6 +110,35 @@ fn test_handle_lifecycle_session_start_empty_session_id() {
 }
 
 #[test]
+fn test_handle_lifecycle_session_start_persists_session_state() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let adapter = CopilotCliLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::SessionStart);
+        event.session_id = "copilot-session-start".to_string();
+        event.session_ref = dir
+            .path()
+            .join("transcript.jsonl")
+            .to_string_lossy()
+            .to_string();
+
+        handle_lifecycle_session_start(&adapter, &event)
+            .expect("session start should persist state");
+
+        let backend = create_session_backend_or_local(dir.path());
+        let state = backend
+            .load_session("copilot-session-start")
+            .unwrap()
+            .expect("session should exist");
+        assert_eq!(state.transcript_path, event.session_ref);
+        assert_eq!(state.agent_type, "copilot");
+        assert!(state.last_interaction_time.is_some());
+    });
+}
+
+#[test]
 fn test_handle_lifecycle_turn_start_empty_session_id() {
     let adapter = ClaudeCodeLifecycleAdapter;
     let mut event = sample_event(LifecycleEventType::TurnStart);
@@ -113,6 +146,76 @@ fn test_handle_lifecycle_turn_start_empty_session_id() {
 
     let err = handle_lifecycle_turn_start(&adapter, &event).unwrap_err();
     assert!(err.to_string().contains("no session_id"));
+}
+
+#[test]
+fn test_handle_lifecycle_turn_start_persists_pre_prompt_and_session_state() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("copilot-events.jsonl");
+    std::fs::write(
+        &transcript_path,
+        "{\"type\":\"user.message\",\"data\":{\"content\":\"hello\"}}\n",
+    )
+    .unwrap();
+
+    with_cwd(dir.path(), || {
+        let adapter = CopilotCliLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::TurnStart);
+        event.session_id = "copilot-turn-start".to_string();
+        event.session_ref = transcript_path.to_string_lossy().to_string();
+        event.prompt = "Create file".to_string();
+
+        handle_lifecycle_turn_start(&adapter, &event).expect("turn start should persist state");
+
+        let backend = create_session_backend_or_local(dir.path());
+        let pre_prompt = backend
+            .load_pre_prompt("copilot-turn-start")
+            .unwrap()
+            .expect("pre-prompt should exist");
+        assert_eq!(pre_prompt.prompt, "Create file");
+        assert_eq!(pre_prompt.transcript_path, event.session_ref);
+
+        let state = backend
+            .load_session("copilot-turn-start")
+            .unwrap()
+            .expect("session should exist");
+        assert_eq!(state.phase, SessionPhase::Active);
+        assert_eq!(state.agent_type, "copilot");
+        assert_eq!(state.first_prompt, "Create file");
+        assert_eq!(state.transcript_path, event.session_ref);
+    });
+}
+
+#[test]
+fn test_handle_lifecycle_turn_start_prefers_real_prompt_over_bootstrap_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "copilot-bootstrap".to_string(),
+                first_prompt: "Bootstrap prompt".to_string(),
+                phase: SessionPhase::Idle,
+                ..Default::default()
+            })
+            .expect("seed session");
+
+        let adapter = CopilotCliLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::TurnStart);
+        event.session_id = "copilot-bootstrap".to_string();
+        event.prompt = "Turn prompt".to_string();
+
+        handle_lifecycle_turn_start(&adapter, &event).expect("turn start should succeed");
+
+        let state = backend
+            .load_session("copilot-bootstrap")
+            .unwrap()
+            .expect("session should exist");
+        assert_eq!(state.first_prompt, "Turn prompt");
+    });
 }
 
 // CLI-868
@@ -215,6 +318,38 @@ fn test_handle_lifecycle_session_end_empty_session_id() {
 
     handle_lifecycle_session_end(&adapter, &event)
         .expect("session end with empty session id should be a safe no-op");
+}
+
+#[test]
+fn test_handle_lifecycle_session_end_marks_session_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "copilot-session-end".to_string(),
+                phase: SessionPhase::Active,
+                files_touched: vec!["file.txt".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = CopilotCliLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::SessionEnd);
+        event.session_id = "copilot-session-end".to_string();
+
+        handle_lifecycle_session_end(&adapter, &event).expect("session end should persist state");
+
+        let state = backend
+            .load_session("copilot-session-end")
+            .unwrap()
+            .expect("session should exist");
+        assert_eq!(state.phase, SessionPhase::Ended);
+        assert!(state.ended_at.is_some());
+        assert!(state.last_interaction_time.is_some());
+    });
 }
 
 // CLI-870
@@ -906,6 +1041,76 @@ fn test_read_and_parse_agent_hook_input_gemini() {
     assert_eq!("/path/to/agent.json", parsed.transcript_path);
     assert_eq!("User's question here", parsed.prompt);
     assert_eq!("before-agent", parsed.hook_event_name);
+}
+
+#[test]
+fn test_parse_hook_event_session_start_copilot() {
+    let adapter = CopilotCliLifecycleAdapter;
+    let mut stdin =
+        Cursor::new(r#"{"sessionId":"copilot-session-1","initialPrompt":"Bootstrap"}"#);
+    let event = adapter
+        .parse_hook_event(COPILOT_HOOK_SESSION_START, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
+    assert_eq!("copilot-session-1", event.session_id);
+    assert_eq!("Bootstrap", event.prompt);
+}
+
+#[test]
+fn test_parse_hook_event_turn_start_copilot() {
+    let adapter = CopilotCliLifecycleAdapter;
+    let mut stdin = Cursor::new(r#"{"sessionId":"copilot-session-2","prompt":"Ship it"}"#);
+    let event = adapter
+        .parse_hook_event(COPILOT_HOOK_USER_PROMPT_SUBMITTED, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::TurnStart), event.event_type);
+    assert_eq!("copilot-session-2", event.session_id);
+    assert_eq!("Ship it", event.prompt);
+}
+
+#[test]
+fn test_parse_hook_event_turn_end_copilot() {
+    let adapter = CopilotCliLifecycleAdapter;
+    let mut stdin =
+        Cursor::new(r#"{"sessionId":"copilot-session-3","transcriptPath":"/tmp/copilot.jsonl"}"#);
+    let event = adapter
+        .parse_hook_event(COPILOT_HOOK_AGENT_STOP, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::TurnEnd), event.event_type);
+    assert_eq!("copilot-session-3", event.session_id);
+    assert_eq!("/tmp/copilot.jsonl", event.session_ref);
+}
+
+#[test]
+fn test_parse_hook_event_session_end_copilot() {
+    let adapter = CopilotCliLifecycleAdapter;
+    let mut stdin = Cursor::new(r#"{"sessionId":"copilot-session-4"}"#);
+    let event = adapter
+        .parse_hook_event(COPILOT_HOOK_SESSION_END, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::SessionEnd), event.event_type);
+    assert_eq!("copilot-session-4", event.session_id);
+}
+
+#[test]
+fn test_parse_hook_event_subagent_end_copilot() {
+    let adapter = CopilotCliLifecycleAdapter;
+    let mut stdin = Cursor::new(r#"{"sessionId":"copilot-session-5"}"#);
+    let event = adapter
+        .parse_hook_event(COPILOT_HOOK_SUBAGENT_STOP, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::SubagentEnd), event.event_type);
+    assert_eq!("copilot-session-5", event.session_id);
 }
 
 // CLI-884

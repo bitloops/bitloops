@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::engine::agent::claude_code::agent::ClaudeCodeAgent;
 use crate::engine::agent::codex::agent::CodexAgent;
+use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -28,6 +29,7 @@ impl AgentRegistry {
     pub fn builtin() -> Self {
         Self::new(vec![
             Box::new(ClaudeCodeAgent),
+            Box::new(CopilotCliAgent),
             Box::new(CodexAgent),
             Box::new(CursorAgent),
             Box::new(GeminiCliAgent),

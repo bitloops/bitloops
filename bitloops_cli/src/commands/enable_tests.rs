@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::{Cli, Commands};
 use crate::engine::agent::codex::hooks as codex_hooks;
+use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
 use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
@@ -858,5 +859,17 @@ fn initialized_agents_detects_claude_and_cursor() {
         assert!(agents.contains(&"claude-code".to_string()));
         assert!(agents.contains(&"codex".to_string()));
         assert!(agents.contains(&"cursor".to_string()));
+    });
+}
+
+#[test]
+fn initialized_agents_detects_copilot() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    with_repo_cwd(dir.path(), || {
+        HookSupport::install_hooks(&CopilotCliAgent, false, false).unwrap();
+
+        let agents = initialized_agents(dir.path());
+        assert!(agents.contains(&"copilot".to_string()));
     });
 }

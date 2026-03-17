@@ -22,7 +22,7 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|codex|cursor|gemini-cli|opencode)
+    /// Target a specific agent setup (claude-code|copilot|cursor|gemini-cli|opencode)
     #[arg(long)]
     pub agent: Option<String>,
 

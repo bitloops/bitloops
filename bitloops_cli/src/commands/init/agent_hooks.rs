@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
 use crate::engine::agent::codex::hooks as codex_hooks;
+use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -15,6 +16,7 @@ pub(super) const AGENT_CURSOR: &str = "cursor";
 pub(super) const AGENT_GEMINI_CLI: &str = "gemini-cli";
 pub(super) const AGENT_OPEN_CODE: &str = "opencode";
 pub(super) const DEFAULT_AGENT: &str = AGENT_CLAUDE_CODE;
+pub(super) const AGENT_COPILOT: &str = "copilot";
 
 pub(super) fn install_agent_hooks(
     repo_root: &Path,
@@ -26,6 +28,10 @@ pub(super) fn install_agent_hooks(
         AGENT_CLAUDE_CODE => Ok((
             "Claude Code".to_string(),
             claude_hooks::install_hooks(repo_root, force)?,
+        )),
+        AGENT_COPILOT => Ok((
+            "Copilot".to_string(),
+            HookSupport::install_hooks(&CopilotCliAgent, local_dev, force)?,
         )),
         AGENT_CODEX => Ok((
             "Codex CLI".to_string(),
@@ -55,6 +61,7 @@ pub(super) fn normalize_agent_name(value: &str) -> Result<String> {
 
     match trimmed {
         AGENT_CLAUDE_CODE => Ok(AGENT_CLAUDE_CODE.to_string()),
+        AGENT_COPILOT | "copilot-cli" => Ok(AGENT_COPILOT.to_string()),
         AGENT_CODEX => Ok(AGENT_CODEX.to_string()),
         AGENT_CURSOR => Ok(AGENT_CURSOR.to_string()),
         AGENT_GEMINI_CLI | "gemini" => Ok(AGENT_GEMINI_CLI.to_string()),
@@ -68,6 +75,9 @@ pub(super) fn detect_agents(repo_root: &Path) -> Vec<String> {
 
     if repo_root.join(".claude").is_dir() {
         detected.push(AGENT_CLAUDE_CODE.to_string());
+    }
+    if HookSupport::are_hooks_installed(&CopilotCliAgent) {
+        detected.push(AGENT_COPILOT.to_string());
     }
     if repo_root.join(".codex").is_dir() {
         detected.push(AGENT_CODEX.to_string());
@@ -88,6 +98,7 @@ pub(super) fn detect_agents(repo_root: &Path) -> Vec<String> {
 pub(super) fn available_agents() -> Vec<String> {
     vec![
         AGENT_CLAUDE_CODE.to_string(),
+        AGENT_COPILOT.to_string(),
         AGENT_CODEX.to_string(),
         AGENT_CURSOR.to_string(),
         AGENT_GEMINI_CLI.to_string(),
@@ -98,6 +109,7 @@ pub(super) fn available_agents() -> Vec<String> {
 pub(super) fn agent_display(agent: &str) -> &'static str {
     match agent {
         AGENT_CLAUDE_CODE => "Claude Code",
+        AGENT_COPILOT => "Copilot",
         AGENT_CODEX => "Codex CLI",
         AGENT_CURSOR => "Cursor",
         AGENT_GEMINI_CLI => "Gemini CLI",
