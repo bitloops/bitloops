@@ -73,7 +73,7 @@ flowchart TD
   end
 
   subgraph db["SQLite Store"]
-    schema["src/db/schema.rs<br/>artefacts<br/>test_links<br/>test_coverage<br/>test_runs<br/>test_classifications"]
+    schema["src/db/schema.rs<br/>artefacts<br/>test_links<br/>coverage_captures<br/>coverage_hits<br/>test_runs<br/>test_classifications"]
   end
 
   subgraph milestones["Domain Milestones"]

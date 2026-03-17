@@ -266,6 +266,8 @@ fn when_i_generate_and_ingest_rust_lcov_coverage(world: &mut RustQuickstartWorld
         &lcov,
         "--commit",
         &world.commit_sha,
+        "--scope",
+        "workspace",
     ]);
 }
 

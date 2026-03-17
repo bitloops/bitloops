@@ -89,6 +89,8 @@ pub fn index_real_typescript_fixture(
         &lcov_arg,
         "--commit",
         commit_sha,
+        "--scope",
+        "workspace",
     ]);
     run_testlens_or_panic(&[
         "ingest-results",

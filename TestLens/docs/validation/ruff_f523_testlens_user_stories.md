@@ -160,9 +160,11 @@ Practical implication:
 Why not:
 - the Ruff workspace does not yet have a validated TestLens coverage quickstart
 - this task is already strongly fixture/snapshot-driven in the brief
+- even with workspace LCOV ingested (`--scope workspace`), coverage data produces artefact-level stats only — it does not inflate per-test confidence. Tests remain `evidence: "static_only"` until isolated per-test captures (LLVM JSON with `--scope test-scenario`) are ingested.
 
 Meaning:
 - `coverage()` is not the main TestLens story for this task today
+- when coverage is eventually ingested, the `coverage_mode` field on query output will honestly report `"artefact_only"` for workspace LCOV, making the limitation transparent to agents
 
 ### 6. Pre-existing failing test detection
 

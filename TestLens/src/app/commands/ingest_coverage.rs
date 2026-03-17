@@ -1,5 +1,5 @@
-// Command handler for ingesting coverage data, materializing coverage rows, and
-// deriving commit-scoped test classifications.
+// Command handler for ingesting coverage data. Creates one coverage_captures row
+// per invocation and N coverage_hits rows. No fan-out through test_links.
 
 use std::collections::HashMap;
 use std::fs;
@@ -7,7 +7,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::domain::TestCoverageRecord;
+use crate::domain::{
+    CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
+};
 use crate::repository::{TestHarnessRepository, open_sqlite_repository};
 
 #[derive(Debug, Clone)]
@@ -24,96 +26,164 @@ struct LcovBranchCoverage {
     hit_count: i64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct IngestStats {
-    files: usize,
-    rows_inserted: usize,
+pub fn handle(
+    db_path: &Path,
+    lcov_path: Option<&Path>,
+    input_path: Option<&Path>,
+    commit_sha: &str,
+    scope_str: &str,
+    tool: &str,
+    test_artefact_id: Option<&str>,
+    format_str: Option<&str>,
+) -> Result<()> {
+    let scope_kind = ScopeKind::from_str(scope_str)
+        .ok_or_else(|| anyhow::anyhow!("invalid scope: {scope_str} (expected workspace, package, test-scenario, or doctest)"))?;
+
+    // Determine the coverage file path
+    let coverage_path = lcov_path
+        .or(input_path)
+        .ok_or_else(|| anyhow::anyhow!("either --lcov or --input must be provided"))?;
+
+    // Determine format from explicit flag, file extension, or default
+    let format = resolve_format(format_str, coverage_path)?;
+
+    // Validate constraints
+    if scope_kind == ScopeKind::TestScenario {
+        if test_artefact_id.is_none() {
+            anyhow::bail!("--test-artefact-id is required when scope is test-scenario");
+        }
+        if format == CoverageFormat::Lcov {
+            anyhow::bail!("LCOV format is not supported for scope=test-scenario (too lossy for per-test attribution); use --format llvm-json");
+        }
+    }
+
+    let mut repository = open_sqlite_repository(db_path)?;
+    let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
+
+    let capture_id = format!(
+        "capture:{commit_sha}:{}:{}",
+        scope_kind,
+        test_artefact_id.unwrap_or("all")
+    );
+    let captured_at = chrono_now();
+
+    let has_branches = format == CoverageFormat::LlvmJson;
+
+    let capture = CoverageCaptureRecord {
+        capture_id: capture_id.clone(),
+        repo_id: repo_id.clone(),
+        commit_sha: commit_sha.to_string(),
+        tool: tool.to_string(),
+        format,
+        scope_kind,
+        subject_test_artefact_id: test_artefact_id.map(|s| s.to_string()),
+        line_truth: true,
+        branch_truth: has_branches,
+        captured_at,
+        status: "complete".to_string(),
+        metadata_json: None,
+    };
+
+    let hits = match format {
+        CoverageFormat::Lcov => ingest_lcov(&repository, coverage_path, commit_sha, &capture_id)?,
+        CoverageFormat::LlvmJson => {
+            crate::app::commands::parse_llvm_json::ingest_llvm_json(
+                &repository,
+                coverage_path,
+                commit_sha,
+                &capture_id,
+            )?
+        }
+    };
+
+    repository.insert_coverage_capture(&capture)?;
+    repository.insert_coverage_hits(&hits)?;
+
+    let classifications = repository.rebuild_classifications_from_coverage(commit_sha)?;
+
+    println!(
+        "ingested {} coverage for commit {} (scope: {}, hits: {}, classifications: {})",
+        format, commit_sha, scope_kind, hits.len(), classifications
+    );
+    Ok(())
 }
 
-pub fn handle(db_path: &Path, lcov_path: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-
+fn ingest_lcov(
+    repository: &impl TestHarnessRepository,
+    lcov_path: &Path,
+    commit_sha: &str,
+    capture_id: &str,
+) -> Result<Vec<CoverageHitRecord>> {
     let report = parse_lcov_report(lcov_path)?;
-    let links = repository.load_test_links_by_production_artefact(commit_sha)?;
-
-    let mut rows_inserted = 0usize;
-    let mut coverage_rows = Vec::new();
+    let mut hits = Vec::new();
 
     for file in &report {
-        let targets = repository.load_coverage_targets_for_file(commit_sha, &file.source_file)?;
-        if targets.is_empty() {
+        let artefacts =
+            repository.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
+        if artefacts.is_empty() {
             continue;
         }
 
-        for target in targets {
-            let Some(test_artefacts) = links.get(&target.artefact_id) else {
-                continue;
-            };
-
+        for (artefact_id, start_line, end_line) in &artefacts {
             for (&line_number, &hit_count) in &file.line_hits {
-                if line_number < target.start_line || line_number > target.end_line {
+                if line_number < *start_line || line_number > *end_line {
                     continue;
                 }
-
-                for test_artefact_id in test_artefacts {
-                    let coverage_id = format!(
-                        "line:{commit_sha}:{test_artefact_id}:{}:{line_number}",
-                        target.artefact_id
-                    );
-                    coverage_rows.push(TestCoverageRecord {
-                        coverage_id,
-                        repo_id: target.repo_id.clone(),
-                        commit_sha: commit_sha.to_string(),
-                        test_artefact_id: test_artefact_id.clone(),
-                        artefact_id: target.artefact_id.clone(),
-                        line: line_number,
-                        branch_id: None,
-                        covered: hit_count > 0,
-                        hit_count,
-                    });
-                    rows_inserted += 1;
-                }
+                hits.push(CoverageHitRecord {
+                    capture_id: capture_id.to_string(),
+                    artefact_id: artefact_id.clone(),
+                    file_path: file.source_file.clone(),
+                    line: line_number,
+                    branch_id: -1,
+                    covered: hit_count > 0,
+                    hit_count,
+                });
             }
 
             for branch in &file.branches {
-                if branch.line < target.start_line || branch.line > target.end_line {
+                if branch.line < *start_line || branch.line > *end_line {
                     continue;
                 }
-
-                for test_artefact_id in test_artefacts {
-                    let coverage_id = format!(
-                        "branch:{commit_sha}:{test_artefact_id}:{}:{}:{}",
-                        target.artefact_id, branch.line, branch.branch_id
-                    );
-                    coverage_rows.push(TestCoverageRecord {
-                        coverage_id,
-                        repo_id: target.repo_id.clone(),
-                        commit_sha: commit_sha.to_string(),
-                        test_artefact_id: test_artefact_id.clone(),
-                        artefact_id: target.artefact_id.clone(),
-                        line: branch.line,
-                        branch_id: Some(branch.branch_id),
-                        covered: branch.hit_count > 0,
-                        hit_count: branch.hit_count,
-                    });
-                    rows_inserted += 1;
-                }
+                hits.push(CoverageHitRecord {
+                    capture_id: capture_id.to_string(),
+                    artefact_id: artefact_id.clone(),
+                    file_path: file.source_file.clone(),
+                    line: branch.line,
+                    branch_id: branch.branch_id,
+                    covered: branch.hit_count > 0,
+                    hit_count: branch.hit_count,
+                });
             }
         }
     }
 
-    repository.replace_test_coverage(commit_sha, &coverage_rows)?;
-    let classifications = repository.rebuild_classifications_from_coverage(commit_sha)?;
+    Ok(hits)
+}
 
-    let stats = IngestStats {
-        files: report.len(),
-        rows_inserted,
-    };
-    println!(
-        "ingested LCOV for commit {} (files parsed: {}, coverage rows upserted: {}, classifications derived: {})",
-        commit_sha, stats.files, stats.rows_inserted, classifications
-    );
-    Ok(())
+fn resolve_format(format_str: Option<&str>, path: &Path) -> Result<CoverageFormat> {
+    if let Some(fmt) = format_str {
+        return CoverageFormat::from_str(fmt)
+            .ok_or_else(|| anyhow::anyhow!("unknown format: {fmt} (expected lcov or llvm-json)"));
+    }
+
+    // Auto-detect from extension
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext {
+        "json" => Ok(CoverageFormat::LlvmJson),
+        _ => Ok(CoverageFormat::Lcov),
+    }
+}
+
+fn chrono_now() -> String {
+    // Simple ISO-8601-ish timestamp without pulling in chrono crate
+    use std::time::SystemTime;
+    let duration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}", duration.as_secs())
 }
 
 fn parse_lcov_report(lcov_path: &Path) -> Result<Vec<LcovFileCoverage>> {

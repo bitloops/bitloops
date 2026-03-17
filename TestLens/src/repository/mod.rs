@@ -7,9 +7,9 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::domain::{
-    ArtefactRecord, CoveragePairStats, CoverageSummaryRecord, CoverageTarget, CoveringTestRecord,
-    LatestTestRunRecord, ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord,
-    TestCoverageRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord,
+    ArtefactRecord, CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
+    ProductionArtefact, QueriedArtefactRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord,
 };
 
 pub mod sqlite;
@@ -18,15 +18,11 @@ pub trait TestHarnessRepository {
     fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<TestScenarioRecord>>;
-    fn load_test_links_by_production_artefact(
+    fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
-    ) -> Result<HashMap<String, Vec<String>>>;
-    fn load_coverage_targets_for_file(
-        &self,
-        commit_sha: &str,
-        lcov_source_file: &str,
-    ) -> Result<Vec<CoverageTarget>>;
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>>;
 
     fn replace_production_artefacts(
         &mut self,
@@ -40,11 +36,8 @@ pub trait TestHarnessRepository {
         links: &[TestLinkRecord],
     ) -> Result<()>;
     fn replace_test_runs(&mut self, commit_sha: &str, runs: &[TestRunRecord]) -> Result<()>;
-    fn replace_test_coverage(
-        &mut self,
-        commit_sha: &str,
-        coverage_rows: &[TestCoverageRecord],
-    ) -> Result<()>;
+    fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;
+    fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()>;
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize>;
 }
 

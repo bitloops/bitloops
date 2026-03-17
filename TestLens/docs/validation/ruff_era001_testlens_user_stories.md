@@ -1,6 +1,6 @@
 # TestLens User Stories Useful For Ruff ERA001 Task
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
 
 Task brief:
 - Confluence page `440500241`
@@ -18,6 +18,50 @@ Fresh local TestLens ingest on March 16, 2026:
 
 This note answers one narrow question:
 - which TestLens user stories are genuinely useful for solving the ERA001 script-metadata false-positive task right now
+
+## Task Quickstart
+
+Use this minimal flow against the ERA001 workspace fixture before running the task-specific queries below:
+
+```bash
+rm -f ./target/ruff-era001-task2.db
+
+testlens init --db ./target/ruff-era001-task2.db
+
+testlens ingest-production-artefacts \
+  --db ./target/ruff-era001-task2.db \
+  --repo-dir ./b2a0d68d70ee690ea871fe9b3317be43075ddb33 \
+  --commit b2a0d68d70ee690ea871fe9b3317be43075ddb33
+
+testlens ingest-tests \
+  --db ./target/ruff-era001-task2.db \
+  --repo-dir ./b2a0d68d70ee690ea871fe9b3317be43075ddb33 \
+  --commit b2a0d68d70ee690ea871fe9b3317be43075ddb33
+```
+
+The highest-value task queries are:
+
+```bash
+testlens query \
+  --db ./target/ruff-era001-task2.db \
+  --artefact commented_out_code \
+  --commit b2a0d68d70ee690ea871fe9b3317be43075ddb33 \
+  --view tests \
+  --min-strength 0.0
+
+testlens query \
+  --db ./target/ruff-era001-task2.db \
+  --artefact skip_script_comments \
+  --commit b2a0d68d70ee690ea871fe9b3317be43075ddb33 \
+  --view tests \
+  --min-strength 0.0
+
+testlens query \
+  --db ./target/ruff-era001-task2.db \
+  --artefact comment_contains_code \
+  --commit b2a0d68d70ee690ea871fe9b3317be43075ddb33 \
+  --view tests
+```
 
 ## Most Useful Right Now
 
@@ -165,9 +209,11 @@ Practical implication:
 Why not:
 - this Ruff workspace does not have a validated TestLens coverage flow yet
 - the task brief is primarily fixture/snapshot and unit-test driven
+- even with workspace LCOV ingested (`--scope workspace`), coverage produces artefact-level stats only — per-test confidence stays at 0.6 (`evidence: "static_only"`) until isolated per-test captures (LLVM JSON with `--scope test-scenario`) are available
 
 Meaning:
 - TestLens `coverage()` is not the main story for ERA001 today
+- when coverage is ingested, the query output will honestly report `coverage_mode: "artefact_only"` for workspace LCOV, making the limitation transparent
 
 ### 6. Pre-existing failure detection
 
@@ -198,3 +244,41 @@ The TestLens stories that are genuinely useful for solving this ERA001 task righ
 - identifying where current static linkage becomes too shallow to trust on tiny helpers
 
 Compared with the earlier F523 task, this ERA001 task is a better fit for current TestLens linkage because the key boundary helper `skip_script_comments` and the general detection helper `comment_contains_code` already resolve to direct unit tests.
+
+## Current Results Snapshot
+
+The concrete results that are most useful on this workspace today are:
+
+- `commented_out_code` resolves to the Ruff harness case `rules[CommentedOutCode, ERA001.py]`
+- `skip_script_comments` resolves to two direct helper tests:
+  - `script_comment`
+  - `script_comment_end_precedence`
+- `comment_contains_code` resolves to `10` linked unit tests, including:
+  - `comment_contains_code_basic`
+  - `comment_contains_code_single_line`
+  - `comment_contains_code_with_multiline`
+  - `comment_contains_code_with_default_allowlist`
+  - `comment_contains_todo`
+- tiny helpers such as `script_line_content`, `is_own_line_comment`, and `is_script_tag_start` still show `untested`, which should be read as a current linkage limit rather than proof of no indirect coverage
+
+In practice, this means TestLens is useful here for:
+
+- finding the exact ERA001 harness fixture to extend
+- surfacing the direct closing-marker precedence helper test named in the task brief
+- showing the broad non-regression surface for general commented-out-code detection
+
+## Helpful Context Injection
+
+If you want to inject TestLens context into an agent prompt for this task, do not paste raw JSON. The highest-value compact injection is:
+
+```text
+Local TestLens context: the ERA001 rule entry point `commented_out_code` links to the Ruff harness case `rules[CommentedOutCode, ERA001.py]`, so `crates/ruff_linter/src/rules/eradicate/mod.rs` and the `ERA001.py` fixture are the main regression surface. The boundary helper `skip_script_comments` links directly to `script_comment` and `script_comment_end_precedence`, which are strong validation targets for script-block start/end handling. The general detection helper `comment_contains_code` also has a broad unit-test surface, so changes should preserve sensitivity outside valid script metadata blocks. Treat tiny helper `untested` results as linkage limits, not proof that no tests exercise them indirectly.
+```
+
+Low-value prompt payload for this task:
+
+- raw query JSON
+- coverage percentages
+- `verification_level` summaries without the linked test names
+
+The useful part is the navigation and validation context, not the JSON shape.

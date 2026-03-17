@@ -57,7 +57,7 @@ npx jest --coverage --json --outputFile=../test-results.json --runInBand || true
 cd ..
 
 # 5) Ingest coverage + run results
-testlens ingest-coverage --db ./testlens.db --lcov ./testlens-fixture/coverage/lcov.info --commit fixture-dev
+testlens ingest-coverage --db ./testlens.db --lcov ./testlens-fixture/coverage/lcov.info --commit fixture-dev --scope workspace
 testlens ingest-results --db ./testlens.db --jest-json ./test-results.json --commit fixture-dev
 
 # 6) Query
@@ -115,7 +115,7 @@ testlens query --db ./testlens.db --artefact UserService.create_user --commit fi
 cd testlens-fixture-rust
 cargo llvm-cov --lcov --output-path ../rust-fixture.lcov
 cd ..
-testlens ingest-coverage --db ./testlens.db --lcov ./rust-fixture.lcov --commit fixture-rust
+testlens ingest-coverage --db ./testlens.db --lcov ./rust-fixture.lcov --commit fixture-rust --scope workspace
 
 # 6) Query coverage
 testlens query --db ./testlens.db --artefact UserRepository.find_by_id --commit fixture-rust --view coverage
@@ -226,7 +226,16 @@ Real workspace notes:
   - `--db <path>` SQLite path
 
 - `testlens ingest-coverage`
-  - `--lcov <path>` LCOV file path
+  - `--lcov <path>` LCOV file path (or `--input <path>` for any format)
+  - `--commit <sha>` commit stamp
+  - `--scope <workspace|package|test-scenario|doctest>` (required) how the coverage was captured
+  - `--format <lcov|llvm-json>` (optional, auto-detected from extension)
+  - `--tool <string>` (optional, default `"unknown"`)
+  - `--test-artefact-id <id>` (required when scope=test-scenario)
+  - `--db <path>` SQLite path
+
+- `testlens ingest-coverage-batch`
+  - `--manifest <path>` JSON manifest file listing per-test coverage entries
   - `--commit <sha>` commit stamp
   - `--db <path>` SQLite path
 
@@ -283,7 +292,7 @@ Rerun semantics for the same commit:
 - `ingest-tests` clears prior commit-scoped test discovery state before rebuilding:
   - `test_links`
   - `test_runs`
-  - `test_coverage`
+  - `coverage_captures` and `coverage_hits`
   - `test_classifications`
   - test artefacts in `artefacts` (`test_suite`, `test_scenario`, and test file rows)
 - This keeps ingestion deterministic and prevents stale coverage/results after test discovery changes.
@@ -344,7 +353,8 @@ sqlite3 ./testlens.db "select count(*) from artefacts where commit_sha='qa1' and
 sqlite3 ./testlens.db "select count(*) from test_links where commit_sha='qa1';"
 
 # After ingest-coverage
-sqlite3 ./testlens.db "select count(*) from test_coverage where commit_sha='qa1';"
+sqlite3 ./testlens.db "select count(*) from coverage_captures where commit_sha='qa1';"
+sqlite3 ./testlens.db "select count(*) from coverage_hits where capture_id in (select capture_id from coverage_captures where commit_sha='qa1');"
 sqlite3 ./testlens.db "select count(*) from test_classifications where commit_sha='qa1';"
 
 # After ingest-results

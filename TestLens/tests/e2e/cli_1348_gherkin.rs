@@ -83,6 +83,8 @@ fn when_i_generate_rust_lcov_and_ingest_it_for_c1(world: &mut RustCoverageWorld)
         &lcov,
         "--commit",
         &world.commit_c1,
+        "--scope",
+        "workspace",
     ]);
 
     world.c0_query_json = Some(query_coverage_json(
@@ -126,14 +128,14 @@ fn then_coverage_rows_exist_only_for_commit_c1(world: &mut RustCoverageWorld) {
     let conn = Connection::open(world.db_path()).expect("failed opening sqlite db");
     let c0_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM test_coverage WHERE commit_sha = ?1",
+            "SELECT COUNT(*) FROM coverage_hits WHERE capture_id IN (SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1)",
             params![world.commit_c0],
             |row| row.get(0),
         )
         .expect("failed counting C0 coverage");
     let c1_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM test_coverage WHERE commit_sha = ?1",
+            "SELECT COUNT(*) FROM coverage_hits WHERE capture_id IN (SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1)",
             params![world.commit_c1],
             |row| row.get(0),
         )

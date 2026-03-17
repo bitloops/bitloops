@@ -39,7 +39,8 @@ cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -- \
   ingest-coverage \
   --db "$DB_PATH" \
   --lcov "$LCOV_PATH" \
-  --commit "$COMMIT_SHA"
+  --commit "$COMMIT_SHA" \
+  --scope workspace
 
 cargo run --manifest-path "$ROOT_DIR/Cargo.toml" -- \
   ingest-results \
@@ -52,7 +53,8 @@ if command -v sqlite3 >/dev/null 2>&1; then
   echo "Ingest verification"
   echo "test_scenarios: $(sqlite3 "$DB_PATH" "select count(*) from artefacts where commit_sha='$COMMIT_SHA' and canonical_kind='test_scenario';")"
   echo "test_links rows: $(sqlite3 "$DB_PATH" "select count(*) from test_links where commit_sha='$COMMIT_SHA';")"
-  echo "test_coverage rows: $(sqlite3 "$DB_PATH" "select count(*) from test_coverage where commit_sha='$COMMIT_SHA';")"
+  echo "coverage_captures: $(sqlite3 "$DB_PATH" "select count(*) from coverage_captures where commit_sha='$COMMIT_SHA';")"
+  echo "coverage_hits rows: $(sqlite3 "$DB_PATH" "select count(*) from coverage_hits where capture_id in (select capture_id from coverage_captures where commit_sha='$COMMIT_SHA');")"
   echo "test_runs rows: $(sqlite3 "$DB_PATH" "select count(*) from test_runs where commit_sha='$COMMIT_SHA';")"
   echo "test_classifications rows: $(sqlite3 "$DB_PATH" "select count(*) from test_classifications where commit_sha='$COMMIT_SHA';")"
 fi

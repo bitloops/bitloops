@@ -78,6 +78,7 @@ struct CoveringTestOutput {
     classification_source: String,
     confidence: f64,
     strength: f64,
+    evidence: String,
     last_run: Option<LastRunOutput>,
 }
 
@@ -100,7 +101,6 @@ struct BranchOutput {
     line: i64,
     description: String,
     covered: bool,
-    covering_test_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +115,7 @@ struct SummaryOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     branch_coverage_pct: Option<f64>,
     untested_branch_count: usize,
+    coverage_mode: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,6 +190,11 @@ fn build_query_payload<R: TestHarnessQueryRepository>(
             &artefact.artefact_id,
         )?;
         let has_covered = pair_stats.covered_rows > 0;
+        let evidence = if has_covered {
+            "isolated_line_hit"
+        } else {
+            "static_only"
+        };
         let confidence = round2(compute_confidence(
             has_covered,
             coverage_exists_for_commit,
@@ -236,9 +242,14 @@ fn build_query_payload<R: TestHarnessQueryRepository>(
             classification_source,
             confidence,
             strength,
+            evidence: evidence.to_string(),
             last_run,
         });
     }
+
+    let has_isolated = all_covering_tests
+        .iter()
+        .any(|t| t.evidence == "isolated_line_hit");
 
     let filtered_by_classification =
         apply_classification_filter(all_covering_tests, classification_filter);
@@ -279,6 +290,16 @@ fn build_query_payload<R: TestHarnessQueryRepository>(
         start_line: artefact.start_line,
         end_line: artefact.end_line,
     };
+    let coverage_mode = if !coverage_exists_for_commit {
+        "none"
+    } else if has_isolated && coverage_details.as_ref().is_some_and(|d| d.branch_total > 0) {
+        "per_test_branch"
+    } else if has_isolated {
+        "per_test_line"
+    } else {
+        "artefact_only"
+    };
+
     let summary = SummaryOutput {
         verification_level,
         total_covering_tests: filtered_by_classification.len(),
@@ -292,6 +313,7 @@ fn build_query_payload<R: TestHarnessQueryRepository>(
             .as_ref()
             .map(|details| round1(ratio_pct(details.branch_covered, details.branch_total))),
         untested_branch_count,
+        coverage_mode: coverage_mode.to_string(),
     };
     let visible_covering_tests = apply_min_strength_filter(
         filtered_by_classification,
@@ -332,7 +354,6 @@ fn build_coverage_output(details: &CoverageSummaryRecord) -> CoverageOutput {
                 line: branch.line,
                 description: format!("branch {}", branch.branch_id),
                 covered: branch.covered,
-                covering_test_ids: branch.covering_test_ids.clone(),
             })
             .collect(),
     }
@@ -590,6 +611,7 @@ mod tests {
                 classification_source: "static_analysis".to_string(),
                 confidence: 1.0,
                 strength: 0.5,
+                evidence: "static_only".to_string(),
                 last_run: None,
             },
             super::CoveringTestOutput {
@@ -601,6 +623,7 @@ mod tests {
                 classification_source: "static_analysis".to_string(),
                 confidence: 1.0,
                 strength: 0.2,
+                evidence: "static_only".to_string(),
                 last_run: None,
             },
         ];

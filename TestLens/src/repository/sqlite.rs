@@ -9,10 +9,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::open_existing_database;
 use crate::domain::{
-    ArtefactRecord, CoverageBranchRecord, CoveragePairStats, CoverageSummaryRecord, CoverageTarget,
-    CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord, ProductionArtefact,
-    QueriedArtefactRecord, TestCoverageRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord,
-    derive_test_classification,
+    ArtefactRecord, CoverageBranchRecord, CoverageCaptureRecord, CoverageHitRecord,
+    CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
+    ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, TestLinkRecord, TestRunRecord,
+    TestScenarioRecord, derive_test_classification,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
@@ -111,75 +111,39 @@ WHERE t.commit_sha = ?1
         Ok(scenarios)
     }
 
-    fn load_test_links_by_production_artefact(
+    fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
-    ) -> Result<HashMap<String, Vec<String>>> {
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
         let mut stmt = self
             .conn
             .prepare(
                 r#"
-SELECT production_artefact_id, test_artefact_id
-FROM test_links
+SELECT artefact_id, start_line, end_line
+FROM artefacts
 WHERE commit_sha = ?1
+  AND canonical_kind NOT IN ('test_suite', 'test_scenario', 'file')
+  AND (path = ?2 OR ?2 LIKE '%' || path)
 "#,
             )
-            .context("failed preparing test link query")?;
-
-        let mut rows = stmt
-            .query(params![commit_sha])
-            .context("failed querying test links")?;
-
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        while let Some(row) = rows.next().context("failed reading test link row")? {
-            let production_artefact_id: String =
-                row.get(0).context("missing production_artefact_id")?;
-            let test_artefact_id: String = row.get(1).context("missing test_artefact_id")?;
-            map.entry(production_artefact_id)
-                .or_default()
-                .push(test_artefact_id);
-        }
-
-        Ok(map)
-    }
-
-    fn load_coverage_targets_for_file(
-        &self,
-        commit_sha: &str,
-        lcov_source_file: &str,
-    ) -> Result<Vec<CoverageTarget>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                r#"
-SELECT DISTINCT a.artefact_id, a.repo_id, a.start_line, a.end_line
-FROM artefacts a
-JOIN test_links tl
-  ON tl.production_artefact_id = a.artefact_id
-WHERE a.commit_sha = ?1
-  AND tl.commit_sha = ?1
-  AND a.canonical_kind NOT IN ('test_suite', 'test_scenario', 'file')
-  AND (a.path = ?2 OR ?2 LIKE '%' || a.path)
-"#,
-            )
-            .context("failed preparing coverage target query")?;
+            .context("failed preparing artefacts-for-file query")?;
 
         let rows = stmt
-            .query_map(params![commit_sha, lcov_source_file], |row| {
-                Ok(CoverageTarget {
-                    artefact_id: row.get(0)?,
-                    repo_id: row.get(1)?,
-                    start_line: row.get(2)?,
-                    end_line: row.get(3)?,
-                })
+            .query_map(params![commit_sha, file_path], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
             })
-            .context("failed querying coverage targets")?;
+            .context("failed querying artefacts for file")?;
 
-        let mut targets = Vec::new();
+        let mut result = Vec::new();
         for row in rows {
-            targets.push(row.context("failed mapping coverage target row")?);
+            result.push(row.context("failed mapping artefact-for-file row")?);
         }
-        Ok(targets)
+        Ok(result)
     }
 
     fn replace_production_artefacts(
@@ -247,28 +211,88 @@ WHERE a.commit_sha = ?1
         Ok(())
     }
 
-    fn replace_test_coverage(
-        &mut self,
-        commit_sha: &str,
-        coverage_rows: &[TestCoverageRecord],
-    ) -> Result<()> {
+    fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()> {
+        self.conn
+            .execute(
+                r#"
+INSERT INTO coverage_captures (
+  capture_id, repo_id, commit_sha, tool, format, scope_kind,
+  subject_test_artefact_id, line_truth, branch_truth, captured_at, status, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+ON CONFLICT(capture_id) DO UPDATE SET
+  repo_id = excluded.repo_id,
+  commit_sha = excluded.commit_sha,
+  tool = excluded.tool,
+  format = excluded.format,
+  scope_kind = excluded.scope_kind,
+  subject_test_artefact_id = excluded.subject_test_artefact_id,
+  line_truth = excluded.line_truth,
+  branch_truth = excluded.branch_truth,
+  captured_at = excluded.captured_at,
+  status = excluded.status,
+  metadata_json = excluded.metadata_json
+"#,
+                params![
+                    capture.capture_id,
+                    capture.repo_id,
+                    capture.commit_sha,
+                    capture.tool,
+                    capture.format.as_str(),
+                    capture.scope_kind.as_str(),
+                    capture.subject_test_artefact_id,
+                    capture.line_truth as i64,
+                    capture.branch_truth as i64,
+                    capture.captured_at,
+                    capture.status,
+                    capture.metadata_json,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed inserting coverage capture {}",
+                    capture.capture_id
+                )
+            })?;
+        Ok(())
+    }
+
+    fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()> {
         let tx = self
             .conn
             .transaction()
-            .context("failed to start test coverage transaction")?;
+            .context("failed to start coverage hits transaction")?;
 
-        tx.execute(
-            "DELETE FROM test_coverage WHERE commit_sha = ?1",
-            params![commit_sha],
-        )
-        .context("failed to clear existing coverage rows for commit")?;
-
-        for row in coverage_rows {
-            upsert_test_coverage(&tx, row)?;
+        for hit in hits {
+            tx.execute(
+                r#"
+INSERT INTO coverage_hits (
+  capture_id, artefact_id, file_path, line, branch_id, covered, hit_count
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(capture_id, artefact_id, line, branch_id) DO UPDATE SET
+  file_path = excluded.file_path,
+  covered = excluded.covered,
+  hit_count = excluded.hit_count
+"#,
+                params![
+                    hit.capture_id,
+                    hit.artefact_id,
+                    hit.file_path,
+                    hit.line,
+                    hit.branch_id,
+                    hit.covered as i64,
+                    hit.hit_count,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed inserting coverage hit for capture {} artefact {} line {}",
+                    hit.capture_id, hit.artefact_id, hit.line
+                )
+            })?;
         }
 
         tx.commit()
-            .context("failed to commit test coverage transaction")?;
+            .context("failed to commit coverage hits transaction")?;
         Ok(())
     }
 
@@ -284,11 +308,13 @@ WHERE a.commit_sha = ?1
             .conn
             .prepare(
                 r#"
-SELECT tc.test_artefact_id, tc.artefact_id, a.path
-FROM test_coverage tc
-JOIN artefacts a ON a.artefact_id = tc.artefact_id
-WHERE tc.commit_sha = ?1
-  AND tc.covered = 1
+SELECT cc.subject_test_artefact_id, ch.artefact_id, ch.file_path
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+  AND cc.scope_kind = 'test_scenario'
+  AND cc.subject_test_artefact_id IS NOT NULL
+  AND ch.covered = 1
 "#,
             )
             .context("failed preparing classification source query")?;
@@ -586,7 +612,7 @@ GROUP BY test_artefact_id
     fn coverage_exists_for_commit(&self, commit_sha: &str) -> Result<bool> {
         let mut stmt = self
             .conn
-            .prepare("SELECT EXISTS(SELECT 1 FROM test_coverage WHERE commit_sha = ?1)")
+            .prepare("SELECT EXISTS(SELECT 1 FROM coverage_captures WHERE commit_sha = ?1)")
             .context("failed preparing coverage existence query")?;
         let exists: i64 = stmt
             .query_row(params![commit_sha], |row| row.get(0))
@@ -606,11 +632,13 @@ GROUP BY test_artefact_id
                 r#"
 SELECT
   COUNT(*) AS total_rows,
-  COALESCE(SUM(CASE WHEN covered = 1 THEN 1 ELSE 0 END), 0) AS covered_rows
-FROM test_coverage
-WHERE commit_sha = ?1
-  AND test_artefact_id = ?2
-  AND artefact_id = ?3
+  COALESCE(SUM(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END), 0) AS covered_rows
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+  AND cc.scope_kind = 'test_scenario'
+  AND cc.subject_test_artefact_id = ?2
+  AND ch.artefact_id = ?3
 "#,
             )
             .context("failed preparing pair coverage query")?;
@@ -669,13 +697,14 @@ LIMIT 1
             .conn
             .prepare(
                 r#"
-SELECT line, MAX(CASE WHEN covered = 1 THEN 1 ELSE 0 END) AS covered_any
-FROM test_coverage
-WHERE commit_sha = ?1
-  AND artefact_id = ?2
-  AND branch_id IS NULL
-GROUP BY line
-ORDER BY line
+SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+  AND ch.artefact_id = ?2
+  AND ch.branch_id = -1
+GROUP BY ch.line
+ORDER BY ch.line
 "#,
             )
             .context("failed preparing line coverage summary query")?;
@@ -701,28 +730,27 @@ ORDER BY line
             .prepare(
                 r#"
 SELECT
-  line,
-  branch_id,
-  MAX(CASE WHEN covered = 1 THEN 1 ELSE 0 END) AS covered_any,
-  GROUP_CONCAT(DISTINCT CASE WHEN covered = 1 THEN test_artefact_id END) AS covering_test_ids
-FROM test_coverage
-WHERE commit_sha = ?1
-  AND artefact_id = ?2
-  AND branch_id IS NOT NULL
-GROUP BY line, branch_id
-ORDER BY line, branch_id
+  ch.line,
+  ch.branch_id,
+  MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any
+FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+  AND ch.artefact_id = ?2
+  AND ch.branch_id != -1
+GROUP BY ch.line, ch.branch_id
+ORDER BY ch.line, ch.branch_id
 "#,
             )
             .context("failed preparing branch coverage summary query")?;
 
         let branch_rows = branch_stmt
             .query_map(params![commit_sha, artefact_id], |row| {
-                let covering_test_ids_raw: Option<String> = row.get(3)?;
                 Ok(CoverageBranchRecord {
                     line: row.get(0)?,
                     branch_id: row.get(1)?,
                     covered: row.get::<_, i64>(2)? == 1,
-                    covering_test_ids: parse_grouped_ids(covering_test_ids_raw.as_deref()),
+                    covering_test_ids: vec![],
                 })
             })
             .context("failed querying branch coverage summary")?;
@@ -760,10 +788,17 @@ fn clear_existing_production_data(conn: &Connection, commit_sha: &str) -> Result
     )
     .context("failed clearing test_links for commit")?;
     conn.execute(
-        "DELETE FROM test_coverage WHERE commit_sha = ?1",
+        r#"DELETE FROM coverage_hits WHERE capture_id IN (
+            SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1
+        )"#,
         params![commit_sha],
     )
-    .context("failed clearing test_coverage for commit")?;
+    .context("failed clearing coverage_hits for commit")?;
+    conn.execute(
+        "DELETE FROM coverage_captures WHERE commit_sha = ?1",
+        params![commit_sha],
+    )
+    .context("failed clearing coverage_captures for commit")?;
     conn.execute(
         "DELETE FROM test_classifications WHERE commit_sha = ?1",
         params![commit_sha],
@@ -804,10 +839,17 @@ fn clear_existing_test_discovery_data(conn: &Connection, commit_sha: &str) -> Re
     )
     .context("failed clearing existing test classifications for commit")?;
     conn.execute(
-        "DELETE FROM test_coverage WHERE commit_sha = ?1",
+        r#"DELETE FROM coverage_hits WHERE capture_id IN (
+            SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1
+        )"#,
         params![commit_sha],
     )
-    .context("failed clearing existing test coverage for commit")?;
+    .context("failed clearing existing coverage_hits for commit")?;
+    conn.execute(
+        "DELETE FROM coverage_captures WHERE commit_sha = ?1",
+        params![commit_sha],
+    )
+    .context("failed clearing existing coverage_captures for commit")?;
     conn.execute(
         "DELETE FROM test_links WHERE commit_sha = ?1",
         params![commit_sha],
@@ -929,54 +971,6 @@ ON CONFLICT(run_id) DO UPDATE SET
     )
     .with_context(|| format!("failed inserting test run {}", run.run_id))?;
     Ok(())
-}
-
-fn upsert_test_coverage(conn: &Connection, row: &TestCoverageRecord) -> Result<()> {
-    conn.execute(
-        r#"
-INSERT INTO test_coverage (
-  coverage_id,
-  repo_id,
-  commit_sha,
-  test_artefact_id,
-  artefact_id,
-  line,
-  branch_id,
-  covered,
-  hit_count
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-ON CONFLICT(coverage_id) DO UPDATE SET
-  repo_id = excluded.repo_id,
-  commit_sha = excluded.commit_sha,
-  test_artefact_id = excluded.test_artefact_id,
-  artefact_id = excluded.artefact_id,
-  line = excluded.line,
-  branch_id = excluded.branch_id,
-  covered = excluded.covered,
-  hit_count = excluded.hit_count;
-"#,
-        params![
-            row.coverage_id,
-            row.repo_id,
-            row.commit_sha,
-            row.test_artefact_id,
-            row.artefact_id,
-            row.line,
-            row.branch_id,
-            row.covered,
-            row.hit_count
-        ],
-    )
-    .with_context(|| format!("failed upserting test coverage {}", row.coverage_id))?;
-    Ok(())
-}
-
-fn parse_grouped_ids(raw: Option<&str>) -> Vec<String> {
-    raw.unwrap_or("")
-        .split(',')
-        .filter(|item| !item.is_empty())
-        .map(|item| item.to_string())
-        .collect()
 }
 
 #[cfg(test)]

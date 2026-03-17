@@ -50,10 +50,29 @@ pub enum Commands {
         #[arg(long, default_value = DEFAULT_DB_PATH)]
         db: PathBuf,
     },
-    /// Ingest LCOV coverage report
+    /// Ingest coverage report (LCOV or LLVM JSON)
     IngestCoverage {
         #[arg(long)]
-        lcov: PathBuf,
+        lcov: Option<PathBuf>,
+        #[arg(long)]
+        input: Option<PathBuf>,
+        #[arg(long)]
+        commit: String,
+        #[arg(long)]
+        scope: String,
+        #[arg(long, default_value = "unknown")]
+        tool: String,
+        #[arg(long)]
+        test_artefact_id: Option<String>,
+        #[arg(long)]
+        format: Option<String>,
+        #[arg(long, default_value = DEFAULT_DB_PATH)]
+        db: PathBuf,
+    },
+    /// Batch-ingest coverage from a JSON manifest
+    IngestCoverageBatch {
+        #[arg(long)]
+        manifest: PathBuf,
         #[arg(long)]
         commit: String,
         #[arg(long, default_value = DEFAULT_DB_PATH)]
