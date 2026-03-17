@@ -2,7 +2,6 @@
 
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
@@ -11,11 +10,12 @@ use clap::Args;
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
+use crate::engine::agent::codex::hooks as codex_hooks;
 use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
     settings_local_path, settings_path,
@@ -170,6 +170,9 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
     if HookSupport::are_hooks_installed(&CursorAgent) {
         agents.push("cursor".to_string());
     }
+    if codex_hooks::are_hooks_installed_at(repo_root) {
+        agents.push("codex".to_string());
+    }
     if HookSupport::are_hooks_installed(&GeminiCliAgent) {
         agents.push("gemini-cli".to_string());
     }
@@ -261,9 +264,9 @@ pub fn run_uninstall(
 
     let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);
     let session_state_count = count_session_states(repo_root);
-    let shadow_branch_count = count_shadow_branches(repo_root);
     let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
     let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
+    let codex_hooks_installed = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_hooks_installed = HookSupport::are_hooks_installed(&CursorAgent);
     let copilot_hooks_installed = HookSupport::are_hooks_installed(&CopilotCliAgent);
     let gemini_hooks_installed = HookSupport::are_hooks_installed(&GeminiCliAgent);
@@ -272,9 +275,9 @@ pub fn run_uninstall(
     if !bitloops_dir_exists
         && !git_hooks_installed
         && session_state_count == 0
-        && shadow_branch_count == 0
         && !claude_hooks_installed
         && !copilot_hooks_installed
+        && !codex_hooks_installed
         && !cursor_hooks_installed
         && !gemini_hooks_installed
         && !opencode_hooks_installed
@@ -300,9 +303,6 @@ pub fn run_uninstall(
         if session_state_count > 0 {
             writeln!(out, "  - Session state files ({session_state_count})")?;
         }
-        if shadow_branch_count > 0 {
-            writeln!(out, "  - Shadow branches ({shadow_branch_count})")?;
-        }
         let mut agents = Vec::new();
         if claude_hooks_installed {
             agents.push("Claude Code");
@@ -312,6 +312,9 @@ pub fn run_uninstall(
         }
         if cursor_hooks_installed {
             agents.push("Cursor");
+        }
+        if codex_hooks_installed {
+            agents.push("Codex CLI");
         }
         if gemini_hooks_installed {
             agents.push("Gemini CLI");
@@ -359,98 +362,34 @@ pub fn run_uninstall(
         writeln!(out, "  Removed .bitloops directory")?;
     }
 
-    let branches_removed = remove_all_shadow_branches(repo_root).unwrap_or(0);
-    if branches_removed > 0 {
-        writeln!(out, "  Removed {branches_removed} shadow branches")?;
-    }
-
     writeln!(out, "\nBitloops CLI uninstalled successfully.")?;
     Ok(())
 }
 
 pub fn count_session_states(repo_root: &Path) -> usize {
-    let backend = LocalFileBackend::new(repo_root);
-    let states_dir = backend.sessions_dir();
-    match fs::read_dir(states_dir) {
-        Ok(entries) => entries
-            .filter_map(io::Result::ok)
-            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
-            .count(),
-        Err(_) => 0,
-    }
+    let backend = create_session_backend_or_local(repo_root);
+    backend.list_sessions().map_or(0, |sessions| sessions.len())
 }
 
+#[cfg(test)]
 pub fn count_shadow_branches(repo_root: &Path) -> usize {
-    list_shadow_branches(repo_root).len()
+    let _ = repo_root;
+    0
 }
 
 fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
-    let backend = LocalFileBackend::new(repo_root);
-    let sessions_dir = backend.sessions_dir();
+    let backend = create_session_backend_or_local(repo_root);
+    let sessions = backend.list_sessions().context("listing session states")?;
+
     let mut removed = 0usize;
-
-    let entries = match fs::read_dir(&sessions_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(err) => return Err(err).context("reading session state directory"),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        fs::remove_file(&path)
-            .with_context(|| format!("removing session state {}", path.display()))?;
+    for session in sessions {
+        let session_id = session.session_id;
+        backend
+            .delete_session(&session_id)
+            .with_context(|| format!("removing session state {}", session_id))?;
         removed += 1;
     }
 
-    Ok(removed)
-}
-
-fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
-    let mut branches = Vec::new();
-    for pattern in ["bitloops/*"] {
-        let output = Command::new("git")
-            .args(["branch", "--list", pattern])
-            .current_dir(repo_root)
-            .output();
-        let Ok(output) = output else { continue };
-        if !output.status.success() {
-            continue;
-        }
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let branch = line.trim().trim_start_matches('*').trim();
-            if branch.is_empty() || branch == crate::engine::paths::METADATA_BRANCH_NAME {
-                continue;
-            }
-            branches.push(branch.to_string());
-        }
-    }
-    branches.sort();
-    branches.dedup();
-    branches
-}
-
-fn remove_all_shadow_branches(repo_root: &Path) -> Result<usize> {
-    let branches = list_shadow_branches(repo_root);
-    let mut removed = 0usize;
-    for branch in branches {
-        let output = Command::new("git")
-            .args(["branch", "-D", &branch])
-            .current_dir(repo_root)
-            .output()
-            .with_context(|| format!("deleting branch {branch}"))?;
-        if output.status.success() {
-            removed += 1;
-            continue;
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not found") || stderr.contains("not exist") {
-            continue;
-        }
-        bail!("failed to delete branch {branch}: {}", stderr.trim());
-    }
     Ok(removed)
 }
 
@@ -470,6 +409,11 @@ fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
     if HookSupport::are_hooks_installed(&cursor) {
         HookSupport::uninstall_hooks(&cursor)?;
         writeln!(out, "  Removed Cursor hooks")?;
+    }
+
+    if codex_hooks::are_hooks_installed_at(repo_root) {
+        codex_hooks::uninstall_hooks_at(repo_root)?;
+        writeln!(out, "  Removed Codex CLI hooks")?;
     }
 
     let gemini = GeminiCliAgent;
@@ -505,8 +449,17 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     }
     let claude_enabled = claude_hooks::are_hooks_installed(repo_root);
     let copilot_enabled = HookSupport::are_hooks_installed(&CopilotCliAgent);
+    let codex_enabled = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_enabled = HookSupport::are_hooks_installed(&CursorAgent);
-    if !claude_enabled && !copilot_enabled && !cursor_enabled {
+    let gemini_enabled = HookSupport::are_hooks_installed(&GeminiCliAgent);
+    let opencode_enabled = HookSupport::are_hooks_installed(&OpenCodeAgent);
+    if !claude_enabled
+        && !codex_enabled
+        && !copilot_enabled
+        && !cursor_enabled
+        && !gemini_enabled
+        && !opencode_enabled
+    {
         return (false, String::new(), String::new());
     }
     let config = if settings_local_path(repo_root).exists() {
@@ -518,8 +471,14 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         "Claude Code"
     } else if copilot_enabled {
         "Copilot"
-    } else {
+    } else if codex_enabled {
+        "Codex CLI"
+    } else if cursor_enabled {
         "Cursor"
+    } else if gemini_enabled {
+        "Gemini CLI"
+    } else {
+        "OpenCode"
     };
     (true, agent.to_string(), config.to_string())
 }

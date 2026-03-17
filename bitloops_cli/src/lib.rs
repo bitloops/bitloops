@@ -1,7 +1,8 @@
+pub mod branding;
 pub mod commands;
-pub mod devql_config;
 pub mod engine;
 pub mod server;
+pub mod store_config;
 pub mod terminal;
 
 #[cfg(test)]

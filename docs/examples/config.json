@@ -1,9 +1,12 @@
 {
   "devql": {
-    "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops",
-    "clickhouse_url": "http://localhost:8123",
-    "clickhouse_database": "default",
-    "clickhouse_user": "default",
-    "clickhouse_password": ""
+    "relational": {
+      "provider": "sqlite",
+      "sqlite_path": "~/.bitloops/devql/relational.db"
+    },
+    "events": {
+      "provider": "duckdb",
+      "duckdb_path": "~/.bitloops/devql/events.duckdb"
+    }
   }
 }

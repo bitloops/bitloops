@@ -1,21 +1,27 @@
 use super::*;
-use crate::engine::agent::{AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CURSOR};
+use crate::engine::agent::{
+    AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
+};
 use crate::engine::hooks::dispatcher::{
     CursorHookVerb, HooksAgent, current_hook_agent_name_for_tests, dispatch_cursor_hook,
     run_agent_hook_with_logging,
 };
+use crate::engine::lifecycle::UNKNOWN_SESSION_ID;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::local_backend::LocalFileBackend;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::noop::NoOpStrategy;
 use crate::engine::strategy::registry;
 use crate::engine::strategy::{StepContext, TaskStepContext};
+use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{with_cwd, with_process_state};
+use crate::test_support::process_state::{
+    git_command, isolated_git_command, with_cwd, with_process_state,
+};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
@@ -28,9 +34,8 @@ fn setup() -> (TempDir, LocalFileBackend, NoOpStrategy) {
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = isolated_git_command(dir.path())
             .args(args)
-            .current_dir(dir.path())
             .output()
             .unwrap();
         assert!(out.status.success(), "git {:?} failed", args);
@@ -41,14 +46,11 @@ fn setup_git_repo(dir: &TempDir) {
     fs::write(dir.path().join("tracked.txt"), "one\n").unwrap();
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
+    ensure_test_store_backends(dir.path());
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    let out = isolated_git_command(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
 }
 
@@ -129,6 +131,25 @@ fn session_start_creates_session_state() {
 }
 
 #[test]
+fn session_start_rejects_empty_session_id() {
+    let (_dir, backend, _strat) = setup();
+    let err = handle_session_start(
+        SessionInfoInput {
+            session_id: "   ".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+        },
+        &backend,
+        None,
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string()
+            .contains("session-start requires non-empty session_id"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn session_start_resets_ended_session() {
     let (_dir, backend, _strat) = setup();
 
@@ -177,6 +198,26 @@ fn user_prompt_submit_transitions_to_active() {
     let pp = backend.load_pre_prompt("s3").unwrap();
     assert!(pp.is_some());
     assert_eq!(pp.unwrap().prompt, "Fix the bug");
+}
+
+#[test]
+fn user_prompt_submit_rejects_empty_session_id() {
+    let (_dir, backend, _strat) = setup();
+    let err = handle_user_prompt_submit(
+        UserPromptSubmitInput {
+            session_id: " ".to_string(),
+            transcript_path: "/tmp/t.jsonl".to_string(),
+            prompt: "Fix the bug".to_string(),
+        },
+        &backend,
+        None,
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string()
+            .contains("turn-start requires non-empty session_id"),
+        "unexpected error: {err:#}"
+    );
 }
 
 #[test]
@@ -278,6 +319,24 @@ fn cursor_session_start_creates_or_updates_session_state() {
 }
 
 #[test]
+fn cursor_session_start_rejects_empty_conversation_id() {
+    let (_dir, backend, strat) = setup();
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::SessionStart,
+        r#"{"conversation_id":"  ","transcript_path":"/tmp/cursor-empty.jsonl"}"#,
+        &backend,
+        &strat,
+        Path::new("/tmp"),
+        "session-start",
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string().contains("session_id is required"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn cursor_before_submit_prompt_creates_pre_prompt_state() {
     let (_dir, backend, strat) = setup();
 
@@ -297,6 +356,24 @@ fn cursor_before_submit_prompt_creates_pre_prompt_state() {
     let pre_prompt = backend.load_pre_prompt("cursor-s2").unwrap().unwrap();
     assert_eq!(pre_prompt.prompt, "Fix bug in parser");
     assert_eq!(pre_prompt.transcript_path, "/tmp/cursor-s2.jsonl");
+}
+
+#[test]
+fn cursor_before_submit_prompt_rejects_empty_conversation_id() {
+    let (_dir, backend, strat) = setup();
+    let err = dispatch_cursor_hook(
+        &CursorHookVerb::BeforeSubmitPrompt,
+        r#"{"conversation_id":" ","transcript_path":"/tmp/cursor-s2.jsonl","prompt":"Fix bug in parser"}"#,
+        &backend,
+        &strat,
+        Path::new("/tmp"),
+        "before-submit-prompt",
+    )
+    .expect_err("expected validation error");
+    assert!(
+        err.to_string().contains("session_id is required"),
+        "unexpected error: {err:#}"
+    );
 }
 
 #[test]
@@ -458,6 +535,33 @@ fn cursor_stop_with_file_changes_triggers_save_step() {
 }
 
 #[test]
+fn cursor_stop_with_empty_conversation_id_falls_back_to_unknown_session() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    fs::write(dir.path().join("tracked.txt"), "cursor-empty-stop\n").unwrap();
+
+    dispatch_cursor_hook(
+        &CursorHookVerb::Stop,
+        r#"{"conversation_id":" ","transcript_path":""}"#,
+        &backend,
+        &strat,
+        dir.path(),
+        "stop",
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1, "expected one save_step call");
+    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
+}
+
+#[test]
 fn cursor_stop_with_manual_strategy_persists_cursor_agent_type() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -615,13 +719,13 @@ fn cursor_session_end_with_idle_zero_steps_still_saves_checkpoint() {
 fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     dispatch_cursor_hook(
         &CursorHookVerb::BeforeSubmitPrompt,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":"","prompt":"Fix bug"}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "before-submit-prompt",
@@ -633,7 +737,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::Stop,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "stop",
@@ -652,7 +756,7 @@ fn cursor_session_end_does_not_duplicate_turn_end_after_stop() {
     dispatch_cursor_hook(
         &CursorHookVerb::SessionEnd,
         r#"{"conversation_id":"cursor-s3-stop-first","transcript_path":""}"#,
-        &backend,
+        backend.as_ref(),
         &strat,
         dir.path(),
         "session-end",
@@ -860,6 +964,39 @@ fn stop_without_existing_session_is_tolerant_and_saves_step_compat() {
 }
 
 #[test]
+fn stop_with_codex_profile_persists_codex_agent_type() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    fs::write(dir.path().join("tracked.txt"), "codex-change\n").unwrap();
+
+    handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "codex-stop".to_string(),
+            transcript_path: String::new(),
+        },
+        &backend,
+        &strat,
+        Some(dir.path()),
+        CODEX_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].agent_type, "codex");
+
+    let state = backend.load_session("codex-stop").unwrap().unwrap();
+    assert_eq!(state.agent_type, AGENT_TYPE_CODEX);
+    assert_eq!(state.phase, SessionPhase::Idle);
+}
+
+#[test]
 fn stop_with_empty_session_id_falls_back_to_unknown_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -888,6 +1025,56 @@ fn stop_with_empty_session_id_falls_back_to_unknown_session() {
 
     let state = backend.load_session(UNKNOWN_SESSION_ID).unwrap().unwrap();
     assert_eq!(state.phase, SessionPhase::Idle);
+}
+
+#[test]
+fn stop_with_empty_session_id_does_not_conflate_existing_session_state() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let strat = RecordingStrategy::default();
+
+    backend
+        .save_session(&SessionState {
+            session_id: "real-session".to_string(),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .unwrap();
+    backend
+        .save_pre_prompt(&PrePromptState {
+            session_id: "real-session".to_string(),
+            prompt: "real prompt".to_string(),
+            transcript_path: String::new(),
+            ..Default::default()
+        })
+        .unwrap();
+    fs::write(dir.path().join("tracked.txt"), "unknown-fallback\n").unwrap();
+
+    handle_stop(
+        SessionInfoInput {
+            session_id: String::new(),
+            transcript_path: String::new(),
+        },
+        &backend,
+        &strat,
+        Some(dir.path()),
+    )
+    .unwrap();
+
+    let calls = strat
+        .step_calls
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(calls.len(), 1, "expected one save_step call");
+    assert_eq!(calls[0].session_id, UNKNOWN_SESSION_ID);
+
+    let real_state = backend.load_session("real-session").unwrap().unwrap();
+    assert_eq!(real_state.phase, SessionPhase::Active);
+    assert!(
+        backend.load_pre_prompt("real-session").unwrap().is_some(),
+        "fallback stop should not consume another session's pre-prompt state"
+    );
 }
 
 #[test]
@@ -945,7 +1132,7 @@ fn stop_saves_step_with_detected_changes() {
 fn stop_preserves_strategy_checkpoint_count_updates() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let strat = ManualCommitStrategy::new(dir.path());
 
     backend
@@ -971,7 +1158,7 @@ fn stop_preserves_strategy_checkpoint_count_updates() {
             session_id: "stop-manual".to_string(),
             transcript_path: String::new(),
         },
-        &backend,
+        backend.as_ref(),
         &strat,
         Some(dir.path()),
     )
@@ -1160,7 +1347,7 @@ fn post_todo_saves_incremental_with_completed_todo() {
     setup_git_repo(&dir);
 
     with_cwd(dir.path(), || {
-        let checkout = Command::new("git")
+        let checkout = git_command()
             .args(["checkout", "-b", "feature/test-post-todo"])
             .current_dir(dir.path())
             .output()
@@ -1665,6 +1852,16 @@ fn claude_code_hooks_cmd_has_logging_hooks() {
 }
 
 #[test]
+fn codex_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_codex = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "codex");
+    assert!(has_codex);
+}
+
+#[test]
 fn gemini_cli_hooks_cmd_has_logging_hooks() {
     let hooks_cmd =
         <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
@@ -1902,13 +2099,13 @@ fn detect_file_changes_new_and_deleted_files() {
     setup_git_repo(&dir);
 
     fs::write(dir.path().join("tracked2.txt"), "content2\n").unwrap();
-    let out = Command::new("git")
+    let out = git_command()
         .args(["add", "tracked2.txt"])
         .current_dir(dir.path())
         .output()
         .unwrap();
     assert!(out.status.success(), "git add tracked2.txt failed");
-    let out = Command::new("git")
+    let out = git_command()
         .args(["commit", "-m", "add tracked2"])
         .current_dir(dir.path())
         .output()

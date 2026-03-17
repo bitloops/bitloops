@@ -2,7 +2,37 @@
 
 This guide shows the minimum commands to get DevQL working in the CLI.
 
-## 0) Run Postgres and ClickHouse with docker
+DevQL now uses the shared Bitloops store backends. These stores also hold checkpoint and session runtime data, so they are not DevQL-only.
+
+## Provider model
+
+Backend configuration is defined in `<repo>/.bitloops/config.json` under `stores`:
+
+- `stores.relational.provider`: `sqlite` | `postgres`
+- `stores.event.provider`: `duckdb` | `clickhouse`
+- `stores.blob.provider`: `local` | `s3` | `gcs`
+
+Current runtime adapters are:
+
+- Relational: `sqlite` (default) and `postgres`
+- Events: `duckdb` (default) and `clickhouse`
+- Blob: `local` (default), `s3`, and `gcs`
+
+Important:
+- The configuration shape is non-backwards-compatible with legacy `devql.*` keys.
+- Store paths default to repo-local `.bitloops/stores/*` locations.
+- Database files are expected to be created during `bitloops init`.
+
+Current command support matrix:
+
+- `devql connection-status` and dashboard DB health checks support all configured providers.
+- `devql init` supports configured providers, including defaults (`relational.provider=sqlite`, `event.provider=duckdb`).
+- `devql ingest` supports configured events and relational providers (`duckdb`/`clickhouse` + `sqlite`/`postgres`).
+- `devql query` supports:
+  - `checkpoints()`/`telemetry()` on `event.provider=duckdb` or `event.provider=clickhouse`
+  - `artefacts()`/`deps()`/`chatHistory()` on `relational.provider=sqlite` or `relational.provider=postgres`
+
+## 0) (Optional) Run Postgres and ClickHouse with Docker
 
 ```bash
 docker run -d --name mypostgres -p 5432:5432 \
@@ -12,38 +42,78 @@ docker run -d --name mypostgres -p 5432:5432 \
   postgres
 ```
 
-```bash
-docker run -d --name bitloops-clickhouse \
-  -p 8123:8123 -p 9000:9000 \
-  -e CLICKHOUSE_USER=bitloops \
-  -e CLICKHOUSE_PASSWORD=bitloops \
-  -e CLICKHOUSE_DB=bitloops \
-  clickhouse/clickhouse-server
-```
+## 1) Configure stores and semantic provider
 
-
-## 1) Configure database connections
-
-Create `~/.bitloops/config.json`:
+Create `<repo>/.bitloops/config.json`:
 
 ```json
 {
-  "devql": {
-    "postgres_dsn": "postgres://bitloops:bitloops@localhost:5432/bitloops",
-    "clickhouse_url": "http://localhost:8123",
-    "clickhouse_database": "bitloops",
-    "clickhouse_user": "bitloops",
-    "clickhouse_password": "bitloops"
+  "stores": {
+    "relational": {
+      "provider": "sqlite",
+      "sqlite_path": ".bitloops/stores/relational/relational.db"
+    },
+    "event": {
+      "provider": "duckdb",
+      "duckdb_path": ".bitloops/stores/event/events.duckdb"
+    },
+    "blob": {
+      "provider": "local",
+      "local_path": ".bitloops/stores/blob"
+    }
+  },
+  "semantic": {
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "api_key": "YOUR_KEY"
   }
 }
 ```
 
 What this does:
-- Tells DevQL where Postgres (artefacts) and ClickHouse (checkpoint events) live.
-- These can also be overridden by `BITLOOPS_DEVQL_*` environment variables.
-- Postgres is used via `psql` with a 10s connect timeout and 30s statement timeout for health checks and queries; you can override with `PGCONNECT_TIMEOUT` and `PGOPTIONS` if needed.
+- Uses `sqlite` for relational data and `duckdb` for event data.
+- Uses local filesystem blob storage.
+- Uses repo-local paths for all stores.
 
-## 2) Check backend connectivity
+If you omit file paths:
+- SQLite defaults to `<repo>/.bitloops/stores/relational/relational.db`
+- DuckDB defaults to `<repo>/.bitloops/stores/event/events.duckdb`
+- Local blob store defaults to `<repo>/.bitloops/stores/blob`
+
+To use ClickHouse for events instead:
+
+```json
+{
+  "stores": {
+    "event": {
+      "provider": "clickhouse",
+      "clickhouse_url": "http://localhost:8123",
+      "clickhouse_database": "bitloops",
+      "clickhouse_user": "bitloops",
+      "clickhouse_password": "bitloops"
+    }
+  }
+}
+```
+
+## 2) Initialise stores in the repo
+
+Run:
+
+```bash
+cargo run -- init --agent claude-code
+```
+
+What this does:
+- Creates and initialises local store files/directories for configured providers.
+- For default local stores, this creates:
+  - `.bitloops/stores/relational/relational.db`
+  - `.bitloops/stores/event/events.duckdb`
+  - `.bitloops/stores/blob`
+
+If store DB files are missing later, runtime commands fail with an error instructing you to run `bitloops init`.
+
+## 3) Check backend connectivity
 
 Run either:
 
@@ -58,36 +128,37 @@ cargo run -- devql connection-status
 ```
 
 What this does:
-- Runs a connectivity check against Postgres and ClickHouse.
-- Prints a `DB Status` table with human-friendly statuses:
-  - `Connected` (green)
-  - `Could not authenticate` (red)
-  - `Could not reach DB` (red)
-  - `Not configured` (yellow)
+- Runs a connectivity check against configured logical backends.
+- Prints a `DB Status` table with statuses:
+  - `Connected`
+  - `Could not authenticate`
+  - `Could not reach DB`
+  - `Not configured`
 - Exits non-zero if any configured backend fails.
 
 Example output:
 
 ```text
-DB Status
+
 +------------+-----------------------+
 | DB         | Status                |
 +------------+-----------------------+
-| Postgres   | Connected             |
-| ClickHouse | Could not reach DB    |
+| Relational | Connected             |
+| Events     | Could not reach DB    |
 +------------+-----------------------+
 ```
 
-## 3) Initialize DevQL schema
+## 4) Initialise DevQL schema
 
 ```bash
 cargo run -- devql init
 ```
 
 What this does:
-- Creates required tables in ClickHouse and Postgres for DevQL MVP.
+- Creates DevQL schema for configured providers.
+- With defaults, this initialises SQLite relational DevQL tables and DuckDB `checkpoint_events` table.
 
-## 4) Ingest checkpoint + artefact data
+## 5) Ingest checkpoint + artefact data
 
 ```bash
 cargo run -- devql ingest
@@ -95,8 +166,8 @@ cargo run -- devql ingest
 
 What this does:
 - Reads committed checkpoints from the repo.
-- Writes checkpoint events to ClickHouse.
-- Writes repository/commit/file/artefact rows to Postgres.
+- Writes checkpoint events to the configured event backend (`duckdb` by default, or `clickhouse`).
+- Writes repository/commit/file/artefact rows to the configured relational backend (`sqlite` by default, or `postgres`).
 
 Optional flags:
 
@@ -107,7 +178,7 @@ cargo run -- devql ingest --init=false --max-checkpoints 200
 - `--init=false`: skip schema bootstrap step.
 - `--max-checkpoints N`: limit how many checkpoints are ingested.
 
-## 5) Query with DevQL
+## 6) Query with DevQL
 
 Checkpoints query:
 
@@ -147,12 +218,12 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 
 What this does:
 - Parses the DevQL pipeline.
-- Routes checkpoint/telemetry stages to ClickHouse.
-- Routes artefact stages to Postgres.
+- Routes checkpoint/telemetry stages to configured event backend (`duckdb` or `clickhouse`).
+- Routes artefact stages to configured relational backend (`sqlite` or `postgres`).
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
 - Prints JSON output.
 
-## 6) (Optional) Use dashboard with DB startup health
+## 7) (Optional) Use dashboard with DB startup health
 
 ```bash
 cargo run -- dashboard --no-open
@@ -161,7 +232,7 @@ cargo run -- dashboard --no-open
 What this does:
 - On startup, checks DB health for configured backends.
 - Uses the same `DB Status` table/status semantics as `--connection-status`.
-- Keeps pooled Postgres and ClickHouse clients while dashboard runs.
+- Keeps live health checks for configured adapters while dashboard runs.
 - Exposes live health at:
 
 ```text
@@ -174,6 +245,7 @@ If `bitloops` is already installed, replace `cargo run -- ...` with:
 
 ```bash
 bitloops --connection-status
+bitloops init --agent claude-code
 bitloops devql init
 bitloops devql ingest
 bitloops devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'

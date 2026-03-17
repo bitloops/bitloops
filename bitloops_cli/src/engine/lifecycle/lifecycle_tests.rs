@@ -1,8 +1,8 @@
 use super::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, CLAUDE_HOOK_SESSION_END,
     CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP, CLAUDE_HOOK_USER_PROMPT_SUBMIT,
-    COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END, COPILOT_HOOK_SESSION_START,
-    COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END,
+    COPILOT_HOOK_SESSION_START, COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
     CURSOR_HOOK_BEFORE_SUBMIT_PROMPT, CURSOR_HOOK_PRE_COMPACT, CURSOR_HOOK_SESSION_END,
     CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP, CURSOR_HOOK_SUBAGENT_START,
     CURSOR_HOOK_SUBAGENT_STOP, GEMINI_HOOK_AFTER_AGENT, GEMINI_HOOK_AFTER_MODEL,
@@ -13,25 +13,25 @@ use super::adapters::{
     OPENCODE_HOOK_TURN_END, OPENCODE_HOOK_TURN_START,
 };
 use super::adapters::{
-    ClaudeCodeLifecycleAdapter, CopilotCliLifecycleAdapter, CursorLifecycleAdapter,
-    GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
+    ClaudeCodeLifecycleAdapter, CodexLifecycleAdapter, CopilotCliLifecycleAdapter,
+    CursorLifecycleAdapter, GeminiCliLifecycleAdapter, OpenCodeLifecycleAdapter,
 };
 use super::{
-    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, create_context_file,
-    dispatch_lifecycle_event, handle_lifecycle_compaction, handle_lifecycle_session_end,
-    handle_lifecycle_session_start, handle_lifecycle_subagent_end, handle_lifecycle_subagent_start,
-    handle_lifecycle_turn_end, handle_lifecycle_turn_start, read_and_parse_hook_input,
-    resolve_transcript_offset,
+    LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy,
+    UNKNOWN_SESSION_ID, apply_session_id_policy, create_context_file, dispatch_lifecycle_event,
+    handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_session_start,
+    handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
+    handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
-use crate::test_support::process_state::{with_cwd, with_git_env_cleared};
+use crate::test_support::git_fixtures::ensure_test_store_backends;
+use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Cursor;
-use std::process::Command;
 
 fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
     LifecycleEvent {
@@ -44,9 +44,21 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
     }
 }
 
+#[test]
+fn test_apply_session_id_policy_strict_rejects_empty() {
+    let err = apply_session_id_policy("  ", SessionIdPolicy::Strict).expect_err("expected error");
+    assert!(err.to_string().contains("session_id is required"));
+}
+
+#[test]
+fn test_apply_session_id_policy_turn_end_fallback_uses_unknown() {
+    let session_id = apply_session_id_policy("", SessionIdPolicy::FallbackUnknown).expect("policy");
+    assert_eq!(session_id, UNKNOWN_SESSION_ID);
+}
+
 fn setup_git_repo(dir: &tempfile::TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
@@ -59,6 +71,7 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     std::fs::write(dir.path().join("README.md"), "init").unwrap();
     run(&["add", "."]);
     run(&["commit", "-m", "initial"]);
+    ensure_test_store_backends(dir.path());
 }
 
 // CLI-866
@@ -130,14 +143,8 @@ fn test_handle_lifecycle_turn_end_nonexistent_transcript() {
 fn test_handle_lifecycle_turn_end_empty_repository() {
     let dir = tempfile::tempdir().unwrap();
     with_git_env_cleared(|| {
-        let init = Command::new("git")
+        let init = git_command()
             .args(["init"])
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env_remove("GIT_COMMON_DIR")
             .current_dir(dir.path())
             .output()
             .unwrap();
@@ -175,7 +182,7 @@ fn test_handle_lifecycle_compaction_applies_phase_transition_and_persists_reset(
     setup_git_repo(&dir);
 
     with_cwd(dir.path(), || {
-        let backend = LocalFileBackend::new(dir.path());
+        let backend = create_session_backend_or_local(dir.path());
         backend
             .save_session(&SessionState {
                 session_id: "session-compaction".to_string(),
@@ -1105,6 +1112,41 @@ fn test_hook_names_opencode() {
     for expected_name in expected {
         assert!(actual.contains(expected_name), "missing {expected_name}");
     }
+}
+
+#[test]
+fn test_parse_hook_event_session_start_codex() {
+    let adapter = CodexLifecycleAdapter;
+    let mut stdin =
+        Cursor::new(r#"{"sessionId":"codex-session-1","transcriptPath":"/tmp/codex.jsonl"}"#);
+    let event = adapter
+        .parse_hook_event(CODEX_HOOK_SESSION_START, &mut stdin)
+        .expect("parse")
+        .expect("event");
+    assert_eq!(event.event_type, Some(LifecycleEventType::SessionStart));
+    assert_eq!(event.session_id, "codex-session-1");
+    assert_eq!(event.session_ref, "/tmp/codex.jsonl");
+}
+
+#[test]
+fn test_parse_hook_event_turn_end_codex() {
+    let adapter = CodexLifecycleAdapter;
+    let mut stdin =
+        Cursor::new(r#"{"session_id":"codex-session-2","transcript_path":"/tmp/codex-2.jsonl"}"#);
+    let event = adapter
+        .parse_hook_event(CODEX_HOOK_STOP, &mut stdin)
+        .expect("parse")
+        .expect("event");
+    assert_eq!(event.event_type, Some(LifecycleEventType::TurnEnd));
+    assert_eq!(event.session_id, "codex-session-2");
+    assert_eq!(event.session_ref, "/tmp/codex-2.jsonl");
+}
+
+#[test]
+fn test_hook_names_codex() {
+    let adapter = CodexLifecycleAdapter;
+    let names = adapter.hook_names();
+    assert_eq!(names, vec![CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP]);
 }
 
 #[test]

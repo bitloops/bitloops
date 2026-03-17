@@ -1,5 +1,11 @@
 mod test_command_support;
 
+use bitloops_cli::engine::session::phase::SessionPhase;
+use bitloops_cli::engine::session::state::{PrePromptState, SessionState};
+use bitloops_cli::engine::session::{SessionBackend, create_session_backend_or_local};
+use bitloops_cli::engine::strategy::manual_commit::{
+    read_commit_checkpoint_mappings, read_committed, read_session_content,
+};
 use serde_json::Value;
 use std::env;
 use std::fs;
@@ -106,48 +112,35 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
         .success()
 }
 
-fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
-    let out = Command::new("git")
-        .args(["cat-file", "-e", &format!("{reference}:{path}")])
-        .current_dir(repo)
-        .output()
-        .expect("failed to run git");
-    out.status.success()
+fn session_backend(repo: &Path) -> Box<dyn SessionBackend> {
+    create_session_backend_or_local(repo)
 }
 
-fn git_show_file(repo: &Path, reference: &str, path: &str) -> String {
-    run_git(repo, &["show", &format!("{reference}:{path}")])
-}
-
-fn git_commit_message(repo: &Path, rev: &str) -> String {
-    run_git(repo, &["show", "-s", "--format=%B", rev])
-}
-
-fn checkpoint_id_from_message(message: &str) -> Option<String> {
-    for line in message.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Bitloops-Checkpoint: ") {
-            let id = rest.trim();
-            if id.len() >= 12 && id[..12].chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(id[..12].to_lowercase());
-            }
-        }
-    }
-    None
-}
-
-fn checkpoint_shard(id: &str) -> (String, String) {
-    if id.len() >= 2 {
-        (id[..2].to_string(), id[2..].to_string())
+fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
+    let cfg = bitloops_cli::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
     } else {
-        (id.to_string(), String::new())
+        bitloops_cli::engine::paths::default_relational_db_path(repo_root)
     }
+}
+
+fn ensure_relational_store_file(repo_root: &Path) {
+    let sqlite =
+        bitloops_cli::engine::db::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
 }
 
 fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "t@t.com"]);
     run_git(repo, &["config", "user.name", "Test"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
     fs::write(repo.join("README.md"), "init\n").unwrap();
     run_git(repo, &["add", "."]);
     run_git(repo, &["commit", "-m", "initial"]);
@@ -201,12 +194,25 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_str(&data).expect("failed to parse json file")
 }
 
-fn session_state(repo: &Path, session_id: &str) -> Value {
-    read_json(
-        &repo
-            .join(".git/bitloops-sessions")
-            .join(format!("{session_id}.json")),
-    )
+fn session_state(repo: &Path, session_id: &str) -> SessionState {
+    session_backend(repo)
+        .load_session(session_id)
+        .expect("failed to load session state from backend")
+        .expect("expected session state to exist")
+}
+
+fn pre_prompt_state(repo: &Path, session_id: &str) -> Option<PrePromptState> {
+    session_backend(repo)
+        .load_pre_prompt(session_id)
+        .expect("failed to load pre-prompt state from backend")
+}
+
+fn checkpoint_id_for_head(repo: &Path) -> Option<String> {
+    let head = run_git(repo, &["rev-parse", "HEAD"]);
+    read_commit_checkpoint_mappings(repo)
+        .expect("failed to read commit-checkpoint mappings")
+        .get(&head)
+        .cloned()
 }
 
 fn user_prompt_submit(repo: &Path, session_id: &str, transcript_path: &str, prompt: &str) {
@@ -229,21 +235,18 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
 }
 
 fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {
-    let state_dir = repo.join(".git").join("bitloops-sessions");
-    fs::create_dir_all(&state_dir).expect("failed to create session state directory");
-    let state_path = state_dir.join(format!("{session_id}.json"));
-    let state = serde_json::json!({
-        "session_id": session_id,
-        "worktree_path": repo.to_string_lossy(),
-        "started_at": "2026-01-01T00:00:00Z",
-        "last_interaction_time": "2026-01-01T00:00:01Z",
-        "phase": "active"
-    });
-    fs::write(
-        state_path,
-        serde_json::to_vec(&state).expect("failed to serialize session state"),
-    )
-    .expect("failed to write session state");
+    ensure_relational_store_file(repo);
+    let backend = session_backend(repo);
+    backend
+        .save_session(&SessionState {
+            session_id: session_id.to_string(),
+            worktree_path: repo.to_string_lossy().to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            last_interaction_time: Some("2026-01-01T00:00:01Z".to_string()),
+            phase: SessionPhase::Active,
+            ..Default::default()
+        })
+        .expect("failed to persist session state");
 }
 
 #[test]
@@ -459,15 +462,14 @@ fn user_prompt_submit_creates_pre_prompt_state() {
     let sid = "test-session-1";
     user_prompt_submit(dir.path(), sid, "", "Create a file");
 
-    let pre_prompt_path = dir
-        .path()
-        .join(".bitloops/tmp")
-        .join(format!("pre-prompt-{sid}.json"));
-    assert!(pre_prompt_path.exists(), "pre-prompt state should exist");
+    let pre_prompt =
+        pre_prompt_state(dir.path(), sid).expect("pre-prompt state should exist in backend");
+    assert_eq!(pre_prompt.session_id, sid);
+    assert_eq!(pre_prompt.prompt, "Create a file");
 
     let state = session_state(dir.path(), sid);
-    assert_eq!(state["session_id"], sid);
-    assert_eq!(state["phase"], "active");
+    assert_eq!(state.session_id, sid);
+    assert_eq!(state.phase, SessionPhase::Active);
 }
 
 #[test]
@@ -496,24 +498,10 @@ fn stop_creates_shadow_checkpoint_and_metadata_files() {
 
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
-    let meta_dir = dir.path().join(".bitloops/metadata").join(sid);
-    assert!(meta_dir.join("full.jsonl").exists());
-    assert!(meta_dir.join("prompt.txt").exists());
-    assert!(meta_dir.join("summary.txt").exists());
-    assert!(meta_dir.join("context.md").exists());
-
-    let prompt = fs::read_to_string(meta_dir.join("prompt.txt")).unwrap();
-    let summary = fs::read_to_string(meta_dir.join("summary.txt")).unwrap();
-    assert!(!prompt.trim().is_empty(), "prompt.txt should not be empty");
-    assert!(
-        !summary.trim().is_empty(),
-        "summary.txt should not be empty"
-    );
-
     let state = session_state(dir.path(), sid);
-    assert_eq!(state["phase"], "idle");
+    assert_eq!(state.phase, SessionPhase::Idle);
     assert!(
-        state["checkpoint_count"].as_u64().unwrap_or(0) > 0,
+        state.step_count > 0,
         "checkpoint_count should increase after stop with changes"
     );
 
@@ -522,17 +510,12 @@ fn stop_creates_shadow_checkpoint_and_metadata_files() {
         &["for-each-ref", "--format=%(refname)", "refs/heads/bitloops"],
     );
     assert!(
-        refs.lines()
-            .any(|line| line.starts_with("refs/heads/bitloops/")),
-        "shadow branch should exist after stop"
+        refs.trim().is_empty(),
+        "stop should not create bitloops/* shadow branches in DB/blob mode"
     );
 
-    let pre_prompt_path = dir
-        .path()
-        .join(".bitloops/tmp")
-        .join(format!("pre-prompt-{sid}.json"));
     assert!(
-        !pre_prompt_path.exists(),
+        pre_prompt_state(dir.path(), sid).is_none(),
         "pre-prompt state should be cleaned up by stop"
     );
 }
@@ -568,19 +551,14 @@ fn stop_handles_already_committed_files_gracefully() {
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
     let state = session_state(dir.path(), sid);
-    assert_eq!(state["phase"], "idle");
+    assert_eq!(state.phase, SessionPhase::Idle);
     assert_eq!(
-        state["checkpoint_count"].as_u64().unwrap_or(0),
-        0,
+        state.step_count, 0,
         "checkpoint should be skipped when no working tree changes remain"
     );
 
-    let pre_prompt_path = dir
-        .path()
-        .join(".bitloops/tmp")
-        .join(format!("pre-prompt-{sid}.json"));
     assert!(
-        !pre_prompt_path.exists(),
+        pre_prompt_state(dir.path(), sid).is_none(),
         "pre-prompt state should be cleaned up by stop"
     );
 }
@@ -621,8 +599,15 @@ fn stop_subagent_only_changes_still_create_checkpoint() {
 
     let state = session_state(dir.path(), sid);
     assert!(
-        state["checkpoint_count"].as_u64().unwrap_or(0) > 0,
+        state.step_count > 0,
         "checkpoint_count should increase for subagent-only file changes"
+    );
+    assert!(
+        state
+            .files_touched
+            .iter()
+            .any(|f| f == "subagent_output.rs"),
+        "subagent output file should be tracked in session state"
     );
 
     let refs = run_git(
@@ -630,9 +615,8 @@ fn stop_subagent_only_changes_still_create_checkpoint() {
         &["for-each-ref", "--format=%(refname)", "refs/heads/bitloops"],
     );
     assert!(
-        refs.lines()
-            .any(|line| line.starts_with("refs/heads/bitloops/")),
-        "shadow branch should exist after subagent-only changes"
+        refs.trim().is_empty(),
+        "subagent-only stop should not create bitloops/* shadow branches"
     );
 }
 
@@ -717,9 +701,6 @@ fn stop_creates_shadow_branch_named_after_head_prefix() {
     init_repo(dir.path());
     setup_claude_and_enable(dir.path());
 
-    let base_head = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let expected_prefix = format!("refs/heads/bitloops/{}-", &base_head[..7]);
-
     let sid = "test-session-7";
     let transcript_path = dir.path().join("transcript.jsonl");
     user_prompt_submit(
@@ -744,6 +725,13 @@ fn stop_creates_shadow_branch_named_after_head_prefix() {
 
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
 
+    let state = session_state(dir.path(), sid);
+    assert_eq!(state.phase, SessionPhase::Idle);
+    assert!(
+        state.step_count > 0,
+        "stop should create a pending checkpoint"
+    );
+
     let refs = run_git(
         dir.path(),
         &[
@@ -752,12 +740,9 @@ fn stop_creates_shadow_branch_named_after_head_prefix() {
             "refs/heads/bitloops/",
         ],
     );
-    let found = refs.lines().any(|line| {
-        line.starts_with(&expected_prefix) || line == expected_prefix.trim_end_matches('-')
-    });
     assert!(
-        found,
-        "expected a shadow branch starting with: {expected_prefix}; got refs:\n{refs}"
+        refs.trim().is_empty(),
+        "DB/blob mode should not create shadow branches; got refs:\n{refs}"
     );
 }
 
@@ -795,48 +780,32 @@ fn commit_condenses_metadata_to_checkpoints_branch() {
     run_git(dir.path(), &["add", "src/auth.rs"]);
     run_git(dir.path(), &["commit", "-m", "feat: add auth module"]);
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     let checkpoint_id =
-        checkpoint_id_from_message(&head_msg).expect("HEAD commit should include checkpoint id");
-    let (d1, d2) = checkpoint_shard(&checkpoint_id);
-    let cp_ref = "bitloops/checkpoints/v1";
+        checkpoint_id_for_head(dir.path()).expect("HEAD commit should map to a checkpoint");
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("reading committed checkpoint should succeed")
+        .expect("committed checkpoint should exist");
 
     assert!(
-        git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
-        "checkpoints branch should exist after post-commit"
+        summary.files_touched.iter().any(|f| f == "src/auth.rs"),
+        "checkpoint should include touched file list for src/auth.rs"
     );
     assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{d1}/{d2}/metadata.json")),
-        "top-level checkpoint metadata should exist"
-    );
-    assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{d1}/{d2}/0/metadata.json")),
-        "per-session checkpoint metadata should exist"
-    );
-    assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{d1}/{d2}/0/full.jsonl")),
-        "full transcript should exist in checkpoint tree"
-    );
-    assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{d1}/{d2}/0/prompt.txt")),
-        "prompt.txt should exist in checkpoint tree"
-    );
-    assert!(
-        git_file_exists_in_ref(dir.path(), cp_ref, &format!("{d1}/{d2}/0/context.md")),
-        "context.md should exist in checkpoint tree"
+        summary.sessions.len() == 1,
+        "single-session stop+commit should produce one checkpoint session"
     );
 
-    let prompt_txt = git_show_file(dir.path(), cp_ref, &format!("{d1}/{d2}/0/prompt.txt"));
+    let content =
+        read_session_content(dir.path(), &checkpoint_id, 0).expect("session content should exist");
     assert!(
-        prompt_txt.contains("Create auth module"),
-        "prompt.txt should include user prompt"
+        content.prompts.contains("Create auth module"),
+        "checkpoint prompts should include the user prompt"
     );
 
     let state = session_state(dir.path(), sid);
-    assert_eq!(state["last_checkpoint_id"], checkpoint_id);
+    assert_eq!(state.last_checkpoint_id, checkpoint_id);
     assert_eq!(
-        state["checkpoint_count"].as_u64().unwrap_or_default(),
-        0,
+        state.step_count, 0,
         "checkpoint_count should be reset after condensation"
     );
 }
@@ -867,35 +836,26 @@ fn intermediate_commit_without_new_prompt_has_no_checkpoint_trailer() {
 
     run_git(dir.path(), &["add", "a.rs"]);
     run_git(dir.path(), &["commit", "-m", "first"]);
-    let first_msg = git_commit_message(dir.path(), "HEAD");
-    let checkpoint1 =
-        checkpoint_id_from_message(&first_msg).expect("first commit should include checkpoint id");
-
-    let checkpoints_count_after_first = run_git(
-        dir.path(),
-        &["rev-list", "--count", "bitloops/checkpoints/v1"],
-    )
-    .parse::<u64>()
-    .expect("checkpoint branch commit count should be numeric");
+    let checkpoint1 = checkpoint_id_for_head(dir.path())
+        .expect("first commit should be mapped to a checkpoint id");
+    let mappings_after_first = read_commit_checkpoint_mappings(dir.path())
+        .expect("reading commit-checkpoint mappings should succeed");
+    let checkpoints_count_after_first = mappings_after_first.len();
 
     fs::write(dir.path().join("intermediate.txt"), "human change\n").unwrap();
     run_git(dir.path(), &["add", "intermediate.txt"]);
     run_git(dir.path(), &["commit", "-m", "intermediate"]);
-    let second_msg = git_commit_message(dir.path(), "HEAD");
+    let second_head = run_git(dir.path(), &["rev-parse", "HEAD"]);
+    let mappings_after_second = read_commit_checkpoint_mappings(dir.path())
+        .expect("reading commit-checkpoint mappings should succeed");
     assert!(
-        checkpoint_id_from_message(&second_msg).is_none(),
-        "intermediate commit without new prompt should not get checkpoint trailer"
+        !mappings_after_second.contains_key(&second_head),
+        "intermediate commit without a new prompt should not map to a checkpoint"
     );
-
-    let checkpoints_count_after_second = run_git(
-        dir.path(),
-        &["rev-list", "--count", "bitloops/checkpoints/v1"],
-    )
-    .parse::<u64>()
-    .expect("checkpoint branch commit count should be numeric");
     assert_eq!(
-        checkpoints_count_after_second, checkpoints_count_after_first,
-        "checkpoint branch should not advance for non-session intermediate commit"
+        mappings_after_second.len(),
+        checkpoints_count_after_first,
+        "checkpoint mapping set should not advance for non-session intermediate commit"
     );
 
     user_prompt_submit(
@@ -916,26 +876,23 @@ fn intermediate_commit_without_new_prompt_has_no_checkpoint_trailer() {
 
     run_git(dir.path(), &["add", "b.rs"]);
     run_git(dir.path(), &["commit", "-m", "third"]);
-    let third_msg = git_commit_message(dir.path(), "HEAD");
     let checkpoint3 =
-        checkpoint_id_from_message(&third_msg).expect("third commit should include checkpoint id");
+        checkpoint_id_for_head(dir.path()).expect("third commit should map to a checkpoint id");
     assert_ne!(
         checkpoint1, checkpoint3,
         "new session work should produce a new checkpoint id"
     );
 
-    let (a1, a2) = checkpoint_shard(&checkpoint1);
-    let (b1, b2) = checkpoint_shard(&checkpoint3);
-    assert!(git_file_exists_in_ref(
-        dir.path(),
-        "bitloops/checkpoints/v1",
-        &format!("{a1}/{a2}/metadata.json")
-    ));
-    assert!(git_file_exists_in_ref(
-        dir.path(),
-        "bitloops/checkpoints/v1",
-        &format!("{b1}/{b2}/metadata.json")
-    ));
+    assert!(
+        read_committed(dir.path(), &checkpoint1)
+            .expect("reading first checkpoint should succeed")
+            .is_some()
+    );
+    assert!(
+        read_committed(dir.path(), &checkpoint3)
+            .expect("reading third checkpoint should succeed")
+            .is_some()
+    );
 }
 
 #[test]
@@ -964,9 +921,15 @@ fn pre_push_pushes_checkpoints_branch_to_remote() {
 
     run_git(dir.path(), &["add", "push.txt"]);
     run_git(dir.path(), &["commit", "-m", "push test"]);
+    let checkpoint_id =
+        checkpoint_id_for_head(dir.path()).expect("push test commit should map to a checkpoint");
     assert!(
-        git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
-        "local checkpoints branch should exist before push"
+        !checkpoint_id.is_empty(),
+        "mapped checkpoint id should not be empty"
+    );
+    assert!(
+        !git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
+        "DB/blob mode should not materialise a local checkpoints branch"
     );
 
     let remote_dir = tempfile::tempdir().unwrap();
@@ -988,8 +951,8 @@ fn pre_push_pushes_checkpoints_branch_to_remote() {
         .output()
         .expect("failed to inspect remote refs");
     assert!(
-        out.status.success(),
-        "remote should contain bitloops/checkpoints/v1 after pushing main branch\nstdout:\n{}\nstderr:\n{}",
+        !out.status.success(),
+        "remote should not contain bitloops/checkpoints/v1 in DB/blob mode\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );

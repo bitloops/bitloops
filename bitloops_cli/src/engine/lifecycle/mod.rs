@@ -6,8 +6,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::engine::agent::TranscriptPositionProvider;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
     TransitionContext as SessionTransitionContext, apply_transition as apply_session_transition,
@@ -41,6 +40,38 @@ pub struct LifecycleEvent {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrePromptState {
     pub transcript_offset: usize,
+}
+
+pub const UNKNOWN_SESSION_ID: &str = "unknown";
+
+/// Session ID policy rationale, invariants, and usage rules are documented in
+/// `SESSION_ID_POLICY.md` in this directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionIdPolicy {
+    Strict,
+    PreserveEmpty,
+    FallbackUnknown,
+}
+
+pub fn apply_session_id_policy(session_id: &str, policy: SessionIdPolicy) -> Result<String> {
+    let trimmed = session_id.trim();
+    match policy {
+        SessionIdPolicy::Strict => {
+            if trimmed.is_empty() {
+                Err(anyhow!("session_id is required"))
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
+        SessionIdPolicy::PreserveEmpty => Ok(trimmed.to_string()),
+        SessionIdPolicy::FallbackUnknown => {
+            if trimmed.is_empty() {
+                Ok(UNKNOWN_SESSION_ID.to_string())
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
+    }
 }
 
 pub trait LifecycleAgentAdapter: Send + Sync {
@@ -92,7 +123,7 @@ pub fn handle_lifecycle_session_start(
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if event.session_id.is_empty() {
+    if apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict).is_err() {
         return Err(anyhow!("no session_id in SessionStart event"));
     }
     Ok(())
@@ -102,7 +133,7 @@ pub fn handle_lifecycle_turn_start(
     _agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if event.session_id.is_empty() {
+    if apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict).is_err() {
         return Err(anyhow!("no session_id in TurnStart event"));
     }
     Ok(())
@@ -287,13 +318,9 @@ pub fn handle_lifecycle_turn_end(
     }
 
     let repo_root = crate::engine::paths::repo_root()?;
-    let session_id = if event.session_id.is_empty() {
-        "unknown-session"
-    } else {
-        &event.session_id
-    };
+    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
 
-    let meta_rel = crate::engine::paths::session_metadata_dir_from_session_id(session_id);
+    let meta_rel = crate::engine::paths::session_metadata_dir_from_session_id(&session_id);
     let meta_dir_abs = repo_root.join(&meta_rel);
     std::fs::create_dir_all(&meta_dir_abs)
         .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
@@ -309,12 +336,12 @@ pub fn handle_lifecycle_turn_end(
         .unwrap_or_else(|_| Path::new(&event.session_ref).to_path_buf());
     let transcript_ref_str = transcript_ref_canon.to_string_lossy().to_string();
 
-    let backend = LocalFileBackend::new(&repo_root);
-    let pre_prompt = backend.load_pre_prompt(session_id).ok().flatten();
+    let backend = create_session_backend_or_local(&repo_root);
+    let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
     let lifecycle_pre = pre_prompt.as_ref().map(|p| PrePromptState {
         transcript_offset: p.transcript_offset as usize,
     });
-    let transcript_offset = resolve_transcript_offset(lifecycle_pre.as_ref(), session_id);
+    let transcript_offset = resolve_transcript_offset(lifecycle_pre.as_ref(), &session_id);
 
     let mut all_prompts: Vec<String> = Vec::new();
     let mut summary = String::new();
@@ -408,7 +435,7 @@ pub fn handle_lifecycle_turn_end(
     create_context_file(
         &context_path,
         &commit_message,
-        session_id,
+        &session_id,
         &all_prompts,
         &summary,
     )?;
@@ -463,7 +490,7 @@ pub fn handle_lifecycle_turn_end(
     )?;
     strategy.save_step(&ctx)?;
 
-    if let Ok(Some(mut state)) = backend.load_session(session_id) {
+    if let Ok(Some(mut state)) = backend.load_session(&session_id) {
         let context = SessionTransitionContext {
             has_files_touched: !state.files_touched.is_empty(),
             is_rebase_in_progress: false,
@@ -475,7 +502,7 @@ pub fn handle_lifecycle_turn_end(
         }
     }
 
-    let _ = backend.delete_pre_prompt(session_id);
+    let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
 }
@@ -500,7 +527,7 @@ pub fn handle_lifecycle_compaction(
         }
     };
 
-    let backend = LocalFileBackend::new(&repo_root);
+    let backend = create_session_backend_or_local(&repo_root);
     match backend.load_session(&event.session_id) {
         Ok(Some(mut state)) => {
             let context = SessionTransitionContext {
@@ -573,7 +600,7 @@ pub fn capture_pre_prompt_state(
     }
 
     let transcript_offset = agent.get_transcript_position(session_ref)?;
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

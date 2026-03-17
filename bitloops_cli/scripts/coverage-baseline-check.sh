@@ -10,6 +10,15 @@ COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
 CANONICAL_CMD="cargo llvm-cov --workspace --all-features --all-targets --lcov --output-path target/llvm-cov.info"
 EPSILON="0.05"
 
+sanitize_git_env() {
+  # Not included in local-env-vars but can poison git config resolution.
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM
+
+  while IFS= read -r name; do
+    unset "$name"
+  done < <(git rev-parse --local-env-vars)
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/coverage-baseline-check.sh [check|update]
@@ -207,6 +216,8 @@ update_mode() {
 }
 
 main() {
+  sanitize_git_env
+
   local mode="${1:-check}"
   case "$mode" in
     -h|--help)

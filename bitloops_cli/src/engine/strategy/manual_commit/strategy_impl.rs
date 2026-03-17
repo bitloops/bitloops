@@ -15,7 +15,7 @@ impl Strategy for ManualCommitStrategy {
         self.initialize_or_refresh_session(session_id, agent_type, transcript_path, user_prompt)
     }
 
-    /// Creates a shadow-branch commit capturing the current working tree state.
+    /// Persists a temporary checkpoint tree capturing the current working tree state.
     ///
     fn save_step(&self, ctx: &StepContext) -> Result<()> {
         // If the repo has no commits yet, HEAD doesn't exist — skip silently.
@@ -60,8 +60,6 @@ impl Strategy for ManualCommitStrategy {
             state.transcript_path = ctx.transcript_path.clone();
         }
 
-        self.migrate_shadow_branch_if_needed(&mut state)?;
-
         let default_prompt_attr = SessionPromptAttribution {
             checkpoint_number: state.step_count as i32 + 1,
             ..Default::default()
@@ -90,32 +88,34 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let default_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let mut metadata_dir = if ctx.metadata_dir.trim().is_empty() {
-            default_metadata_dir.clone()
+        let legacy_metadata_enabled = crate::engine::session::legacy_local_backend_enabled();
+        let default_metadata_dir = if legacy_metadata_enabled {
+            paths::session_metadata_dir_from_session_id(&ctx.session_id)
         } else {
-            ctx.metadata_dir.clone()
+            String::new()
         };
-        let mut metadata_dir_abs = if ctx.metadata_dir_abs.trim().is_empty() {
-            self.repo_root
-                .join(&metadata_dir)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            ctx.metadata_dir_abs.clone()
-        };
-        if metadata_dir.trim().is_empty() {
+        let mut metadata_dir = ctx.metadata_dir.trim().to_string();
+        let mut metadata_dir_abs = ctx.metadata_dir_abs.trim().to_string();
+
+        if legacy_metadata_enabled && metadata_dir.is_empty() {
             metadata_dir = default_metadata_dir.clone();
         }
-        if metadata_dir_abs.trim().is_empty() {
+        if legacy_metadata_enabled && metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
             metadata_dir_abs = self
                 .repo_root
                 .join(&metadata_dir)
                 .to_string_lossy()
                 .to_string();
         }
-        // Keep compatibility with direct strategy tests that don't precreate metadata.
-        if metadata_dir == default_metadata_dir && !transcript_path.trim().is_empty() {
+        if !legacy_metadata_enabled && (metadata_dir.is_empty() || metadata_dir_abs.is_empty()) {
+            metadata_dir.clear();
+            metadata_dir_abs.clear();
+        }
+        // Legacy compatibility: only materialise session metadata files when explicitly enabled.
+        if legacy_metadata_enabled
+            && metadata_dir == default_metadata_dir
+            && !transcript_path.trim().is_empty()
+        {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
         }
 
@@ -130,21 +130,20 @@ impl Strategy for ManualCommitStrategy {
             ctx.author_email.clone()
         };
 
-        // Commit message with Bitloops metadata trailers.
+        // Persist plain subjects for temporary checkpoints; metadata lives in DB/blobs.
         let subject = if ctx.commit_message.is_empty() {
             "Bitloops checkpoint".to_string()
         } else {
             ctx.commit_message.clone()
         };
-        let commit_msg =
-            crate::engine::trailers::format_shadow_commit(&subject, &metadata_dir, &ctx.session_id);
+        let commit_msg = subject;
 
         let result = write_temporary(
             &self.repo_root,
             WriteTemporaryOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                worktree_id: state.worktree_id.clone(),
+                step_number: state.step_count + 1,
                 modified_files: modified.clone(),
                 new_files: new_files.clone(),
                 deleted_files: deleted.clone(),
@@ -160,7 +159,7 @@ impl Strategy for ManualCommitStrategy {
             anyhow::bail!("temporary checkpoint commit hash is empty");
         }
 
-        // Dedup: skip if tree is identical to the last shadow commit's tree.
+        // Dedup: skip if tree is identical to the latest temporary checkpoint tree.
         // Still persist token_usage when provided so turn-end can record usage without a new commit.
         if result.skipped {
             if let Some(usage) = &ctx.token_usage {
@@ -195,7 +194,7 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 
-    /// Creates a task checkpoint on the shadow branch.
+    /// Persists a task checkpoint as a temporary checkpoint tree.
     ///
     fn save_task_step(&self, ctx: &TaskStepContext) -> Result<()> {
         use super::messages::{format_incremental_subject, format_subagent_end_message};
@@ -221,14 +220,8 @@ impl Strategy for ManualCommitStrategy {
             format_subagent_end_message(&ctx.subagent_type, &ctx.task_description, short_id)
         };
 
-        // Build the full commit message with task-specific trailers.
-        let session_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
-        let task_metadata_dir = format!("{}/tasks/{}", session_metadata_dir, ctx.tool_use_id);
-        let commit_msg = crate::engine::trailers::format_shadow_task_commit(
-            &subject,
-            &task_metadata_dir,
-            &ctx.session_id,
-        );
+        // Persist plain subjects for temporary task checkpoints.
+        let commit_msg = subject;
 
         // If the repo has no commits yet, skip silently.
         let Some(head) = try_head_hash(&self.repo_root)? else {
@@ -259,8 +252,6 @@ impl Strategy for ManualCommitStrategy {
             }
         };
 
-        self.migrate_shadow_branch_if_needed(&mut state)?;
-
         let author_name = if ctx.author_name.trim().is_empty() {
             "Bitloops".to_string()
         } else {
@@ -277,7 +268,7 @@ impl Strategy for ManualCommitStrategy {
             WriteTemporaryTaskOptions {
                 session_id: ctx.session_id.clone(),
                 base_commit: state.base_commit.clone(),
-                worktree_id: state.worktree_id.clone(),
+                step_number: state.step_count,
                 tool_use_id: ctx.tool_use_id.clone(),
                 agent_id: ctx.agent_id.clone(),
                 modified_files: ctx.modified_files.clone(),
@@ -319,100 +310,15 @@ impl Strategy for ManualCommitStrategy {
         Ok(())
     }
 
-    /// Appends a `Bitloops-Checkpoint: <id>` trailer to the commit message file.
-    ///
     /// Called by the `prepare-commit-msg` git hook.
-    ///
-    fn prepare_commit_msg(&self, commit_msg_file: &Path, source: Option<&str>) -> Result<()> {
-        let source = source.unwrap_or("");
-
-        // Skip during git sequence operations (rebase, cherry-pick, revert).
-        if is_git_sequence_operation(&self.repo_root) {
-            return Ok(());
-        }
-
-        // Skip for auto-generated messages.
-        if source == "merge" || source == "squash" {
-            return Ok(());
-        }
-
-        // For amend: preserve or restore trailer.
-        if source == "commit" {
-            return self.handle_amend_commit_msg(commit_msg_file);
-        }
-
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        if sessions.is_empty() {
-            return Ok(());
-        }
-
-        let staged_files = get_staged_files(&self.repo_root);
-
-        // Only attach a fresh trailer when there is pending session work
-        // and the staged content overlaps with files touched by the session.
-        let has_pending_session_content = sessions.iter().any(|s| {
-            let has_pending = s.phase.is_active()
-                || !s.files_touched.is_empty()
-                || (s.phase != SessionPhase::Ended && s.step_count > 0);
-            if !has_pending {
-                return false;
-            }
-            if s.files_touched.is_empty() {
-                return true;
-            }
-            if staged_files.is_empty() {
-                return true;
-            }
-            let shadow_branch = expected_shadow_branch_short_name(&s.base_commit, &s.worktree_id);
-            staged_files_overlap_with_content(
-                &self.repo_root,
-                &shadow_branch,
-                &staged_files,
-                &s.files_touched,
-            )
-        });
-        if !has_pending_session_content {
-            return Ok(());
-        }
-
-        // Read current commit message.
-        let content = fs::read_to_string(commit_msg_file).unwrap_or_default();
-
-        // If trailer already present, keep it.
-        if parse_checkpoint_id(&content).is_some() {
-            return Ok(());
-        }
-
-        // Generate a new checkpoint ID and append the trailer.
-        let id = generate_checkpoint_id();
-        let new_content = add_checkpoint_trailer(&content, &id);
-        fs::write(commit_msg_file, new_content)
-            .with_context(|| format!("writing commit msg file: {}", commit_msg_file.display()))?;
-
+    /// This is intentionally a no-op.
+    fn prepare_commit_msg(&self, _commit_msg_file: &Path, _source: Option<&str>) -> Result<()> {
         Ok(())
     }
 
-    /// Strips the checkpoint trailer when the commit message has no user content.
-    ///
-    /// Called by the `commit-msg` git hook.  Returning an error causes git to abort.
-    ///
-    fn commit_msg(&self, commit_msg_file: &Path) -> Result<()> {
-        let content = match fs::read_to_string(commit_msg_file) {
-            Ok(c) => c,
-            Err(_) => return Ok(()), // be silent on failure
-        };
-
-        // Only act when our trailer is present.
-        if parse_checkpoint_id(&content).is_none() {
-            return Ok(());
-        }
-
-        // Strip the trailer if there's no real user content.
-        if !has_user_content(&content) {
-            let stripped = strip_checkpoint_trailer(&content);
-            let _ = fs::write(commit_msg_file, stripped);
-        }
-
+    /// Called by the `commit-msg` git hook.
+    /// This is intentionally a no-op.
+    fn commit_msg(&self, _commit_msg_file: &Path) -> Result<()> {
         Ok(())
     }
 
@@ -425,32 +331,24 @@ impl Strategy for ManualCommitStrategy {
         let Some(head) = try_head_hash(&self.repo_root)? else {
             return Ok(());
         };
-        // Extract checkpoint ID from HEAD commit.
-        let checkpoint_id = match get_checkpoint_id_from_head(&self.repo_root)? {
-            Some(id) => id,
-            None => {
-                // No trailer — just update base_commit for active sessions.
-                self.update_base_commit_for_active_sessions()?;
-                return Ok(());
-            }
-        };
+        if commit_has_checkpoint_mapping(&self.repo_root, &head)? {
+            return Ok(());
+        }
 
         let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
         let sessions = self.backend.list_sessions().unwrap_or_default();
-        let mut shadow_branches_to_delete: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
-        let mut preserved_shadow_branches: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let checkpoint_id = generate_checkpoint_id();
+        let mut condensed_any_session = false;
 
         for mut state in sessions {
-            let shadow_branch_before =
-                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-            let mut condensed = false;
-            let has_pending = state.phase.is_active()
-                || state.phase == SessionPhase::Ended
+            let has_pending = state.phase == SessionPhase::Ended
                 || !state.files_touched.is_empty()
                 || state.step_count > 0;
             if !has_pending {
+                if state.phase.is_active() && state.base_commit != head {
+                    state.base_commit = head.clone();
+                    let _ = self.backend.save_session(&state);
+                }
                 continue;
             }
 
@@ -478,18 +376,6 @@ impl Strategy for ManualCommitStrategy {
                         let _ = self.backend.save_session(&state);
                         continue;
                     }
-                    if !files_overlap_with_content(
-                        &self.repo_root,
-                        &shadow_branch_before,
-                        &head,
-                        &committed_touched,
-                    ) {
-                        if state.phase.is_active() && state.base_commit != head {
-                            state.base_commit = head.clone();
-                        }
-                        let _ = self.backend.save_session(&state);
-                        continue;
-                    }
                 }
 
                 if let Err(e) = self.condense_session(&mut state, &checkpoint_id, &head) {
@@ -500,7 +386,7 @@ impl Strategy for ManualCommitStrategy {
                     let _ = self.backend.save_session(&state);
                     continue;
                 }
-                condensed = true;
+                condensed_any_session = true;
 
                 // ACTIVE sessions track all turn checkpoint IDs for stop-time finalization.
                 if state.phase.is_active() {
@@ -513,44 +399,72 @@ impl Strategy for ManualCommitStrategy {
                 state.base_commit = head.clone();
             }
 
-            if condensed && !shadow_branch_before.is_empty() {
-                // Condensed branches are eligible for cleanup; keep any
-                // branch that still carries uncommitted files.
-                if state.files_touched.is_empty() {
-                    shadow_branches_to_delete.insert(shadow_branch_before.clone());
-                } else {
-                    preserved_shadow_branches.insert(shadow_branch_before.clone());
-                }
-            }
-            if state.phase.is_active() && !condensed && !shadow_branch_before.is_empty() {
-                preserved_shadow_branches.insert(shadow_branch_before.clone());
-            }
-
             let _ = self.backend.save_session(&state);
         }
 
-        for branch in shadow_branches_to_delete {
-            if preserved_shadow_branches.contains(&branch) {
-                continue;
-            }
-            let _ = run_git(&self.repo_root, &["branch", "-D", &branch]);
+        if condensed_any_session {
+            insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
         }
 
         Ok(())
     }
 
-    /// Pushes `bitloops/checkpoints/v1` alongside the user's push.
-    ///
     /// Called by the `pre-push` git hook.
-    ///
-    fn pre_push(&self, remote: &str) -> Result<()> {
-        // Only push if the checkpoints branch exists.
-        if run_git(&self.repo_root, &["rev-parse", paths::METADATA_BRANCH_NAME]).is_ok() {
-            // Non-fatal: push failure must not block the user's push.
-            // Use --no-verify to avoid recursive pre-push hook execution.
-            let _ = push_checkpoints_branch_no_verify(&self.repo_root, remote);
-        }
+    /// This is intentionally a no-op.
+    fn pre_push(&self, _remote: &str) -> Result<()> {
         Ok(())
     }
 }
 
+fn open_commit_checkpoint_mapping_db(
+    repo_root: &Path,
+) -> Result<(crate::engine::db::SqliteConnectionPool, String)> {
+    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
+        .context("resolving SQLite path for commit_checkpoints")?;
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
+        .context("opening SQLite for commit_checkpoints")?;
+    sqlite
+        .initialise_checkpoint_schema()
+        .context("initialising checkpoint schema for commit_checkpoints")?;
+
+    let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for commit_checkpoints")?
+        .repo_id;
+    Ok((sqlite, repo_id))
+}
+
+fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<bool> {
+    use rusqlite::OptionalExtension;
+
+    let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
+    sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT 1
+             FROM commit_checkpoints
+             WHERE commit_sha = ?1 AND repo_id = ?2
+             LIMIT 1",
+            rusqlite::params![commit_sha, repo_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|hit| hit.is_some())
+        .map_err(anyhow::Error::from)
+    })
+}
+
+fn insert_commit_checkpoint_mapping(
+    repo_root: &Path,
+    commit_sha: &str,
+    checkpoint_id: &str,
+) -> Result<()> {
+    let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
+    sqlite.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![commit_sha, checkpoint_id, repo_id],
+        )
+        .context("inserting commit_checkpoints row")?;
+        Ok(())
+    })
+}

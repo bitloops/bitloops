@@ -8,6 +8,10 @@ use serde_json::Value;
 use tokio::runtime::Builder;
 use tokio::task;
 
+const DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX: &str = "Postgres DSN is required for Postgres operations";
+const DEVQL_PG_DSN_REQUIRED_NEW_PREFIX: &str =
+    crate::engine::devql::DEVQL_POSTGRES_DSN_REQUIRED_PREFIX;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryTarget {
     pub path: String,
@@ -37,7 +41,11 @@ pub fn prefetch_for_prompt(
     };
 
     let query = build_devql_history_query(&primary_target);
-    let rows = run_devql_query(repo_root, &query)?;
+    let rows = match run_devql_query(repo_root, &query) {
+        Ok(rows) => rows,
+        Err(err) if is_prefetch_backend_not_available_error(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
 
     Ok(Some(PrefetchResult {
         session_id: session_id.to_string(),
@@ -46,6 +54,14 @@ pub fn prefetch_for_prompt(
         targets: vec![primary_target],
         rows,
     }))
+}
+
+fn is_prefetch_backend_not_available_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains(DEVQL_PG_DSN_REQUIRED_ERROR_PREFIX)
+            || message.contains(DEVQL_PG_DSN_REQUIRED_NEW_PREFIX)
+    })
 }
 
 fn extract_history_target_from_prompt(repo_root: &Path, prompt: &str) -> Option<HistoryTarget> {
@@ -214,7 +230,7 @@ fn build_devql_history_query(target: &HistoryTarget) -> String {
 fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         return task::block_in_place(|| {
-            handle.block_on(crate::commands::devql::execute_query_json_for_repo_root(
+            handle.block_on(crate::engine::devql::execute_query_json_for_repo_root(
                 repo_root, query,
             ))
         });
@@ -224,7 +240,7 @@ fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
         .enable_all()
         .build()
         .context("building tokio runtime for pre-hook DevQL query")?;
-    runtime.block_on(crate::commands::devql::execute_query_json_for_repo_root(
+    runtime.block_on(crate::engine::devql::execute_query_json_for_repo_root(
         repo_root, query,
     ))
 }
@@ -232,6 +248,7 @@ fn run_devql_query(repo_root: &Path, query: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
 
     #[test]
     fn extract_targets_parses_single_line_anchor() {
@@ -306,5 +323,19 @@ mod tests {
             query,
             "file(\"src/main.rs\")->artefacts(lines:10..25)->chatHistory()->limit(5)"
         );
+    }
+
+    #[test]
+    fn missing_pg_dsn_error_is_detected() {
+        let err = anyhow!(
+            "Postgres DSN is required for Postgres operations (example: postgres://u:p@localhost:5432/db)"
+        );
+        assert!(is_prefetch_backend_not_available_error(&err));
+    }
+
+    #[test]
+    fn non_pg_dsn_errors_are_not_detected() {
+        let err = anyhow!("connection refused");
+        assert!(!is_prefetch_backend_not_available_error(&err));
     }
 }

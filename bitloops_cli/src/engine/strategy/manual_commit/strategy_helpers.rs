@@ -57,42 +57,9 @@ impl ManualCommitStrategy {
         state.last_checkpoint_id.clear();
         state.turn_checkpoint_ids.clear();
 
-        self.migrate_shadow_branch_if_needed(&mut state)?;
         state.pending_prompt_attribution = Some(self.calculate_prompt_attribution_at_start(&state));
 
         self.backend.save_session(&state)
-    }
-
-    fn migrate_shadow_branch_if_needed(&self, state: &mut SessionState) -> Result<()> {
-        if state.base_commit.trim().is_empty() {
-            return Ok(());
-        }
-
-        let Some(current_head) = try_head_hash(&self.repo_root)? else {
-            return Ok(());
-        };
-        if state.base_commit == current_head {
-            return Ok(());
-        }
-
-        let old_shadow_ref = shadow_branch_ref(&state.base_commit, &state.worktree_id);
-        let new_shadow_ref = shadow_branch_ref(&current_head, &state.worktree_id);
-        if old_shadow_ref != new_shadow_ref
-            && let Ok(old_shadow_commit) = run_git(&self.repo_root, &["rev-parse", &old_shadow_ref])
-            && !old_shadow_commit.trim().is_empty()
-        {
-            run_git(
-                &self.repo_root,
-                &["update-ref", &new_shadow_ref, old_shadow_commit.trim()],
-            )?;
-            let old_short = old_shadow_ref
-                .strip_prefix("refs/heads/")
-                .unwrap_or(old_shadow_ref.as_str());
-            let _ = run_git(&self.repo_root, &["branch", "-D", old_short]);
-        }
-
-        state.base_commit = current_head;
-        Ok(())
     }
 
     fn calculate_prompt_attribution_at_start(
@@ -123,11 +90,9 @@ impl ManualCommitStrategy {
         } else {
             load_tree_snapshot(&self.repo_root, &state.base_commit)
         };
-        let last_checkpoint_tree = resolve_commit(
-            &self.repo_root,
-            &shadow_branch_ref(&state.base_commit, &state.worktree_id),
-        )
-        .and_then(|commit| load_tree_snapshot(&self.repo_root, &commit));
+        let last_checkpoint_tree =
+            latest_temporary_checkpoint_tree_hash(&self.repo_root, &state.session_id)
+                .and_then(|tree_hash| load_tree_snapshot(&self.repo_root, &tree_hash));
 
         let attr = calculate_prompt_attribution(
             base_tree.as_ref(),
@@ -164,12 +129,8 @@ impl ManualCommitStrategy {
         }
 
         let transcript_text = String::from_utf8_lossy(&full_transcript).to_string();
-        let mut prompts = extract_user_prompts_from_jsonl(&transcript_text);
-        let redacted_transcript = redact_jsonl_bytes_with_fallback(&full_transcript);
-        for prompt in &mut prompts {
-            *prompt = redact_text(prompt);
-        }
-        let context = redact_bytes(generate_context_from_prompts(&prompts).as_bytes());
+        let prompts = extract_user_prompts_from_jsonl(&transcript_text);
+        let context = generate_context_from_prompts(&prompts).into_bytes();
 
         for checkpoint_id in state.turn_checkpoint_ids.clone() {
             let _ = update_committed(
@@ -177,7 +138,7 @@ impl ManualCommitStrategy {
                 UpdateCommittedOptions {
                     checkpoint_id,
                     session_id: state.session_id.clone(),
-                    transcript: Some(redacted_transcript.clone()),
+                    transcript: Some(full_transcript.clone()),
                     prompts: Some(prompts.clone()),
                     context: Some(context.clone()),
                     agent: state.agent_type.clone(),
@@ -187,32 +148,7 @@ impl ManualCommitStrategy {
         state.turn_checkpoint_ids.clear();
     }
 
-    /// Handles `prepare-commit-msg` for `git commit --amend` (source = "commit").
-    fn handle_amend_commit_msg(&self, commit_msg_file: &Path) -> Result<()> {
-        let content = fs::read_to_string(commit_msg_file).unwrap_or_default();
-
-        // If message already has our trailer, keep it.
-        if parse_checkpoint_id(&content).is_some() {
-            return Ok(());
-        }
-
-        // Try to restore last_checkpoint_id from an active session.
-        let sessions = self.backend.list_sessions().unwrap_or_default();
-        for state in &sessions {
-            if state.phase == SessionPhase::Ended {
-                continue;
-            }
-            if !state.last_checkpoint_id.is_empty() {
-                let new_content = add_checkpoint_trailer(&content, &state.last_checkpoint_id);
-                let _ = fs::write(commit_msg_file, new_content);
-                return Ok(());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Condenses session work into a checkpoint on `bitloops/checkpoints/v1`.
+    /// Condenses session work into committed checkpoint rows/blobs.
     ///
     fn condense_session(
         &self,
@@ -235,18 +171,29 @@ impl ManualCommitStrategy {
             fallback.sort();
             fallback
         };
-        let shadow_ref = shadow_branch_ref(&state.base_commit, &state.worktree_id);
+        let latest_session_tree_hash =
+            latest_temporary_checkpoint_tree_hash(&self.repo_root, &state.session_id);
         let initial_attribution = calculate_session_initial_attribution(
             &self.repo_root,
             state,
-            &shadow_ref,
+            latest_session_tree_hash.as_deref(),
             new_head,
             &committed_touched,
         );
-        let transcript_content =
-            extract_transcript_from_shadow(&self.repo_root, &shadow_ref, &state.session_id)
-                .or_else(|| read_transcript_from_disk(&self.repo_root, &state.session_id))
-                .unwrap_or_default();
+        let transcript_content = if crate::engine::session::legacy_local_backend_enabled() {
+            read_transcript_from_disk(&self.repo_root, &state.session_id)
+        } else {
+            None
+        }
+        .or_else(|| {
+                if state.transcript_path.trim().is_empty() {
+                    return None;
+                }
+                fs::read_to_string(&state.transcript_path)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_default();
         let total_transcript_lines = transcript_content.lines().count() as i64;
         let prompts = extract_user_prompts_from_jsonl(&transcript_content);
         let context = generate_context_from_prompts(&prompts).into_bytes();
@@ -272,7 +219,7 @@ impl ManualCommitStrategy {
                 let summarize_agent = match state.agent_type.as_str() {
                     s if s == AGENT_TYPE_GEMINI => crate::engine::summarize::AgentType::Gemini,
                     s if s == AGENT_TYPE_OPEN_CODE => crate::engine::summarize::AgentType::OpenCode,
-                    s if s == AGENT_TYPE_CLAUDE_CODE => {
+                    s if s == AGENT_TYPE_CLAUDE_CODE || s == AGENT_TYPE_CODEX => {
                         crate::engine::summarize::AgentType::ClaudeCode
                     }
                     _ => crate::engine::summarize::AgentType::Unknown,
@@ -337,11 +284,9 @@ impl ManualCommitStrategy {
             },
         )?;
 
-        let shadow_branch =
-            expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-        let remaining_files = files_with_remaining_agent_changes(
+        let remaining_files = files_with_remaining_agent_changes_from_tree(
             &self.repo_root,
-            &shadow_branch,
+            latest_session_tree_hash.as_deref(),
             new_head,
             &state.files_touched,
             &committed_files,
@@ -390,6 +335,7 @@ impl ManualCommitStrategy {
     }
 
     /// Updates `base_commit` to HEAD for all active sessions (no-trailer commit path).
+    #[allow(dead_code)]
     fn update_base_commit_for_active_sessions(&self) -> Result<()> {
         let Some(head) = try_head_hash(&self.repo_root)? else {
             return Ok(());
@@ -407,4 +353,3 @@ impl ManualCommitStrategy {
         Ok(())
     }
 }
-

@@ -256,6 +256,9 @@ fn detect_installed_agents(repo_root: &Path) -> Vec<String> {
     {
         installed.push("copilot".to_string());
     }
+    if repo_root.join(".codex").is_dir() {
+        installed.push("codex".to_string());
+    }
     if repo_root.join(".gemini").is_dir() {
         installed.push("gemini-cli".to_string());
     }

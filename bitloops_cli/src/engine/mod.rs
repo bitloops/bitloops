@@ -1,11 +1,16 @@
 pub mod agent;
+pub mod blob;
+pub mod db;
 pub mod db_status;
+pub mod devql;
 pub mod git_operations;
 pub mod history;
 pub mod hooks;
 pub mod lifecycle;
 pub mod logging;
 pub mod paths;
+pub mod providers;
+pub mod semantic_features;
 pub mod session;
 pub mod settings;
 pub mod strategy;

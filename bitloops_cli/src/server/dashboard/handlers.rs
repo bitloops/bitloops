@@ -372,6 +372,8 @@ pub(crate) async fn handle_api_db_health(
     let health = state.db.health_check().await;
 
     Json(ApiDbHealthResponse {
+        relational: map_backend_health(health.relational),
+        events: map_backend_health(health.events),
         postgres: map_backend_health(health.postgres),
         clickhouse: map_backend_health(health.clickhouse),
     })

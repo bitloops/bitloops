@@ -1,26 +1,32 @@
 use std::fs;
-use std::process::Command;
 
 use tempfile::TempDir;
 
 use crate::engine::paths;
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::strategy::manual_commit::run_git;
 use crate::engine::trailers::{
     METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
 };
+use crate::test_support::git_fixtures::ensure_test_store_backends;
+use crate::test_support::process_state::git_command;
 
 use super::*;
 
 fn setup_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = git_command()
             .args(args)
             .current_dir(dir.path())
             .output()
             .expect("git command failed to start");
-        assert!(out.status.success(), "git {:?} failed", args);
+        assert!(
+            out.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
     run(&["init"]);
     run(&["config", "user.email", "test@test.com"]);
@@ -28,6 +34,7 @@ fn setup_git_repo(dir: &TempDir) {
     fs::write(dir.path().join("README.md"), "# Test").expect("write README");
     run(&["add", "README.md"]);
     run(&["commit", "-m", "Initial commit"]);
+    ensure_test_store_backends(dir.path());
 }
 
 fn commit_tree_hash(dir: &TempDir, rev: &str) -> String {
@@ -479,7 +486,7 @@ fn auto_commit_initialize_session_creates_session_state() {
     SessionInitializer::initialize_session(&strategy, session_id, "claude-code", "", "")
         .expect("initialize_session should run");
 
-    let backend = LocalFileBackend::new(dir.path());
+    let backend = create_session_backend_or_local(dir.path());
     let state = backend
         .load_session(session_id)
         .expect("load_session")

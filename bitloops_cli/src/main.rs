@@ -1,10 +1,10 @@
 use clap::Parser;
 
 pub use bitloops_cli::engine;
+pub use bitloops_cli::store_config;
+mod branding;
 mod commands;
-mod devql_config;
 mod server;
-mod terminal;
 
 #[cfg(test)]
 pub(crate) mod test_support;

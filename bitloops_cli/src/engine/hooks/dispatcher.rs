@@ -7,12 +7,14 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use crate::engine::agent::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
 use crate::engine::agent::cursor::types::{
     CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
     CursorSessionInfoRaw,
 };
 use crate::engine::agent::{
-    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
+    AGENT_NAME_GEMINI,
 };
 use crate::engine::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, COPILOT_HOOK_POST_TOOL_USE,
@@ -22,7 +24,7 @@ use crate::engine::lifecycle::adapters::{
 use crate::engine::logging;
 use crate::engine::paths;
 use crate::engine::session::backend::SessionBackend;
-use crate::engine::session::local_backend::LocalFileBackend;
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
 use crate::engine::settings;
@@ -36,6 +38,7 @@ use crate::engine::agent::claude_code::hooks_cmd::{
     handle_post_task, handle_post_todo, handle_pre_task, handle_session_end, handle_session_start,
     handle_stop, handle_user_prompt_submit_with_strategy,
 };
+use crate::engine::agent::codex::hooks_cmd::{handle_session_start_codex, handle_stop_codex};
 use crate::engine::agent::cursor::hooks_cmd::{
     handle_before_submit_prompt_cursor, handle_session_end_cursor, handle_session_start_cursor,
     handle_stop_cursor,
@@ -51,6 +54,8 @@ pub struct HooksArgs {
 pub enum HooksAgent {
     #[command(name = "claude-code")]
     ClaudeCode(ClaudeCodeHooksArgs),
+    #[command(name = "codex")]
+    Codex(CodexHooksArgs),
     #[command(name = "cursor")]
     Cursor(CursorHooksArgs),
     #[command(name = "copilot")]
@@ -84,6 +89,20 @@ pub enum ClaudeCodeHookVerb {
     PostTask,
     #[command(name = "post-todo")]
     PostTodo,
+}
+
+#[derive(Args)]
+pub struct CodexHooksArgs {
+    #[command(subcommand)]
+    pub verb: CodexHookVerb,
+}
+
+#[derive(Subcommand)]
+pub enum CodexHookVerb {
+    #[command(name = "session-start")]
+    SessionStart,
+    #[command(name = "stop")]
+    Stop,
 }
 
 #[derive(Args)]
@@ -182,6 +201,15 @@ impl ClaudeCodeHookVerb {
             Self::PreTask => "pre-task",
             Self::PostTask => "post-task",
             Self::PostTodo => "post-todo",
+        }
+    }
+}
+
+impl CodexHookVerb {
+    pub fn hook_name(&self) -> &'static str {
+        match self {
+            Self::SessionStart => crate::engine::agent::codex::lifecycle::HOOK_NAME_SESSION_START,
+            Self::Stop => crate::engine::agent::codex::lifecycle::HOOK_NAME_STOP,
         }
     }
 }
@@ -296,7 +324,7 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
 }
 
 fn find_most_recent_session_id(repo_root: &Path) -> String {
-    let backend = LocalFileBackend::new(repo_root);
+    let backend = create_session_backend_or_local(repo_root);
     let sessions = backend.list_sessions().unwrap_or_default();
     crate::engine::session::state::find_most_recent_session(&sessions, &repo_root.to_string_lossy())
         .map(|s| s.session_id)
@@ -400,7 +428,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
 
     match agent {
         HooksAgent::ClaudeCode(cc) => {
-            let backend = LocalFileBackend::new(&repo_root);
+            let backend = create_session_backend_or_local(&repo_root);
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
@@ -416,14 +444,14 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::SessionStart => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-start input")?;
-                        handle_session_start(input, &backend, Some(&repo_root))
+                        handle_session_start(input, backend.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::UserPromptSubmit => {
                         let input: UserPromptSubmitInput = serde_json::from_str(&stdin)
                             .context("parsing user-prompt-submit input")?;
                         handle_user_prompt_submit_with_strategy(
                             input,
-                            &backend,
+                            backend.as_ref(),
                             strategy.as_ref(),
                             Some(&repo_root),
                         )
@@ -431,27 +459,82 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     ClaudeCodeHookVerb::Stop => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing stop input")?;
-                        handle_stop(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_stop(input, backend.as_ref(), strategy.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::SessionEnd => {
                         let input: SessionInfoInput =
                             serde_json::from_str(&stdin).context("parsing session-end input")?;
-                        handle_session_end(input, &backend)
+                        handle_session_end(input, backend.as_ref())
                     }
                     ClaudeCodeHookVerb::PreTask => {
                         let input: TaskHookInput =
                             serde_json::from_str(&stdin).context("parsing pre-task input")?;
-                        handle_pre_task(input, &backend, Some(&repo_root))
+                        handle_pre_task(input, backend.as_ref(), Some(&repo_root))
                     }
                     ClaudeCodeHookVerb::PostTask => {
                         let input: PostTaskInput =
                             serde_json::from_str(&stdin).context("parsing post-task input")?;
-                        handle_post_task(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_post_task(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        )
                     }
                     ClaudeCodeHookVerb::PostTodo => {
                         let input: PostTodoInput =
                             serde_json::from_str(&stdin).context("parsing post-todo input")?;
-                        handle_post_todo(input, &backend, strategy.as_ref(), Some(&repo_root))
+                        handle_post_todo(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        )
+                    }
+                },
+            )
+        }
+        HooksAgent::Codex(codex) => {
+            let backend = create_session_backend_or_local(&repo_root);
+            let strategy: Box<dyn Strategy> = strategy_registry
+                .get(&strategy_name, &repo_root)
+                .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
+            let hook_name = codex.verb.hook_name();
+            let stdin = read_stdin()?;
+
+            run_agent_hook_with_logging(
+                &repo_root,
+                AGENT_NAME_CODEX,
+                hook_name,
+                &strategy_name,
+                || {
+                    let raw: CodexSessionInfoRaw = parse_codex_session_info(&stdin)?;
+                    let session_policy = match codex.verb {
+                        CodexHookVerb::SessionStart => {
+                            crate::engine::lifecycle::SessionIdPolicy::Strict
+                        }
+                        CodexHookVerb::Stop => {
+                            crate::engine::lifecycle::SessionIdPolicy::PreserveEmpty
+                        }
+                    };
+                    let input = SessionInfoInput {
+                        session_id: crate::engine::lifecycle::apply_session_id_policy(
+                            &raw.session_id,
+                            session_policy,
+                        )
+                        .context("validating codex session_id")?,
+                        transcript_path: raw.transcript_path,
+                    };
+                    match codex.verb {
+                        CodexHookVerb::SessionStart => {
+                            handle_session_start_codex(input, backend.as_ref(), Some(&repo_root))
+                        }
+                        CodexHookVerb::Stop => handle_stop_codex(
+                            input,
+                            backend.as_ref(),
+                            strategy.as_ref(),
+                            Some(&repo_root),
+                        ),
                     }
                 },
             )
@@ -470,7 +553,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
         HooksAgent::Cursor(cursor) => {
             let hook_name = cursor.verb.hook_name();
             let stdin = read_stdin()?;
-            let backend = LocalFileBackend::new(&repo_root);
+            let backend = create_session_backend_or_local(&repo_root);
             let strategy: Box<dyn Strategy> = strategy_registry
                 .get(&strategy_name, &repo_root)
                 .unwrap_or_else(|_| Box::new(ManualCommitStrategy::new(&repo_root)));
@@ -483,7 +566,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                     dispatch_cursor_hook(
                         &cursor.verb,
                         &stdin,
-                        &backend,
+                        backend.as_ref(),
                         strategy.as_ref(),
                         &repo_root,
                         hook_name,
@@ -518,10 +601,14 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::SessionStart => {
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing session-start input")?;
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::Strict,
+            )?;
             let input = SessionInfoInput {
-                session_id: raw.conversation_id.clone(),
+                session_id: session_id.clone(),
                 transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                    &raw.conversation_id,
+                    &session_id,
                     raw.transcript_path.as_deref(),
                 ),
             };
@@ -530,10 +617,14 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::BeforeSubmitPrompt => {
             let raw: CursorBeforeSubmitPromptRaw =
                 serde_json::from_str(stdin).context("parsing before-submit-prompt input")?;
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::Strict,
+            )?;
             let input = UserPromptSubmitInput {
-                session_id: raw.conversation_id.clone(),
+                session_id: session_id.clone(),
                 transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                    &raw.conversation_id,
+                    &session_id,
                     raw.transcript_path.as_deref(),
                 ),
                 prompt: raw.prompt,
@@ -543,7 +634,10 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::BeforeShellExecution => {
             let raw: CursorBeforeShellExecutionRaw =
                 serde_json::from_str(stdin).context("parsing before-shell-execution input")?;
-            let session_id = normalize_cursor_session_id(&raw.conversation_id);
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::Strict,
+            )?;
 
             // Fallback-only behavior: if turn-start already captured pre-prompt state,
             // skip shell fallback to avoid duplicate turn boundaries.
@@ -551,15 +645,10 @@ pub(crate) fn dispatch_cursor_hook(
                 return Ok(());
             }
 
-            let resolver_session_id = if raw.conversation_id.trim().is_empty() {
-                session_id.clone()
-            } else {
-                raw.conversation_id.clone()
-            };
             let input = UserPromptSubmitInput {
                 session_id: session_id.clone(),
                 transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                    &resolver_session_id,
+                    &session_id,
                     raw.transcript_path.as_deref(),
                 ),
                 prompt: shell_command_to_prompt(&raw.command),
@@ -575,7 +664,10 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::AfterShellExecution => {
             let raw: CursorAfterShellExecutionRaw =
                 serde_json::from_str(stdin).context("parsing after-shell-execution input")?;
-            let session_id = normalize_cursor_session_id(&raw.conversation_id);
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::PreserveEmpty,
+            )?;
 
             // Only complete turns that were started by shell fallback.
             let Some(pre_prompt) = backend.load_pre_prompt(&session_id)? else {
@@ -585,15 +677,10 @@ pub(crate) fn dispatch_cursor_hook(
                 return Ok(());
             }
 
-            let resolver_session_id = if raw.conversation_id.trim().is_empty() {
-                session_id.clone()
-            } else {
-                raw.conversation_id.clone()
-            };
             let input = SessionInfoInput {
-                session_id,
+                session_id: session_id.clone(),
                 transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                    &resolver_session_id,
+                    &session_id,
                     raw.transcript_path.as_deref(),
                 ),
             };
@@ -602,10 +689,14 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::Stop => {
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing stop input")?;
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::PreserveEmpty,
+            )?;
             let input = SessionInfoInput {
-                session_id: raw.conversation_id.clone(),
+                session_id: session_id.clone(),
                 transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                    &raw.conversation_id,
+                    &session_id,
                     raw.transcript_path.as_deref(),
                 ),
             };
@@ -614,25 +705,24 @@ pub(crate) fn dispatch_cursor_hook(
         CursorHookVerb::SessionEnd => {
             let raw: CursorSessionInfoRaw =
                 serde_json::from_str(stdin).context("parsing session-end input")?;
-            let session_id = normalize_cursor_session_id(&raw.conversation_id);
-            let resolver_session_id = if raw.conversation_id.trim().is_empty() {
-                session_id.clone()
-            } else {
-                raw.conversation_id.clone()
-            };
+            let session_id = crate::engine::lifecycle::apply_session_id_policy(
+                &raw.conversation_id,
+                crate::engine::lifecycle::SessionIdPolicy::PreserveEmpty,
+            )?;
             let transcript_path = crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                &resolver_session_id,
+                &session_id,
                 raw.transcript_path.as_deref(),
             );
 
             let pre_prompt = backend.load_pre_prompt(&session_id)?;
             let session = backend.load_session(&session_id)?;
-            let should_finalize_turn = pre_prompt.is_some()
-                || session.is_none()
-                || session.as_ref().is_some_and(|state| {
-                    state.phase == SessionPhase::Active
-                        || (state.phase == SessionPhase::Idle && state.step_count == 0)
-                });
+            let should_finalize_turn = !session_id.is_empty()
+                && (pre_prompt.is_some()
+                    || session.is_none()
+                    || session.as_ref().is_some_and(|state| {
+                        state.phase == SessionPhase::Active
+                            || (state.phase == SessionPhase::Idle && state.step_count == 0)
+                    }));
 
             if should_finalize_turn {
                 handle_stop_cursor(
@@ -657,15 +747,6 @@ pub(crate) fn dispatch_cursor_hook(
         | CursorHookVerb::SubagentStop => {
             route_hook_command_to_lifecycle(AGENT_NAME_CURSOR, hook_name, stdin)
         }
-    }
-}
-
-fn normalize_cursor_session_id(session_id: &str) -> String {
-    let trimmed = session_id.trim();
-    if trimmed.is_empty() {
-        "unknown".to_string()
-    } else {
-        trimmed.to_string()
     }
 }
 

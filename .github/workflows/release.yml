@@ -47,10 +47,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Configure Linux arm64 linker
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
-
       - name: Install qemu for Linux arm64 smoke test
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
@@ -120,7 +116,7 @@ jobs:
 
   publish:
     name: Publish release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build
     steps:
       - name: Download packaged artifacts
@@ -144,7 +140,7 @@ jobs:
 
   update-homebrew-tap:
     name: Update Homebrew tap formula
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: publish
     environment: "Production CLI"
     steps:
@@ -230,7 +226,7 @@ jobs:
 
   verify:
     name: Verify published release artifacts
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: publish
     steps:
       - name: Download assets from published release

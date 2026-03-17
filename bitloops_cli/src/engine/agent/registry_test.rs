@@ -119,6 +119,7 @@ fn TestDetect() {
 fn TestAgentNameConstants() {
     assert_eq!(AGENT_NAME_CLAUDE_CODE, "claude-code");
     assert_eq!(AGENT_NAME_COPILOT, "copilot");
+    assert_eq!(AGENT_NAME_CODEX, "codex");
     assert_eq!(AGENT_NAME_CURSOR, "cursor");
     assert_eq!(AGENT_NAME_GEMINI, "gemini");
     assert_eq!(AGENT_NAME_OPEN_CODE, "opencode");

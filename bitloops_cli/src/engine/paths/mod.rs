@@ -8,13 +8,21 @@ use std::sync::{OnceLock, RwLock};
 // Directory constants.
 pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TMP_DIR: &str = ".bitloops/tmp";
+// Legacy compatibility path used by git-backed checkpoint metadata.
 pub const BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
+pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
+pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";
+pub const BITLOOPS_EVENT_STORE_DIR: &str = ".bitloops/stores/event";
+pub const BITLOOPS_BLOB_STORE_DIR: &str = ".bitloops/stores/blob";
+pub const RELATIONAL_DB_FILE_NAME: &str = "relational.db";
+pub const EVENTS_DB_FILE_NAME: &str = "events.duckdb";
 
 // Metadata file names.
 pub const CONTEXT_FILE_NAME: &str = "context.md";
 pub const PROMPT_FILE_NAME: &str = "prompt.txt";
 pub const SUMMARY_FILE_NAME: &str = "summary.txt";
 pub const TRANSCRIPT_FILE_NAME: &str = "full.jsonl";
+// Legacy transcript filename used by git-backed metadata checkpoints.
 pub const TRANSCRIPT_FILE_NAME_LEGACY: &str = "full.log";
 pub const METADATA_FILE_NAME: &str = "metadata.json";
 pub const CHECKPOINT_FILE_NAME: &str = "checkpoint.json";
@@ -22,7 +30,7 @@ pub const CONTENT_HASH_FILE_NAME: &str = "content_hash.txt";
 pub const EXPORT_DATA_FILE_NAME: &str = "export.json";
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
-// Canonical metadata branch used by the Rust CLI.
+// Legacy metadata branch used by git-backed checkpoint storage.
 pub const METADATA_BRANCH_NAME: &str = "bitloops/checkpoints/v1";
 
 #[derive(Clone)]
@@ -62,6 +70,7 @@ pub fn is_protected_path(path: &str) -> bool {
         BITLOOPS_DIR,
         ".claude",
         ".github/hooks",
+        ".codex",
         ".cursor",
         ".gemini",
     ]
@@ -231,6 +240,22 @@ pub fn abs_path(path: &str) -> Result<PathBuf> {
 /// Returns `.bitloops/metadata/<session_id>`.
 pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
     format!("{BITLOOPS_METADATA_DIR}/{session_id}")
+}
+
+pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(BITLOOPS_RELATIONAL_STORE_DIR)
+        .join(RELATIONAL_DB_FILE_NAME)
+}
+
+pub fn default_events_db_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join(BITLOOPS_EVENT_STORE_DIR)
+        .join(EVENTS_DB_FILE_NAME)
+}
+
+pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(BITLOOPS_BLOB_STORE_DIR)
 }
 
 /// Attempts to extract a session ID from a transcript path.
@@ -680,6 +705,8 @@ mod tests {
             (".claude/settings.json", true),
             (".github/hooks", true),
             (".github/hooks/bitloops.json", true),
+            (".codex", true),
+            (".codex/hooks.json", true),
             (".cursor", true),
             (".cursor/hooks.json", true),
             (".gemini", true),

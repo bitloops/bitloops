@@ -506,82 +506,69 @@ fn file_url_to_path(url: &str) -> Result<Option<PathBuf>, BundleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use crate::test_support::process_state::with_env_vars;
     use tempfile::TempDir;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn lock_env() -> MutexGuard<'static, ()> {
-        match env_lock().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
 
     #[test]
     fn manifest_url_uses_compiled_default_when_env_missing() {
-        let _guard = lock_env();
-        unsafe {
-            env::remove_var(DASHBOARD_MANIFEST_URL_ENV);
-            env::remove_var(DASHBOARD_CDN_BASE_URL_ENV);
-        }
-
-        let actual = manifest_url().expect("manifest URL should resolve");
-        assert_eq!(
-            actual,
-            dashboard_env::DASHBOARD_MANIFEST_URL,
-            "manifest URL should fall back to compiled value"
+        with_env_vars(
+            &[
+                (DASHBOARD_MANIFEST_URL_ENV, None),
+                (DASHBOARD_CDN_BASE_URL_ENV, None),
+            ],
+            || {
+                let actual = manifest_url().expect("manifest URL should resolve");
+                assert_eq!(
+                    actual,
+                    dashboard_env::DASHBOARD_MANIFEST_URL,
+                    "manifest URL should fall back to compiled value"
+                );
+            },
         );
     }
 
     #[test]
     fn manifest_url_prefers_manifest_env_override() {
-        let _guard = lock_env();
-        unsafe {
-            env::set_var(
-                DASHBOARD_MANIFEST_URL_ENV,
-                "https://override.example.com/bundle_versions.json",
-            );
-            env::set_var(
-                DASHBOARD_CDN_BASE_URL_ENV,
-                "https://cdn-override.example.com/",
-            );
-        }
-
-        let actual = manifest_url().expect("manifest URL should resolve");
-        assert_eq!(
-            actual, "https://override.example.com/bundle_versions.json",
-            "manifest env override should have highest priority"
+        with_env_vars(
+            &[
+                (
+                    DASHBOARD_MANIFEST_URL_ENV,
+                    Some("https://override.example.com/bundle_versions.json"),
+                ),
+                (
+                    DASHBOARD_CDN_BASE_URL_ENV,
+                    Some("https://cdn-override.example.com/"),
+                ),
+            ],
+            || {
+                let actual = manifest_url().expect("manifest URL should resolve");
+                assert_eq!(
+                    actual, "https://override.example.com/bundle_versions.json",
+                    "manifest env override should have highest priority"
+                );
+            },
         );
-
-        unsafe {
-            env::remove_var(DASHBOARD_MANIFEST_URL_ENV);
-            env::remove_var(DASHBOARD_CDN_BASE_URL_ENV);
-        }
     }
 
     #[test]
     fn resolve_entry_url_prefers_cdn_env_override_for_relative_paths() {
-        let _guard = lock_env();
-        unsafe {
-            env::set_var(
-                DASHBOARD_CDN_BASE_URL_ENV,
-                "https://cdn-override.example.com/",
-            );
-        }
-
-        let actual = resolve_entry_url("bundle.tar.zst").expect("relative URL should resolve");
-        assert_eq!(
-            actual, "https://cdn-override.example.com/bundle.tar.zst",
-            "relative URL should use CDN env override when present"
+        with_env_vars(
+            &[
+                (DASHBOARD_MANIFEST_URL_ENV, None),
+                (
+                    DASHBOARD_CDN_BASE_URL_ENV,
+                    Some("https://cdn-override.example.com/"),
+                ),
+            ],
+            || {
+                let actual =
+                    resolve_entry_url("bundle.tar.zst").expect("relative URL should resolve");
+                assert_eq!(
+                    actual, "https://cdn-override.example.com/bundle.tar.zst",
+                    "relative URL should use CDN env override when present"
+                );
+            },
         );
-
-        unsafe {
-            env::remove_var(DASHBOARD_CDN_BASE_URL_ENV);
-        }
     }
 
     #[test]

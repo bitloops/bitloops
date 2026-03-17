@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, bail};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,8 +21,7 @@ pub fn run_reset_cmd(config: &ResetConfig) -> Result<()> {
         return Ok(());
     }
 
-    cleanup_session_files(&config.repo_root, config.session_id.as_deref())?;
-    cleanup_shadow_branches(&config.repo_root)?;
+    cleanup_session_states(&config.repo_root, config.session_id.as_deref())?;
     Ok(())
 }
 
@@ -41,90 +39,41 @@ fn ensure_git_repository(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cleanup_session_files(repo_root: &Path, target_session_id: Option<&str>) -> Result<()> {
-    let session_dir = repo_root.join(".git").join("bitloops-sessions");
-    if !session_dir.exists() {
-        return Ok(());
-    }
-
+fn cleanup_session_states(repo_root: &Path, target_session_id: Option<&str>) -> Result<()> {
+    let backend = crate::engine::session::create_session_backend_or_local(repo_root);
     if let Some(session_id) = target_session_id {
-        let file = session_dir.join(format!("{session_id}.json"));
-        if file.exists() {
-            fs::remove_file(&file)
-                .with_context(|| format!("failed to delete session state {}", file.display()))?;
-        }
+        backend
+            .delete_session(session_id)
+            .with_context(|| format!("failed to delete session state {session_id}"))?;
         return Ok(());
     }
 
-    for entry in fs::read_dir(&session_dir)
-        .with_context(|| format!("failed to read session directory {}", session_dir.display()))?
-    {
-        let entry = entry.context("failed to read session directory entry")?;
-        let path = entry.path();
-        if path.is_file() {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to delete session state {}", path.display()))?;
-        }
+    let sessions = backend
+        .list_sessions()
+        .context("failed to list session states for reset")?;
+    for session in sessions {
+        backend
+            .delete_session(&session.session_id)
+            .with_context(|| format!("failed to delete session state {}", session.session_id))?;
     }
-
     Ok(())
-}
-
-fn cleanup_shadow_branches(repo_root: &Path) -> Result<()> {
-    let out = Command::new("git")
-        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
-        .current_dir(repo_root)
-        .output()
-        .context("failed to list git branches")?;
-    if !out.status.success() {
-        bail!(
-            "failed to list git branches: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-
-    for branch in String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|name| is_shadow_branch(name))
-    {
-        let deleted = Command::new("git")
-            .args(["branch", "-D", branch])
-            .current_dir(repo_root)
-            .output()
-            .with_context(|| format!("failed to delete branch {branch}"))?;
-        if !deleted.status.success() {
-            bail!(
-                "failed to delete branch {branch}: {}",
-                String::from_utf8_lossy(&deleted.stderr).trim()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn is_shadow_branch(branch: &str) -> bool {
-    if branch == "bitloops/checkpoints/v1" {
-        return false;
-    }
-    if let Some(rest) = branch.strip_prefix("bitloops/") {
-        return !rest.is_empty() && !rest.starts_with("checkpoints/");
-    }
-    false
 }
 
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
     use super::{ResetConfig, run_reset_cmd};
-    use std::fs;
+    use crate::engine::db::SqliteConnectionPool;
+    use crate::engine::session::state::SessionState;
+    use crate::store_config::{
+        resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    };
+    use crate::test_support::process_state::git_command;
     use std::path::Path;
-    use std::process::Command;
     use tempfile::TempDir;
 
     fn run_git(dir: &Path, args: &[&str]) -> (bool, String, String) {
-        let out = Command::new("git")
+        let out = git_command()
             .current_dir(dir)
             .args(args)
             .output()
@@ -134,6 +83,28 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).to_string(),
             String::from_utf8_lossy(&out.stderr).to_string(),
         )
+    }
+
+    fn with_legacy_local_backend<T>(f: impl FnOnce() -> T) -> T {
+        f()
+    }
+
+    fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+        let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            crate::engine::paths::default_relational_db_path(repo_root)
+        }
+    }
+
+    fn ensure_relational_store_file(repo_root: &Path) {
+        let sqlite = SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
     }
 
     fn setup_reset_test_repo() -> (TempDir, String) {
@@ -149,6 +120,8 @@ mod tests {
                 "user.name=Test User",
                 "-c",
                 "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -156,15 +129,11 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        ensure_relational_store_file(root);
 
         let (_, stdout, _) = run_git(root, &["rev-parse", "HEAD"]);
         let commit_hash = stdout.trim().to_string();
         (dir, commit_hash)
-    }
-
-    fn create_shadow_branch(repo_root: &Path, branch: &str) {
-        let (ok, _, err) = run_git(repo_root, &["branch", branch]);
-        assert!(ok, "failed to create branch {branch}: {err}");
     }
 
     fn create_session_state(
@@ -174,12 +143,16 @@ mod tests {
         base_commit: &str,
         checkpoint_count: i32,
     ) {
-        let session_dir = repo_root.join(".git").join("bitloops-sessions");
-        fs::create_dir_all(&session_dir).expect("session dir");
-        let content = format!(
-            "{{\"session_id\":\"{session_id}\",\"base_commit\":\"{base_commit}\",\"checkpoint_count\":{checkpoint_count}}}"
-        );
-        fs::write(session_dir.join(file_name), content).expect("session file");
+        let _ = file_name;
+        let _ = checkpoint_count;
+        let backend = crate::engine::session::create_session_backend_or_local(repo_root);
+        backend
+            .save_session(&SessionState {
+                session_id: session_id.to_string(),
+                base_commit: base_commit.to_string(),
+                ..Default::default()
+            })
+            .expect("save session state");
     }
 
     fn default_config(repo_root: &Path) -> ResetConfig {
@@ -197,7 +170,7 @@ mod tests {
         let (repo, _) = setup_reset_test_repo();
         let cfg = default_config(repo.path());
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(
             result.is_ok(),
             "reset should succeed with nothing to reset: {result:?}"
@@ -209,7 +182,6 @@ mod tests {
     fn TestResetCmd_WithForce() {
         let (repo, commit_hash) = setup_reset_test_repo();
         let root = repo.path();
-        create_shadow_branch(root, "bitloops/abc1234-deadbeef");
         create_session_state(
             root,
             "2026-02-02-test123.json",
@@ -221,28 +193,16 @@ mod tests {
         let mut cfg = default_config(root);
         cfg.force = true;
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(result.is_ok(), "reset --force should succeed: {result:?}");
 
         assert!(
-            !root
-                .join(".git")
-                .join("bitloops-sessions")
-                .join("2026-02-02-test123.json")
-                .exists(),
+            crate::engine::session::create_session_backend_or_local(root)
+                .load_session("2026-02-02-test123")
+                .expect("load session")
+                .is_none(),
             "session state file should be deleted"
         );
-
-        let (ok, _, _) = run_git(
-            root,
-            &[
-                "show-ref",
-                "--verify",
-                "--quiet",
-                "refs/heads/bitloops/abc1234-deadbeef",
-            ],
-        );
-        assert!(!ok, "shadow branch should be deleted");
     }
 
     // CLI-560
@@ -261,17 +221,16 @@ mod tests {
         let mut cfg = default_config(root);
         cfg.force = true;
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(
             result.is_ok(),
             "reset should succeed without shadow branch: {result:?}"
         );
         assert!(
-            !root
-                .join(".git")
-                .join("bitloops-sessions")
-                .join("2026-02-02-orphaned.json")
-                .exists(),
+            crate::engine::session::create_session_backend_or_local(root)
+                .load_session("2026-02-02-orphaned")
+                .expect("load session")
+                .is_none(),
             "session state file should be deleted even without shadow branch"
         );
     }
@@ -282,7 +241,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let cfg = default_config(dir.path());
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(result.is_err(), "reset should fail outside git repository");
         let msg = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(
@@ -298,7 +257,7 @@ mod tests {
         let mut cfg = default_config(repo.path());
         cfg.strategy_name = "auto-commit".to_string();
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(
             result.is_err(),
             "reset should fail for auto-commit strategy: {result:?}"
@@ -315,7 +274,6 @@ mod tests {
     fn TestResetCmd_MultipleSessions() {
         let (repo, commit_hash) = setup_reset_test_repo();
         let root = repo.path();
-        create_shadow_branch(root, "bitloops/abc1234-deadbeef");
         create_session_state(
             root,
             "2026-02-02-session1.json",
@@ -334,37 +292,25 @@ mod tests {
         let mut cfg = default_config(root);
         cfg.force = true;
 
-        let result = run_reset_cmd(&cfg);
+        let result = with_legacy_local_backend(|| run_reset_cmd(&cfg));
         assert!(
             result.is_ok(),
             "reset should succeed and delete all sessions: {result:?}"
         );
 
         assert!(
-            !root
-                .join(".git")
-                .join("bitloops-sessions")
-                .join("2026-02-02-session1.json")
-                .exists(),
+            crate::engine::session::create_session_backend_or_local(root)
+                .load_session("2026-02-02-session1")
+                .expect("load session1")
+                .is_none(),
             "session1 should be deleted"
         );
         assert!(
-            !root
-                .join(".git")
-                .join("bitloops-sessions")
-                .join("2026-02-02-session2.json")
-                .exists(),
+            crate::engine::session::create_session_backend_or_local(root)
+                .load_session("2026-02-02-session2")
+                .expect("load session2")
+                .is_none(),
             "session2 should be deleted"
         );
-        let (ok, _, _) = run_git(
-            root,
-            &[
-                "show-ref",
-                "--verify",
-                "--quiet",
-                "refs/heads/bitloops/abc1234-deadbeef",
-            ],
-        );
-        assert!(!ok, "shadow branch should be deleted");
     }
 }

@@ -5,9 +5,9 @@ on:
     branches:
       - main
     paths:
-      - 'bitloops_cli/**'
-      - 'scripts/check-rust-file-size.sh'
-      - '.github/workflows/ci.yml'
+      - "bitloops_cli/**"
+      - "scripts/check-rust-file-size.sh"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ permissions:
 jobs:
   rust-file-size:
     name: Rust File Size
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
       - name: Install ripgrep
@@ -24,7 +24,7 @@ jobs:
         run: bash scripts/check-rust-file-size.sh
   test:
     name: Test compile (Ubuntu)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -67,10 +67,6 @@ jobs:
       - name: Install musl-tools
         if: contains(matrix.target, 'unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
-
-      - name: Configure Linux arm64 linker
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld" >> "$GITHUB_ENV"
 
       - name: Install qemu for Linux arm64 smoke test
         if: matrix.target == 'aarch64-unknown-linux-musl'
