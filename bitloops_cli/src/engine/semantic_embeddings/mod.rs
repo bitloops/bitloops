@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 
 use crate::engine::providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
-    default_embedding_provider,
-    default_embedding_output_dimension, embedding_provider_requires_api_key,
+    default_embedding_output_dimension, default_embedding_provider,
+    embedding_provider_requires_api_key,
 };
 use crate::engine::semantic_features::SemanticFeatureInput;
 
@@ -34,7 +34,11 @@ pub fn build_symbol_embedding_provider(
         .filter(|value| !value.trim().is_empty())
         .map(str::trim)
         .map(str::to_string)
-        .unwrap_or_else(|| default_embedding_model(&provider).unwrap_or_default().to_string());
+        .unwrap_or_else(|| {
+            default_embedding_model(&provider)
+                .unwrap_or_default()
+                .to_string()
+        });
     if model.is_empty() {
         return Err(anyhow!(
             "BITLOOPS_DEVQL_EMBEDDING_MODEL is required when embedding provider is configured"
@@ -48,9 +52,7 @@ pub fn build_symbol_embedding_provider(
         .map(str::trim)
         .map(|value| {
             value.parse::<usize>().map_err(|_| {
-                anyhow!(
-                    "BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION must be a positive integer"
-                )
+                anyhow!("BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION must be a positive integer")
             })
         })
         .transpose()?;
@@ -144,7 +146,10 @@ pub fn build_symbol_embedding_inputs(
         .iter()
         .filter(|input| should_embed_kind(&input.canonical_kind))
         .filter_map(|input| {
-            let summary = summary_by_artefact_id.get(&input.artefact_id)?.trim().to_string();
+            let summary = summary_by_artefact_id
+                .get(&input.artefact_id)?
+                .trim()
+                .to_string();
             if summary.is_empty() {
                 return None;
             }
@@ -260,11 +265,10 @@ pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
     provider: &dyn EmbeddingProvider,
 ) -> Result<SymbolEmbeddingRow> {
-    let embedding = provider
-        .embed(
-            &build_symbol_embedding_text(input),
-            crate::engine::providers::embeddings::EmbeddingInputType::Document,
-        )?;
+    let embedding = provider.embed(
+        &build_symbol_embedding_text(input),
+        crate::engine::providers::embeddings::EmbeddingInputType::Document,
+    )?;
     if embedding.is_empty() {
         bail!("embedding provider returned an empty vector");
     }

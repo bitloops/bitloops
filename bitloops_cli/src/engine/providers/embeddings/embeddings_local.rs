@@ -23,10 +23,9 @@ pub(super) fn build(
     }
 
     let resolved_model = resolve_local_embedding_model(&model)?;
-    let embedder = TextEmbedding::try_new(
-        InitOptions::new(resolved_model).with_show_download_progress(false),
-    )
-        .with_context(|| format!("loading local embedding model `{model}`"))?;
+    let embedder =
+        TextEmbedding::try_new(InitOptions::new(resolved_model).with_show_download_progress(false))
+            .with_context(|| format!("loading local embedding model `{model}`"))?;
 
     Ok(Box::new(LocalEmbeddingsProvider {
         provider: provider.to_string(),

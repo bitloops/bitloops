@@ -38,7 +38,9 @@ pub(super) fn resolve_endpoint(provider: &str, base_url: Option<&str>) -> Result
         "voyage" => Ok("https://api.voyageai.com/v1/embeddings".to_string()),
         "openai" => Ok("https://api.openai.com/v1/embeddings".to_string()),
         "qodo" | "openai_compatible" | "custom" => {
-            bail!("BITLOOPS_DEVQL_EMBEDDING_BASE_URL is required for embedding provider `{provider}`")
+            bail!(
+                "BITLOOPS_DEVQL_EMBEDDING_BASE_URL is required for embedding provider `{provider}`"
+            )
         }
         other => bail!(
             "unsupported embedding provider `{other}`. Use `local`, `voyage`, `qodo`, `openai`, or `openai_compatible` with BITLOOPS_DEVQL_EMBEDDING_BASE_URL"

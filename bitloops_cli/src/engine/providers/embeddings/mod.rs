@@ -1,5 +1,5 @@
-mod embeddings_local;
 mod embeddings_http;
+mod embeddings_local;
 
 use anyhow::Result;
 

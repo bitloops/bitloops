@@ -302,10 +302,9 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
-        &embedding_provider_config(cfg),
-    )?
-    .map(Arc::<dyn EmbeddingProvider>::from);
+    let embedding_provider =
+        semantic_embeddings::build_symbol_embedding_provider(&embedding_provider_config(cfg))?
+            .map(Arc::<dyn EmbeddingProvider>::from);
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if init {
         init_clickhouse_schema(cfg).await?;

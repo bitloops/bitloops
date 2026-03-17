@@ -580,8 +580,9 @@ where
         read_non_empty_env(&env_lookup, ENV_EMBEDDING_API_KEY).or(file_cfg.embedding_api_key);
     let embedding_base_url =
         read_non_empty_env(&env_lookup, ENV_EMBEDDING_BASE_URL).or(file_cfg.embedding_base_url);
-    let embedding_output_dimension = read_non_empty_env(&env_lookup, ENV_EMBEDDING_OUTPUT_DIMENSION)
-        .or(file_cfg.embedding_output_dimension);
+    let embedding_output_dimension =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_OUTPUT_DIMENSION)
+            .or(file_cfg.embedding_output_dimension);
     let embedding_provider = read_non_empty_env(&env_lookup, ENV_EMBEDDING_PROVIDER)
         .or(file_cfg.embedding_provider)
         .or_else(|| Some(DEFAULT_EMBEDDING_PROVIDER.to_string()));

@@ -209,7 +209,10 @@ fn embedding_config_honors_env_over_file_precedence() {
 
     let cfg = resolve_devql_embedding_config_for_tests(file_cfg, &env);
     assert_eq!(cfg.embedding_provider.as_deref(), Some("qodo"));
-    assert_eq!(cfg.embedding_model.as_deref(), Some("Qodo/Qodo-Embed-1-1.5B"));
+    assert_eq!(
+        cfg.embedding_model.as_deref(),
+        Some("Qodo/Qodo-Embed-1-1.5B")
+    );
     assert_eq!(cfg.embedding_api_key.as_deref(), Some("file-key"));
     assert_eq!(
         cfg.embedding_base_url.as_deref(),
