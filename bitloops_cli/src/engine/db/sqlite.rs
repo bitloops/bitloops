@@ -28,7 +28,13 @@ impl SqliteConnectionPool {
 
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
         self.execute_batch(crate::engine::devql::checkpoint_schema_sql_sqlite())
-            .context("initialising SQLite checkpoint schema")
+            .context("initialising SQLite checkpoint schema")?;
+        self.with_connection(|conn| match conn.execute_batch("ALTER TABLE sessions ADD COLUMN ended_at TEXT;") {
+            Ok(()) => Ok(()),
+            Err(err) if err.to_string().contains("duplicate column name: ended_at") => Ok(()),
+            Err(err) => Err(err).context("executing SQLite ended_at migration"),
+        })
+        .context("migrating SQLite checkpoint schema for sessions.ended_at")
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {

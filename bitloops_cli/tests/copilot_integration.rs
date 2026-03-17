@@ -1,9 +1,11 @@
-use bitloops_cli::engine::session::SessionBackend;
 use bitloops_cli::engine::session::create_session_backend_or_local;
 use bitloops_cli::engine::session::phase::SessionPhase;
 use bitloops_cli::engine::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
+use bitloops_cli::store_config::resolve_store_backend_config_for_repo;
+use bitloops_cli::store_config::resolve_sqlite_db_path_for_repo;
+use rusqlite::Connection;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -114,11 +116,14 @@ fn init_repo(repo: &Path) {
 }
 
 fn write_transcript(path: &Path, prompt: &str, response: &str, file_path: &str) {
+    write_transcript_turn(path, prompt, response, file_path, false);
+}
+
+fn write_transcript_turn(path: &Path, prompt: &str, response: &str, file_path: &str, append: bool) {
     let payload = format!(
         r#"{{"type":"user.message","data":{{"content":{prompt_json}}}}}
 {{"type":"tool.execution_complete","data":{{"model":"gpt-5","toolTelemetry":{{"properties":{{"filePaths":{file_paths_json}}}}}}}}}
 {{"type":"assistant.message","data":{{"content":{response_json},"outputTokens":42}}}}
-{{"type":"session.shutdown","data":{{"modelMetrics":[{{"requests":{{"count":1}},"usage":{{"inputTokens":100,"outputTokens":42,"cacheReadTokens":0,"cacheWriteTokens":0}}}}]}}}}
 "#,
         prompt_json = serde_json::to_string(prompt).unwrap(),
         response_json = serde_json::to_string(response).unwrap(),
@@ -128,7 +133,46 @@ fn write_transcript(path: &Path, prompt: &str, response: &str, file_path: &str) 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
     }
-    fs::write(path, payload).unwrap();
+    if append {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        file.write_all(payload.as_bytes()).unwrap();
+    } else {
+        fs::write(path, payload).unwrap();
+    }
+}
+
+fn append_transcript_shutdown(path: &Path) {
+    let payload = r#"{"type":"session.shutdown","data":{"modelMetrics":[{"requests":{"count":1},"usage":{"inputTokens":100,"outputTokens":42,"cacheReadTokens":0,"cacheWriteTokens":0}}]}}
+"#;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(payload.as_bytes()).unwrap();
+}
+
+fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
+    let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
+    } else {
+        bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+    }
+}
+
+fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
+    let conn = Connection::open(checkpoint_sqlite_path(repo_root)).expect("open sqlite");
+    conn.query_row(
+        "SELECT COUNT(*) FROM temporary_checkpoints WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .expect("count temporary checkpoints")
 }
 
 #[test]
@@ -203,6 +247,22 @@ fn copilot_basic_workflow() {
     );
     assert_success(&out, "hooks copilot agent-stop");
 
+    let backend = create_session_backend_or_local(dir.path());
+    let pre_commit_state = backend
+        .load_session("copilot-basic-1")
+        .expect("load pre-commit copilot session")
+        .expect("pre-commit copilot session should exist");
+    assert_eq!(pre_commit_state.first_prompt, "Create copilot_hello.txt");
+    assert!(
+        !pre_commit_state.turn_id.is_empty(),
+        "turn id should be initialized before commit"
+    );
+    assert_eq!(
+        temporary_checkpoint_count(dir.path(), "copilot-basic-1"),
+        1,
+        "Copilot turn end should write one temporary checkpoint before commit"
+    );
+
     let out = run_cmd_with_home(
         dir.path(),
         home.path(),
@@ -235,11 +295,19 @@ fn copilot_basic_workflow() {
         .expect("committed checkpoint should exist");
     assert_eq!(summary.checkpoint_id, checkpoint_id);
     assert_eq!(summary.strategy, "manual-commit");
+    assert!(
+        summary.files_touched.contains(&"copilot_hello.txt".to_string()),
+        "committed checkpoint should include Copilot-created file"
+    );
 
     let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
     assert_eq!(session.metadata["agent"], "copilot");
+    assert_eq!(session.prompts, "Create copilot_hello.txt");
+    assert!(
+        session.context.contains("Create copilot_hello.txt"),
+        "checkpoint context should include the Copilot prompt"
+    );
 
-    let backend = create_session_backend_or_local(dir.path());
     let state = backend
         .load_session("copilot-basic-1")
         .expect("load copilot session")
@@ -257,4 +325,308 @@ fn copilot_basic_workflow() {
         !head_message.contains("Bitloops-Checkpoint: "),
         "manual-commit persistence currently relies on commit-checkpoint mappings, not commit-message trailers\n{head_message}"
     );
+}
+
+#[test]
+fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["init", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops init --agent copilot",
+    );
+    assert_success(
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
+    );
+
+    run_git_expect_success(
+        dir.path(),
+        &["add", ".github/hooks/bitloops.json", ".bitloops"],
+        "stage copilot infra files",
+    );
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "seed copilot infra"],
+        "commit copilot infra files",
+    );
+
+    let sid = "copilot-fallback-1";
+    let transcript_path = home
+        .path()
+        .join(".copilot")
+        .join("session-state")
+        .join(sid)
+        .join("events.jsonl");
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "session-start"],
+            Some(&format!(r#"{{"sessionId":"{sid}"}}"#)),
+        ),
+        "hooks copilot session-start",
+    );
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "user-prompt-submitted"],
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","prompt":"Create fallback.txt"}}"#
+            )),
+        ),
+        "hooks copilot user-prompt-submitted",
+    );
+
+    fs::write(dir.path().join("fallback.txt"), "fallback\n").unwrap();
+    write_transcript(
+        &transcript_path,
+        "Create fallback.txt",
+        "Created fallback.txt",
+        "fallback.txt",
+    );
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "agent-stop"],
+            Some(&format!(r#"{{"sessionId":"{sid}","transcriptPath":""}}"#)),
+        ),
+        "hooks copilot agent-stop",
+    );
+    assert_eq!(temporary_checkpoint_count(dir.path(), sid), 1);
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "session-end"],
+            Some(&format!(r#"{{"sessionId":"{sid}"}}"#)),
+        ),
+        "hooks copilot session-end",
+    );
+
+    run_git_expect_success(dir.path(), &["add", "fallback.txt"], "stage fallback");
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "add fallback file"],
+        "commit fallback",
+    );
+
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
+    let mappings = read_commit_checkpoint_mappings(dir.path()).expect("read mappings");
+    assert!(
+        mappings.contains_key(&head_sha),
+        "Copilot fallback transcript path should still produce a commit mapping"
+    );
+}
+
+#[test]
+fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["init", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops init --agent copilot",
+    );
+    assert_success(
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
+    );
+
+    run_git_expect_success(
+        dir.path(),
+        &["add", ".github/hooks/bitloops.json", ".bitloops"],
+        "stage copilot infra files",
+    );
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "seed copilot infra"],
+        "commit copilot infra files",
+    );
+
+    let sid = "copilot-bootstrap-1";
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "session-start"],
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","initialPrompt":"Bootstrap prompt"}}"#
+            )),
+        ),
+        "hooks copilot session-start",
+    );
+
+    let backend = create_session_backend_or_local(dir.path());
+    let state = backend
+        .load_session(sid)
+        .expect("load session")
+        .expect("session should exist");
+    assert_eq!(state.first_prompt, "Bootstrap prompt");
+}
+
+#[test]
+fn copilot_multi_turn_session_condenses_both_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["init", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops init --agent copilot",
+    );
+    assert_success(
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
+    );
+
+    run_git_expect_success(
+        dir.path(),
+        &["add", ".github/hooks/bitloops.json", ".bitloops"],
+        "stage copilot infra files",
+    );
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "seed copilot infra"],
+        "commit copilot infra files",
+    );
+
+    let sid = "copilot-multi-turn-1";
+    let transcript_path = home
+        .path()
+        .join(".copilot")
+        .join("session-state")
+        .join(sid)
+        .join("events.jsonl");
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "session-start"],
+            Some(&format!(r#"{{"sessionId":"{sid}"}}"#)),
+        ),
+        "hooks copilot session-start",
+    );
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "user-prompt-submitted"],
+            Some(&format!(r#"{{"sessionId":"{sid}","prompt":"Create first.txt"}}"#)),
+        ),
+        "hooks copilot user-prompt-submitted first",
+    );
+    fs::write(dir.path().join("first.txt"), "first\n").unwrap();
+    write_transcript_turn(
+        &transcript_path,
+        "Create first.txt",
+        "Created first.txt",
+        "first.txt",
+        false,
+    );
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "agent-stop"],
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","transcriptPath":"{}"}}"#,
+                transcript_path.to_string_lossy()
+            )),
+        ),
+        "hooks copilot agent-stop first",
+    );
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "user-prompt-submitted"],
+            Some(&format!(r#"{{"sessionId":"{sid}","prompt":"Create second.txt"}}"#)),
+        ),
+        "hooks copilot user-prompt-submitted second",
+    );
+    fs::write(dir.path().join("second.txt"), "second\n").unwrap();
+    write_transcript_turn(
+        &transcript_path,
+        "Create second.txt",
+        "Created second.txt",
+        "second.txt",
+        true,
+    );
+    append_transcript_shutdown(&transcript_path);
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "agent-stop"],
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","transcriptPath":"{}"}}"#,
+                transcript_path.to_string_lossy()
+            )),
+        ),
+        "hooks copilot agent-stop second",
+    );
+
+    assert_success(
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["hooks", "copilot", "session-end"],
+            Some(&format!(r#"{{"sessionId":"{sid}"}}"#)),
+        ),
+        "hooks copilot session-end",
+    );
+
+    run_git_expect_success(
+        dir.path(),
+        &["add", "first.txt", "second.txt"],
+        "stage multi-turn files",
+    );
+    run_git_expect_success(
+        dir.path(),
+        &["commit", "-m", "add multi-turn files"],
+        "commit multi-turn files",
+    );
+
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
+    let mappings = read_commit_checkpoint_mappings(dir.path()).expect("read mappings");
+    let checkpoint_id = mappings
+        .get(&head_sha)
+        .cloned()
+        .expect("checkpoint mapping should exist");
+    let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
+    assert!(session.prompts.contains("Create first.txt"));
+    assert!(session.prompts.contains("Create second.txt"));
+
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("read committed checkpoint")
+        .expect("committed checkpoint should exist");
+    assert!(summary.files_touched.contains(&"first.txt".to_string()));
+    assert!(summary.files_touched.contains(&"second.txt".to_string()));
 }

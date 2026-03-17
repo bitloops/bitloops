@@ -21,6 +21,15 @@ const HOOK_TYPE_PRE_TOOL_USE: &str = "preToolUse";
 const HOOK_TYPE_POST_TOOL_USE: &str = "postToolUse";
 const HOOK_TYPE_ERROR_OCCURRED: &str = "errorOccurred";
 
+fn required_hook_types() -> [&'static str; 4] {
+    [
+        HOOK_TYPE_USER_PROMPT_SUBMITTED,
+        HOOK_TYPE_SESSION_START,
+        HOOK_TYPE_AGENT_STOP,
+        HOOK_TYPE_SESSION_END,
+    ]
+}
+
 fn managed_hook_types() -> [&'static str; 8] {
     [
         HOOK_TYPE_USER_PROMPT_SUBMITTED,
@@ -191,6 +200,10 @@ fn has_command(entries: &[Value], command: &str) -> bool {
     entries.iter().any(|entry| bash_of(entry) == Some(command))
 }
 
+fn has_managed_hook(entries: &[super::types::CopilotHookEntry]) -> bool {
+    entries.iter().any(|entry| is_bitloops_hook(&entry.bash))
+}
+
 pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     let path = hooks_file_path()?;
     let existing_data = fs::read(&path).ok();
@@ -291,18 +304,13 @@ pub fn are_hooks_installed() -> bool {
         return false;
     };
 
-    [
-        parsed.hooks.user_prompt_submitted.as_slice(),
-        parsed.hooks.session_start.as_slice(),
-        parsed.hooks.agent_stop.as_slice(),
-        parsed.hooks.session_end.as_slice(),
-        parsed.hooks.subagent_stop.as_slice(),
-        parsed.hooks.pre_tool_use.as_slice(),
-        parsed.hooks.post_tool_use.as_slice(),
-        parsed.hooks.error_occurred.as_slice(),
-    ]
-    .into_iter()
-    .all(|entries| entries.iter().any(|entry| is_bitloops_hook(&entry.bash)))
+    required_hook_types().into_iter().all(|hook_type| match hook_type {
+        HOOK_TYPE_USER_PROMPT_SUBMITTED => has_managed_hook(&parsed.hooks.user_prompt_submitted),
+        HOOK_TYPE_SESSION_START => has_managed_hook(&parsed.hooks.session_start),
+        HOOK_TYPE_AGENT_STOP => has_managed_hook(&parsed.hooks.agent_stop),
+        HOOK_TYPE_SESSION_END => has_managed_hook(&parsed.hooks.session_end),
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -331,6 +339,49 @@ mod tests {
 
             let second = install_hooks(false, false).expect("install second");
             assert_eq!(second, 0);
+        });
+    }
+
+    #[test]
+    fn are_hooks_installed_accepts_missing_optional_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+        with_cwd(dir.path(), || {
+            let hooks_dir = dir.path().join(".github/hooks");
+            std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+            let content = r#"{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
+    "sessionStart": [{"type":"command","bash":"bitloops hooks copilot session-start"}],
+    "agentStop": [{"type":"command","bash":"bitloops hooks copilot agent-stop"}],
+    "sessionEnd": [{"type":"command","bash":"bitloops hooks copilot session-end"}]
+  }
+}
+"#;
+            std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
+            assert!(are_hooks_installed());
+        });
+    }
+
+    #[test]
+    fn are_hooks_installed_requires_core_lifecycle_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+        with_cwd(dir.path(), || {
+            let hooks_dir = dir.path().join(".github/hooks");
+            std::fs::create_dir_all(&hooks_dir).expect("hooks dir");
+            let content = r#"{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
+    "sessionStart": [{"type":"command","bash":"bitloops hooks copilot session-start"}],
+    "agentStop": [{"type":"command","bash":"bitloops hooks copilot agent-stop"}]
+  }
+}
+"#;
+            std::fs::write(hooks_dir.join("bitloops.json"), content).expect("write");
+            assert!(!are_hooks_installed());
         });
     }
 
@@ -379,6 +430,67 @@ mod tests {
                     .and_then(|hooks| hooks.get("customHook"))
                     .is_some()
             );
+        });
+    }
+
+    #[test]
+    fn install_hooks_preserves_user_hooks_alongside_managed_hooks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+        with_cwd(dir.path(), || {
+            let hooks_dir = dir.path().join(".github/hooks");
+            fs::create_dir_all(&hooks_dir).expect("mkdir");
+            fs::write(
+                hooks_dir.join("bitloops.json"),
+                r#"{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"type":"command","bash":"echo custom-session-start"}]
+  }
+}
+"#,
+            )
+            .expect("write");
+
+            install_hooks(false, false).expect("install");
+            let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
+            assert!(content.contains("echo custom-session-start"));
+            assert!(content.contains("bitloops hooks copilot session-start"));
+        });
+    }
+
+    #[test]
+    fn install_hooks_recovers_missing_managed_entries_without_duplicating_existing_ones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_repo(dir.path());
+        with_cwd(dir.path(), || {
+            let hooks_dir = dir.path().join(".github/hooks");
+            fs::create_dir_all(&hooks_dir).expect("mkdir");
+            fs::write(
+                hooks_dir.join("bitloops.json"),
+                r#"{
+  "version": 1,
+  "hooks": {
+    "userPromptSubmitted": [{"type":"command","bash":"bitloops hooks copilot user-prompt-submitted"}],
+    "sessionStart": [{"type":"command","bash":"echo custom-session-start"}],
+    "customHook": [{"type":"command","bash":"echo custom"}]
+  }
+}
+"#,
+            )
+            .expect("write");
+
+            let installed = install_hooks(false, false).expect("install");
+            assert_eq!(installed, 7);
+
+            let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
+            assert_eq!(
+                content.matches("bitloops hooks copilot user-prompt-submitted").count(),
+                1
+            );
+            assert!(content.contains("echo custom-session-start"));
+            assert!(content.contains("echo custom"));
+            assert!(content.contains("bitloops hooks copilot session-end"));
         });
     }
 

@@ -26,7 +26,7 @@ use super::{
 
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
-use crate::engine::session::{SessionBackend, create_session_backend_or_local};
+use crate::engine::session::create_session_backend_or_local;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
@@ -41,6 +41,7 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         prompt: String::from("hello"),
         tool_use_id: String::from("toolu_123"),
         subagent_id: String::from("subagent-1"),
+        model: String::new(),
     }
 }
 
@@ -183,6 +184,37 @@ fn test_handle_lifecycle_turn_start_persists_pre_prompt_and_session_state() {
         assert_eq!(state.agent_type, "copilot");
         assert_eq!(state.first_prompt, "Create file");
         assert_eq!(state.transcript_path, event.session_ref);
+    });
+}
+
+#[test]
+fn test_handle_lifecycle_turn_start_prefers_real_prompt_over_bootstrap_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "copilot-bootstrap".to_string(),
+                first_prompt: "Bootstrap prompt".to_string(),
+                phase: SessionPhase::Idle,
+                ..Default::default()
+            })
+            .expect("seed session");
+
+        let adapter = CopilotCliLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::TurnStart);
+        event.session_id = "copilot-bootstrap".to_string();
+        event.prompt = "Turn prompt".to_string();
+
+        handle_lifecycle_turn_start(&adapter, &event).expect("turn start should succeed");
+
+        let state = backend
+            .load_session("copilot-bootstrap")
+            .unwrap()
+            .expect("session should exist");
+        assert_eq!(state.first_prompt, "Turn prompt");
     });
 }
 
@@ -1014,7 +1046,8 @@ fn test_read_and_parse_agent_hook_input_gemini() {
 #[test]
 fn test_parse_hook_event_session_start_copilot() {
     let adapter = CopilotCliLifecycleAdapter;
-    let mut stdin = Cursor::new(r#"{"sessionId":"copilot-session-1"}"#);
+    let mut stdin =
+        Cursor::new(r#"{"sessionId":"copilot-session-1","initialPrompt":"Bootstrap"}"#);
     let event = adapter
         .parse_hook_event(COPILOT_HOOK_SESSION_START, &mut stdin)
         .unwrap()
@@ -1022,6 +1055,7 @@ fn test_parse_hook_event_session_start_copilot() {
 
     assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
     assert_eq!("copilot-session-1", event.session_id);
+    assert_eq!("Bootstrap", event.prompt);
 }
 
 #[test]

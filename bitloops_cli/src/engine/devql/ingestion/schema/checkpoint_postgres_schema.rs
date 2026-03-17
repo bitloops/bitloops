@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     worktree_path TEXT DEFAULT '',
     worktree_id TEXT DEFAULT '',
     started_at TEXT,
+    ended_at TEXT,
     phase TEXT DEFAULT 'active',
     turn_id TEXT DEFAULT '',
     step_count INTEGER DEFAULT 0,

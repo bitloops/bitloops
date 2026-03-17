@@ -36,6 +36,7 @@ pub struct LifecycleEvent {
     pub prompt: String,
     pub tool_use_id: String,
     pub subagent_id: String,
+    pub model: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -142,12 +143,17 @@ pub fn handle_lifecycle_session_start(
         SessionTransitionContext::default(),
     );
     apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
-    state.transcript_path = event.session_ref.clone();
+    if !event.session_ref.trim().is_empty() {
+        state.transcript_path = event.session_ref.clone();
+    }
     state.last_interaction_time = Some(now_rfc3339());
     state.worktree_path = repo_root.to_string_lossy().into_owned();
     state.worktree_id = crate::engine::paths::get_worktree_id(&repo_root)?;
     if state.agent_type.trim().is_empty() {
         state.agent_type = agent.agent_name().to_string();
+    }
+    if state.first_prompt.is_empty() && !event.prompt.trim().is_empty() {
+        state.first_prompt = truncate_prompt_for_storage(&event.prompt);
     }
 
     backend.save_session(&state)?;
@@ -200,7 +206,10 @@ pub fn handle_lifecycle_turn_start(
             ..Default::default()
         }
     });
-    if state.first_prompt.is_empty() {
+    let should_replace_bootstrap_prompt = state.step_count == 0
+        && state.turn_id.trim().is_empty()
+        && state.phase == crate::engine::session::phase::SessionPhase::Idle;
+    if state.first_prompt.is_empty() || should_replace_bootstrap_prompt {
         state.first_prompt = truncate_prompt_for_storage(&event.prompt);
     }
 

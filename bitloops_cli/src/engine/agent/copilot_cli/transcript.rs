@@ -29,6 +29,18 @@ pub struct CopilotEvent {
 struct UserMessageData {
     #[serde(default)]
     content: String,
+    #[serde(default, rename = "transformedContent")]
+    transformed_content: String,
+}
+
+impl UserMessageData {
+    fn best_prompt(&self) -> &str {
+        if !self.content.trim().is_empty() {
+            &self.content
+        } else {
+            &self.transformed_content
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -136,8 +148,9 @@ pub fn extract_prompts_from_events(events: &[CopilotEvent]) -> Vec<String> {
         let Ok(data) = serde_json::from_value::<UserMessageData>(event.data.clone()) else {
             continue;
         };
-        if !data.content.is_empty() {
-            prompts.push(data.content);
+        let prompt = data.best_prompt().trim();
+        if !prompt.is_empty() {
+            prompts.push(prompt.to_string());
         }
     }
 
@@ -186,8 +199,9 @@ pub fn extract_modified_files_from_events(events: &[CopilotEvent]) -> Vec<String
         };
 
         for path in paths {
-            if !path.is_empty() && seen.insert(path.clone()) {
-                files.push(path);
+            let normalized = path.trim();
+            if !normalized.is_empty() && seen.insert(normalized.to_string()) {
+                files.push(normalized.to_string());
             }
         }
     }
@@ -285,6 +299,14 @@ mod tests {
     }
 
     #[test]
+    fn transcript_position_counts_last_line_without_trailing_newline() {
+        let position =
+            get_transcript_position_from_bytes(br#"{"type":"assistant.message","data":{"content":"done"}}"#)
+                .expect("position");
+        assert_eq!(position, 1);
+    }
+
+    #[test]
     fn parse_events_skips_malformed_lines() {
         let data = br#"{"type":"user.message","data":{"content":"hello"}}
 not-json
@@ -305,6 +327,27 @@ not-json
     }
 
     #[test]
+    fn extract_prompts_uses_transformed_content_when_content_is_empty() {
+        let data = br#"{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(extract_prompts_from_events(&events), vec!["Refactor parser"]);
+    }
+
+    #[test]
+    fn extract_prompts_preserves_multi_turn_order() {
+        let data = br#"{"type":"user.message","data":{"content":"First prompt"}}
+{"type":"assistant.message","data":{"content":"done"}}
+{"type":"user.message","data":{"content":"Second prompt"}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(
+            extract_prompts_from_events(&events),
+            vec!["First prompt", "Second prompt"]
+        );
+    }
+
+    #[test]
     fn extract_summary_reads_last_assistant_message() {
         let (events, _) = parse_events_from_offset(&sample_data(), 0).expect("parse");
         assert_eq!(extract_summary_from_events(&events), "Created hello.txt");
@@ -320,9 +363,54 @@ not-json
     }
 
     #[test]
+    fn extract_modified_files_deduplicates_and_trims() {
+        let data = br#"{"type":"tool.execution_complete","data":{"toolTelemetry":{"properties":{"filePaths":"[\" hello.txt \",\"hello.txt\",\"world.txt\"]"}}}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(
+            extract_modified_files_from_events(&events),
+            vec!["hello.txt", "world.txt"]
+        );
+    }
+
+    #[test]
+    fn extract_modified_files_skips_malformed_file_paths() {
+        let data =
+            br#"{"type":"tool.execution_complete","data":{"toolTelemetry":{"properties":{"filePaths":"not-json"}}}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert!(extract_modified_files_from_events(&events).is_empty());
+    }
+
+    #[test]
+    fn extract_modified_files_skips_empty_entries() {
+        let data = br#"{"type":"tool.execution_complete","data":{"toolTelemetry":{"properties":{"filePaths":"[\"\",\"  \",\"src/main.rs\"]"}}}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(extract_modified_files_from_events(&events), vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn extract_summary_skips_empty_assistant_messages() {
+        let data = br#"{"type":"assistant.message","data":{"content":"Earlier summary"}}
+{"type":"assistant.message","data":{"content":"","outputTokens":10}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(extract_summary_from_events(&events), "Earlier summary");
+    }
+
+    #[test]
     fn extract_model_prefers_model_change() {
         let (events, _) = parse_events_from_offset(&sample_data(), 0).expect("parse");
         assert_eq!(extract_model_from_events(&events), "gpt-5");
+    }
+
+    #[test]
+    fn extract_model_falls_back_to_tool_execution_complete() {
+        let data = br#"{"type":"tool.execution_complete","data":{"model":"gpt-5.2","toolTelemetry":{"properties":{"filePaths":"[]"}}}}
+"#;
+        let (events, _) = parse_events_from_offset(data, 0).expect("parse");
+        assert_eq!(extract_model_from_events(&events), "gpt-5.2");
     }
 
     #[test]

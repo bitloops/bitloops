@@ -129,7 +129,7 @@ fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
 }
 
 fn is_user_role(role: Option<&str>) -> bool {
-    matches!(role, Some("user") | Some("human"))
+    matches!(role, Some("user") | Some("human") | Some("user.message"))
 }
 
 /// Extracts the last assistant text block as a session summary.
@@ -143,7 +143,10 @@ fn extract_summary_from_jsonl(jsonl: &str) -> String {
         let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if transcript_line_role(&val) != Some("assistant") {
+        if !matches!(
+            transcript_line_role(&val),
+            Some("assistant") | Some("assistant.message")
+        ) {
             continue;
         }
         let Some(content) = transcript_line_content(&val) else {
@@ -166,8 +169,21 @@ fn transcript_line_role(val: &serde_json::Value) -> Option<&str> {
 }
 
 fn transcript_line_content(val: &serde_json::Value) -> Option<&serde_json::Value> {
-    val.get("message")
-        .and_then(|m| m.get("content"))
+    let message_content = val.get("message").and_then(|m| m.get("content"));
+    if message_content.is_some() {
+        return message_content;
+    }
+
+    let data_content = val.get("data").and_then(|d| d.get("content"));
+    if let Some(content) = data_content {
+        let text = content_to_text(content);
+        if !text.is_empty() {
+            return Some(content);
+        }
+    }
+
+    val.get("data")
+        .and_then(|d| d.get("transformedContent"))
         .or_else(|| val.get("content"))
 }
 
@@ -188,6 +204,29 @@ fn content_to_text(content: &serde_json::Value) -> String {
             .trim()
             .to_string(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod session_metadata_inline_tests {
+    use super::{extract_summary_from_jsonl, extract_user_prompts_from_jsonl};
+
+    #[test]
+    fn extract_user_prompts_supports_copilot_user_message_payloads() {
+        let jsonl = r#"{"type":"user.message","data":{"content":"Create hello.txt"}}
+{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
+"#;
+        assert_eq!(
+            extract_user_prompts_from_jsonl(jsonl),
+            vec!["Create hello.txt", "Refactor parser"]
+        );
+    }
+
+    #[test]
+    fn extract_summary_supports_copilot_assistant_messages() {
+        let jsonl = r#"{"type":"assistant.message","data":{"content":"Created hello.txt"}}
+"#;
+        assert_eq!(extract_summary_from_jsonl(jsonl), "Created hello.txt");
     }
 }
 
