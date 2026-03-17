@@ -432,6 +432,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::db::SqliteConnectionPool;
     use crate::store_config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
@@ -499,6 +500,108 @@ mod tests {
             !store
                 .payload_exists(&payload.storage_path)
                 .expect("exists after delete")
+        );
+    }
+
+    #[test]
+    fn sqlite_relational_store_roundtrip_persists_and_finds_item() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("knowledge-relational.db");
+        let pool = SqliteConnectionPool::connect(sqlite_path).expect("sqlite pool");
+        let store = SqliteKnowledgeRelationalStore::new(pool);
+        store.initialise_schema().expect("initialise schema");
+
+        let source = KnowledgeSourceRow {
+            knowledge_source_id: "source-1".to_string(),
+            provider: "github".to_string(),
+            source_kind: "github_issue".to_string(),
+            canonical_external_id: "github://bitloops/bitloops/issues/42".to_string(),
+            canonical_url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+        let item = KnowledgeItemRow {
+            knowledge_item_id: "item-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            knowledge_source_id: source.knowledge_source_id.clone(),
+            item_kind: "github_issue".to_string(),
+            latest_document_version_id: "version-1".to_string(),
+            provenance_json: source.provenance_json.clone(),
+        };
+        let relation = KnowledgeRelationAssertionRow {
+            relation_assertion_id: "relation-1".to_string(),
+            repo_id: item.repo_id.clone(),
+            knowledge_item_id: item.knowledge_item_id.clone(),
+            source_document_version_id: item.latest_document_version_id.clone(),
+            target_type: "commit".to_string(),
+            target_id: "abc123".to_string(),
+            relation_type: "associated_with".to_string(),
+            association_method: "manual_commit_flag".to_string(),
+            confidence: 1.0,
+            provenance_json: source.provenance_json.clone(),
+        };
+
+        store
+            .persist_ingestion(&source, &item, Some(&relation))
+            .expect("persist ingestion");
+
+        let found = store
+            .find_item(&item.repo_id, &source.knowledge_source_id)
+            .expect("find item")
+            .expect("item row");
+
+        assert_eq!(found, item);
+    }
+
+    #[test]
+    fn duckdb_document_store_roundtrip_inserts_looks_up_and_deletes_version() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("knowledge-documents.duckdb");
+        let store = DuckdbKnowledgeDocumentStore::new(path);
+        store.initialise_schema().expect("initialise schema");
+        assert!(
+            store
+                .has_document_version("item-1", "hash-1")
+                .expect("lookup before insert")
+                .is_none()
+        );
+
+        let row = KnowledgeDocumentVersionRow {
+            document_version_id: "version-1".to_string(),
+            knowledge_item_id: "item-1".to_string(),
+            provider: "github".to_string(),
+            source_kind: "github_issue".to_string(),
+            content_hash: "hash-1".to_string(),
+            title: "Issue title".to_string(),
+            state: Some("open".to_string()),
+            author: Some("spiros".to_string()),
+            updated_at: Some("2026-03-16T10:00:00Z".to_string()),
+            body_preview: Some("Issue body".to_string()),
+            normalized_fields_json: "{\"title\":\"Issue title\"}".to_string(),
+            storage_backend: "local".to_string(),
+            storage_path: "knowledge/repo-1/item-1/version-1/payload.json".to_string(),
+            payload_mime_type: "application/json".to_string(),
+            payload_size_bytes: 32,
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+
+        store
+            .insert_document_version(&row)
+            .expect("insert document version");
+        assert_eq!(
+            store
+                .has_document_version(&row.knowledge_item_id, &row.content_hash)
+                .expect("lookup after insert"),
+            Some(row.document_version_id.clone())
+        );
+
+        store
+            .delete_document_version(&row.document_version_id)
+            .expect("delete document version");
+        assert!(
+            store
+                .has_document_version(&row.knowledge_item_id, &row.content_hash)
+                .expect("lookup after delete")
+                .is_none()
         );
     }
 }

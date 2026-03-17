@@ -9,14 +9,18 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::providers::{
+    ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient,
     KnowledgeProviderClient, build_confluence_document, build_github_document, build_jira_document,
 };
+use super::plugin::build_host_context;
 use super::storage::{content_hash, knowledge_payload_key, serialize_payload};
 use super::types::{
     BoxFuture, FetchedKnowledgeDocument, IngestKnowledgeRequest, KnowledgeHostContext,
     KnowledgePayloadData, KnowledgeSourceKind,
 };
-use super::{KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result};
+use super::{
+    KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result, run_add_command,
+};
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
@@ -119,6 +123,24 @@ fn github_provider_maps_pull_request_payload() -> Result<()> {
 }
 
 #[test]
+fn github_provider_rejects_issue_url_that_resolves_to_pull_request_payload() {
+    let parsed =
+        super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")
+            .expect("parse github issue url");
+
+    let err = build_github_document(
+        &parsed,
+        json!({
+            "title": "PR payload",
+            "pull_request": { "url": "https://api.github.com/repos/bitloops/bitloops/pulls/42" }
+        }),
+    )
+    .expect_err("issue url must reject pull request payload");
+
+    assert!(err.to_string().contains("pull request payload"));
+}
+
+#[test]
 fn jira_provider_maps_issue_payload() -> Result<()> {
     let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
     let document = build_jira_document(
@@ -148,6 +170,23 @@ fn jira_provider_maps_issue_payload() -> Result<()> {
 }
 
 #[test]
+fn jira_provider_collects_plain_string_description() -> Result<()> {
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+    let document = build_jira_document(
+        &parsed,
+        json!({
+            "fields": {
+                "summary": "Jira title",
+                "description": "Plain Jira body"
+            }
+        }),
+    )?;
+
+    assert_eq!(document.body_preview.as_deref(), Some("Plain Jira body"));
+    Ok(())
+}
+
+#[test]
 fn confluence_provider_maps_page_payload() -> Result<()> {
     let parsed = super::url::parse_knowledge_url(
         "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge",
@@ -170,6 +209,148 @@ fn confluence_provider_maps_page_payload() -> Result<()> {
     assert_eq!(document.title, "Knowledge page");
     assert_eq!(document.author.as_deref(), Some("Docs User"));
     assert_eq!(document.body_preview.as_deref(), Some("Hello world"));
+    Ok(())
+}
+
+#[test]
+fn knowledge_plugin_builtin_constructs_real_clients() -> Result<()> {
+    let _plugin = KnowledgePlugin::builtin()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn github_client_fetch_requires_provider_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, ProviderConfig::default())?;
+    let client = GitHubKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("missing github config must fail");
+
+    assert!(err.to_string().contains("knowledge.providers.github"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn github_client_rejects_non_github_locator() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let client = GitHubKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("non github locator must fail");
+
+    assert!(err.to_string().contains("non-GitHub locator"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn jira_client_fetch_requires_provider_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.jira = None;
+    let host = build_test_host(&temp, config)?;
+    let client = JiraKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("missing jira config must fail");
+
+    assert!(err.to_string().contains("knowledge.providers.jira"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn jira_client_fetch_rejects_site_mismatch_before_network() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://other.atlassian.net"))?;
+    let client = JiraKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://bitloops.atlassian.net/browse/CLI-1370")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("site mismatch must fail");
+
+    assert!(err.to_string().contains("does not match configured"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn jira_client_rejects_non_jira_locator() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let client = JiraKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("non jira locator must fail");
+
+    assert!(err.to_string().contains("non-Jira locator"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn confluence_client_fetch_requires_provider_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut config = provider_config("https://bitloops.atlassian.net");
+    config.confluence = None;
+    let host = build_test_host(&temp, config)?;
+    let client = ConfluenceKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url(
+        "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge",
+    )?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("missing confluence config must fail");
+
+    assert!(err.to_string().contains("knowledge.providers.confluence"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn confluence_client_fetch_rejects_site_mismatch_before_network() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://other.atlassian.net"))?;
+    let client = ConfluenceKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url(
+        "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge",
+    )?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("site mismatch must fail");
+
+    assert!(err.to_string().contains("does not match configured"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn confluence_client_rejects_non_confluence_locator() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let client = ConfluenceKnowledgeClient::new()?;
+    let parsed = super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")?;
+
+    let err = client
+        .fetch(&parsed, &host)
+        .await
+        .expect_err("non confluence locator must fail");
+
+    assert!(err.to_string().contains("non-Confluence locator"));
     Ok(())
 }
 
@@ -570,19 +751,46 @@ fn format_result_renders_expected_summary() {
     assert!(rendered.contains("association: none"));
 }
 
+#[test]
+fn build_host_context_reads_repo_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let repo_root = init_knowledge_repo(&temp)?;
+    let repo = resolve_repo_identity(&repo_root)?;
+    write_repo_config(&repo_root, &test_backends(&temp), &provider_config("https://bitloops.atlassian.net"))?;
+
+    let host = build_host_context(&repo_root, &repo)?;
+
+    assert_eq!(host.repo.identity, repo.identity);
+    assert!(host.provider_config.github.is_some());
+    assert!(host.provider_config.jira.is_some());
+    assert!(host.provider_config.confluence.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_add_command_returns_missing_provider_error_without_repo_config() -> Result<()> {
+    let temp = TempDir::new()?;
+    let repo_root = init_knowledge_repo(&temp)?;
+    let repo = resolve_repo_identity(&repo_root)?;
+
+    let err = run_add_command(
+        &repo_root,
+        &repo,
+        "https://github.com/bitloops/bitloops/issues/42",
+        None,
+    )
+    .await
+    .expect_err("missing provider config must fail");
+
+    assert!(!err.to_string().trim().is_empty());
+    Ok(())
+}
+
 fn build_test_host(
     temp: &TempDir,
     provider_config: ProviderConfig,
 ) -> Result<KnowledgeHostContext> {
-    let repo_root = temp.path().join("repo");
-    fs::create_dir_all(&repo_root)?;
-    init_test_repo(
-        &repo_root,
-        "main",
-        "Bitloops Test",
-        "bitloops-test@example.com",
-    );
-    git_ok(&repo_root, &["commit", "--allow-empty", "-m", "initial"]);
+    let repo_root = init_knowledge_repo(temp)?;
     let repo = resolve_repo_identity(&repo_root)?;
     let backends = test_backends(temp);
     let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
@@ -601,6 +809,93 @@ fn build_test_host(
         document_store,
         payload_store,
     })
+}
+
+fn init_knowledge_repo(temp: &TempDir) -> Result<PathBuf> {
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&repo_root)?;
+    init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    git_ok(&repo_root, &["commit", "--allow-empty", "-m", "initial"]);
+    Ok(repo_root)
+}
+
+fn write_repo_config(
+    repo_root: &Path,
+    backends: &StoreBackendConfig,
+    provider_config: &ProviderConfig,
+) -> Result<()> {
+    let sqlite_path = backends
+        .relational
+        .sqlite_path
+        .as_ref()
+        .context("missing sqlite path for test config")?;
+    let duckdb_path = backends
+        .events
+        .duckdb_path
+        .as_ref()
+        .context("missing duckdb path for test config")?;
+    let blob_path = backends
+        .blobs
+        .local_path
+        .as_ref()
+        .context("missing blob path for test config")?;
+    let github = provider_config
+        .github
+        .as_ref()
+        .context("missing github config for test config")?;
+    let jira = provider_config
+        .jira
+        .as_ref()
+        .context("missing jira config for test config")?;
+    let confluence = provider_config
+        .confluence
+        .as_ref()
+        .context("missing confluence config for test config")?;
+    let config_dir = repo_root.join(".bitloops");
+    fs::create_dir_all(&config_dir)?;
+    fs::write(
+        config_dir.join("config.json"),
+        json!({
+            "stores": {
+                "relational": {
+                    "provider": "sqlite",
+                    "sqlite_path": sqlite_path,
+                },
+                "events": {
+                    "provider": "duckdb",
+                    "duckdb_path": duckdb_path,
+                },
+                "blobs": {
+                    "provider": "local",
+                    "local_path": blob_path,
+                }
+            },
+            "knowledge": {
+                "providers": {
+                    "github": {
+                        "token": github.token,
+                    },
+                    "jira": {
+                        "site_url": jira.site_url,
+                        "email": jira.email,
+                        "token": jira.token,
+                    },
+                    "confluence": {
+                        "site_url": confluence.site_url,
+                        "email": confluence.email,
+                        "token": confluence.token,
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )?;
+    Ok(())
 }
 
 fn provider_config(base_url: &str) -> ProviderConfig {

@@ -1,5 +1,6 @@
 use super::*;
-use crate::test_support::process_state::with_cwd;
+use crate::test_support::process_state::{enter_process_state, with_cwd};
+use std::fs;
 
 #[test]
 fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
@@ -73,6 +74,48 @@ fn backend_config_rejects_invalid_provider_values() {
 }
 
 #[test]
+fn backend_config_resolves_from_current_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "provider": "postgres",
+                    "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
+                },
+                "events": {
+                    "provider": "clickhouse",
+                    "clickhouse_url": "http://localhost:8123",
+                    "clickhouse_database": "bitloops"
+                },
+                "blobs": {
+                    "provider": "local",
+                    "local_path": "data/blobs"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+    let cfg = resolve_store_backend_config().expect("backend config");
+
+    assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
+    assert_eq!(
+        cfg.relational.postgres_dsn.as_deref(),
+        Some("postgres://u:p@localhost:5432/bitloops")
+    );
+    assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+    assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
+    assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
+    assert_eq!(cfg.blobs.local_path.as_deref(), Some("data/blobs"));
+}
+
+#[test]
 fn semantic_config_reads_values_from_semantic_block() {
     let value = serde_json::json!({
         "semantic": {
@@ -95,7 +138,7 @@ fn semantic_config_reads_values_from_semantic_block() {
 }
 
 #[test]
-fn store_provider_config_defaults_when_block_missing() {
+fn knowledge_config_providers_defaults_when_block_missing() {
     let value = serde_json::json!({
         "stores": {
             "relational": { "provider": "sqlite" }
@@ -111,17 +154,17 @@ fn knowledge_config_providers_reads_literal_values() {
     let value = serde_json::json!({
         "knowledge": {
             "providers": {
-            "github": { "token": "gh-token" },
-            "jira": {
-                "site_url": "https://bitloops.atlassian.net",
-                "email": "jira@example.com",
-                "token": "jira-token"
-            },
-            "confluence": {
-                "site_url": "https://bitloops.atlassian.net",
-                "email": "docs@example.com",
-                "token": "confluence-token"
-            }
+                "github": { "token": "gh-token" },
+                "jira": {
+                    "site_url": "https://bitloops.atlassian.net",
+                    "email": "jira@example.com",
+                    "token": "jira-token"
+                },
+                "confluence": {
+                    "site_url": "https://bitloops.atlassian.net",
+                    "email": "docs@example.com",
+                    "token": "confluence-token"
+                }
             }
         }
     });
@@ -156,7 +199,7 @@ fn knowledge_config_providers_resolves_env_indirection() {
     let value = serde_json::json!({
         "knowledge": {
             "providers": {
-            "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+                "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
             }
         }
     });
@@ -176,7 +219,7 @@ fn knowledge_config_providers_rejects_missing_env_value() {
     let value = serde_json::json!({
         "knowledge": {
             "providers": {
-            "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+                "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
             }
         }
     });
@@ -190,10 +233,10 @@ fn knowledge_config_providers_rejects_missing_required_field() {
     let value = serde_json::json!({
         "knowledge": {
             "providers": {
-            "jira": {
-                "site_url": "https://bitloops.atlassian.net",
-                "email": "jira@example.com"
-            }
+                "jira": {
+                    "site_url": "https://bitloops.atlassian.net",
+                    "email": "jira@example.com"
+                }
             }
         }
     });
@@ -203,6 +246,126 @@ fn knowledge_config_providers_rejects_missing_required_field() {
     assert!(
         err.to_string()
             .contains("missing `knowledge.providers.jira.token`")
+    );
+}
+
+#[test]
+fn knowledge_config_providers_defaults_when_repo_config_missing() {
+    let temp = tempfile::tempdir().expect("temp dir");
+
+    let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
+
+    assert_eq!(cfg, ProviderConfig::default());
+}
+
+#[test]
+fn knowledge_config_providers_reads_values_from_repo_config_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "knowledge": {
+                "providers": {
+                    "github": { "token": "gh-token" },
+                    "jira": {
+                        "site_url": "https://bitloops.atlassian.net",
+                        "email": "jira@example.com",
+                        "token": "jira-token"
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
+
+    assert_eq!(
+        cfg.github,
+        Some(GithubProviderConfig {
+            token: "gh-token".to_string(),
+        })
+    );
+    assert_eq!(
+        cfg.jira,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "jira@example.com".to_string(),
+            token: "jira-token".to_string(),
+        })
+    );
+    assert_eq!(cfg.confluence, None);
+}
+
+#[test]
+fn knowledge_config_providers_resolve_from_current_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "knowledge": {
+                "providers": {
+                    "confluence": {
+                        "site_url": "https://bitloops.atlassian.net",
+                        "email": "docs@example.com",
+                        "token": "docs-token"
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+    let cfg = resolve_provider_config().expect("provider config");
+
+    assert_eq!(
+        cfg.confluence,
+        Some(AtlassianProviderConfig {
+            site_url: "https://bitloops.atlassian.net".to_string(),
+            email: "docs@example.com".to_string(),
+            token: "docs-token".to_string(),
+        })
+    );
+    assert_eq!(cfg.github, None);
+    assert_eq!(cfg.jira, None);
+}
+
+#[test]
+fn knowledge_config_providers_resolve_env_indirection_from_repo_config_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "knowledge": {
+                "providers": {
+                    "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(
+        None,
+        &[("BITLOOPS_GITHUB_TOKEN", Some("env-gh-from-file"))],
+    );
+    let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
+
+    assert_eq!(
+        cfg.github,
+        Some(GithubProviderConfig {
+            token: "env-gh-from-file".to_string(),
+        })
     );
 }
 
@@ -230,6 +393,39 @@ fn semantic_config_honors_env_over_file_precedence() {
     assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
     assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
     assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
+    assert_eq!(
+        cfg.semantic_base_url.as_deref(),
+        Some("http://localhost:11434/v1/chat/completions")
+    );
+}
+
+#[test]
+fn semantic_config_resolves_from_current_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "stores": {
+                "semantic": {
+                    "provider": "openai",
+                    "model": "gpt-4.1-mini",
+                    "api_key": "file-key",
+                    "base_url": "http://localhost:11434/v1/chat/completions"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+    let cfg = resolve_store_semantic_config();
+
+    assert_eq!(cfg.semantic_provider.as_deref(), Some("openai"));
+    assert_eq!(cfg.semantic_model.as_deref(), Some("gpt-4.1-mini"));
+    assert_eq!(cfg.semantic_api_key.as_deref(), Some("file-key"));
     assert_eq!(
         cfg.semantic_base_url.as_deref(),
         Some("http://localhost:11434/v1/chat/completions")
@@ -269,6 +465,40 @@ fn events_backend_duckdb_path_preserves_explicit_path() {
     assert_eq!(
         events.duckdb_path_or_default(),
         PathBuf::from("/tmp/custom-events.duckdb")
+    );
+}
+
+#[test]
+fn events_backend_clickhouse_endpoint_uses_defaults() {
+    let events = EventsBackendConfig {
+        provider: EventsProvider::ClickHouse,
+        duckdb_path: None,
+        clickhouse_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: None,
+    };
+
+    assert_eq!(
+        events.clickhouse_endpoint(),
+        "http://localhost:8123/?database=default"
+    );
+}
+
+#[test]
+fn events_backend_clickhouse_endpoint_trims_trailing_slash() {
+    let events = EventsBackendConfig {
+        provider: EventsProvider::ClickHouse,
+        duckdb_path: None,
+        clickhouse_url: Some("http://localhost:8123/".to_string()),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: Some("bitloops".to_string()),
+    };
+
+    assert_eq!(
+        events.clickhouse_endpoint(),
+        "http://localhost:8123/?database=bitloops"
     );
 }
 
@@ -318,6 +548,117 @@ fn sqlite_path_resolution_expands_windows_tilde_prefix_with_windows_home() {
         PathBuf::from(expanded),
         windows_home.join(r".bitloops\stores\relational\relational.db")
     );
+}
+
+#[test]
+fn blob_local_path_resolution_defaults_under_current_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    let resolved = resolve_blob_local_path(None).expect("default blob path");
+    let rendered = resolved.to_string_lossy();
+
+    assert!(
+        rendered.ends_with(".bitloops/stores/blob")
+            || rendered.ends_with(".bitloops\\stores\\blob")
+    );
+}
+
+#[test]
+fn blob_storage_local_path_or_default_uses_current_repo_root() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config = BlobStorageConfig {
+        provider: BlobStorageProvider::Local,
+        local_path: None,
+        s3_bucket: None,
+        s3_region: None,
+        s3_access_key_id: None,
+        s3_secret_access_key: None,
+        gcs_bucket: None,
+        gcs_credentials_path: None,
+    };
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    let resolved = config.local_path_or_default().expect("default local blob path");
+
+    let rendered = resolved.to_string_lossy();
+    assert!(
+        rendered.ends_with(".bitloops/stores/blob")
+            || rendered.ends_with(".bitloops\\stores\\blob")
+    );
+}
+
+#[test]
+fn dashboard_use_bitloops_local_reads_repo_config_via_public_helper() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "dashboard": {
+                "use_bitloops_local": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    assert!(dashboard_use_bitloops_local());
+    assert_eq!(DashboardFileConfig::load().use_bitloops_local, Some(true));
+}
+
+#[test]
+fn store_file_config_load_reads_repo_config_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "provider": "sqlite",
+                    "sqlite_path": "data/relational.sqlite"
+                },
+                "events": {
+                    "provider": "duckdb",
+                    "duckdb_path": "data/events.duckdb"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write repo config");
+
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+    let cfg = StoreFileConfig::load();
+
+    assert_eq!(cfg.relational_provider.as_deref(), Some("sqlite"));
+    assert_eq!(cfg.sqlite_path.as_deref(), Some("data/relational.sqlite"));
+    assert_eq!(cfg.events_provider.as_deref(), Some("duckdb"));
+    assert_eq!(cfg.duckdb_path.as_deref(), Some("data/events.duckdb"));
+}
+
+#[test]
+fn resolve_provider_config_defaults_without_repo_config_via_public_function() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    let cfg = resolve_provider_config().expect("provider config");
+
+    assert_eq!(cfg, ProviderConfig::default());
+}
+
+#[test]
+fn dashboard_file_config_load_defaults_when_repo_config_missing() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    assert_eq!(DashboardFileConfig::load(), DashboardFileConfig::default());
+    assert!(!dashboard_use_bitloops_local());
 }
 
 #[test]
