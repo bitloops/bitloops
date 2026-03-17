@@ -1,5 +1,30 @@
 use super::registry::AgentRegistry;
 use super::*;
+use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
+use crate::engine::agent::gemini_cli::transcript::{GeminiMessage, GeminiTranscript};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+struct DispatchAgent {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Agent for DispatchAgent {
+    fn name(&self) -> String {
+        "dispatch-agent".to_string()
+    }
+
+    fn agent_type(&self) -> String {
+        "dispatch-agent".to_string()
+    }
+
+    fn reassemble_transcript(&self, chunks: &[Vec<u8>]) -> anyhow::Result<Vec<u8>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut result = b"dispatch:".to_vec();
+        result.extend_from_slice(&chunks.concat());
+        Ok(result)
+    }
+}
 
 #[test]
 #[allow(non_snake_case)]
@@ -136,6 +161,72 @@ fn TestReassembleTranscript_EmptyChunks() {
     let result =
         reassemble_transcript(Vec::new(), "", &registry).expect("reassemble should not error");
     assert!(result.is_none(), "expected None for empty chunks");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestReassembleTranscript_UsesAgentSpecificImplementation() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = AgentRegistry::new(vec![Box::new(DispatchAgent {
+        calls: calls.clone(),
+    })]);
+
+    let chunks = vec![b"one".to_vec(), b"two".to_vec()];
+    let result = reassemble_transcript(chunks, "dispatch-agent", &registry)
+        .expect("reassemble should not error")
+        .expect("expected reassembled transcript");
+
+    assert_eq!(result, b"dispatch:onetwo".to_vec());
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "agent path should be used");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestGeminiCliAgentChunkAndReassembleTranscript() {
+    let agent = GeminiCliAgent;
+    let transcript = GeminiTranscript {
+        messages: vec![
+            GeminiMessage {
+                id: "msg-1".to_string(),
+                r#type: "user".to_string(),
+                content: "hello".to_string(),
+                tool_calls: Vec::new(),
+            },
+            GeminiMessage {
+                id: "msg-2".to_string(),
+                r#type: "gemini".to_string(),
+                content: "a".repeat(120),
+                tool_calls: Vec::new(),
+            },
+            GeminiMessage {
+                id: "msg-3".to_string(),
+                r#type: "user".to_string(),
+                content: "follow up".to_string(),
+                tool_calls: Vec::new(),
+            },
+        ],
+    };
+
+    let content = serde_json::to_vec(&transcript).expect("marshal transcript");
+    let chunks = agent
+        .chunk_transcript(&content, 180)
+        .expect("chunking should succeed");
+    assert!(
+        chunks.len() >= 2,
+        "expected Gemini transcript to split into multiple chunks"
+    );
+
+    let reassembled = agent
+        .reassemble_transcript(&chunks)
+        .expect("reassembly should succeed");
+    let reassembled_transcript: GeminiTranscript =
+        serde_json::from_slice(&reassembled).expect("parse reassembled transcript");
+
+    assert_eq!(
+        serde_json::to_value(&reassembled_transcript).expect("marshal reassembled transcript"),
+        serde_json::to_value(&transcript).expect("marshal original transcript"),
+        "reassembled Gemini transcript should match the original structure"
+    );
 }
 
 #[test]

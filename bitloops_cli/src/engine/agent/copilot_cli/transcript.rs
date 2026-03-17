@@ -300,9 +300,10 @@ mod tests {
 
     #[test]
     fn transcript_position_counts_last_line_without_trailing_newline() {
-        let position =
-            get_transcript_position_from_bytes(br#"{"type":"assistant.message","data":{"content":"done"}}"#)
-                .expect("position");
+        let position = get_transcript_position_from_bytes(
+            br#"{"type":"assistant.message","data":{"content":"done"}}"#,
+        )
+        .expect("position");
         assert_eq!(position, 1);
     }
 
@@ -331,7 +332,10 @@ not-json
         let data = br#"{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
 "#;
         let (events, _) = parse_events_from_offset(data, 0).expect("parse");
-        assert_eq!(extract_prompts_from_events(&events), vec!["Refactor parser"]);
+        assert_eq!(
+            extract_prompts_from_events(&events),
+            vec!["Refactor parser"]
+        );
     }
 
     #[test]
@@ -387,7 +391,10 @@ not-json
         let data = br#"{"type":"tool.execution_complete","data":{"toolTelemetry":{"properties":{"filePaths":"[\"\",\"  \",\"src/main.rs\"]"}}}}
 "#;
         let (events, _) = parse_events_from_offset(data, 0).expect("parse");
-        assert_eq!(extract_modified_files_from_events(&events), vec!["src/main.rs"]);
+        assert_eq!(
+            extract_modified_files_from_events(&events),
+            vec!["src/main.rs"]
+        );
     }
 
     #[test]

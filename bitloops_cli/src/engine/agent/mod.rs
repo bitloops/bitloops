@@ -1,3 +1,5 @@
+pub mod adapters;
+pub mod canonical;
 pub mod chunking;
 pub mod claude_code;
 pub mod codex;
@@ -12,6 +14,8 @@ pub mod types;
 use anyhow::Result;
 use std::io::Read;
 
+pub use adapters::*;
+pub use canonical::*;
 pub use chunking::*;
 pub use registry::AgentRegistry;
 pub use session::*;
@@ -140,6 +144,8 @@ pub trait TranscriptPositionProvider: Send + Sync {
     fn get_transcript_position(&self, path: &str) -> Result<usize>;
 }
 
+#[cfg(test)]
+mod adapters_test;
 #[cfg(test)]
 mod agent_test;
 #[cfg(test)]

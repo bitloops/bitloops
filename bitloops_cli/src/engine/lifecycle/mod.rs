@@ -7,6 +7,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::engine::agent::TranscriptPositionProvider;
+use crate::engine::agent::canonical::CanonicalInvocationRequest;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
@@ -125,8 +126,13 @@ pub fn handle_lifecycle_session_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict)
-        .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
+    let canonical_request =
+        CanonicalInvocationRequest::for_lifecycle_event(agent.agent_name(), event)?;
+    let session_id = apply_session_id_policy(
+        &canonical_request.session.session_id,
+        SessionIdPolicy::Strict,
+    )
+    .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
     let repo_root = crate::engine::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
 
@@ -143,17 +149,19 @@ pub fn handle_lifecycle_session_start(
         SessionTransitionContext::default(),
     );
     apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
-    if !event.session_ref.trim().is_empty() {
-        state.transcript_path = event.session_ref.clone();
+    if let Some(session_ref) = canonical_request.session.session_ref.as_ref() {
+        state.transcript_path = session_ref.clone();
     }
     state.last_interaction_time = Some(now_rfc3339());
     state.worktree_path = repo_root.to_string_lossy().into_owned();
     state.worktree_id = crate::engine::paths::get_worktree_id(&repo_root)?;
     if state.agent_type.trim().is_empty() {
-        state.agent_type = agent.agent_name().to_string();
+        state.agent_type = canonical_request.agent.agent_key.clone();
     }
-    if state.first_prompt.is_empty() && !event.prompt.trim().is_empty() {
-        state.first_prompt = truncate_prompt_for_storage(&event.prompt);
+    if state.first_prompt.is_empty()
+        && let Some(prompt) = canonical_request.prompt.as_ref()
+    {
+        state.first_prompt = truncate_prompt_for_storage(prompt);
     }
 
     backend.save_session(&state)?;
@@ -164,8 +172,13 @@ pub fn handle_lifecycle_turn_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict)
-        .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
+    let canonical_request =
+        CanonicalInvocationRequest::for_lifecycle_event(agent.agent_name(), event)?;
+    let session_id = apply_session_id_policy(
+        &canonical_request.session.session_id,
+        SessionIdPolicy::Strict,
+    )
+    .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
     let repo_root = crate::engine::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
 
@@ -177,8 +190,14 @@ pub fn handle_lifecycle_turn_start(
     let pre_prompt = crate::engine::session::state::PrePromptState {
         session_id: session_id.clone(),
         timestamp: now_rfc3339(),
-        prompt: truncate_prompt_for_storage(&event.prompt),
-        transcript_path: event.session_ref.clone(),
+        prompt: truncate_prompt_for_storage(
+            canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
+        ),
+        transcript_path: canonical_request
+            .session
+            .session_ref
+            .clone()
+            .unwrap_or_else(|| event.session_ref.clone()),
         untracked_files: collect_untracked_files_for_lifecycle(&repo_root),
         transcript_offset: transcript_offset as i64,
         ..crate::engine::session::state::PrePromptState::default()
@@ -210,7 +229,9 @@ pub fn handle_lifecycle_turn_start(
         && state.turn_id.trim().is_empty()
         && state.phase == crate::engine::session::phase::SessionPhase::Idle;
     if state.first_prompt.is_empty() || should_replace_bootstrap_prompt {
-        state.first_prompt = truncate_prompt_for_storage(&event.prompt);
+        state.first_prompt = truncate_prompt_for_storage(
+            canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
+        );
     }
 
     let transition = transition_session_with_context(
@@ -219,14 +240,18 @@ pub fn handle_lifecycle_turn_start(
         SessionTransitionContext::default(),
     );
     apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
-    state.transcript_path = event.session_ref.clone();
+    state.transcript_path = canonical_request
+        .session
+        .session_ref
+        .clone()
+        .unwrap_or_else(|| event.session_ref.clone());
     state.last_interaction_time = Some(now_rfc3339());
     if state.turn_id.trim().is_empty() {
         state.turn_id = generate_lifecycle_turn_id();
     }
     state.turn_checkpoint_ids.clear();
     if state.agent_type.trim().is_empty() {
-        state.agent_type = agent.agent_name().to_string();
+        state.agent_type = canonical_request.agent.agent_key.clone();
     }
 
     backend.save_session(&state)?;

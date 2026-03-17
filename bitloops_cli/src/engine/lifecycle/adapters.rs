@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::engine::agent::AgentAdapterRegistry;
 use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::{TokenCalculator, TranscriptAnalyzer};
@@ -392,12 +393,13 @@ pub fn route_hook_command_to_lifecycle(
     hook_name: &str,
     stdin: &str,
 ) -> Result<()> {
-    let adapter: Box<dyn LifecycleAgentAdapter> = match agent_name {
+    let canonical_agent = AgentAdapterRegistry::builtin().normalise_agent_name(agent_name)?;
+    let adapter: Box<dyn LifecycleAgentAdapter> = match canonical_agent.as_str() {
         crate::engine::agent::AGENT_NAME_CLAUDE_CODE => Box::new(ClaudeCodeLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_COPILOT => Box::new(CopilotCliLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_CODEX => Box::new(CodexLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_CURSOR => Box::new(CursorLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_GEMINI => Box::new(GeminiCliLifecycleAdapter),
+        crate::engine::agent::AGENT_TYPE_GEMINI => Box::new(GeminiCliLifecycleAdapter),
         crate::engine::agent::AGENT_NAME_OPEN_CODE => Box::new(OpenCodeLifecycleAdapter),
         _ => return Err(anyhow!("unsupported lifecycle agent: {agent_name}")),
     };

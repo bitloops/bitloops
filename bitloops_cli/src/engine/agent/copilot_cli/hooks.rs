@@ -304,13 +304,17 @@ pub fn are_hooks_installed() -> bool {
         return false;
     };
 
-    required_hook_types().into_iter().all(|hook_type| match hook_type {
-        HOOK_TYPE_USER_PROMPT_SUBMITTED => has_managed_hook(&parsed.hooks.user_prompt_submitted),
-        HOOK_TYPE_SESSION_START => has_managed_hook(&parsed.hooks.session_start),
-        HOOK_TYPE_AGENT_STOP => has_managed_hook(&parsed.hooks.agent_stop),
-        HOOK_TYPE_SESSION_END => has_managed_hook(&parsed.hooks.session_end),
-        _ => false,
-    })
+    required_hook_types()
+        .into_iter()
+        .all(|hook_type| match hook_type {
+            HOOK_TYPE_USER_PROMPT_SUBMITTED => {
+                has_managed_hook(&parsed.hooks.user_prompt_submitted)
+            }
+            HOOK_TYPE_SESSION_START => has_managed_hook(&parsed.hooks.session_start),
+            HOOK_TYPE_AGENT_STOP => has_managed_hook(&parsed.hooks.agent_stop),
+            HOOK_TYPE_SESSION_END => has_managed_hook(&parsed.hooks.session_end),
+            _ => false,
+        })
 }
 
 #[cfg(test)]
@@ -485,7 +489,9 @@ mod tests {
 
             let content = fs::read_to_string(hooks_dir.join("bitloops.json")).expect("read");
             assert_eq!(
-                content.matches("bitloops hooks copilot user-prompt-submitted").count(),
+                content
+                    .matches("bitloops hooks copilot user-prompt-submitted")
+                    .count(),
                 1
             );
             assert!(content.contains("echo custom-session-start"));

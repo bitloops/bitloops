@@ -3,8 +3,8 @@ use bitloops_cli::engine::session::phase::SessionPhase;
 use bitloops_cli::engine::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
-use bitloops_cli::store_config::resolve_store_backend_config_for_repo;
 use bitloops_cli::store_config::resolve_sqlite_db_path_for_repo;
+use bitloops_cli::store_config::resolve_store_backend_config_for_repo;
 use rusqlite::Connection;
 use std::env;
 use std::fs;
@@ -296,7 +296,9 @@ fn copilot_basic_workflow() {
     assert_eq!(summary.checkpoint_id, checkpoint_id);
     assert_eq!(summary.strategy, "manual-commit");
     assert!(
-        summary.files_touched.contains(&"copilot_hello.txt".to_string()),
+        summary
+            .files_touched
+            .contains(&"copilot_hello.txt".to_string()),
         "committed checkpoint should include Copilot-created file"
     );
 
@@ -537,7 +539,9 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
             dir.path(),
             home.path(),
             &["hooks", "copilot", "user-prompt-submitted"],
-            Some(&format!(r#"{{"sessionId":"{sid}","prompt":"Create first.txt"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","prompt":"Create first.txt"}}"#
+            )),
         ),
         "hooks copilot user-prompt-submitted first",
     );
@@ -567,7 +571,9 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
             dir.path(),
             home.path(),
             &["hooks", "copilot", "user-prompt-submitted"],
-            Some(&format!(r#"{{"sessionId":"{sid}","prompt":"Create second.txt"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{sid}","prompt":"Create second.txt"}}"#
+            )),
         ),
         "hooks copilot user-prompt-submitted second",
     );

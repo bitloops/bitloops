@@ -1,6 +1,8 @@
 use super::*;
+use crate::engine::agent::codex::agent::CodexAgent;
 use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
 use std::io::Cursor;
 
 const MOCK_AGENT_NAME: &str = "mock";
@@ -315,6 +317,93 @@ fn TestAgentDefaultMethodsAreSafeNoOps() {
         .write_session(&AgentSession::default())
         .expect("session write should succeed");
     assert_eq!(agent.format_resume_command("abc123"), "");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestCodexAgentHooksSessionIOAndResumeCommand() {
+    let agent = CodexAgent;
+    assert_eq!(
+        agent.hook_names(),
+        vec!["session-start".to_string(), "stop".to_string()]
+    );
+
+    let cases = [
+        (
+            "session-start hook parsing",
+            "session-start",
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#,
+        ),
+        (
+            "stop hook parsing",
+            "stop",
+            br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl"}"#,
+        ),
+    ];
+
+    for (name, hook_name, payload) in cases {
+        let mut stdin = Cursor::new(payload);
+        let event = agent
+            .parse_hook_event(hook_name, &mut stdin)
+            .expect("hook parsing should succeed");
+        assert!(
+            event.is_some(),
+            "case {name} should parse a lifecycle event"
+        );
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.jsonl");
+    let output_path = dir.path().join("output.jsonl");
+    let transcript = br#"{"role":"user","content":"hello"}"#.to_vec();
+    fs::write(&input_path, &transcript).expect("write input transcript");
+
+    let input = HookInput {
+        session_id: "codex-session-1".to_string(),
+        session_ref: input_path.to_string_lossy().to_string(),
+        ..HookInput::default()
+    };
+
+    let session = agent
+        .read_session(&input)
+        .expect("read session should succeed")
+        .expect("expected a session");
+    assert_eq!(session.session_id, "codex-session-1");
+    assert_eq!(session.agent_name, AGENT_NAME_CODEX);
+    assert_eq!(session.session_ref, input_path.to_string_lossy());
+    assert_eq!(session.native_data, transcript);
+
+    let session_to_write = AgentSession {
+        session_id: session.session_id.clone(),
+        agent_name: session.agent_name.clone(),
+        session_ref: output_path.to_string_lossy().to_string(),
+        native_data: transcript.clone(),
+        ..AgentSession::default()
+    };
+    agent
+        .write_session(&session_to_write)
+        .expect("write session should succeed");
+    assert_eq!(
+        fs::read(&output_path).expect("read written transcript"),
+        transcript
+    );
+
+    let resume_cases = [
+        (
+            "non-empty session id",
+            "codex-session-1",
+            "codex --resume codex-session-1",
+        ),
+        ("whitespace session id", "   ", "codex"),
+    ];
+
+    for (name, session_id, expected) in resume_cases {
+        assert_eq!(
+            agent.format_resume_command(session_id),
+            expected,
+            "case {name} mismatch"
+        );
+    }
 }
 
 #[test]

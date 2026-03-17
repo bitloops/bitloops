@@ -1,14 +1,7 @@
 use super::Agent;
-use super::DEFAULT_AGENT_NAME;
+use super::adapters::AgentAdapterRegistry;
 use anyhow::{Result, anyhow};
 use std::collections::{HashMap, HashSet};
-
-use crate::engine::agent::claude_code::agent::ClaudeCodeAgent;
-use crate::engine::agent::codex::agent::CodexAgent;
-use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
-use crate::engine::agent::cursor::agent::CursorAgent;
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
-use crate::engine::agent::open_code::agent::OpenCodeAgent;
 
 /// Immutable registry of known agents, constructed once at startup.
 pub struct AgentRegistry {
@@ -27,14 +20,7 @@ impl AgentRegistry {
 
     /// Build the default registry containing all built-in agents.
     pub fn builtin() -> Self {
-        Self::new(vec![
-            Box::new(ClaudeCodeAgent),
-            Box::new(CopilotCliAgent),
-            Box::new(CodexAgent),
-            Box::new(CursorAgent),
-            Box::new(GeminiCliAgent),
-            Box::new(OpenCodeAgent),
-        ])
+        Self::new(AgentAdapterRegistry::builtin().create_all_agents())
     }
 
     pub fn get(&self, name: &str) -> Result<&(dyn Agent + Send + Sync)> {
@@ -99,6 +85,7 @@ impl AgentRegistry {
     }
 
     pub fn default_agent(&self) -> Option<&(dyn Agent + Send + Sync)> {
-        self.get(DEFAULT_AGENT_NAME).ok()
+        self.get(AgentAdapterRegistry::builtin().default_agent_name())
+            .ok()
     }
 }
