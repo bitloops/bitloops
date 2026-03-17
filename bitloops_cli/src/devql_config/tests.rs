@@ -163,6 +163,87 @@ fn semantic_config_honors_env_over_file_precedence() {
 }
 
 #[test]
+fn embedding_config_reads_values_from_devql_file() {
+    let value = serde_json::json!({
+        "devql": {
+            "embedding_provider": "voyage",
+            "embedding_model": "voyage-code-3",
+            "embedding_api_key": "voyage-key",
+            "embedding_base_url": "http://localhost:8000/v1/embeddings",
+            "embedding_output_dimension": "1024"
+        }
+    });
+    let file_cfg = DevqlFileConfig::from_json_value(&value);
+
+    let cfg = resolve_devql_embedding_config_for_tests(file_cfg, &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("voyage"));
+    assert_eq!(cfg.embedding_model.as_deref(), Some("voyage-code-3"));
+    assert_eq!(cfg.embedding_api_key.as_deref(), Some("voyage-key"));
+    assert_eq!(
+        cfg.embedding_base_url.as_deref(),
+        Some("http://localhost:8000/v1/embeddings")
+    );
+    assert_eq!(cfg.embedding_output_dimension.as_deref(), Some("1024"));
+}
+
+#[test]
+fn embedding_config_honors_env_over_file_precedence() {
+    let value = serde_json::json!({
+        "devql": {
+            "embedding_provider": "voyage",
+            "embedding_model": "voyage-code-3",
+            "embedding_api_key": "file-key",
+            "embedding_output_dimension": "1024"
+        }
+    });
+    let file_cfg = DevqlFileConfig::from_json_value(&value);
+    let env = [
+        (ENV_EMBEDDING_PROVIDER, "qodo"),
+        (ENV_EMBEDDING_MODEL, "Qodo/Qodo-Embed-1-1.5B"),
+        (
+            ENV_EMBEDDING_BASE_URL,
+            "http://localhost:11434/v1/embeddings",
+        ),
+        (ENV_EMBEDDING_OUTPUT_DIMENSION, "1536"),
+    ];
+
+    let cfg = resolve_devql_embedding_config_for_tests(file_cfg, &env);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("qodo"));
+    assert_eq!(cfg.embedding_model.as_deref(), Some("Qodo/Qodo-Embed-1-1.5B"));
+    assert_eq!(cfg.embedding_api_key.as_deref(), Some("file-key"));
+    assert_eq!(
+        cfg.embedding_base_url.as_deref(),
+        Some("http://localhost:11434/v1/embeddings")
+    );
+    assert_eq!(cfg.embedding_output_dimension.as_deref(), Some("1536"));
+}
+
+#[test]
+fn embedding_config_defaults_provider_to_local_when_settings_exist() {
+    let value = serde_json::json!({
+        "devql": {
+            "embedding_base_url": "http://localhost:11434/v1/embeddings"
+        }
+    });
+    let file_cfg = DevqlFileConfig::from_json_value(&value);
+
+    let cfg = resolve_devql_embedding_config_for_tests(file_cfg, &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("local"));
+    assert_eq!(
+        cfg.embedding_base_url.as_deref(),
+        Some("http://localhost:11434/v1/embeddings")
+    );
+}
+
+#[test]
+fn embedding_config_defaults_provider_to_local_when_no_embedding_settings_exist() {
+    let cfg = resolve_devql_embedding_config_for_tests(DevqlFileConfig::default(), &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("local"));
+    assert_eq!(cfg.embedding_model, None);
+    assert_eq!(cfg.embedding_base_url, None);
+}
+
+#[test]
 fn events_backend_duckdb_path_defaults_under_bitloops_directory() {
     let events = EventsBackendConfig {
         provider: EventsProvider::DuckDb,

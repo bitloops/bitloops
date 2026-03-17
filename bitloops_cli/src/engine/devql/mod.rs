@@ -13,11 +13,13 @@ use tokio_postgres::{NoTls, config::SslMode};
 use crate::devql_config::{
     DevqlBackendConfig, DevqlFileConfig, EventsBackendConfig, EventsProvider,
     RelationalBackendConfig, RelationalProvider, resolve_devql_backend_config,
-    resolve_devql_semantic_config,
+    resolve_devql_embedding_config, resolve_devql_semantic_config,
 };
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
+use crate::engine::providers::embeddings::EmbeddingProvider;
+use crate::engine::semantic_embeddings;
 use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
@@ -47,12 +49,18 @@ pub struct DevqlConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
+    pub(crate) embedding_provider: Option<String>,
+    pub(crate) embedding_model: Option<String>,
+    pub(crate) embedding_api_key: Option<String>,
+    pub(crate) embedding_base_url: Option<String>,
+    pub(crate) embedding_output_dimension: Option<String>,
 }
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Self {
         let file_cfg = DevqlFileConfig::load();
         let semantic_cfg = resolve_devql_semantic_config();
+        let embedding_cfg = resolve_devql_embedding_config();
         Self {
             repo_root,
             repo,
@@ -82,6 +90,11 @@ impl DevqlConfig {
             semantic_model: semantic_cfg.semantic_model,
             semantic_api_key: semantic_cfg.semantic_api_key,
             semantic_base_url: semantic_cfg.semantic_base_url,
+            embedding_provider: embedding_cfg.embedding_provider,
+            embedding_model: embedding_cfg.embedding_model,
+            embedding_api_key: embedding_cfg.embedding_api_key,
+            embedding_base_url: embedding_cfg.embedding_base_url,
+            embedding_output_dimension: embedding_cfg.embedding_output_dimension,
         }
     }
 
@@ -264,6 +277,16 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
     }
 }
 
+fn embedding_provider_config(cfg: &DevqlConfig) -> semantic_embeddings::EmbeddingProviderConfig {
+    semantic_embeddings::EmbeddingProviderConfig {
+        embedding_provider: cfg.embedding_provider.clone(),
+        embedding_model: cfg.embedding_model.clone(),
+        embedding_api_key: cfg.embedding_api_key.clone(),
+        embedding_base_url: cfg.embedding_base_url.clone(),
+        embedding_output_dimension: cfg.embedding_output_dimension.clone(),
+    }
+}
+
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     init_clickhouse_schema(cfg).await?;
@@ -279,6 +302,10 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
+    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
+        &embedding_provider_config(cfg),
+    )?
+    .map(Arc::<dyn EmbeddingProvider>::from);
     let pg_client = connect_postgres_client(cfg.require_pg_dsn()?).await?;
     if init {
         init_clickhouse_schema(cfg).await?;
@@ -375,6 +402,16 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 Arc::clone(&summary_provider),
             )
             .await?;
+            if let Some(embedding_provider) = embedding_provider.as_ref() {
+                let embedding_stats = upsert_symbol_embedding_rows(
+                    &pg_client,
+                    &semantic_feature_inputs,
+                    Arc::clone(embedding_provider),
+                )
+                .await?;
+                counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
+                counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
+            }
             counters.artefacts_upserted += 1;
             counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
             counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
@@ -384,13 +421,15 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     }
 
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
         counters.checkpoints_without_commit,
         counters.semantic_feature_rows_upserted,
-        counters.semantic_feature_rows_skipped
+        counters.semantic_feature_rows_skipped,
+        counters.symbol_embedding_rows_upserted,
+        counters.symbol_embedding_rows_skipped
     );
     Ok(())
 }
@@ -446,6 +485,8 @@ include!("ingestion/checkpoint.rs");
 include!("ingestion/artefact_persistence.rs");
 // ingestion: Stage 1 semantic persistence
 include!("ingestion/semantic_features_persistence.rs");
+// ingestion: Stage 2 embedding persistence
+include!("ingestion/semantic_embeddings_persistence.rs");
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)

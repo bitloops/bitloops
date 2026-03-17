@@ -34,6 +34,33 @@ async fn execute_devql_query(
         bail!("deps() cannot be combined with chatHistory() stage");
     }
 
+    if parsed.has_semantic_neighbors_stage && !parsed.has_artefacts_stage {
+        log_devql_validation_failure(
+            parsed,
+            "semantic_neighbors_requires_artefacts",
+            "semanticNeighbors() requires an artefacts() stage in the query",
+        );
+        bail!("semanticNeighbors() requires an artefacts() stage in the query");
+    }
+
+    if parsed.has_semantic_neighbors_stage && parsed.has_deps_stage {
+        log_devql_validation_failure(
+            parsed,
+            "semantic_neighbors_with_deps",
+            "semanticNeighbors() cannot be combined with deps() stage",
+        );
+        bail!("semanticNeighbors() cannot be combined with deps() stage");
+    }
+
+    if parsed.has_semantic_neighbors_stage && parsed.has_chat_history_stage {
+        log_devql_validation_failure(
+            parsed,
+            "semantic_neighbors_with_chat_history",
+            "semanticNeighbors() cannot be combined with chatHistory() stage",
+        );
+        bail!("semanticNeighbors() cannot be combined with chatHistory() stage");
+    }
+
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
     {
         log_devql_validation_failure(
@@ -63,6 +90,10 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
             crate::engine::logging::bool_attr(
                 "has_chat_history_stage",
                 parsed.has_chat_history_stage,
+            ),
+            crate::engine::logging::bool_attr(
+                "has_semantic_neighbors_stage",
+                parsed.has_semantic_neighbors_stage,
             ),
             crate::engine::logging::bool_attr(
                 "has_checkpoints_stage",
@@ -138,6 +169,10 @@ async fn execute_postgres_pipeline(
 
     if parsed.has_deps_stage {
         return execute_postgres_deps_pipeline(cfg, parsed, pg_client, &repo_id).await;
+    }
+
+    if parsed.has_semantic_neighbors_stage {
+        return execute_postgres_semantic_neighbors_pipeline(cfg, parsed, pg_client, &repo_id).await;
     }
 
     let sql = build_postgres_artefacts_query(cfg, parsed, Some(pg_client), &repo_id).await?;
@@ -251,6 +286,39 @@ async fn execute_postgres_deps_pipeline(
     repo_id: &str,
 ) -> Result<Vec<Value>> {
     let sql = build_postgres_deps_query(cfg, parsed, repo_id)?;
+    pg_query_rows(pg_client, &sql).await
+}
+
+async fn execute_postgres_semantic_neighbors_pipeline(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    pg_client: &tokio_postgres::Client,
+    repo_id: &str,
+) -> Result<Vec<Value>> {
+    let mut source_query = parsed.clone();
+    source_query.has_semantic_neighbors_stage = false;
+    source_query.has_chat_history_stage = false;
+    source_query.limit = 1;
+
+    let source_sql =
+        build_postgres_artefacts_query(cfg, &source_query, Some(pg_client), repo_id).await?;
+    let source_rows = pg_query_rows(pg_client, &source_sql).await?;
+    let Some(source) = source_rows.first() else {
+        return Ok(vec![]);
+    };
+    let Some(source_artefact_id) = source.get("artefact_id").and_then(Value::as_str) else {
+        bail!("semanticNeighbors() source artefact did not include artefact_id");
+    };
+
+    let source_embedding = load_symbol_embedding_source_metadata(pg_client, repo_id, source_artefact_id)
+        .await?;
+    if source_embedding.is_none() {
+        bail!(
+            "semanticNeighbors() requires Stage 2 embeddings for the source artefact. Configure BITLOOPS_DEVQL_EMBEDDING_PROVIDER and re-run `bitloops devql ingest`."
+        );
+    }
+
+    let sql = build_postgres_semantic_neighbors_sql(repo_id, source_artefact_id, parsed.limit);
     pg_query_rows(pg_client, &sql).await
 }
 

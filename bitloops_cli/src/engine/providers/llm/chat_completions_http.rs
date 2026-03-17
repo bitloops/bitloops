@@ -18,7 +18,7 @@ pub(super) fn build(
         .build()
         .context("building semantic summary HTTP client")?;
 
-    Ok(Box::new(OpenAiCompatibleLlmProvider {
+    Ok(Box::new(ChatCompletionsHttpProvider {
         provider: provider.to_string(),
         model,
         endpoint,
@@ -44,7 +44,7 @@ pub(super) fn resolve_endpoint(provider: &str, base_url: Option<&str>) -> Result
     }
 }
 
-struct OpenAiCompatibleLlmProvider {
+struct ChatCompletionsHttpProvider {
     provider: String,
     model: String,
     endpoint: String,
@@ -52,7 +52,7 @@ struct OpenAiCompatibleLlmProvider {
     client: reqwest::blocking::Client,
 }
 
-impl LlmProvider for OpenAiCompatibleLlmProvider {
+impl LlmProvider for ChatCompletionsHttpProvider {
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Option<String> {
         let response = self
             .client
@@ -130,7 +130,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn semantic_llm_provider_resolves_known_endpoints_and_errors() {
+    fn chat_completions_http_resolves_known_endpoints_and_errors() {
         assert_eq!(
             resolve_endpoint("openai", None).expect("openai endpoint"),
             "https://api.openai.com/v1/chat/completions"
@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_llm_provider_builds_payload_and_extracts_message_content() {
+    fn chat_completions_http_builds_payload_and_extracts_message_content() {
         let payload = build_chat_completion_payload("gpt-test", "system prompt", "user prompt");
         assert_eq!(payload["model"], "gpt-test");
         assert_eq!(payload["messages"][0]["role"], "system");
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_llm_provider_build_exposes_descriptor() {
+    fn chat_completions_http_build_exposes_descriptor() {
         let provider = build(
             "openai",
             "gpt-test".to_string(),
@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_llm_provider_extract_message_content_returns_none_when_no_text_exists() {
+    fn chat_completions_http_extract_message_content_returns_none_when_no_text_exists() {
         let payload = json!({
             "choices": [{
                 "message": {

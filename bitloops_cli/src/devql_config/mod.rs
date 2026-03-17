@@ -29,6 +29,12 @@ const ENV_SEMANTIC_PROVIDER: &str = "BITLOOPS_DEVQL_SEMANTIC_PROVIDER";
 const ENV_SEMANTIC_MODEL: &str = "BITLOOPS_DEVQL_SEMANTIC_MODEL";
 const ENV_SEMANTIC_API_KEY: &str = "BITLOOPS_DEVQL_SEMANTIC_API_KEY";
 const ENV_SEMANTIC_BASE_URL: &str = "BITLOOPS_DEVQL_SEMANTIC_BASE_URL";
+const ENV_EMBEDDING_PROVIDER: &str = "BITLOOPS_DEVQL_EMBEDDING_PROVIDER";
+const ENV_EMBEDDING_MODEL: &str = "BITLOOPS_DEVQL_EMBEDDING_MODEL";
+const ENV_EMBEDDING_API_KEY: &str = "BITLOOPS_DEVQL_EMBEDDING_API_KEY";
+const ENV_EMBEDDING_BASE_URL: &str = "BITLOOPS_DEVQL_EMBEDDING_BASE_URL";
+const ENV_EMBEDDING_OUTPUT_DIMENSION: &str = "BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION";
+const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
 const ENV_BLOB_STORAGE_PROVIDER: &str = "BITLOOPS_DEVQL_BLOB_PROVIDER";
 const ENV_BLOB_LOCAL_PATH: &str = "BITLOOPS_DEVQL_BLOB_LOCAL_PATH";
 const ENV_BLOB_S3_BUCKET: &str = "BITLOOPS_DEVQL_BLOB_S3_BUCKET";
@@ -90,6 +96,15 @@ pub struct DevqlSemanticConfig {
     pub semantic_model: Option<String>,
     pub semantic_api_key: Option<String>,
     pub semantic_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DevqlEmbeddingConfig {
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_api_key: Option<String>,
+    pub embedding_base_url: Option<String>,
+    pub embedding_output_dimension: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +204,11 @@ pub struct DevqlFileConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
+    pub(crate) embedding_provider: Option<String>,
+    pub(crate) embedding_model: Option<String>,
+    pub(crate) embedding_api_key: Option<String>,
+    pub(crate) embedding_base_url: Option<String>,
+    pub(crate) embedding_output_dimension: Option<String>,
     pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
@@ -290,6 +310,20 @@ impl DevqlFileConfig {
             semantic_model: read_any_string(root, &["semantic_model", ENV_SEMANTIC_MODEL]),
             semantic_api_key: read_any_string(root, &["semantic_api_key", ENV_SEMANTIC_API_KEY]),
             semantic_base_url: read_any_string(root, &["semantic_base_url", ENV_SEMANTIC_BASE_URL]),
+            embedding_provider: read_any_string(
+                root,
+                &["embedding_provider", ENV_EMBEDDING_PROVIDER],
+            ),
+            embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
+            embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
+            embedding_base_url: read_any_string(
+                root,
+                &["embedding_base_url", ENV_EMBEDDING_BASE_URL],
+            ),
+            embedding_output_dimension: read_any_string(
+                root,
+                &["embedding_output_dimension", ENV_EMBEDDING_OUTPUT_DIMENSION],
+            ),
             blob_provider: read_any_string_opt(
                 blobs,
                 &["provider", "blob_provider", ENV_BLOB_STORAGE_PROVIDER],
@@ -380,6 +414,11 @@ pub fn resolve_devql_backend_config() -> Result<DevqlBackendConfig> {
 pub fn resolve_devql_semantic_config() -> DevqlSemanticConfig {
     let file_cfg = DevqlFileConfig::load();
     resolve_devql_semantic_config_with(file_cfg, |key| env::var(key).ok())
+}
+
+pub fn resolve_devql_embedding_config() -> DevqlEmbeddingConfig {
+    let file_cfg = DevqlFileConfig::load();
+    resolve_devql_embedding_config_with(file_cfg, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -525,6 +564,34 @@ where
             .or(file_cfg.semantic_api_key),
         semantic_base_url: read_non_empty_env(&env_lookup, ENV_SEMANTIC_BASE_URL)
             .or(file_cfg.semantic_base_url),
+    }
+}
+
+fn resolve_devql_embedding_config_with<F>(
+    file_cfg: DevqlFileConfig,
+    env_lookup: F,
+) -> DevqlEmbeddingConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let embedding_model =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_MODEL).or(file_cfg.embedding_model);
+    let embedding_api_key =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_API_KEY).or(file_cfg.embedding_api_key);
+    let embedding_base_url =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_BASE_URL).or(file_cfg.embedding_base_url);
+    let embedding_output_dimension = read_non_empty_env(&env_lookup, ENV_EMBEDDING_OUTPUT_DIMENSION)
+        .or(file_cfg.embedding_output_dimension);
+    let embedding_provider = read_non_empty_env(&env_lookup, ENV_EMBEDDING_PROVIDER)
+        .or(file_cfg.embedding_provider)
+        .or_else(|| Some(DEFAULT_EMBEDDING_PROVIDER.to_string()));
+
+    DevqlEmbeddingConfig {
+        embedding_provider,
+        embedding_model,
+        embedding_api_key,
+        embedding_base_url,
+        embedding_output_dimension,
     }
 }
 
@@ -695,6 +762,22 @@ pub(crate) fn resolve_devql_semantic_config_for_tests(
     env: &[(&str, &str)],
 ) -> DevqlSemanticConfig {
     resolve_devql_semantic_config_with(file_cfg, |key| {
+        env.iter().find_map(|(k, v)| {
+            if *k == key {
+                Some((*v).to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_devql_embedding_config_for_tests(
+    file_cfg: DevqlFileConfig,
+    env: &[(&str, &str)],
+) -> DevqlEmbeddingConfig {
+    resolve_devql_embedding_config_with(file_cfg, |key| {
         env.iter().find_map(|(k, v)| {
             if *k == key {
                 Some((*v).to_string())

@@ -27,6 +27,11 @@ fn test_cfg() -> DevqlConfig {
         semantic_model: None,
         semantic_api_key: None,
         semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
+        embedding_base_url: None,
+        embedding_output_dimension: None,
     }
 }
 
@@ -578,6 +583,18 @@ fn parse_devql_deps_stage_basic() {
     assert_eq!(parsed.limit, 25);
 }
 
+#[test]
+fn parse_devql_semantic_neighbors_stage_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->semanticNeighbors()->limit(7)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_artefacts_stage);
+    assert!(parsed.has_semantic_neighbors_stage);
+    assert_eq!(parsed.limit, 7);
+}
+
 #[tokio::test]
 async fn execute_devql_query_rejects_combining_deps_and_checkpoints_stage() {
     let cfg = test_cfg();
@@ -759,6 +776,40 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
         err.to_string()
             .contains("deps() cannot be combined with chatHistory()")
     );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_semantic_neighbors_without_artefacts_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->semanticNeighbors()->limit(1)"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("semanticNeighbors() requires an artefacts() stage")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_combining_semantic_neighbors_and_deps_stage() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->semanticNeighbors()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, None).await.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("semanticNeighbors() cannot be combined with deps()")
+    );
+}
+
+#[test]
+fn build_postgres_semantic_neighbors_sql_uses_embedding_similarity() {
+    let sql = build_postgres_semantic_neighbors_sql("repo-1", "artefact-1", 8);
+    assert!(sql.contains("FROM symbol_embeddings src"));
+    assert!(sql.contains("JOIN symbol_embeddings emb"));
+    assert!(sql.contains("semantic_score"));
+    assert!(sql.contains("LIMIT 8"));
 }
 
 #[test]
