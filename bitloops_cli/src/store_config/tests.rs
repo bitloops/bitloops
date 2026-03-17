@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::process_state::{with_cwd, with_env_vars};
+use crate::test_support::process_state::{with_cwd, with_process_state};
 use std::fs;
 
 fn write_repo_config(repo_root: &Path, value: serde_json::Value) {
@@ -537,26 +537,25 @@ fn resolve_store_semantic_config_reads_file_and_env() {
         }),
     );
 
-    with_cwd(temp.path(), || {
-        with_env_vars(
-            &[
-                (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
-                (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
-                (ENV_SEMANTIC_API_KEY, Some("env-key")),
-                (ENV_SEMANTIC_BASE_URL, Some("http://localhost:9999/v1/chat/completions")),
-            ],
-            || {
-                let cfg = resolve_store_semantic_config();
-                assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
-                assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
-                assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
-                assert_eq!(
-                    cfg.semantic_base_url.as_deref(),
-                    Some("http://localhost:9999/v1/chat/completions")
-                );
-            },
-        );
-    });
+    with_process_state(
+        Some(temp.path()),
+        &[
+            (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
+            (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
+            (ENV_SEMANTIC_API_KEY, Some("env-key")),
+            (ENV_SEMANTIC_BASE_URL, Some("http://localhost:9999/v1/chat/completions")),
+        ],
+        || {
+            let cfg = resolve_store_semantic_config();
+            assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
+            assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
+            assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
+            assert_eq!(
+                cfg.semantic_base_url.as_deref(),
+                Some("http://localhost:9999/v1/chat/completions")
+            );
+        },
+    );
 }
 
 #[test]
@@ -573,22 +572,21 @@ fn resolve_store_embedding_config_reads_file_and_env() {
         }),
     );
 
-    with_cwd(temp.path(), || {
-        with_env_vars(
-            &[
-                (ENV_EMBEDDING_PROVIDER, Some("openai")),
-                (ENV_EMBEDDING_MODEL, Some("text-embedding-3-large")),
-                (ENV_EMBEDDING_API_KEY, Some("env-key")),
-            ],
-            || {
-                let cfg = resolve_store_embedding_config();
-                assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
-                assert_eq!(
-                    cfg.embedding_model.as_deref(),
-                    Some("text-embedding-3-large")
-                );
-                assert_eq!(cfg.embedding_api_key.as_deref(), Some("env-key"));
-            },
-        );
-    });
+    with_process_state(
+        Some(temp.path()),
+        &[
+            (ENV_EMBEDDING_PROVIDER, Some("openai")),
+            (ENV_EMBEDDING_MODEL, Some("text-embedding-3-large")),
+            (ENV_EMBEDDING_API_KEY, Some("env-key")),
+        ],
+        || {
+            let cfg = resolve_store_embedding_config();
+            assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
+            assert_eq!(
+                cfg.embedding_model.as_deref(),
+                Some("text-embedding-3-large")
+            );
+            assert_eq!(cfg.embedding_api_key.as_deref(), Some("env-key"));
+        },
+    );
 }
