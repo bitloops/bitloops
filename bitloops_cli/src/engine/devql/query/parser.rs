@@ -12,7 +12,6 @@ struct ParsedDevqlQuery {
     deps: DepsFilter,
     has_artefacts_stage: bool,
     has_deps_stage: bool,
-    has_semantic_neighbors_stage: bool,
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
     has_chat_history_stage: bool,
@@ -164,11 +163,6 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 
         if stage == "deps()" {
             parsed.has_deps_stage = true;
-            continue;
-        }
-
-        if stage == "semanticNeighbors()" {
-            parsed.has_semantic_neighbors_stage = true;
             continue;
         }
 

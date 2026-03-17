@@ -159,17 +159,6 @@ async fn persist_symbol_embedding_row(
     relational.exec(&sql).await
 }
 
-async fn load_symbol_embedding_source_metadata(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    artefact_id: &str,
-) -> Result<Option<Value>> {
-    let rows = relational
-        .query_rows(&build_symbol_embedding_source_metadata_sql(repo_id, artefact_id))
-        .await?;
-    Ok(rows.into_iter().next())
-}
-
 fn build_symbol_embedding_index_state_sql(artefact_id: &str) -> String {
     format!(
         "SELECT embedding_input_hash AS embedding_hash \
@@ -239,67 +228,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = e
         embedding_input_hash = esc_pg(&row.embedding_input_hash),
         embedding = embedding_json,
     ))
-}
-
-fn build_symbol_embedding_source_metadata_sql(repo_id: &str, artefact_id: &str) -> String {
-    format!(
-        "SELECT artefact_id, provider, model, dimension \
-FROM symbol_embeddings \
-WHERE repo_id = '{repo_id}' AND artefact_id = '{artefact_id}' \
-LIMIT 1",
-        repo_id = esc_pg(repo_id),
-        artefact_id = esc_pg(artefact_id),
-    )
-}
-
-fn build_postgres_semantic_neighbors_sql(
-    repo_id: &str,
-    source_artefact_id: &str,
-    limit: usize,
-) -> String {
-    format!(
-        "SELECT \
-target.artefact_id, \
-target.path, \
-target.canonical_kind, \
-target.language_kind, \
-target.language, \
-target.start_line, \
-target.end_line, \
-target.start_byte, \
-target.end_byte, \
-target.signature, \
-target.modifiers, \
-target.docstring, \
-target.blob_sha, \
-target.symbol_fqn, \
-target.content_hash, \
-target.updated_at AS created_at, \
-sem.summary, \
-emb.provider AS embedding_provider, \
-emb.model AS embedding_model, \
-emb.dimension AS embedding_dimension, \
-1 - (emb.embedding <=> src.embedding) AS semantic_score \
-FROM symbol_embeddings src \
-JOIN symbol_embeddings emb \
-  ON emb.repo_id = src.repo_id \
- AND emb.provider = src.provider \
- AND emb.model = src.model \
- AND emb.dimension = src.dimension \
- AND emb.artefact_id <> src.artefact_id \
-JOIN artefacts_current target \
-  ON target.repo_id = emb.repo_id \
- AND target.artefact_id = emb.artefact_id \
-LEFT JOIN symbol_semantics sem \
-  ON sem.artefact_id = target.artefact_id \
-WHERE src.repo_id = '{repo_id}' \
-  AND src.artefact_id = '{source_artefact_id}' \
-ORDER BY emb.embedding <=> src.embedding, target.path, target.start_line \
-LIMIT {limit}",
-        repo_id = esc_pg(repo_id),
-        source_artefact_id = esc_pg(source_artefact_id),
-        limit = limit.max(1),
-    )
 }
 
 fn sql_vector_string(values: &[f32]) -> Result<String> {
@@ -447,14 +375,6 @@ mod semantic_embedding_persistence_tests {
     }
 
     #[test]
-    fn semantic_neighbors_sql_orders_by_cosine_distance() {
-        let sql = build_postgres_semantic_neighbors_sql("repo-1", "artefact-1", 10);
-        assert!(sql.contains("1 - (emb.embedding <=> src.embedding) AS semantic_score"));
-        assert!(sql.contains("ORDER BY emb.embedding <=> src.embedding"));
-        assert!(sql.contains("LIMIT 10"));
-    }
-
-    #[test]
     fn semantic_embedding_index_state_sql_filters_by_artefact_id() {
         let sql = build_symbol_embedding_index_state_sql("artefact-'1");
         assert!(sql.contains("FROM symbol_embeddings"));
@@ -470,15 +390,6 @@ mod semantic_embedding_persistence_tests {
         assert!(sql.contains("FROM symbol_semantics"));
         assert!(sql.contains("'artefact-1'"));
         assert!(sql.contains("'artefact-2'"));
-    }
-
-    #[test]
-    fn semantic_embedding_source_metadata_sql_filters_by_repo_and_artefact() {
-        let sql = build_symbol_embedding_source_metadata_sql("repo-1", "artefact-1");
-        assert!(sql.contains("FROM symbol_embeddings"));
-        assert!(sql.contains("repo_id = 'repo-1'"));
-        assert!(sql.contains("artefact_id = 'artefact-1'"));
-        assert!(sql.contains("LIMIT 1"));
     }
 
     #[tokio::test]
@@ -541,38 +452,6 @@ mod semantic_embedding_persistence_tests {
             Some("summarizes function 3")
         );
         assert!(!summary_map.contains_key("artefact-2"));
-    }
-
-    #[tokio::test]
-    async fn semantic_embedding_loads_source_metadata_from_relational_storage() {
-        let relational = sqlite_relational_with_schema(
-            "CREATE TABLE symbol_embeddings (
-                artefact_id TEXT PRIMARY KEY,
-                repo_id TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                dimension INTEGER NOT NULL
-            );
-            INSERT INTO symbol_embeddings (
-                artefact_id, repo_id, provider, model, dimension
-            ) VALUES (
-                'artefact-1', 'repo-1', 'local', 'jinaai/jina-embeddings-v2-base-code', 768
-            );",
-        )
-        .await;
-
-        let source_metadata =
-            load_symbol_embedding_source_metadata(&relational, "repo-1", "artefact-1")
-                .await
-                .expect("load embedding source metadata")
-                .expect("embedding metadata row");
-
-        assert_eq!(source_metadata.get("provider"), Some(&json!("local")));
-        assert_eq!(
-            source_metadata.get("model"),
-            Some(&json!("jinaai/jina-embeddings-v2-base-code"))
-        );
-        assert_eq!(source_metadata.get("dimension"), Some(&json!(768)));
     }
 
     #[tokio::test]

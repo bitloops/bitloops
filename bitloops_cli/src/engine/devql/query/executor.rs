@@ -35,33 +35,6 @@ async fn execute_devql_query(
         bail!("deps() cannot be combined with chatHistory() stage");
     }
 
-    if parsed.has_semantic_neighbors_stage && !parsed.has_artefacts_stage {
-        log_devql_validation_failure(
-            parsed,
-            "semantic_neighbors_requires_artefacts",
-            "semanticNeighbors() requires an artefacts() stage in the query",
-        );
-        bail!("semanticNeighbors() requires an artefacts() stage in the query");
-    }
-
-    if parsed.has_semantic_neighbors_stage && parsed.has_deps_stage {
-        log_devql_validation_failure(
-            parsed,
-            "semantic_neighbors_with_deps",
-            "semanticNeighbors() cannot be combined with deps() stage",
-        );
-        bail!("semanticNeighbors() cannot be combined with deps() stage");
-    }
-
-    if parsed.has_semantic_neighbors_stage && parsed.has_chat_history_stage {
-        log_devql_validation_failure(
-            parsed,
-            "semantic_neighbors_with_chat_history",
-            "semanticNeighbors() cannot be combined with chatHistory() stage",
-        );
-        bail!("semanticNeighbors() cannot be combined with chatHistory() stage");
-    }
-
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
     {
         log_devql_validation_failure(
@@ -94,10 +67,6 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
             crate::engine::logging::bool_attr(
                 "has_chat_history_stage",
                 parsed.has_chat_history_stage,
-            ),
-            crate::engine::logging::bool_attr(
-                "has_semantic_neighbors_stage",
-                parsed.has_semantic_neighbors_stage,
             ),
             crate::engine::logging::bool_attr(
                 "has_checkpoints_stage",
@@ -274,17 +243,6 @@ async fn execute_relational_pipeline(
         return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
     }
 
-    if parsed.has_semantic_neighbors_stage {
-        return execute_relational_semantic_neighbors_pipeline(
-            cfg,
-            events_cfg,
-            parsed,
-            relational,
-            &repo_id,
-        )
-        .await;
-    }
-
     let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
         .await?;
     let rows = relational
@@ -410,47 +368,6 @@ async fn execute_relational_deps_pipeline(
         .into_iter()
         .map(normalise_relational_result_row)
         .collect::<Vec<_>>())
-}
-
-async fn execute_relational_semantic_neighbors_pipeline(
-    cfg: &DevqlConfig,
-    events_cfg: &EventsBackendConfig,
-    parsed: &ParsedDevqlQuery,
-    relational: &RelationalStorage,
-    repo_id: &str,
-) -> Result<Vec<Value>> {
-    if relational.dialect() != RelationalDialect::Postgres {
-        bail!(
-            "semanticNeighbors() currently requires Postgres relational storage because SQLite vector search is not supported yet."
-        );
-    }
-
-    let mut source_query = parsed.clone();
-    source_query.has_semantic_neighbors_stage = false;
-    source_query.has_chat_history_stage = false;
-    source_query.limit = 1;
-
-    let source_sql =
-        build_relational_artefacts_query(cfg, events_cfg, &source_query, Some(relational), repo_id)
-            .await?;
-    let source_rows = relational.query_rows(&source_sql).await?;
-    let Some(source) = source_rows.first() else {
-        return Ok(vec![]);
-    };
-    let Some(source_artefact_id) = source.get("artefact_id").and_then(Value::as_str) else {
-        bail!("semanticNeighbors() source artefact did not include artefact_id");
-    };
-
-    let source_embedding =
-        load_symbol_embedding_source_metadata(relational, repo_id, source_artefact_id).await?;
-    if source_embedding.is_none() {
-        bail!(
-            "semanticNeighbors() requires Stage 2 embeddings for the source artefact. Configure BITLOOPS_DEVQL_EMBEDDING_PROVIDER and re-run `bitloops devql ingest`."
-        );
-    }
-
-    let sql = build_postgres_semantic_neighbors_sql(repo_id, source_artefact_id, parsed.limit);
-    relational.query_rows(&sql).await
 }
 
 async fn blob_shas_changed_in_events(
