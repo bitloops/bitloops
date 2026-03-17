@@ -209,7 +209,10 @@ pub fn format_knowledge_add_result(
     if let Some(association) = association {
         lines.extend([
             "Association created".to_string(),
-            format!("  relation assertion: {}", association.relation_assertion_id),
+            format!(
+                "  relation assertion: {}",
+                association.relation_assertion_id
+            ),
             format!(
                 "  target: {}:{}",
                 association.target_type, association.target_id

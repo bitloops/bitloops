@@ -15,9 +15,9 @@ use super::providers::{
 };
 use super::storage::{content_hash, knowledge_payload_key, serialize_payload};
 use super::types::{
-    AssociateKnowledgeResult, AssociateKnowledgeRequest, BoxFuture, FetchedKnowledgeDocument,
-    IngestKnowledgeRequest, KnowledgeAssociationTarget, KnowledgeHostContext,
-    KnowledgePayloadData, KnowledgeSourceKind,
+    AssociateKnowledgeRequest, AssociateKnowledgeResult, BoxFuture, FetchedKnowledgeDocument,
+    IngestKnowledgeRequest, KnowledgeAssociationTarget, KnowledgeHostContext, KnowledgePayloadData,
+    KnowledgeSourceKind,
 };
 use super::{KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result, run_add_command};
 use crate::engine::db::SqliteConnectionPool;
@@ -725,7 +725,7 @@ async fn ingest_source_does_not_create_commit_relation_assertion() -> Result<()>
         sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
         0
     );
-    assert_eq!(result.knowledge_item_id.is_empty(), false);
+    assert!(!result.knowledge_item_id.is_empty());
     Ok(())
 }
 
@@ -1115,7 +1115,10 @@ async fn run_add_command_invalid_commit_fails_before_persisting_rows() -> Result
 
     let host = build_host_context(&repo_root, &repo)?;
     assert_eq!(sqlite_row_count(&sqlite_path(&host), "knowledge_items")?, 0);
-    assert_eq!(sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?, 0);
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        0
+    );
     assert_eq!(duckdb_document_count(&duckdb_path(&host))?, 0);
     Ok(())
 }

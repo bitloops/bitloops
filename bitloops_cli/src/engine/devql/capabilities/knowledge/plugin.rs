@@ -20,9 +20,9 @@ use super::storage::{
 };
 use super::types::{
     AssociateKnowledgeRequest, AssociateKnowledgeResult, BoxFuture, FetchedKnowledgeDocument,
-    IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeAssociationTarget, KnowledgeHostContext,
-    KnowledgeItemStatus, KnowledgeProvider, KnowledgeVersionStatus, ParsedKnowledgeUrl,
-    format_knowledge_add_result,
+    IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeAssociationTarget,
+    KnowledgeHostContext, KnowledgeItemStatus, KnowledgeProvider, KnowledgeVersionStatus,
+    ParsedKnowledgeUrl, format_knowledge_add_result,
 };
 use super::url::parse_knowledge_url;
 
@@ -180,7 +180,10 @@ impl KnowledgePlugin {
             inserted_document_version = Some(derived_document_version_id);
         }
 
-        if let Err(err) = host.relational_store.persist_ingestion(&source_row, &item_row) {
+        if let Err(err) = host
+            .relational_store
+            .persist_ingestion(&source_row, &item_row)
+        {
             if let Some(document_version_id) = inserted_document_version.as_deref() {
                 let _ = host
                     .document_store
@@ -326,7 +329,10 @@ fn validate_commit_exists(repo_root: &std::path::Path, commit: &str) -> Result<(
     Ok(())
 }
 
-fn preflight_validate_commit_target(repo_root: &std::path::Path, commit: Option<&str>) -> Result<()> {
+fn preflight_validate_commit_target(
+    repo_root: &std::path::Path,
+    commit: Option<&str>,
+) -> Result<()> {
     if let Some(commit) = commit {
         validate_commit_exists(repo_root, commit)?;
     }
@@ -354,7 +360,10 @@ pub(crate) async fn run_add_flow(
     let association_result = if let Some(commit) = commit {
         Some(
             capability
-                .associate(host, build_commit_association_request(&ingest_result, commit))
+                .associate(
+                    host,
+                    build_commit_association_request(&ingest_result, commit),
+                )
                 .await?,
         )
     } else {
