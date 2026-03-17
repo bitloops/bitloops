@@ -94,7 +94,6 @@ impl SqliteKnowledgeRelationalStore {
         &self,
         source: &KnowledgeSourceRow,
         item: &KnowledgeItemRow,
-        relation: Option<&KnowledgeRelationAssertionRow>,
     ) -> Result<()> {
         self.sqlite.with_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
@@ -103,9 +102,6 @@ impl SqliteKnowledgeRelationalStore {
             let result = (|| -> Result<()> {
                 upsert_source(conn, source)?;
                 upsert_item(conn, item)?;
-                if let Some(relation) = relation {
-                    insert_relation_assertion(conn, relation)?;
-                }
                 Ok(())
             })();
 
@@ -121,6 +117,14 @@ impl SqliteKnowledgeRelationalStore {
                 }
             }
         })
+    }
+
+    pub fn insert_relation_assertion(
+        &self,
+        relation: &KnowledgeRelationAssertionRow,
+    ) -> Result<()> {
+        self.sqlite
+            .with_connection(|conn| insert_relation_assertion(conn, relation))
     }
 
     pub fn find_item(&self, repo_id: &str, source_id: &str) -> Result<Option<KnowledgeItemRow>> {
@@ -527,21 +531,8 @@ mod tests {
             latest_document_version_id: "version-1".to_string(),
             provenance_json: source.provenance_json.clone(),
         };
-        let relation = KnowledgeRelationAssertionRow {
-            relation_assertion_id: "relation-1".to_string(),
-            repo_id: item.repo_id.clone(),
-            knowledge_item_id: item.knowledge_item_id.clone(),
-            source_document_version_id: item.latest_document_version_id.clone(),
-            target_type: "commit".to_string(),
-            target_id: "abc123".to_string(),
-            relation_type: "associated_with".to_string(),
-            association_method: "manual_commit_flag".to_string(),
-            confidence: 1.0,
-            provenance_json: source.provenance_json.clone(),
-        };
-
         store
-            .persist_ingestion(&source, &item, Some(&relation))
+            .persist_ingestion(&source, &item)
             .expect("persist ingestion");
 
         let found = store
@@ -550,6 +541,32 @@ mod tests {
             .expect("item row");
 
         assert_eq!(found, item);
+    }
+
+    #[test]
+    fn sqlite_relational_store_inserts_relation_assertion() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("knowledge-relational.db");
+        let pool = SqliteConnectionPool::connect(sqlite_path).expect("sqlite pool");
+        let store = SqliteKnowledgeRelationalStore::new(pool);
+        store.initialise_schema().expect("initialise schema");
+
+        let relation = KnowledgeRelationAssertionRow {
+            relation_assertion_id: "relation-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            knowledge_item_id: "item-1".to_string(),
+            source_document_version_id: "version-1".to_string(),
+            target_type: "commit".to_string(),
+            target_id: "abc123".to_string(),
+            relation_type: "associated_with".to_string(),
+            association_method: "manual_attachment".to_string(),
+            confidence: 1.0,
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+
+        store
+            .insert_relation_assertion(&relation)
+            .expect("insert relation assertion");
     }
 
     #[test]

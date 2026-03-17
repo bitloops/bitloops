@@ -105,7 +105,43 @@ pub struct FetchedKnowledgeDocument {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestKnowledgeRequest {
     pub url: String,
-    pub commit: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnowledgeAssociationTarget {
+    Commit { sha: String },
+}
+
+impl KnowledgeAssociationTarget {
+    pub fn target_type(&self) -> &'static str {
+        match self {
+            Self::Commit { .. } => "commit",
+        }
+    }
+
+    pub fn target_id(&self) -> &str {
+        match self {
+            Self::Commit { sha } => sha.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssociateKnowledgeRequest {
+    pub knowledge_item_id: String,
+    pub source_document_version_id: String,
+    pub target: KnowledgeAssociationTarget,
+    pub relation_type: String,
+    pub association_method: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssociateKnowledgeResult {
+    pub relation_assertion_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub relation_type: String,
+    pub association_method: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +165,6 @@ pub struct IngestKnowledgeResult {
     pub document_version_id: String,
     pub item_status: KnowledgeItemStatus,
     pub version_status: KnowledgeVersionStatus,
-    pub relation_assertion_id: Option<String>,
 }
 
 pub struct KnowledgeHostContext {
@@ -142,8 +177,8 @@ pub struct KnowledgeHostContext {
     pub payload_store: BlobKnowledgePayloadStore,
 }
 
-pub fn format_knowledge_add_result(result: &IngestKnowledgeResult) -> String {
-    let status = match (&result.item_status, &result.version_status) {
+fn render_ingest_status(result: &IngestKnowledgeResult) -> &'static str {
+    match (&result.item_status, &result.version_status) {
         (KnowledgeItemStatus::Created, KnowledgeVersionStatus::Created) => "new item, new version",
         (KnowledgeItemStatus::Created, KnowledgeVersionStatus::Reused) => {
             "new item, reused version"
@@ -154,18 +189,37 @@ pub fn format_knowledge_add_result(result: &IngestKnowledgeResult) -> String {
         (KnowledgeItemStatus::Reused, KnowledgeVersionStatus::Reused) => {
             "reused item, reused version"
         }
-    };
-    let association = result.relation_assertion_id.as_deref().unwrap_or("none");
+    }
+}
 
-    [
+pub fn format_knowledge_add_result(
+    ingest: &IngestKnowledgeResult,
+    association: Option<&AssociateKnowledgeResult>,
+) -> String {
+    let mut lines = vec![
         "Knowledge added".to_string(),
-        format!("  provider: {}", result.provider),
-        format!("  source kind: {}", result.source_kind),
-        format!("  repository: {}", result.repo_identity),
-        format!("  knowledge item: {}", result.knowledge_item_id),
-        format!("  document version: {}", result.document_version_id),
-        format!("  status: {status}"),
-        format!("  association: {association}"),
-    ]
-    .join("\n")
+        format!("  provider: {}", ingest.provider),
+        format!("  source kind: {}", ingest.source_kind),
+        format!("  repository: {}", ingest.repo_identity),
+        format!("  knowledge item: {}", ingest.knowledge_item_id),
+        format!("  document version: {}", ingest.document_version_id),
+        format!("  status: {}", render_ingest_status(ingest)),
+    ];
+
+    if let Some(association) = association {
+        lines.extend([
+            "Association created".to_string(),
+            format!("  relation assertion: {}", association.relation_assertion_id),
+            format!(
+                "  target: {}:{}",
+                association.target_type, association.target_id
+            ),
+            format!("  relation: {}", association.relation_type),
+            format!("  method: {}", association.association_method),
+        ]);
+    } else {
+        lines.push("Association: none".to_string());
+    }
+
+    lines.join("\n")
 }
