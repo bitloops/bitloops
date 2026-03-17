@@ -234,6 +234,7 @@ fn test_unresolved_call_edge(
 
 include!("devql_tests/core_and_ingestion.rs");
 include!("devql_tests/query_pipeline.rs");
+include!("devql_tests/query_executor.rs");
 include!("devql_tests/config_and_status.rs");
 include!("devql_tests/extraction_js_ts.rs");
 include!("devql_tests/extraction_rust.rs");

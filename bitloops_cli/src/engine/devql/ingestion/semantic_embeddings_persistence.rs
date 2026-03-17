@@ -262,6 +262,17 @@ fn sql_vector_string(values: &[f32]) -> Result<String> {
 mod semantic_embedding_persistence_tests {
     use super::*;
     use serde_json::json;
+    use tempfile::tempdir;
+
+    async fn sqlite_relational_with_schema(sql: &str) -> RelationalStorage {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("semantic-embeddings.sqlite");
+        sqlite_exec_path_allow_create(&db_path, sql)
+            .await
+            .expect("create sqlite schema");
+        std::mem::forget(temp);
+        RelationalStorage::Sqlite { path: db_path }
+    }
 
     #[test]
     fn semantic_embedding_schema_includes_vector_table() {
@@ -307,5 +318,140 @@ mod semantic_embedding_persistence_tests {
         assert!(sql.contains("1 - (emb.embedding <=> src.embedding) AS semantic_score"));
         assert!(sql.contains("ORDER BY emb.embedding <=> src.embedding"));
         assert!(sql.contains("LIMIT 10"));
+    }
+
+    #[test]
+    fn semantic_embedding_index_state_sql_filters_by_artefact_id() {
+        let sql = build_symbol_embedding_index_state_sql("artefact-'1");
+        assert!(sql.contains("FROM symbol_embeddings"));
+        assert!(sql.contains("WHERE artefact_id = 'artefact-''1'"));
+    }
+
+    #[test]
+    fn semantic_embedding_summary_lookup_sql_uses_all_ids() {
+        let sql = build_semantic_summary_lookup_sql(&[
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+        ]);
+        assert!(sql.contains("FROM symbol_semantics"));
+        assert!(sql.contains("'artefact-1'"));
+        assert!(sql.contains("'artefact-2'"));
+    }
+
+    #[test]
+    fn semantic_embedding_source_metadata_sql_filters_by_repo_and_artefact() {
+        let sql = build_symbol_embedding_source_metadata_sql("repo-1", "artefact-1");
+        assert!(sql.contains("FROM symbol_embeddings"));
+        assert!(sql.contains("repo_id = 'repo-1'"));
+        assert!(sql.contains("artefact_id = 'artefact-1'"));
+        assert!(sql.contains("LIMIT 1"));
+    }
+
+    #[test]
+    fn semantic_embedding_vector_sql_rejects_empty_or_non_finite_vectors() {
+        let empty_err = sql_vector_string(&[]).expect_err("empty vectors must fail");
+        assert!(empty_err.to_string().contains("empty embedding vector"));
+
+        let invalid_err =
+            sql_vector_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
+        assert!(
+            invalid_err
+                .to_string()
+                .contains("non-finite values")
+        );
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_loads_index_state_from_relational_storage() {
+        let relational = sqlite_relational_with_schema(
+            "CREATE TABLE symbol_embeddings (
+                artefact_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                dimension INTEGER NOT NULL,
+                embedding_input_hash TEXT NOT NULL
+            );
+            INSERT INTO symbol_embeddings (
+                artefact_id, repo_id, provider, model, dimension, embedding_input_hash
+            ) VALUES (
+                'artefact-1', 'repo-1', 'voyage', 'voyage-code-3', 1024, 'hash-1'
+            );",
+        )
+        .await;
+
+        let state = load_symbol_embedding_index_state(&relational, "artefact-1")
+            .await
+            .expect("load embedding state");
+
+        assert_eq!(state.embedding_hash.as_deref(), Some("hash-1"));
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_loads_summary_map_from_relational_storage() {
+        let relational = sqlite_relational_with_schema(
+            "CREATE TABLE symbol_semantics (
+                artefact_id TEXT PRIMARY KEY,
+                summary TEXT
+            );
+            INSERT INTO symbol_semantics (artefact_id, summary) VALUES
+                ('artefact-1', 'summarizes function 1'),
+                ('artefact-2', ''),
+                ('artefact-3', 'summarizes function 3');",
+        )
+        .await;
+
+        let summary_map = load_semantic_summary_map(
+            &relational,
+            &[
+                "artefact-1".to_string(),
+                "artefact-2".to_string(),
+                "artefact-3".to_string(),
+            ],
+        )
+        .await
+        .expect("load summary map");
+
+        assert_eq!(
+            summary_map.get("artefact-1").map(String::as_str),
+            Some("summarizes function 1")
+        );
+        assert_eq!(
+            summary_map.get("artefact-3").map(String::as_str),
+            Some("summarizes function 3")
+        );
+        assert!(!summary_map.contains_key("artefact-2"));
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_loads_source_metadata_from_relational_storage() {
+        let relational = sqlite_relational_with_schema(
+            "CREATE TABLE symbol_embeddings (
+                artefact_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                dimension INTEGER NOT NULL
+            );
+            INSERT INTO symbol_embeddings (
+                artefact_id, repo_id, provider, model, dimension
+            ) VALUES (
+                'artefact-1', 'repo-1', 'local', 'jinaai/jina-embeddings-v2-base-code', 768
+            );",
+        )
+        .await;
+
+        let source_metadata =
+            load_symbol_embedding_source_metadata(&relational, "repo-1", "artefact-1")
+                .await
+                .expect("load embedding source metadata")
+                .expect("embedding metadata row");
+
+        assert_eq!(source_metadata.get("provider"), Some(&json!("local")));
+        assert_eq!(
+            source_metadata.get("model"),
+            Some(&json!("jinaai/jina-embeddings-v2-base-code"))
+        );
+        assert_eq!(source_metadata.get("dimension"), Some(&json!(768)));
     }
 }
