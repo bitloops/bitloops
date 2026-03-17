@@ -382,9 +382,12 @@ pub fn run_send_analytics_command(
 pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Result<()> {
     let mut cmd = crate::commands::Cli::command();
     // clap_complete splits subcommand paths using "__". Our hidden
-    // "__send_analytics" command conflicts with that separator and causes a
-    // panic during completion generation, so we rename only in this generated
-    // tree. Runtime parsing remains unchanged.
+    // "__send_analytics" and "__devql-watcher" commands conflict with that
+    // separator and cause a panic during completion generation, so we rename
+    // them only in this generated tree. Runtime parsing remains unchanged.
+    cmd = cmd.mut_subcommand("__devql-watcher", |sub| {
+        sub.name("devql-watcher-internal")
+    });
     cmd = cmd.mut_subcommand("__send_analytics", |sub| {
         sub.name("send-analytics-internal")
     });

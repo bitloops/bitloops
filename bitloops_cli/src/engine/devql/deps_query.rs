@@ -39,26 +39,28 @@ fn build_relational_deps_query(
     };
 
     let mut source_filters = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
-    match parsed.as_of.as_ref() {
-        Some(AsOfSelector::SaveCurrent) => {
-            source_filters.push("a.current_scope = 'visible'".to_string());
-        }
-        Some(AsOfSelector::SaveRevision(revision_id)) => {
-            source_filters.push("a.revision_kind = 'temporary'".to_string());
-            source_filters.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
-        }
-        Some(AsOfSelector::Commit(commit_sha)) => {
-            source_filters.push("a.revision_kind = 'commit'".to_string());
-            source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit_sha)));
-        }
-        Some(AsOfSelector::Ref(reference)) => {
-            let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
-                .with_context(|| format!("resolving git ref `{reference}`"))?;
-            source_filters.push("a.revision_kind = 'commit'".to_string());
-            source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit.trim())));
-        }
-        None => {
-            source_filters.push("a.current_scope = 'committed'".to_string());
+    if use_historical_tables {
+        match parsed.as_of.as_ref() {
+            Some(AsOfSelector::SaveCurrent) => {
+                source_filters.push("a.current_scope = 'visible'".to_string());
+            }
+            Some(AsOfSelector::SaveRevision(revision_id)) => {
+                source_filters.push("a.revision_kind = 'temporary'".to_string());
+                source_filters.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
+            }
+            Some(AsOfSelector::Commit(commit_sha)) => {
+                source_filters.push("a.revision_kind = 'commit'".to_string());
+                source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit_sha)));
+            }
+            Some(AsOfSelector::Ref(reference)) => {
+                let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
+                    .with_context(|| format!("resolving git ref `{reference}`"))?;
+                source_filters.push("a.revision_kind = 'commit'".to_string());
+                source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit.trim())));
+            }
+            None => {
+                source_filters.push("a.current_scope = 'committed'".to_string());
+            }
         }
     }
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
@@ -99,23 +101,27 @@ fn build_relational_deps_query(
     }
 
     let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
-    match parsed.as_of.as_ref() {
-        Some(AsOfSelector::SaveCurrent) => edge_filters.push("e.current_scope = 'visible'".to_string()),
-        Some(AsOfSelector::SaveRevision(revision_id)) => {
-            edge_filters.push("e.revision_kind = 'temporary'".to_string());
-            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
+    if use_historical_tables {
+        match parsed.as_of.as_ref() {
+            Some(AsOfSelector::SaveCurrent) => {
+                edge_filters.push("e.current_scope = 'visible'".to_string())
+            }
+            Some(AsOfSelector::SaveRevision(revision_id)) => {
+                edge_filters.push("e.revision_kind = 'temporary'".to_string());
+                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
+            }
+            Some(AsOfSelector::Commit(commit_sha)) => {
+                edge_filters.push("e.revision_kind = 'commit'".to_string());
+                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit_sha)));
+            }
+            Some(AsOfSelector::Ref(reference)) => {
+                let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
+                    .with_context(|| format!("resolving git ref `{reference}`"))?;
+                edge_filters.push("e.revision_kind = 'commit'".to_string());
+                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit.trim())));
+            }
+            None => edge_filters.push("e.current_scope = 'committed'".to_string()),
         }
-        Some(AsOfSelector::Commit(commit_sha)) => {
-            edge_filters.push("e.revision_kind = 'commit'".to_string());
-            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit_sha)));
-        }
-        Some(AsOfSelector::Ref(reference)) => {
-            let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
-                .with_context(|| format!("resolving git ref `{reference}`"))?;
-            edge_filters.push("e.revision_kind = 'commit'".to_string());
-            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit.trim())));
-        }
-        None => edge_filters.push("e.current_scope = 'committed'".to_string()),
     }
     if let Some(kind) = parsed.deps.kind.as_deref() {
         edge_filters.push(format!(

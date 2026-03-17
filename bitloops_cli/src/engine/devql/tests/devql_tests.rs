@@ -292,7 +292,7 @@ async fn devql_run_requires_subcommand() {
 }
 
 #[tokio::test]
-async fn devql_run_init_requires_pg_dsn_after_repo_resolution() {
+async fn devql_run_init_uses_default_sqlite_duckdb_after_repo_resolution() {
     let repo = seed_git_repo();
     let home = TempDir::new().expect("home dir");
     let home_path = home.path().to_string_lossy().to_string();
@@ -309,14 +309,13 @@ async fn devql_run_init_requires_pg_dsn_after_repo_resolution() {
         ],
     );
 
-    let err = run_devql_command(DevqlArgs {
+    let result = run_devql_command(DevqlArgs {
         command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
     })
-    .await
-    .expect_err("missing PG DSN should error before DB setup");
+    .await;
 
     assert!(
-        err.to_string().contains("BITLOOPS_DEVQL_PG_DSN is required"),
-        "unexpected error: {err:#}"
+        result.is_ok(),
+        "default DevQL backends should initialise after repo resolution: {result:#?}"
     );
 }
