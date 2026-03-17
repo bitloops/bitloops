@@ -269,8 +269,7 @@ mod tests {
 
         let err = provider
             .embed("fn normalize_email() {}", EmbeddingInputType::Document)
-            .err()
-            .expect("request should fail without a listening server");
+            .expect_err("request should fail without a listening server");
 
         assert!(
             err.to_string()
