@@ -212,3 +212,7 @@ ON artefact_edges_current (
 );
 "#
 }
+
+pub(crate) fn devql_schema_sql_sqlite() -> &'static str {
+    sqlite_schema_sql()
+}

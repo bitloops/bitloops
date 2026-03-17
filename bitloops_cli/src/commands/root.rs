@@ -231,6 +231,7 @@ pub(crate) fn command_name(command: &crate::commands::Commands) -> &'static str 
         crate::commands::Commands::Explain(_) => "explain",
         crate::commands::Commands::Debug(_) => "debug",
         crate::commands::Commands::Devql(_) => "devql",
+        crate::commands::Commands::DevqlWatcher(_) => "__devql-watcher",
         crate::commands::Commands::Doctor(_) => "doctor",
         crate::commands::Commands::SendAnalytics(_) => "__send_analytics",
         crate::commands::Commands::Completion(_) => "completion",
@@ -244,10 +245,25 @@ pub(crate) fn hidden_chain_for_command(command: &crate::commands::Commands) -> V
         command,
         crate::commands::Commands::Hooks(_)
             | crate::commands::Commands::Debug(_)
+            | crate::commands::Commands::DevqlWatcher(_)
             | crate::commands::Commands::SendAnalytics(_)
             | crate::commands::Commands::Completion(_)
             | crate::commands::Commands::CurlBashPostInstall
     )]
+}
+
+pub(crate) fn should_attempt_watcher_autostart(command: &crate::commands::Commands) -> bool {
+    !matches!(
+        command,
+        crate::commands::Commands::Clean(_)
+            | crate::commands::Commands::Disable(_)
+            | crate::commands::Commands::Help(_)
+            | crate::commands::Commands::Version(_)
+            | crate::commands::Commands::Completion(_)
+            | crate::commands::Commands::CurlBashPostInstall
+            | crate::commands::Commands::SendAnalytics(_)
+            | crate::commands::Commands::DevqlWatcher(_)
+    )
 }
 
 pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str) {

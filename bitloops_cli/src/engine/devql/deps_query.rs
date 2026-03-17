@@ -10,6 +10,7 @@ fn resolve_commit_selector(cfg: &DevqlConfig, parsed: &ParsedDevqlQuery) -> Resu
                 .with_context(|| format!("resolving git ref `{reference}`"))?;
             Ok(Some(commit.trim().to_string()))
         }
+        AsOfSelector::SaveCurrent | AsOfSelector::SaveRevision(_) => Ok(None),
     }
 }
 
@@ -20,7 +21,12 @@ fn build_relational_deps_query(
     dialect: RelationalDialect,
 ) -> Result<String> {
     validate_deps_filter(&parsed.deps)?;
-    let use_historical_tables = parsed.as_of.is_some();
+    let use_historical_tables = matches!(
+        parsed.as_of,
+        Some(AsOfSelector::Commit(_))
+            | Some(AsOfSelector::Ref(_))
+            | Some(AsOfSelector::SaveRevision(_))
+    );
     let artefacts_table = if use_historical_tables {
         "artefacts"
     } else {
@@ -33,6 +39,28 @@ fn build_relational_deps_query(
     };
 
     let mut source_filters = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
+    match parsed.as_of.as_ref() {
+        Some(AsOfSelector::SaveCurrent) => {
+            source_filters.push("a.current_scope = 'visible'".to_string());
+        }
+        Some(AsOfSelector::SaveRevision(revision_id)) => {
+            source_filters.push("a.revision_kind = 'temporary'".to_string());
+            source_filters.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
+        }
+        Some(AsOfSelector::Commit(commit_sha)) => {
+            source_filters.push("a.revision_kind = 'commit'".to_string());
+            source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit_sha)));
+        }
+        Some(AsOfSelector::Ref(reference)) => {
+            let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
+                .with_context(|| format!("resolving git ref `{reference}`"))?;
+            source_filters.push("a.revision_kind = 'commit'".to_string());
+            source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit.trim())));
+        }
+        None => {
+            source_filters.push("a.current_scope = 'committed'".to_string());
+        }
+    }
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         source_filters.push(format!("a.canonical_kind = '{}'", esc_pg(kind)));
     }
@@ -52,7 +80,7 @@ fn build_relational_deps_query(
                 source_filters.push(format!("a.blob_sha = '{}'", esc_pg(&blob_sha)));
             } else {
                 source_filters.push(format!(
-                    "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",
+                    "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND revision_kind = 'commit' AND revision_id = '{}' AND ({}) LIMIT 1)",
                     esc_pg(repo_id),
                     esc_pg(&commit_sha),
                     sql_path_candidates_clause("path", &path_candidates),
@@ -71,6 +99,24 @@ fn build_relational_deps_query(
     }
 
     let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
+    match parsed.as_of.as_ref() {
+        Some(AsOfSelector::SaveCurrent) => edge_filters.push("e.current_scope = 'visible'".to_string()),
+        Some(AsOfSelector::SaveRevision(revision_id)) => {
+            edge_filters.push("e.revision_kind = 'temporary'".to_string());
+            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
+        }
+        Some(AsOfSelector::Commit(commit_sha)) => {
+            edge_filters.push("e.revision_kind = 'commit'".to_string());
+            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit_sha)));
+        }
+        Some(AsOfSelector::Ref(reference)) => {
+            let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
+                .with_context(|| format!("resolving git ref `{reference}`"))?;
+            edge_filters.push("e.revision_kind = 'commit'".to_string());
+            edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit.trim())));
+        }
+        None => edge_filters.push("e.current_scope = 'committed'".to_string()),
+    }
     if let Some(kind) = parsed.deps.kind.as_deref() {
         edge_filters.push(format!(
             "e.edge_kind = '{}'",

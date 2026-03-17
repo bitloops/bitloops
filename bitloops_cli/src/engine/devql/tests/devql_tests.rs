@@ -1,5 +1,7 @@
 use super::*;
-use crate::commands::devql::DevqlCommand;
+use crate::commands::{Cli, Commands};
+use crate::commands::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
+use crate::test_support::process_state::enter_process_state;
 use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use clap::Parser;
@@ -236,3 +238,85 @@ include!("devql_tests/extraction_js_ts.rs");
 include!("devql_tests/extraction_rust.rs");
 include!("devql_tests/identity_and_schema.rs");
 include!("devql_tests/postgres_integration.rs");
+
+// --- CLI arg parsing and run() dispatch (moved from commands/devql.rs) ---
+
+#[test]
+fn devql_cli_parses_ingest_defaults() {
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "ingest"])
+        .expect("devql ingest should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Ingest(ingest)) = args.command else {
+        panic!("expected devql ingest command");
+    };
+
+    assert!(ingest.init);
+    assert_eq!(ingest.max_checkpoints, 500);
+}
+
+#[test]
+fn devql_cli_parses_query_compact_flag() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "repo(\"bitloops-cli\")",
+        "--compact",
+    ])
+    .expect("devql query should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Query(query)) = args.command else {
+        panic!("expected devql query command");
+    };
+
+    assert_eq!(query.query, "repo(\"bitloops-cli\")");
+    assert!(query.compact);
+}
+
+#[tokio::test]
+async fn devql_run_requires_subcommand() {
+    let err = run_devql_command(DevqlArgs::default())
+        .await
+        .expect_err("missing subcommand should error");
+
+    assert!(
+        err.to_string()
+            .contains(crate::commands::devql::MISSING_SUBCOMMAND_MESSAGE)
+    );
+}
+
+#[tokio::test]
+async fn devql_run_init_requires_pg_dsn_after_repo_resolution() {
+    let repo = seed_git_repo();
+    let home = TempDir::new().expect("home dir");
+    let home_path = home.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            ("HOME", Some(home_path.as_str())),
+            ("USERPROFILE", Some(home_path.as_str())),
+            ("BITLOOPS_DEVQL_PG_DSN", None),
+            ("BITLOOPS_DEVQL_CH_URL", None),
+            ("BITLOOPS_DEVQL_CH_USER", None),
+            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+            ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ],
+    );
+
+    let err = run_devql_command(DevqlArgs {
+        command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
+    })
+    .await
+    .expect_err("missing PG DSN should error before DB setup");
+
+    assert!(
+        err.to_string().contains("BITLOOPS_DEVQL_PG_DSN is required"),
+        "unexpected error: {err:#}"
+    );
+}

@@ -23,6 +23,8 @@ struct ParsedDevqlQuery {
 enum AsOfSelector {
     Ref(String),
     Commit(String),
+    SaveCurrent,
+    SaveRevision(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -98,8 +100,16 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                 parsed.as_of = Some(AsOfSelector::Commit(commit.clone()));
             } else if let Some(reference) = args.get("ref") {
                 parsed.as_of = Some(AsOfSelector::Ref(reference.clone()));
+            } else if let Some(save) = args.get("save") {
+                if save.eq_ignore_ascii_case("current") {
+                    parsed.as_of = Some(AsOfSelector::SaveCurrent);
+                } else {
+                    bail!("asOf(save:...) only supports save:\"current\"")
+                }
+            } else if let Some(revision) = args.get("saveRevision") {
+                parsed.as_of = Some(AsOfSelector::SaveRevision(revision.clone()));
             } else {
-                bail!("asOf(...) requires `commit:` or `ref:`")
+                bail!("asOf(...) requires `commit:`, `ref:`, `save:`, or `saveRevision:`")
             }
             continue;
         }

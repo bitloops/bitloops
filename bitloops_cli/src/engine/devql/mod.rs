@@ -24,6 +24,9 @@ use crate::store_config::{
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
+pub mod watch;
+pub(crate) mod store;
+
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
     pub(crate) provider: String,
