@@ -102,8 +102,8 @@ Important:
 
 These live under `knowledge.providers`.
 
-| Key                             | Type   | Default | Notes                                                                                       |
-| ------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------- |
+| Key                                       | Type   | Default | Notes                                                                                       |
+| ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------- |
 | `knowledge.providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                           |
 | `knowledge.providers.jira.site_url`       | string | none    | Required for Jira issue knowledge ingestion. Must match the Atlassian site in the URL.      |
 | `knowledge.providers.jira.email`          | string | none    | Required for Jira basic auth.                                                               |
