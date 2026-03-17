@@ -9,10 +9,8 @@ pub(super) fn build(
     provider: &str,
     model: String,
     api_key: Option<String>,
-    base_url: Option<&str>,
-    output_dimension: Option<usize>,
 ) -> Result<Box<dyn EmbeddingProvider>> {
-    let endpoint = resolve_endpoint(provider, base_url)?;
+    let endpoint = resolve_endpoint(provider)?;
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
@@ -24,27 +22,25 @@ pub(super) fn build(
         model,
         api_key,
         endpoint,
-        output_dimension,
+        output_dimension: default_output_dimension(provider),
         client,
     }))
 }
 
-pub(super) fn resolve_endpoint(provider: &str, base_url: Option<&str>) -> Result<String> {
-    if let Some(base_url) = base_url.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(base_url.to_string());
-    }
-
+pub(super) fn resolve_endpoint(provider: &str) -> Result<String> {
     match provider {
         "voyage" => Ok("https://api.voyageai.com/v1/embeddings".to_string()),
         "openai" => Ok("https://api.openai.com/v1/embeddings".to_string()),
-        "qodo" | "openai_compatible" | "custom" => {
-            bail!(
-                "BITLOOPS_DEVQL_EMBEDDING_BASE_URL is required for embedding provider `{provider}`"
-            )
+        other => {
+            bail!("unsupported embedding provider `{other}`. Use `local`, `voyage`, or `openai`")
         }
-        other => bail!(
-            "unsupported embedding provider `{other}`. Use `local`, `voyage`, `qodo`, `openai`, or `openai_compatible` with BITLOOPS_DEVQL_EMBEDDING_BASE_URL"
-        ),
+    }
+}
+
+fn default_output_dimension(provider: &str) -> Option<usize> {
+    match provider {
+        "voyage" => Some(1024),
+        _ => None,
     }
 }
 
@@ -152,12 +148,6 @@ fn build_embedding_payload(
                 payload["output_dimension"] = json!(output_dimension);
             }
         }
-        "qodo" => {
-            payload["input"] = json!([format_qodo_input(input, input_type)]);
-            if let Some(output_dimension) = output_dimension {
-                payload["dimensions"] = json!(output_dimension);
-            }
-        }
         _ => {
             if let Some(output_dimension) = output_dimension {
                 payload["dimensions"] = json!(output_dimension);
@@ -167,19 +157,6 @@ fn build_embedding_payload(
 
     payload
 }
-
-fn format_qodo_input(input: &str, input_type: EmbeddingInputType) -> String {
-    match input_type {
-        EmbeddingInputType::Query => {
-            format!(
-                "Instruct: Given a question, retrieve relevant code snippets that best answer the question\nQuery: {}",
-                input.trim()
-            )
-        }
-        EmbeddingInputType::Document => input.to_string(),
-    }
-}
-
 fn extract_embedding(value: &Value) -> Result<Vec<f32>> {
     let embedding = value
         .pointer("/data/0/embedding")
@@ -212,29 +189,18 @@ mod tests {
     #[test]
     fn embeddings_http_resolves_known_endpoints_and_errors() {
         assert_eq!(
-            resolve_endpoint("voyage", None).expect("voyage endpoint"),
+            resolve_endpoint("voyage").expect("voyage endpoint"),
             "https://api.voyageai.com/v1/embeddings"
         );
         assert_eq!(
-            resolve_endpoint("openai", None).expect("openai endpoint"),
+            resolve_endpoint("openai").expect("openai endpoint"),
             "https://api.openai.com/v1/embeddings"
         );
-        assert_eq!(
-            resolve_endpoint("custom", Some(" http://localhost:11434/v1/embeddings "))
-                .expect("custom base url"),
-            "http://localhost:11434/v1/embeddings"
-        );
         assert!(
-            resolve_endpoint("openai_compatible", None)
-                .expect_err("missing base url should fail")
+            resolve_endpoint("custom")
+                .expect_err("unsupported provider should fail")
                 .to_string()
-                .contains("BITLOOPS_DEVQL_EMBEDDING_BASE_URL is required")
-        );
-        assert!(
-            resolve_endpoint("qodo", None)
-                .expect_err("missing base url should fail")
-                .to_string()
-                .contains("BITLOOPS_DEVQL_EMBEDDING_BASE_URL is required")
+                .contains("unsupported embedding provider")
         );
     }
 
@@ -265,39 +231,6 @@ mod tests {
         assert_eq!(payload["model"], "text-embedding-3-large");
         assert_eq!(payload["dimensions"], 1536);
         assert!(payload.get("input_type").is_none());
-    }
-
-    #[test]
-    fn embeddings_http_builds_qodo_payload_with_query_instruction() {
-        let payload = build_embedding_payload(
-            "qodo",
-            "Qodo/Qodo-Embed-1-1.5B",
-            "normalize email helper",
-            EmbeddingInputType::Query,
-            None,
-        );
-
-        assert_eq!(payload["model"], "Qodo/Qodo-Embed-1-1.5B");
-        assert_eq!(
-            payload["input"][0],
-            "Instruct: Given a question, retrieve relevant code snippets that best answer the question\nQuery: normalize email helper"
-        );
-        assert!(payload.get("dimensions").is_none());
-        assert!(payload.get("input_type").is_none());
-    }
-
-    #[test]
-    fn embeddings_http_builds_qodo_payload_without_instruction_for_documents() {
-        let payload = build_embedding_payload(
-            "qodo",
-            "Qodo/Qodo-Embed-1-1.5B",
-            "fn normalize_email() {}",
-            EmbeddingInputType::Document,
-            Some(1536),
-        );
-
-        assert_eq!(payload["input"][0], "fn normalize_email() {}");
-        assert_eq!(payload["dimensions"], 1536);
     }
 
     #[test]

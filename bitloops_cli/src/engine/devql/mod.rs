@@ -52,8 +52,6 @@ pub struct DevqlConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
-    pub(crate) embedding_base_url: Option<String>,
-    pub(crate) embedding_output_dimension: Option<String>,
 }
 
 impl DevqlConfig {
@@ -93,8 +91,6 @@ impl DevqlConfig {
             embedding_provider: embedding_cfg.embedding_provider,
             embedding_model: embedding_cfg.embedding_model,
             embedding_api_key: embedding_cfg.embedding_api_key,
-            embedding_base_url: embedding_cfg.embedding_base_url,
-            embedding_output_dimension: embedding_cfg.embedding_output_dimension,
         }
     }
 
@@ -282,8 +278,6 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> semantic_embeddings::Embeddin
         embedding_provider: cfg.embedding_provider.clone(),
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
-        embedding_base_url: cfg.embedding_base_url.clone(),
-        embedding_output_dimension: cfg.embedding_output_dimension.clone(),
     }
 }
 

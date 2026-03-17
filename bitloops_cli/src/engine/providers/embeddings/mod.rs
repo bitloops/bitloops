@@ -6,8 +6,6 @@ use anyhow::Result;
 const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
 const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "jinaai/jina-embeddings-v2-base-code";
 const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-code-3";
-const DEFAULT_VOYAGE_OUTPUT_DIMENSION: usize = 1024;
-const DEFAULT_QODO_EMBEDDING_MODEL: &str = "Qodo/Qodo-Embed-1-1.5B";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
@@ -36,18 +34,12 @@ pub fn build_embedding_provider(
     provider: &str,
     model: String,
     api_key: Option<String>,
-    base_url: Option<&str>,
-    output_dimension: Option<usize>,
 ) -> Result<Box<dyn EmbeddingProvider>> {
     if embeddings_local::supports_provider(provider) {
-        embeddings_local::build(provider, model, output_dimension)
+        embeddings_local::build(provider, model)
     } else {
-        embeddings_http::build(provider, model, api_key, base_url, output_dimension)
+        embeddings_http::build(provider, model, api_key)
     }
-}
-
-pub fn resolve_embedding_endpoint(provider: &str, base_url: Option<&str>) -> Result<String> {
-    embeddings_http::resolve_endpoint(provider, base_url)
 }
 
 pub fn default_embedding_provider() -> &'static str {
@@ -58,14 +50,6 @@ pub fn default_embedding_model(provider: &str) -> Option<&'static str> {
     match provider {
         "local" | "jina" | "jina_local" => Some(DEFAULT_LOCAL_EMBEDDING_MODEL),
         "voyage" => Some(DEFAULT_VOYAGE_EMBEDDING_MODEL),
-        "qodo" => Some(DEFAULT_QODO_EMBEDDING_MODEL),
-        _ => None,
-    }
-}
-
-pub fn default_embedding_output_dimension(provider: &str) -> Option<usize> {
-    match provider {
-        "voyage" => Some(DEFAULT_VOYAGE_OUTPUT_DIMENSION),
         _ => None,
     }
 }

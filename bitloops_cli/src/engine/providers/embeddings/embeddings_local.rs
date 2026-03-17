@@ -11,17 +11,7 @@ pub(super) fn supports_provider(provider: &str) -> bool {
     matches!(provider, "local" | "jina" | "jina_local")
 }
 
-pub(super) fn build(
-    provider: &str,
-    model: String,
-    output_dimension: Option<usize>,
-) -> Result<Box<dyn EmbeddingProvider>> {
-    if output_dimension.is_some() {
-        bail!(
-            "BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION is not supported for local embedding provider `{provider}`"
-        );
-    }
-
+pub(super) fn build(provider: &str, model: String) -> Result<Box<dyn EmbeddingProvider>> {
     let resolved_model = resolve_local_embedding_model(&model)?;
     let embedder =
         TextEmbedding::try_new(InitOptions::new(resolved_model).with_show_download_progress(false))

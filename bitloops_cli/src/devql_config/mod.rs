@@ -32,8 +32,6 @@ const ENV_SEMANTIC_BASE_URL: &str = "BITLOOPS_DEVQL_SEMANTIC_BASE_URL";
 const ENV_EMBEDDING_PROVIDER: &str = "BITLOOPS_DEVQL_EMBEDDING_PROVIDER";
 const ENV_EMBEDDING_MODEL: &str = "BITLOOPS_DEVQL_EMBEDDING_MODEL";
 const ENV_EMBEDDING_API_KEY: &str = "BITLOOPS_DEVQL_EMBEDDING_API_KEY";
-const ENV_EMBEDDING_BASE_URL: &str = "BITLOOPS_DEVQL_EMBEDDING_BASE_URL";
-const ENV_EMBEDDING_OUTPUT_DIMENSION: &str = "BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION";
 const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
 const ENV_BLOB_STORAGE_PROVIDER: &str = "BITLOOPS_DEVQL_BLOB_PROVIDER";
 const ENV_BLOB_LOCAL_PATH: &str = "BITLOOPS_DEVQL_BLOB_LOCAL_PATH";
@@ -103,8 +101,6 @@ pub struct DevqlEmbeddingConfig {
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
-    pub embedding_base_url: Option<String>,
-    pub embedding_output_dimension: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,8 +203,6 @@ pub struct DevqlFileConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
-    pub(crate) embedding_base_url: Option<String>,
-    pub(crate) embedding_output_dimension: Option<String>,
     pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
@@ -316,14 +310,6 @@ impl DevqlFileConfig {
             ),
             embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
             embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
-            embedding_base_url: read_any_string(
-                root,
-                &["embedding_base_url", ENV_EMBEDDING_BASE_URL],
-            ),
-            embedding_output_dimension: read_any_string(
-                root,
-                &["embedding_output_dimension", ENV_EMBEDDING_OUTPUT_DIMENSION],
-            ),
             blob_provider: read_any_string_opt(
                 blobs,
                 &["provider", "blob_provider", ENV_BLOB_STORAGE_PROVIDER],
@@ -578,11 +564,6 @@ where
         read_non_empty_env(&env_lookup, ENV_EMBEDDING_MODEL).or(file_cfg.embedding_model);
     let embedding_api_key =
         read_non_empty_env(&env_lookup, ENV_EMBEDDING_API_KEY).or(file_cfg.embedding_api_key);
-    let embedding_base_url =
-        read_non_empty_env(&env_lookup, ENV_EMBEDDING_BASE_URL).or(file_cfg.embedding_base_url);
-    let embedding_output_dimension =
-        read_non_empty_env(&env_lookup, ENV_EMBEDDING_OUTPUT_DIMENSION)
-            .or(file_cfg.embedding_output_dimension);
     let embedding_provider = read_non_empty_env(&env_lookup, ENV_EMBEDDING_PROVIDER)
         .or(file_cfg.embedding_provider)
         .or_else(|| Some(DEFAULT_EMBEDDING_PROVIDER.to_string()));
@@ -591,8 +572,6 @@ where
         embedding_provider,
         embedding_model,
         embedding_api_key,
-        embedding_base_url,
-        embedding_output_dimension,
     }
 }
 

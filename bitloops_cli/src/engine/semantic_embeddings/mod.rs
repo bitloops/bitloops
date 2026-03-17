@@ -4,8 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::engine::providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
-    default_embedding_output_dimension, default_embedding_provider,
-    embedding_provider_requires_api_key,
+    default_embedding_provider, embedding_provider_requires_api_key,
 };
 use crate::engine::semantic_features::SemanticFeatureInput;
 
@@ -17,8 +16,6 @@ pub struct EmbeddingProviderConfig {
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
-    pub embedding_base_url: Option<String>,
-    pub embedding_output_dimension: Option<String>,
 }
 
 pub fn build_symbol_embedding_provider(
@@ -45,20 +42,6 @@ pub fn build_symbol_embedding_provider(
         ));
     }
 
-    let output_dimension = cfg
-        .embedding_output_dimension
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::trim)
-        .map(|value| {
-            value.parse::<usize>().map_err(|_| {
-                anyhow!("BITLOOPS_DEVQL_EMBEDDING_OUTPUT_DIMENSION must be a positive integer")
-            })
-        })
-        .transpose()?;
-    let output_dimension =
-        output_dimension.or_else(|| default_embedding_output_dimension(&provider));
-
     let api_key = cfg
         .embedding_api_key
         .as_deref()
@@ -71,13 +54,7 @@ pub fn build_symbol_embedding_provider(
         ));
     }
 
-    Ok(Some(build_embedding_provider(
-        &provider,
-        model,
-        api_key,
-        cfg.embedding_base_url.as_deref(),
-        output_dimension,
-    )?))
+    Ok(Some(build_embedding_provider(&provider, model, api_key)?))
 }
 
 fn resolve_embedding_provider(cfg: &EmbeddingProviderConfig) -> Option<String> {
@@ -444,8 +421,6 @@ mod tests {
             embedding_provider: Some("voyage".to_string()),
             embedding_model: None,
             embedding_api_key: Some("test-key".to_string()),
-            embedding_base_url: Some("https://api.voyageai.com/v1/embeddings".to_string()),
-            embedding_output_dimension: None,
         })
         .expect("provider should build")
         .expect("provider should be enabled");
@@ -456,31 +431,28 @@ mod tests {
             crate::engine::providers::embeddings::default_embedding_model("voyage")
                 .expect("voyage default model")
         );
-        assert_eq!(
-            provider.output_dimension(),
-            crate::engine::providers::embeddings::default_embedding_output_dimension("voyage")
-        );
+        assert_eq!(provider.output_dimension(), Some(1024));
     }
 
     #[test]
-    fn symbol_embedding_provider_defaults_qodo_model_without_api_key() {
-        let provider = build_symbol_embedding_provider(&EmbeddingProviderConfig {
-            embedding_provider: Some("qodo".to_string()),
+    fn symbol_embedding_provider_resolves_local_defaults_without_api_key() {
+        let provider = resolve_embedding_provider(&EmbeddingProviderConfig {
+            embedding_provider: Some("local".to_string()),
             embedding_model: None,
             embedding_api_key: None,
-            embedding_base_url: Some("http://localhost:11434/v1/embeddings".to_string()),
-            embedding_output_dimension: None,
-        })
-        .expect("provider should build")
-        .expect("provider should be enabled");
+        });
 
-        assert_eq!(provider.provider_name(), "qodo");
+        assert_eq!(provider.as_deref(), Some("local"));
         assert_eq!(
-            provider.model_name(),
-            crate::engine::providers::embeddings::default_embedding_model("qodo")
-                .expect("qodo default model")
+            crate::engine::providers::embeddings::default_embedding_provider(),
+            "local"
         );
-        assert_eq!(provider.output_dimension(), None);
+        assert_eq!(
+            crate::engine::providers::embeddings::default_embedding_model("local")
+                .expect("local default model")
+                .to_string(),
+            "jinaai/jina-embeddings-v2-base-code"
+        );
     }
 
     #[test]
@@ -490,8 +462,6 @@ mod tests {
                 embedding_provider: None,
                 embedding_model: None,
                 embedding_api_key: None,
-                embedding_base_url: None,
-                embedding_output_dimension: None,
             })
             .as_deref(),
             Some(crate::engine::providers::embeddings::default_embedding_provider())
