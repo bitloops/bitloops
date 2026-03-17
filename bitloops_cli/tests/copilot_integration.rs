@@ -1,3 +1,9 @@
+use bitloops_cli::engine::session::SessionBackend;
+use bitloops_cli::engine::session::create_session_backend_or_local;
+use bitloops_cli::engine::session::phase::SessionPhase;
+use bitloops_cli::engine::strategy::manual_commit::{
+    read_commit_checkpoint_mappings, read_committed, read_session_content,
+};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -216,9 +222,39 @@ fn copilot_basic_workflow() {
         "commit copilot output file",
     );
 
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
+    let mappings =
+        read_commit_checkpoint_mappings(dir.path()).expect("read commit-checkpoint mappings");
+    let checkpoint_id = mappings
+        .get(&head_sha)
+        .cloned()
+        .expect("copilot workflow should map HEAD to a committed checkpoint");
+
+    let summary = read_committed(dir.path(), &checkpoint_id)
+        .expect("read committed checkpoint")
+        .expect("committed checkpoint should exist");
+    assert_eq!(summary.checkpoint_id, checkpoint_id);
+    assert_eq!(summary.strategy, "manual-commit");
+
+    let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
+    assert_eq!(session.metadata["agent"], "copilot");
+
+    let backend = create_session_backend_or_local(dir.path());
+    let state = backend
+        .load_session("copilot-basic-1")
+        .expect("load copilot session")
+        .expect("copilot session should exist");
+    assert_eq!(state.phase, SessionPhase::Ended);
+    assert_eq!(state.step_count, 0);
+    assert!(state.turn_checkpoint_ids.is_empty());
+    assert!(
+        !state.last_checkpoint_id.is_empty(),
+        "condensed session should record last checkpoint id"
+    );
+
     let head_message = git_commit_message(dir.path(), "HEAD");
     assert!(
-        head_message.contains("Bitloops-Checkpoint: "),
-        "copilot workflow commit should include checkpoint trailer\n{head_message}"
+        !head_message.contains("Bitloops-Checkpoint: "),
+        "manual-commit persistence currently relies on commit-checkpoint mappings, not commit-message trailers\n{head_message}"
     );
 }
