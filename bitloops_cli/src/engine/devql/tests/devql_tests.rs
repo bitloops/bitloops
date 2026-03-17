@@ -134,7 +134,10 @@ async fn init_clickhouse_schema_returns_error_for_unreachable_endpoint() {
         .await
         .expect_err("unreachable clickhouse endpoint must fail");
 
-    assert!(err.to_string().contains("ClickHouse") || err.to_string().contains("sending ClickHouse request"));
+    assert!(
+        err.to_string().contains("ClickHouse")
+            || err.to_string().contains("sending ClickHouse request")
+    );
 }
 
 fn seed_git_repo() -> TempDir {

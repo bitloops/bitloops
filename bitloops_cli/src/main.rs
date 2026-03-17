@@ -33,8 +33,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::store_config::{
-        DashboardFileConfig, ProviderConfig, dashboard_use_bitloops_local,
-        resolve_provider_config, resolve_store_backend_config,
+        DashboardFileConfig, ProviderConfig, dashboard_use_bitloops_local, resolve_provider_config,
+        resolve_store_backend_config,
     };
     use crate::test_support::process_state::enter_process_state;
     use std::fs;
@@ -61,7 +61,10 @@ mod tests {
         let _guard = enter_process_state(Some(temp.path()), &[]);
         let cfg = resolve_store_backend_config().expect("backend config");
 
-        assert_eq!(cfg.relational.postgres_dsn.as_deref(), Some("postgres://u:p@localhost:5432/bitloops"));
+        assert_eq!(
+            cfg.relational.postgres_dsn.as_deref(),
+            Some("postgres://u:p@localhost:5432/bitloops")
+        );
     }
 
     #[test]

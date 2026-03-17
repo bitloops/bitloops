@@ -8,19 +8,17 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::providers::{
-    ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient,
-    KnowledgeProviderClient, build_confluence_document, build_github_document, build_jira_document,
-};
 use super::plugin::build_host_context;
+use super::providers::{
+    ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient, KnowledgeProviderClient,
+    build_confluence_document, build_github_document, build_jira_document,
+};
 use super::storage::{content_hash, knowledge_payload_key, serialize_payload};
 use super::types::{
     BoxFuture, FetchedKnowledgeDocument, IngestKnowledgeRequest, KnowledgeHostContext,
     KnowledgePayloadData, KnowledgeSourceKind,
 };
-use super::{
-    KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result, run_add_command,
-};
+use super::{KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result, run_add_command};
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
@@ -124,9 +122,8 @@ fn github_provider_maps_pull_request_payload() -> Result<()> {
 
 #[test]
 fn github_provider_rejects_issue_url_that_resolves_to_pull_request_payload() {
-    let parsed =
-        super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")
-            .expect("parse github issue url");
+    let parsed = super::url::parse_knowledge_url("https://github.com/bitloops/bitloops/issues/42")
+        .expect("parse github issue url");
 
     let err = build_github_document(
         &parsed,
@@ -756,7 +753,11 @@ fn build_host_context_reads_repo_config() -> Result<()> {
     let temp = TempDir::new()?;
     let repo_root = init_knowledge_repo(&temp)?;
     let repo = resolve_repo_identity(&repo_root)?;
-    write_repo_config(&repo_root, &test_backends(&temp), &provider_config("https://bitloops.atlassian.net"))?;
+    write_repo_config(
+        &repo_root,
+        &test_backends(&temp),
+        &provider_config("https://bitloops.atlassian.net"),
+    )?;
 
     let host = build_host_context(&repo_root, &repo)?;
 

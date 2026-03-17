@@ -355,10 +355,7 @@ fn knowledge_config_providers_resolve_env_indirection_from_repo_config_file() {
     )
     .expect("write repo config");
 
-    let _guard = enter_process_state(
-        None,
-        &[("BITLOOPS_GITHUB_TOKEN", Some("env-gh-from-file"))],
-    );
+    let _guard = enter_process_state(None, &[("BITLOOPS_GITHUB_TOKEN", Some("env-gh-from-file"))]);
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 
     assert_eq!(
@@ -579,7 +576,9 @@ fn blob_storage_local_path_or_default_uses_current_repo_root() {
     };
     let _guard = enter_process_state(Some(temp.path()), &[]);
 
-    let resolved = config.local_path_or_default().expect("default local blob path");
+    let resolved = config
+        .local_path_or_default()
+        .expect("default local blob path");
 
     let rendered = resolved.to_string_lossy();
     assert!(
