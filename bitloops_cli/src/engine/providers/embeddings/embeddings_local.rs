@@ -118,4 +118,15 @@ mod tests {
                 .contains("unsupported local embedding model")
         );
     }
+
+    #[test]
+    fn local_provider_build_rejects_unknown_model_before_loading_runtime() {
+        let err = build("local", "voyage-code-3".to_string())
+            .err()
+            .expect("unsupported model should fail before loading embedder");
+        assert!(
+            err.to_string()
+                .contains("unsupported local embedding model")
+        );
+    }
 }

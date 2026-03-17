@@ -185,6 +185,7 @@ fn extract_embedding(value: &Value) -> Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn embeddings_http_resolves_known_endpoints_and_errors() {
@@ -201,6 +202,24 @@ mod tests {
                 .expect_err("unsupported provider should fail")
                 .to_string()
                 .contains("unsupported embedding provider")
+        );
+    }
+
+    #[test]
+    fn embeddings_http_build_constructs_provider_defaults() {
+        let provider = build(
+            "voyage",
+            "voyage-code-3".to_string(),
+            Some("test-key".to_string()),
+        )
+        .expect("provider should build");
+
+        assert_eq!(provider.provider_name(), "voyage");
+        assert_eq!(provider.model_name(), "voyage-code-3");
+        assert_eq!(provider.output_dimension(), Some(1024));
+        assert_eq!(
+            provider.cache_key(),
+            "provider=voyage::model=voyage-code-3::dimension=1024"
         );
     }
 
@@ -231,6 +250,32 @@ mod tests {
         assert_eq!(payload["model"], "text-embedding-3-large");
         assert_eq!(payload["dimensions"], 1536);
         assert!(payload.get("input_type").is_none());
+    }
+
+    #[test]
+    fn embeddings_http_embed_surfaces_request_errors() {
+        let provider = EmbeddingsHttpProvider {
+            provider: "voyage".to_string(),
+            model: "voyage-code-3".to_string(),
+            api_key: Some("secret".to_string()),
+            endpoint: "http://127.0.0.1:1".to_string(),
+            output_dimension: Some(1024),
+            client: reqwest::blocking::Client::builder()
+                .connect_timeout(Duration::from_millis(25))
+                .timeout(Duration::from_millis(50))
+                .build()
+                .expect("client should build"),
+        };
+
+        let err = provider
+            .embed("fn normalize_email() {}", EmbeddingInputType::Document)
+            .err()
+            .expect("request should fail without a listening server");
+
+        assert!(
+            err.to_string()
+                .contains("sending embedding request to provider=voyage model=voyage-code-3")
+        );
     }
 
     #[test]

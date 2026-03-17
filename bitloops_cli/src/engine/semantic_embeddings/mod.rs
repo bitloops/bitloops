@@ -401,6 +401,7 @@ mod tests {
     fn symbol_embedding_row_uses_provider_vector_and_dimension() {
         let provider = MockEmbeddingProvider;
         let row = build_symbol_embedding_row(&sample_input(), &provider).expect("embedding row");
+        assert_eq!(provider.output_dimension(), Some(3));
         assert_eq!(row.provider, "mock");
         assert_eq!(row.model, "voyage-code-3");
         assert_eq!(row.dimension, 3);
@@ -500,5 +501,19 @@ mod tests {
             err.to_string()
                 .contains("BITLOOPS_DEVQL_EMBEDDING_API_KEY is required")
         );
+    }
+
+    #[test]
+    fn symbol_embedding_reindex_only_when_hash_changes() {
+        let state = SymbolEmbeddingIndexState {
+            embedding_hash: Some("hash-1".to_string()),
+        };
+
+        assert!(!symbol_embeddings_require_reindex(&state, "hash-1"));
+        assert!(symbol_embeddings_require_reindex(&state, "hash-2"));
+        assert!(symbol_embeddings_require_reindex(
+            &SymbolEmbeddingIndexState::default(),
+            "hash-1"
+        ));
     }
 }
