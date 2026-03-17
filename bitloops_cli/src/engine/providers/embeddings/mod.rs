@@ -1,6 +1,8 @@
 mod embeddings_http;
 mod embeddings_local;
 
+use std::path::Path;
+
 use anyhow::Result;
 
 const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
@@ -34,9 +36,10 @@ pub fn build_embedding_provider(
     provider: &str,
     model: String,
     api_key: Option<String>,
+    repo_root: Option<&Path>,
 ) -> Result<Box<dyn EmbeddingProvider>> {
     if embeddings_local::supports_provider(provider) {
-        embeddings_local::build(provider, model)
+        embeddings_local::build(provider, model, repo_root)
     } else {
         embeddings_http::build(provider, model, api_key)
     }

@@ -54,7 +54,14 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
 }
 
 /// Entries that must be present in `.bitloops/.gitignore`.
-const GITIGNORE_ENTRIES: &[&str] = &["tmp/", SETTINGS_LOCAL_FILE, "metadata/", "logs/"];
+const GITIGNORE_ENTRIES: &[&str] = &[
+    "tmp/",
+    SETTINGS_LOCAL_FILE,
+    "metadata/",
+    "logs/",
+    "stores/",
+    "embeddings/",
+];
 
 /// Ensures the `.bitloops/` directory and its `.gitignore` exist.
 fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {

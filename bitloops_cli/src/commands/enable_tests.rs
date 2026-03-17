@@ -305,7 +305,14 @@ fn setup_bitloops_dir_writes_all_required_gitignore_entries() {
     let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore"))
         .expect("expected .bitloops/.gitignore to exist");
 
-    for required in ["tmp/", "settings.local.json", "metadata/", "logs/"] {
+    for required in [
+        "tmp/",
+        "settings.local.json",
+        "metadata/",
+        "logs/",
+        "stores/",
+        "embeddings/",
+    ] {
         assert!(
             gitignore.contains(required),
             "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"
@@ -331,7 +338,14 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
         gitignore.contains("custom-entry/"),
         "existing content should be preserved:\n{gitignore}"
     );
-    for required in ["tmp/", "settings.local.json", "metadata/", "logs/"] {
+    for required in [
+        "tmp/",
+        "settings.local.json",
+        "metadata/",
+        "logs/",
+        "stores/",
+        "embeddings/",
+    ] {
         assert!(
             gitignore.contains(required),
             "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"

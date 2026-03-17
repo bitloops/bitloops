@@ -372,9 +372,11 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let embedding_provider =
-        semantic_embeddings::build_symbol_embedding_provider(&embedding_provider_config(cfg))?
-            .map(Arc::<dyn EmbeddingProvider>::from);
+    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
+        &embedding_provider_config(cfg),
+        Some(&cfg.repo_root),
+    )?
+    .map(Arc::<dyn EmbeddingProvider>::from);
     if init {
         match backends.events.provider {
             EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,

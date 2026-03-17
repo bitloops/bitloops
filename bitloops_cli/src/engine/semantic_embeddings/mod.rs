@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 use crate::engine::providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
@@ -20,6 +21,7 @@ pub struct EmbeddingProviderConfig {
 
 pub fn build_symbol_embedding_provider(
     cfg: &EmbeddingProviderConfig,
+    repo_root: Option<&Path>,
 ) -> Result<Option<Box<dyn EmbeddingProvider>>> {
     let Some(provider) = resolve_embedding_provider(cfg) else {
         return Ok(None);
@@ -54,7 +56,9 @@ pub fn build_symbol_embedding_provider(
         ));
     }
 
-    Ok(Some(build_embedding_provider(&provider, model, api_key)?))
+    Ok(Some(build_embedding_provider(
+        &provider, model, api_key, repo_root,
+    )?))
 }
 
 fn resolve_embedding_provider(cfg: &EmbeddingProviderConfig) -> Option<String> {
@@ -418,11 +422,14 @@ mod tests {
 
     #[test]
     fn symbol_embedding_provider_defaults_voyage_model_and_dimension() {
-        let provider = build_symbol_embedding_provider(&EmbeddingProviderConfig {
-            embedding_provider: Some("voyage".to_string()),
-            embedding_model: None,
-            embedding_api_key: Some("test-key".to_string()),
-        })
+        let provider = build_symbol_embedding_provider(
+            &EmbeddingProviderConfig {
+                embedding_provider: Some("voyage".to_string()),
+                embedding_model: None,
+                embedding_api_key: Some("test-key".to_string()),
+            },
+            None,
+        )
         .expect("provider should build")
         .expect("provider should be enabled");
 
@@ -477,11 +484,14 @@ mod tests {
 
     #[test]
     fn symbol_embedding_provider_returns_none_when_disabled() {
-        let provider = build_symbol_embedding_provider(&EmbeddingProviderConfig {
-            embedding_provider: Some("disabled".to_string()),
-            embedding_model: None,
-            embedding_api_key: None,
-        })
+        let provider = build_symbol_embedding_provider(
+            &EmbeddingProviderConfig {
+                embedding_provider: Some("disabled".to_string()),
+                embedding_model: None,
+                embedding_api_key: None,
+            },
+            None,
+        )
         .expect("disabled provider should not error");
 
         assert!(provider.is_none());
@@ -489,11 +499,14 @@ mod tests {
 
     #[test]
     fn symbol_embedding_provider_requires_api_key_for_openai() {
-        let err = build_symbol_embedding_provider(&EmbeddingProviderConfig {
-            embedding_provider: Some("openai".to_string()),
-            embedding_model: Some("text-embedding-3-large".to_string()),
-            embedding_api_key: None,
-        })
+        let err = build_symbol_embedding_provider(
+            &EmbeddingProviderConfig {
+                embedding_provider: Some("openai".to_string()),
+                embedding_model: Some("text-embedding-3-large".to_string()),
+                embedding_api_key: None,
+            },
+            None,
+        )
         .err()
         .expect("openai provider without api key should fail");
 

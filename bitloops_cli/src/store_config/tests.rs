@@ -493,9 +493,15 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
 
     let cfg = resolve_store_backend_config_for_repo(temp.path()).expect("store backend config");
     assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
-    assert_eq!(cfg.relational.sqlite_path.as_deref(), Some("data/devql.sqlite"));
+    assert_eq!(
+        cfg.relational.sqlite_path.as_deref(),
+        Some("data/devql.sqlite")
+    );
     assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
-    assert_eq!(cfg.events.duckdb_path.as_deref(), Some("data/events.duckdb"));
+    assert_eq!(
+        cfg.events.duckdb_path.as_deref(),
+        Some("data/events.duckdb")
+    );
 }
 
 #[test]
@@ -543,7 +549,10 @@ fn resolve_store_semantic_config_reads_file_and_env() {
             (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
             (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
             (ENV_SEMANTIC_API_KEY, Some("env-key")),
-            (ENV_SEMANTIC_BASE_URL, Some("http://localhost:9999/v1/chat/completions")),
+            (
+                ENV_SEMANTIC_BASE_URL,
+                Some("http://localhost:9999/v1/chat/completions"),
+            ),
         ],
         || {
             let cfg = resolve_store_semantic_config();
