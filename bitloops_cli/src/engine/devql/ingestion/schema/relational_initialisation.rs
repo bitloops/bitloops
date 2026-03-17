@@ -8,6 +8,9 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     init_sqlite_semantic_features_schema(sqlite_path)
         .await
         .context("creating SQLite semantic feature tables")?;
+    init_sqlite_semantic_embeddings_schema(sqlite_path)
+        .await
+        .context("creating SQLite semantic embedding tables")?;
     Ok(())
 }
 

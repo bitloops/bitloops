@@ -22,6 +22,35 @@ ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
 "#
 }
 
+fn semantic_embeddings_sqlite_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS symbol_embeddings (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
+ON symbol_embeddings (repo_id, artefact_id);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
+ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
+"#
+}
+
+async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
+    sqlite_exec_path_allow_create(sqlite_path, semantic_embeddings_sqlite_schema_sql())
+        .await
+        .context("creating SQLite semantic embedding tables")?;
+    Ok(())
+}
+
 async fn init_postgres_semantic_embeddings_schema(
     pg_client: &tokio_postgres::Client,
 ) -> Result<()> {
@@ -40,6 +69,8 @@ async fn upsert_symbol_embedding_rows(
     if inputs.is_empty() {
         return Ok(stats);
     }
+
+    ensure_semantic_embeddings_schema(relational).await?;
 
     let artefact_ids = inputs
         .iter()
@@ -72,6 +103,13 @@ async fn upsert_symbol_embedding_rows(
     }
 
     Ok(stats)
+}
+
+async fn ensure_semantic_embeddings_schema(relational: &RelationalStorage) -> Result<()> {
+    match relational {
+        RelationalStorage::Postgres(client) => init_postgres_semantic_embeddings_schema(client).await,
+        RelationalStorage::Sqlite { path } => init_sqlite_semantic_embeddings_schema(path).await,
+    }
 }
 
 async fn load_symbol_embedding_index_state(
@@ -114,7 +152,11 @@ async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
     row: &semantic_embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
-    relational.exec(&build_symbol_embedding_persist_sql(row)?).await
+    let sql = match relational {
+        RelationalStorage::Postgres(_) => build_postgres_symbol_embedding_persist_sql(row)?,
+        RelationalStorage::Sqlite { .. } => build_sqlite_symbol_embedding_persist_sql(row)?,
+    };
+    relational.exec(&sql).await
 }
 
 async fn load_symbol_embedding_source_metadata(
@@ -161,7 +203,7 @@ WHERE artefact_id IN ({})",
     )
 }
 
-fn build_symbol_embedding_persist_sql(
+fn build_postgres_symbol_embedding_persist_sql(
     row: &semantic_embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
     let embedding_expr = sql_vector_string(&row.embedding)?;
@@ -177,6 +219,25 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         dimension = row.dimension,
         embedding_input_hash = esc_pg(&row.embedding_input_hash),
         embedding = embedding_expr,
+    ))
+}
+
+fn build_sqlite_symbol_embedding_persist_sql(
+    row: &semantic_embeddings::SymbolEmbeddingRow,
+) -> Result<String> {
+    let embedding_json = sql_json_string(&row.embedding)?;
+    Ok(format!(
+        "INSERT INTO symbol_embeddings (artefact_id, repo_id, blob_sha, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', '{embedding}') \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = excluded.blob_sha, provider = excluded.provider, model = excluded.model, dimension = excluded.dimension, embedding_input_hash = excluded.embedding_input_hash, embedding = excluded.embedding, generated_at = CURRENT_TIMESTAMP",
+        artefact_id = esc_pg(&row.artefact_id),
+        repo_id = esc_pg(&row.repo_id),
+        blob_sha = esc_pg(&row.blob_sha),
+        provider = esc_pg(&row.provider),
+        model = esc_pg(&row.model),
+        dimension = row.dimension,
+        embedding_input_hash = esc_pg(&row.embedding_input_hash),
+        embedding = embedding_json,
     ))
 }
 
@@ -242,6 +303,11 @@ LIMIT {limit}",
 }
 
 fn sql_vector_string(values: &[f32]) -> Result<String> {
+    let json = sql_json_string(values)?;
+    Ok(format!("'{json}'::vector"))
+}
+
+fn sql_json_string(values: &[f32]) -> Result<String> {
     if values.is_empty() {
         bail!("cannot persist empty embedding vector");
     }
@@ -252,10 +318,7 @@ fn sql_vector_string(values: &[f32]) -> Result<String> {
         }
     }
 
-    Ok(format!(
-        "'{}'::vector",
-        esc_pg(&serde_json::to_string(values)?)
-    ))
+    Ok(esc_pg(&serde_json::to_string(values)?))
 }
 
 #[cfg(test)]
@@ -283,6 +346,14 @@ mod semantic_embedding_persistence_tests {
     }
 
     #[test]
+    fn semantic_embedding_sqlite_schema_uses_text_storage() {
+        let schema = semantic_embeddings_sqlite_schema_sql();
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS symbol_embeddings"));
+        assert!(schema.contains("embedding TEXT NOT NULL"));
+        assert!(schema.contains("generated_at DATETIME DEFAULT CURRENT_TIMESTAMP"));
+    }
+
+    #[test]
     fn semantic_embedding_state_parser_defaults_and_reads_hash() {
         let empty = parse_symbol_embedding_index_state_rows(&[]);
         assert_eq!(
@@ -296,20 +367,83 @@ mod semantic_embedding_persistence_tests {
     }
 
     #[test]
-    fn semantic_embedding_persist_sql_contains_vector_literal() {
-        let sql = build_symbol_embedding_persist_sql(&semantic_embeddings::SymbolEmbeddingRow {
-            artefact_id: "artefact-1".to_string(),
-            repo_id: "repo-1".to_string(),
-            blob_sha: "blob-1".to_string(),
-            provider: "voyage".to_string(),
-            model: "voyage-code-3".to_string(),
-            dimension: 3,
-            embedding_input_hash: "hash-1".to_string(),
-            embedding: vec![0.1, -0.2, 0.3],
-        })
+    fn semantic_embedding_postgres_persist_sql_contains_vector_literal() {
+        let sql = build_postgres_symbol_embedding_persist_sql(
+            &semantic_embeddings::SymbolEmbeddingRow {
+                artefact_id: "artefact-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                provider: "voyage".to_string(),
+                model: "voyage-code-3".to_string(),
+                dimension: 3,
+                embedding_input_hash: "hash-1".to_string(),
+                embedding: vec![0.1, -0.2, 0.3],
+            },
+        )
         .expect("persist sql");
         assert!(sql.contains("INSERT INTO symbol_embeddings"));
         assert!(sql.contains("'[0.1,-0.2,0.3]'::vector"));
+    }
+
+    #[test]
+    fn semantic_embedding_sqlite_persist_sql_contains_json_literal() {
+        let sql = build_sqlite_symbol_embedding_persist_sql(
+            &semantic_embeddings::SymbolEmbeddingRow {
+                artefact_id: "artefact-1".to_string(),
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                provider: "local".to_string(),
+                model: "jinaai/jina-embeddings-v2-base-code".to_string(),
+                dimension: 3,
+                embedding_input_hash: "hash-1".to_string(),
+                embedding: vec![0.1, -0.2, 0.3],
+            },
+        )
+        .expect("persist sql");
+        assert!(sql.contains("INSERT INTO symbol_embeddings"));
+        assert!(sql.contains("'[0.1,-0.2,0.3]'"));
+        assert!(!sql.contains("::vector"));
+        assert!(sql.contains("generated_at = CURRENT_TIMESTAMP"));
+    }
+
+    #[test]
+    fn semantic_embedding_vector_sql_contains_vector_cast() {
+        let sql = sql_vector_string(&[0.1, -0.2, 0.3]).expect("vector sql");
+        assert_eq!(sql, "'[0.1,-0.2,0.3]'::vector");
+    }
+
+    #[test]
+    fn semantic_embedding_json_sql_contains_json_literal() {
+        let sql = sql_json_string(&[0.1, -0.2, 0.3]).expect("json sql");
+        assert_eq!(sql, "[0.1,-0.2,0.3]");
+    }
+
+    #[test]
+    fn semantic_embedding_vector_sql_rejects_empty_or_non_finite_vectors() {
+        let empty_err = sql_vector_string(&[]).expect_err("empty vectors must fail");
+        assert!(empty_err.to_string().contains("empty embedding vector"));
+
+        let invalid_err =
+            sql_vector_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
+        assert!(
+            invalid_err
+                .to_string()
+                .contains("non-finite values")
+        );
+    }
+
+    #[test]
+    fn semantic_embedding_json_sql_rejects_empty_or_non_finite_vectors() {
+        let empty_err = sql_json_string(&[]).expect_err("empty vectors must fail");
+        assert!(empty_err.to_string().contains("empty embedding vector"));
+
+        let invalid_err =
+            sql_json_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
+        assert!(
+            invalid_err
+                .to_string()
+                .contains("non-finite values")
+        );
     }
 
     #[test]
@@ -345,20 +479,6 @@ mod semantic_embedding_persistence_tests {
         assert!(sql.contains("repo_id = 'repo-1'"));
         assert!(sql.contains("artefact_id = 'artefact-1'"));
         assert!(sql.contains("LIMIT 1"));
-    }
-
-    #[test]
-    fn semantic_embedding_vector_sql_rejects_empty_or_non_finite_vectors() {
-        let empty_err = sql_vector_string(&[]).expect_err("empty vectors must fail");
-        assert!(empty_err.to_string().contains("empty embedding vector"));
-
-        let invalid_err =
-            sql_vector_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
-        assert!(
-            invalid_err
-                .to_string()
-                .contains("non-finite values")
-        );
     }
 
     #[tokio::test]
@@ -453,5 +573,26 @@ mod semantic_embedding_persistence_tests {
             Some(&json!("jinaai/jina-embeddings-v2-base-code"))
         );
         assert_eq!(source_metadata.get("dimension"), Some(&json!(768)));
+    }
+
+    #[tokio::test]
+    async fn semantic_embedding_schema_ensure_creates_sqlite_table() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("semantic-embeddings.sqlite");
+        let relational = RelationalStorage::Sqlite { path: db_path.clone() };
+
+        ensure_semantic_embeddings_schema(&relational)
+            .await
+            .expect("ensure sqlite embedding schema");
+
+        let rows = sqlite_query_rows_path(
+            &db_path,
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'symbol_embeddings'",
+        )
+        .await
+        .expect("query sqlite master");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("name"), Some(&json!("symbol_embeddings")));
     }
 }
