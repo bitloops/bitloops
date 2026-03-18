@@ -24,9 +24,9 @@ use super::{
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
 
+use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::SessionState;
-use crate::engine::session::create_session_backend_or_local;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd, with_git_env_cleared};
 use serde::Deserialize;
@@ -1046,8 +1046,7 @@ fn test_read_and_parse_agent_hook_input_gemini() {
 #[test]
 fn test_parse_hook_event_session_start_copilot() {
     let adapter = CopilotCliLifecycleAdapter;
-    let mut stdin =
-        Cursor::new(r#"{"sessionId":"copilot-session-1","initialPrompt":"Bootstrap"}"#);
+    let mut stdin = Cursor::new(r#"{"sessionId":"copilot-session-1","initialPrompt":"Bootstrap"}"#);
     let event = adapter
         .parse_hook_event(COPILOT_HOOK_SESSION_START, &mut stdin)
         .unwrap()
