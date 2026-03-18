@@ -1299,8 +1299,10 @@ async fn resolve_target_ref_resolves_knowledge_item_target() -> Result<()> {
         )
         .await?;
 
-    let resolved =
-        resolve_target_ref(&host, &format!("knowledge:{}", ingest_result.knowledge_item_id))?;
+    let resolved = resolve_target_ref(
+        &host,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+    )?;
 
     assert_eq!(
         resolved,
@@ -1423,7 +1425,10 @@ async fn run_associate_flow_knowledge_to_knowledge_with_explicit_source_version(
     .await?;
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
-    assert_eq!(relation.source_document_version_id, first.document_version_id);
+    assert_eq!(
+        relation.source_document_version_id,
+        first.document_version_id
+    );
     assert_eq!(relation.target_type, "knowledge_item");
     assert_eq!(relation.target_id, target.knowledge_item_id);
     Ok(())
@@ -1540,10 +1545,8 @@ async fn run_associate_flow_one_knowledge_item_to_multiple_knowledge_targets() -
 
     let rows = sqlite_all_relation_assertions(&sqlite_path(&host))?;
     assert_eq!(rows.len(), 2);
-    assert!(rows
-        .iter()
-        .all(|r| r.target_type == "knowledge_item"
-            && r.source_document_version_id == source.document_version_id));
+    assert!(rows.iter().all(|r| r.target_type == "knowledge_item"
+        && r.source_document_version_id == source.document_version_id));
     let target_ids: Vec<&str> = rows.iter().map(|r| r.target_id.as_str()).collect();
     assert!(target_ids.contains(&target_a.knowledge_item_id.as_str()));
     assert!(target_ids.contains(&target_b.knowledge_item_id.as_str()));
@@ -1632,10 +1635,7 @@ async fn run_associate_flow_knowledge_to_knowledge_stamps_correct_provenance() -
     assert_eq!(provenance["capability"], "knowledge");
     assert_eq!(provenance["plugin_type"], "first_party");
     assert_eq!(provenance["operation"], "knowledge.associate");
-    assert_eq!(
-        provenance["command"],
-        "bitloops devql knowledge associate"
-    );
+    assert_eq!(provenance["command"], "bitloops devql knowledge associate");
     Ok(())
 }
 

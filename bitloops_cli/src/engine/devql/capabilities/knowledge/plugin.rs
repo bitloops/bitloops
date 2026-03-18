@@ -337,10 +337,7 @@ pub(crate) async fn run_add_flow(
         };
         Some(
             capability
-                .associate(
-                    host,
-                    build_commit_association_request(&ingest_result, sha),
-                )
+                .associate(host, build_commit_association_request(&ingest_result, sha))
                 .await?,
         )
     } else {
