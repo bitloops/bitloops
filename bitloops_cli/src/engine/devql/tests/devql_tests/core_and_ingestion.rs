@@ -176,8 +176,7 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 
     let records = build_current_edge_records(
         &cfg,
-        "commit-3",
-        blob_sha,
+        path,
         "typescript",
         vec![
             test_call_edge(&from.symbol_fqn, &to.symbol_fqn, 7),
@@ -206,34 +205,45 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 
 #[test]
 fn incoming_revision_is_newer_prefers_newer_timestamp_then_sha() {
+    let state = |revision_id: &str, committed_at_unix: i64| CurrentFileStateRecord {
+        revision_id: revision_id.to_string(),
+        blob_sha: "blob".to_string(),
+        committed_at_unix,
+    };
     assert!(incoming_revision_is_newer(None, "bbb", 10));
+    let existing_1 = state("aaa", 9);
     assert!(incoming_revision_is_newer(
-        Some(("aaa".to_string(), 9)),
+        Some(&existing_1),
         "bbb",
         10
     ));
+    let existing_2 = state("zzz", 11);
     assert!(!incoming_revision_is_newer(
-        Some(("zzz".to_string(), 11)),
+        Some(&existing_2),
         "bbb",
         10
     ));
+    let existing_3 = state("aaa", 10);
     assert!(incoming_revision_is_newer(
-        Some(("aaa".to_string(), 10)),
+        Some(&existing_3),
         "bbb",
         10
     ));
+    let existing_4 = state("ccc", 10);
     assert!(!incoming_revision_is_newer(
-        Some(("ccc".to_string(), 10)),
+        Some(&existing_4),
         "bbb",
         10
     ));
+    let existing_5 = state("temp:9", 10);
     assert!(incoming_revision_is_newer(
-        Some(("temp:9".to_string(), 10)),
+        Some(&existing_5),
         "temp:10",
         10
     ));
+    let existing_6 = state("temp:10", 10);
     assert!(!incoming_revision_is_newer(
-        Some(("temp:10".to_string(), 10)),
+        Some(&existing_6),
         "temp:9",
         10
     ));

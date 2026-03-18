@@ -140,6 +140,9 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
+    assert!(sql.contains("revision_kind TEXT NOT NULL DEFAULT 'commit'"));
+    assert!(sql.contains("revision_id TEXT NOT NULL DEFAULT ''"));
+    assert!(sql.contains("temp_checkpoint_id BIGINT"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
     assert!(sql.contains("PRIMARY KEY (repo_id, symbol_id)"));
@@ -187,24 +190,33 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 
 #[test]
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
+    let state = |revision_id: &str, committed_at_unix: i64| CurrentFileStateRecord {
+        revision_id: revision_id.to_string(),
+        blob_sha: "blob".to_string(),
+        committed_at_unix,
+    };
     assert!(incoming_revision_is_newer(None, "commit-b", 200));
+    let existing_1 = state("commit-a", 100);
     assert!(incoming_revision_is_newer(
-        Some(("commit-a".to_string(), 100)),
+        Some(&existing_1),
         "commit-b",
         200
     ));
+    let existing_2 = state("commit-a", 100);
     assert!(incoming_revision_is_newer(
-        Some(("commit-a".to_string(), 100)),
+        Some(&existing_2),
         "commit-b",
         100
     ));
+    let existing_3 = state("commit-b", 200);
     assert!(!incoming_revision_is_newer(
-        Some(("commit-b".to_string(), 200)),
+        Some(&existing_3),
         "commit-a",
         100
     ));
+    let existing_4 = state("commit-z", 200);
     assert!(!incoming_revision_is_newer(
-        Some(("commit-z".to_string(), 200)),
+        Some(&existing_4),
         "commit-a",
         200
     ));
@@ -262,4 +274,3 @@ fn postgres_sslmode_validation_rejects_verify_full_dsn() {
     let err = validate_postgres_sslmode_for_notls(dsn, SslMode::Prefer).unwrap_err();
     assert!(err.to_string().contains("sslmode=verify-ca/verify-full"));
 }
-

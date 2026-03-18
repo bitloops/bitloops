@@ -2,9 +2,24 @@
 
 struct FileRevision<'a> {
     commit_sha: &'a str,
+    revision: RevisionRef<'a>,
     commit_unix: i64,
     path: &'a str,
     blob_sha: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct RevisionRef<'a> {
+    kind: &'a str,
+    id: &'a str,
+    temp_checkpoint_id: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentFileStateRecord {
+    revision_id: String,
+    blob_sha: String,
+    committed_at_unix: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +54,19 @@ struct PersistedEdgeRecord {
     start_line: Option<i32>,
     end_line: Option<i32>,
     metadata: Value,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentArtefactStateRecord {
+    record: PersistedArtefactRecord,
+    symbol_id: String,
+    symbol_fqn: String,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentEdgeStateRecord {
+    edge_id: String,
+    record: PersistedEdgeRecord,
 }
 
 async fn upsert_file_state_row(
@@ -326,15 +354,23 @@ async fn upsert_current_artefact(
     let signature_sql = sql_nullable_text(record.signature.as_deref());
     let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
+    let temp_checkpoint_id_sql = rev
+        .revision
+        .temp_checkpoint_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
     let now_sql = sql_now(relational);
     let sql = format!(
-        "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}) \
-ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = {}",
+        "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}) \
+ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = {}",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(&record.symbol_id),
         esc_pg(&record.artefact_id),
         esc_pg(rev.commit_sha),
+        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.id),
+        temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),
         esc_pg(rev.path),
         esc_pg(language),
@@ -455,13 +491,13 @@ async fn load_current_file_state(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
-) -> Result<Option<(String, i64)>> {
+) -> Result<Option<CurrentFileStateRecord>> {
     let committed_at_unix_expr = match relational.dialect() {
         RelationalDialect::Postgres => "EXTRACT(EPOCH FROM committed_at)::BIGINT".to_string(),
         RelationalDialect::Sqlite => "CAST(strftime('%s', committed_at) AS INTEGER)".to_string(),
     };
     let sql = format!(
-        "SELECT commit_sha, {} AS committed_at_unix \
+        "SELECT revision_id, blob_sha, {} AS committed_at_unix \
 FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         committed_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
@@ -472,8 +508,13 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         return Ok(None);
     };
 
-    let commit_sha = row
-        .get("commit_sha")
+    let revision_id = row
+        .get("revision_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let blob_sha = row
+        .get("blob_sha")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -481,16 +522,24 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         .get("committed_at_unix")
         .and_then(|value| value.as_i64().or_else(|| value.as_str().and_then(|raw| raw.parse().ok())))
         .unwrap_or_default();
-    Ok(Some((commit_sha, committed_at_unix)))
+    Ok(Some(CurrentFileStateRecord {
+        revision_id,
+        blob_sha,
+        committed_at_unix,
+    }))
 }
 
-fn incoming_revision_is_newer(existing: Option<(String, i64)>, commit_sha: &str, commit_unix: i64) -> bool {
+fn incoming_revision_is_newer(
+    existing: Option<&CurrentFileStateRecord>,
+    revision_id: &str,
+    commit_unix: i64,
+) -> bool {
     match existing {
         None => true,
-        Some((existing_commit_sha, existing_commit_unix)) => {
-            commit_unix > existing_commit_unix
-                || (commit_unix == existing_commit_unix
-                    && revision_id_is_newer(commit_sha, &existing_commit_sha))
+        Some(existing) => {
+            commit_unix > existing.committed_at_unix
+                || (commit_unix == existing.committed_at_unix
+                    && revision_id_is_newer(revision_id, &existing.revision_id))
         }
     }
 }
@@ -515,13 +564,21 @@ async fn upsert_current_file_state(
         RelationalDialect::Sqlite => format!("datetime({}, 'unixepoch')", rev.commit_unix),
     };
     let now_sql = sql_now(relational);
+    let temp_checkpoint_id_sql = rev
+        .revision
+        .temp_checkpoint_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
     let sql = format!(
-        "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', {}, {}) \
-ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, committed_at = EXCLUDED.committed_at, updated_at = {}",
+        "INSERT INTO current_file_state (repo_id, path, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, committed_at, updated_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', {}, {}) \
+ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, committed_at = EXCLUDED.committed_at, updated_at = {}",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(rev.path),
         esc_pg(rev.commit_sha),
+        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.id),
+        temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),
         committed_at_sql,
         now_sql,
@@ -530,21 +587,239 @@ ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, blob
     relational.exec(&sql).await
 }
 
-async fn load_current_symbol_ids_for_path(
+fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(raw)) => serde_json::from_str::<Vec<String>>(raw).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
+    match value {
+        Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or(default),
+        Some(other) => other.clone(),
+        None => default,
+    }
+}
+
+fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
+    value.and_then(|value| {
+        value
+            .as_i64()
+            .and_then(|raw| i32::try_from(raw).ok())
+            .or_else(|| value.as_str().and_then(|raw| raw.parse::<i32>().ok()))
+    })
+}
+
+fn parse_required_i32(value: Option<&Value>) -> i32 {
+    parse_nullable_i32(value).unwrap_or_default()
+}
+
+fn current_artefact_state_record_from_row(
+    row: &serde_json::Map<String, Value>,
+) -> Option<CurrentArtefactStateRecord> {
+    let symbol_id = row
+        .get("symbol_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if symbol_id.is_empty() {
+        return None;
+    }
+    let symbol_fqn = row
+        .get("symbol_fqn")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let record = PersistedArtefactRecord {
+        symbol_id: symbol_id.clone(),
+        artefact_id: row
+            .get("artefact_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        canonical_kind: row
+            .get("canonical_kind")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        language_kind: row
+            .get("language_kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        symbol_fqn: symbol_fqn.clone(),
+        parent_symbol_id: row
+            .get("parent_symbol_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        parent_artefact_id: row
+            .get("parent_artefact_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        start_line: parse_required_i32(row.get("start_line")),
+        end_line: parse_required_i32(row.get("end_line")),
+        start_byte: parse_required_i32(row.get("start_byte")),
+        end_byte: parse_required_i32(row.get("end_byte")),
+        signature: row
+            .get("signature")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        modifiers: parse_json_array_strings(row.get("modifiers")),
+        docstring: row
+            .get("docstring")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        content_hash: row
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
+
+    Some(CurrentArtefactStateRecord {
+        record,
+        symbol_id,
+        symbol_fqn,
+    })
+}
+
+fn current_edge_state_record_from_row(
+    row: &serde_json::Map<String, Value>,
+) -> Option<CurrentEdgeStateRecord> {
+    let edge_id = row
+        .get("edge_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if edge_id.is_empty() {
+        return None;
+    }
+
+    let record = PersistedEdgeRecord {
+        edge_id: edge_id.clone(),
+        from_symbol_id: row
+            .get("from_symbol_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        from_artefact_id: row
+            .get("from_artefact_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        to_symbol_id: row
+            .get("to_symbol_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        to_artefact_id: row
+            .get("to_artefact_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        to_symbol_ref: row
+            .get("to_symbol_ref")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        edge_kind: row
+            .get("edge_kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        language: row
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        start_line: parse_nullable_i32(row.get("start_line")),
+        end_line: parse_nullable_i32(row.get("end_line")),
+        metadata: parse_json_value_or_default(row.get("metadata"), Value::Object(Map::new())),
+    };
+
+    Some(CurrentEdgeStateRecord { edge_id, record })
+}
+
+fn artefact_payload_equal(lhs: &PersistedArtefactRecord, rhs: &PersistedArtefactRecord) -> bool {
+    lhs.symbol_id == rhs.symbol_id
+        && lhs.canonical_kind == rhs.canonical_kind
+        && lhs.language_kind == rhs.language_kind
+        && lhs.symbol_fqn == rhs.symbol_fqn
+        && lhs.parent_symbol_id == rhs.parent_symbol_id
+        && lhs.start_line == rhs.start_line
+        && lhs.end_line == rhs.end_line
+        && lhs.start_byte == rhs.start_byte
+        && lhs.end_byte == rhs.end_byte
+        && lhs.signature == rhs.signature
+        && lhs.modifiers == rhs.modifiers
+        && lhs.docstring == rhs.docstring
+}
+
+fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeRecord) -> bool {
+    lhs.from_symbol_id == rhs.from_symbol_id
+        && lhs.from_artefact_id == rhs.from_artefact_id
+        && lhs.to_symbol_id == rhs.to_symbol_id
+        && lhs.to_artefact_id == rhs.to_artefact_id
+        && lhs.to_symbol_ref == rhs.to_symbol_ref
+        && lhs.edge_kind == rhs.edge_kind
+        && lhs.language == rhs.language
+        && lhs.start_line == rhs.start_line
+        && lhs.end_line == rhs.end_line
+        && lhs.metadata == rhs.metadata
+}
+
+async fn load_current_artefacts_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
-) -> Result<HashSet<String>> {
+) -> Result<HashMap<String, CurrentArtefactStateRecord>> {
     let sql = format!(
-        "SELECT symbol_id FROM artefacts_current WHERE repo_id = '{}' AND path = '{}'",
+        "SELECT symbol_id, artefact_id, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, \
+start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
+FROM artefacts_current WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(path),
     );
     let rows = relational.query_rows(&sql).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| row.get("symbol_id").and_then(Value::as_str).map(str::to_string))
-        .collect())
+    let mut out = HashMap::new();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let Some(record) = current_artefact_state_record_from_row(obj) else {
+            continue;
+        };
+        out.insert(record.symbol_id.clone(), record);
+    }
+    Ok(out)
+}
+
+async fn load_current_outgoing_edges_for_path(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    path: &str,
+) -> Result<HashMap<String, CurrentEdgeStateRecord>> {
+    let sql = format!(
+        "SELECT edge_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata \
+FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(path),
+    );
+    let rows = relational.query_rows(&sql).await?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let Some(record) = current_edge_state_record_from_row(obj) else {
+            continue;
+        };
+        out.insert(record.edge_id.clone(), record);
+    }
+    Ok(out)
 }
 
 async fn delete_current_artefacts_for_path_symbols(
@@ -576,6 +851,24 @@ async fn delete_current_outgoing_edges_for_path(
         "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(&cfg.repo.repo_id),
         esc_pg(path),
+    );
+    relational.exec(&sql).await
+}
+
+async fn delete_current_outgoing_edges_for_ids(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    edge_ids: &HashSet<String>,
+) -> Result<()> {
+    if edge_ids.is_empty() {
+        return Ok(());
+    }
+
+    let edge_ids = edge_ids.iter().cloned().collect::<Vec<_>>();
+    let sql = format!(
+        "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND edge_id IN ({})",
+        esc_pg(&cfg.repo.repo_id),
+        sql_string_list_pg(edge_ids.as_slice()),
     );
     relational.exec(&sql).await
 }
@@ -621,8 +914,7 @@ WHERE repo_id = '{}' AND path <> '{}' AND symbol_fqn IN ({})",
 
 fn build_current_edge_records(
     cfg: &DevqlConfig,
-    commit_sha: &str,
-    _blob_sha: &str,
+    path: &str,
     language: &str,
     edges: Vec<JsTsDependencyEdge>,
     current_by_fqn: &HashMap<String, PersistedArtefactRecord>,
@@ -666,7 +958,7 @@ fn build_current_edge_records(
             edge_id: deterministic_uuid(&format!(
                 "{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 cfg.repo.repo_id,
-                commit_sha,
+                path,
                 from_record.symbol_id,
                 edge.edge_kind.as_str(),
                 to_symbol_id.clone().unwrap_or_default(),
@@ -709,15 +1001,23 @@ async fn upsert_current_edge(
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
     let metadata_sql = sql_json_value(relational, &record.metadata);
+    let temp_checkpoint_id_sql = rev
+        .revision
+        .temp_checkpoint_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
     let now_sql = sql_now(relational);
 
     let sql = format!(
-        "INSERT INTO artefact_edges_current (edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {}) \
-ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXCLUDED.commit_sha, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = {}",
+        "INSERT INTO artefact_edges_current (edge_id, repo_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {}) \
+ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = {}",
         esc_pg(&record.edge_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(rev.commit_sha),
+        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.id),
+        temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),
         esc_pg(rev.path),
         esc_pg(&record.from_symbol_id),
@@ -787,11 +1087,22 @@ async fn refresh_current_state_for_path(
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
     let existing = load_current_file_state(cfg, relational, rev.path).await?;
-    if !incoming_revision_is_newer(existing, rev.commit_sha, rev.commit_unix) {
+    if !incoming_revision_is_newer(existing.as_ref(), rev.revision.id, rev.commit_unix) {
+        return Ok(());
+    }
+    if rev.revision.kind == "temporary"
+        && existing
+            .as_ref()
+            .is_some_and(|state| state.blob_sha == rev.blob_sha)
+    {
         return Ok(());
     }
 
-    let old_symbol_ids = load_current_symbol_ids_for_path(cfg, relational, rev.path).await?;
+    let old_symbol_records = load_current_artefacts_for_path(cfg, relational, rev.path).await?;
+    let old_symbol_ids = old_symbol_records
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
     upsert_current_file_state(cfg, relational, rev).await?;
 
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
@@ -804,8 +1115,20 @@ async fn refresh_current_state_for_path(
     all_records.extend(symbol_records.iter().cloned());
 
     let mut current_by_fqn = HashMap::new();
+    let mut refreshed_symbol_ids = HashSet::new();
     for record in &all_records {
+        let unchanged = old_symbol_records
+            .get(&record.symbol_id)
+            .map(|state| artefact_payload_equal(&state.record, record))
+            .unwrap_or(false);
+        if unchanged {
+            if let Some(state) = old_symbol_records.get(&record.symbol_id) {
+                current_by_fqn.insert(state.symbol_fqn.clone(), state.record.clone());
+            }
+            continue;
+        }
         upsert_current_artefact(cfg, relational, rev, &file_artefact.language, record).await?;
+        refreshed_symbol_ids.insert(record.symbol_id.clone());
         current_by_fqn.insert(record.symbol_fqn.clone(), record.clone());
     }
 
@@ -826,22 +1149,37 @@ async fn refresh_current_state_for_path(
         load_current_external_target_lookup(cfg, relational, rev.path, &target_refs).await?;
     let current_edge_records = build_current_edge_records(
         cfg,
-        rev.commit_sha,
-        rev.blob_sha,
+        rev.path,
         &file_artefact.language,
         edges,
         &current_by_fqn,
         &external_targets,
     );
 
-    delete_current_outgoing_edges_for_path(cfg, relational, rev.path).await?;
-    for record in &current_edge_records {
-        upsert_current_edge(cfg, relational, rev, record).await?;
+    let old_edges = load_current_outgoing_edges_for_path(cfg, relational, rev.path).await?;
+    let mut next_edge_ids = HashSet::new();
+    for record in current_edge_records {
+        next_edge_ids.insert(record.edge_id.clone());
+        let unchanged = old_edges
+            .get(&record.edge_id)
+            .map(|existing| edge_payload_equal(&existing.record, &record))
+            .unwrap_or(false);
+        if unchanged {
+            continue;
+        }
+        upsert_current_edge(cfg, relational, rev, &record).await?;
     }
+    let old_edge_ids = old_edges.keys().cloned().collect::<HashSet<_>>();
+    let deleted_edge_ids = old_edge_ids
+        .difference(&next_edge_ids)
+        .cloned()
+        .collect::<HashSet<_>>();
+    delete_current_outgoing_edges_for_ids(cfg, relational, &deleted_edge_ids).await?;
 
     delete_current_artefacts_for_path_symbols(cfg, relational, rev.path, &deleted_symbol_ids)
         .await?;
-    repair_inbound_current_edges(cfg, relational, &new_symbol_ids, &deleted_symbol_ids).await?;
+    repair_inbound_current_edges(cfg, relational, &refreshed_symbol_ids, &deleted_symbol_ids)
+        .await?;
     Ok(())
 }
 
@@ -914,7 +1252,11 @@ async fn delete_current_state_for_path(
     relational: &RelationalStorage,
     path: &str,
 ) -> Result<()> {
-    let deleted_symbol_ids = load_current_symbol_ids_for_path(cfg, relational, path).await?;
+    let deleted_symbol_ids = load_current_artefacts_for_path(cfg, relational, path)
+        .await?
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
     delete_current_outgoing_edges_for_path(cfg, relational, path).await?;
 
     let sql = format!(

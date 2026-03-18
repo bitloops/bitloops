@@ -442,6 +442,11 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
+                    revision: RevisionRef {
+                        kind: "commit",
+                        id: &commit_sha,
+                        temp_checkpoint_id: None,
+                    },
                     commit_unix: commit_info
                         .expect("commit_info exists when sha exists")
                         .commit_unix,
