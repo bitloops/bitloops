@@ -14,6 +14,8 @@ pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
 pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";
 pub const BITLOOPS_EVENT_STORE_DIR: &str = ".bitloops/stores/event";
 pub const BITLOOPS_BLOB_STORE_DIR: &str = ".bitloops/stores/blob";
+pub const BITLOOPS_EMBEDDINGS_DIR: &str = ".bitloops/embeddings";
+pub const BITLOOPS_EMBEDDING_MODELS_DIR: &str = ".bitloops/embeddings/models";
 pub const RELATIONAL_DB_FILE_NAME: &str = "relational.db";
 pub const EVENTS_DB_FILE_NAME: &str = "events.duckdb";
 
@@ -69,6 +71,7 @@ pub fn is_protected_path(path: &str) -> bool {
         ".worktrees",
         BITLOOPS_DIR,
         ".claude",
+        ".github/hooks",
         ".codex",
         ".cursor",
         ".gemini",
@@ -257,6 +260,10 @@ pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
     repo_root.join(BITLOOPS_BLOB_STORE_DIR)
 }
 
+pub fn default_embedding_model_cache_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join(BITLOOPS_EMBEDDING_MODELS_DIR)
+}
+
 /// Attempts to extract a session ID from a transcript path.
 /// Expected shape: `.../sessions/<id>.jsonl`.
 pub fn extract_session_id_from_transcript_path(transcript_path: &str) -> String {
@@ -306,10 +313,12 @@ pub fn get_worktree_id(worktree_path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        abs_path, clear_repo_root_cache, extract_session_id_from_transcript_path,
-        get_claude_project_dir, get_main_repo_root, get_worktree_id, is_infrastructure_path,
-        is_inside_worktree, is_protected_path, open_repository, repo_root,
-        sanitize_path_for_claude, session_metadata_dir_from_session_id, to_relative_path,
+        abs_path, clear_repo_root_cache, default_blob_store_path,
+        default_embedding_model_cache_dir, default_events_db_path, default_relational_db_path,
+        extract_session_id_from_transcript_path, get_claude_project_dir, get_main_repo_root,
+        get_worktree_id, is_infrastructure_path, is_inside_worktree, is_protected_path,
+        open_repository, repo_root, sanitize_path_for_claude, session_metadata_dir_from_session_id,
+        to_relative_path,
     };
     use crate::test_support::process_state::{with_cwd, with_env_var};
     use std::fs;
@@ -420,6 +429,28 @@ mod tests {
     fn test_session_metadata_dir_from_session_id() {
         let got = session_metadata_dir_from_session_id("sess-123");
         assert_eq!(got, ".bitloops/metadata/sess-123");
+    }
+
+    #[test]
+    fn test_default_bitloops_storage_paths_live_under_bitloops_directory() {
+        let repo_root = Path::new("/repo");
+
+        assert_eq!(
+            default_relational_db_path(repo_root),
+            PathBuf::from("/repo/.bitloops/stores/relational/relational.db")
+        );
+        assert_eq!(
+            default_events_db_path(repo_root),
+            PathBuf::from("/repo/.bitloops/stores/event/events.duckdb")
+        );
+        assert_eq!(
+            default_blob_store_path(repo_root),
+            PathBuf::from("/repo/.bitloops/stores/blob")
+        );
+        assert_eq!(
+            default_embedding_model_cache_dir(repo_root),
+            PathBuf::from("/repo/.bitloops/embeddings/models")
+        );
     }
 
     #[test]
@@ -702,6 +733,8 @@ mod tests {
             (".bitloops/metadata/session.json", true),
             (".claude", true),
             (".claude/settings.json", true),
+            (".github/hooks", true),
+            (".github/hooks/bitloops.json", true),
             (".codex", true),
             (".codex/hooks.json", true),
             (".cursor", true),

@@ -1,5 +1,5 @@
 use super::agent_hooks::{
-    AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI_CLI, DEFAULT_AGENT,
+    AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
 use super::telemetry::{
     TELEMETRY_OPTOUT_ENV, maybe_capture_telemetry_consent, prompt_telemetry_consent,
@@ -260,7 +260,7 @@ fn run_init_with_agent_gemini_installs_gemini_hooks() {
         run_with_writer(
             InitArgs {
                 force: false,
-                agent: Some(AGENT_GEMINI_CLI.to_string()),
+                agent: Some(AGENT_GEMINI.to_string()),
                 telemetry: true,
             },
             &mut out,
@@ -414,7 +414,7 @@ fn detect_or_select_agent_multiple_with_selector() {
     std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
     let select = |_available: &[String]| -> std::result::Result<Vec<String>, String> {
         Ok(vec![
-            AGENT_GEMINI_CLI.to_string(),
+            AGENT_GEMINI.to_string(),
             AGENT_CLAUDE_CODE.to_string(),
         ])
     };
@@ -426,7 +426,7 @@ fn detect_or_select_agent_multiple_with_selector() {
             let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
             assert_eq!(
                 selected,
-                vec![AGENT_GEMINI_CLI.to_string(), AGENT_CLAUDE_CODE.to_string()]
+                vec![AGENT_GEMINI.to_string(), AGENT_CLAUDE_CODE.to_string()]
             );
         },
     );

@@ -27,6 +27,10 @@ const ENV_SEMANTIC_PROVIDER: &str = "BITLOOPS_DEVQL_SEMANTIC_PROVIDER";
 const ENV_SEMANTIC_MODEL: &str = "BITLOOPS_DEVQL_SEMANTIC_MODEL";
 const ENV_SEMANTIC_API_KEY: &str = "BITLOOPS_DEVQL_SEMANTIC_API_KEY";
 const ENV_SEMANTIC_BASE_URL: &str = "BITLOOPS_DEVQL_SEMANTIC_BASE_URL";
+const ENV_EMBEDDING_PROVIDER: &str = "BITLOOPS_DEVQL_EMBEDDING_PROVIDER";
+const ENV_EMBEDDING_MODEL: &str = "BITLOOPS_DEVQL_EMBEDDING_MODEL";
+const ENV_EMBEDDING_API_KEY: &str = "BITLOOPS_DEVQL_EMBEDDING_API_KEY";
+const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationalProvider {
@@ -110,6 +114,13 @@ pub struct StoreSemanticConfig {
     pub semantic_base_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StoreEmbeddingConfig {
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_api_key: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationalBackendConfig {
     pub provider: RelationalProvider,
@@ -187,6 +198,9 @@ pub struct StoreFileConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
+    pub(crate) embedding_provider: Option<String>,
+    pub(crate) embedding_model: Option<String>,
+    pub(crate) embedding_api_key: Option<String>,
     pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
@@ -266,6 +280,12 @@ impl StoreFileConfig {
                 .or_else(|| read_any_string(root, &["semantic_api_key"])),
             semantic_base_url: read_any_string_opt(semantic, &["base_url", "semantic_base_url"])
                 .or_else(|| read_any_string(root, &["semantic_base_url"])),
+            embedding_provider: read_any_string(
+                root,
+                &["embedding_provider", ENV_EMBEDDING_PROVIDER],
+            ),
+            embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
+            embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
             blob_provider: read_any_string_opt(blobs, &["provider"])
                 .or_else(|| read_any_string(root, &["blob_provider"])),
             blob_local_path: read_any_string_opt(blobs, &["local_path"])
@@ -338,6 +358,11 @@ pub fn resolve_provider_config() -> Result<ProviderConfig> {
 pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConfig> {
     let value = load_repo_config_value(repo_root).unwrap_or(Value::Object(Map::new()));
     resolve_provider_config_from_value_with(&value, |key| env::var(key).ok())
+}
+
+pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
+    let file_cfg = StoreFileConfig::load();
+    resolve_store_embedding_config_with(file_cfg, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -573,6 +598,28 @@ where
     }
 }
 
+fn resolve_store_embedding_config_with<F>(
+    file_cfg: StoreFileConfig,
+    env_lookup: F,
+) -> StoreEmbeddingConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let embedding_model =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_MODEL).or(file_cfg.embedding_model);
+    let embedding_api_key =
+        read_non_empty_env(&env_lookup, ENV_EMBEDDING_API_KEY).or(file_cfg.embedding_api_key);
+    let embedding_provider = read_non_empty_env(&env_lookup, ENV_EMBEDDING_PROVIDER)
+        .or(file_cfg.embedding_provider)
+        .or_else(|| Some(DEFAULT_EMBEDDING_PROVIDER.to_string()));
+
+    StoreEmbeddingConfig {
+        embedding_provider,
+        embedding_model,
+        embedding_api_key,
+    }
+}
+
 fn current_repo_root_or_cwd_result() -> Result<PathBuf> {
     paths::repo_root()
         .or_else(|_| env::current_dir().context("resolving current directory for repo config"))
@@ -779,13 +826,28 @@ pub(crate) fn resolve_store_semantic_config_for_tests(
         })
     })
 }
-
 #[cfg(test)]
 pub(crate) fn resolve_provider_config_for_tests(
     value: &Value,
     env: &[(&str, &str)],
 ) -> Result<ProviderConfig> {
     resolve_provider_config_from_value_with(value, |key| {
+        env.iter().find_map(|(k, v)| {
+            if *k == key {
+                Some((*v).to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_store_embedding_config_for_tests(
+    file_cfg: StoreFileConfig,
+    env: &[(&str, &str)],
+) -> StoreEmbeddingConfig {
+    resolve_store_embedding_config_with(file_cfg, |key| {
         env.iter().find_map(|(k, v)| {
             if *k == key {
                 Some((*v).to_string())

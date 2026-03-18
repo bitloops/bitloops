@@ -188,11 +188,11 @@ bitloops dashboard
 ## Supported Agents
 
 - [x] Claude Code
-- [x] Codex CLI (currently supports `SessionStart` and `Stop` hooks only; richer hook parity will follow as Codex expands hook coverage)
+- [x] Codex (currently supports `SessionStart` and `Stop` hooks only; richer hook parity will follow as Codex expands hook coverage)
 - [x] Cursor
-- [x] Gemini CLI
+- [x] Gemini
+- [x] Copilot
 - [x] OpenCode
-- [ ] GitHub Copilot (Coming soon)
 
 ## What is DevQL?
 

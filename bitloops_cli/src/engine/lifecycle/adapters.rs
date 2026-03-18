@@ -2,7 +2,9 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
+use crate::engine::agent::AgentAdapterRegistry;
+use crate::engine::agent::copilot::agent::CopilotCliAgent;
+use crate::engine::agent::gemini::agent::GeminiCliAgent;
 use crate::engine::agent::{TokenCalculator, TranscriptAnalyzer};
 
 use super::{
@@ -43,6 +45,15 @@ pub const CURSOR_HOOK_SESSION_END: &str = "session-end";
 pub const CURSOR_HOOK_PRE_COMPACT: &str = "pre-compact";
 pub const CURSOR_HOOK_SUBAGENT_START: &str = "subagent-start";
 pub const CURSOR_HOOK_SUBAGENT_STOP: &str = "subagent-stop";
+
+pub const COPILOT_HOOK_USER_PROMPT_SUBMITTED: &str = "user-prompt-submitted";
+pub const COPILOT_HOOK_SESSION_START: &str = "session-start";
+pub const COPILOT_HOOK_AGENT_STOP: &str = "agent-stop";
+pub const COPILOT_HOOK_SESSION_END: &str = "session-end";
+pub const COPILOT_HOOK_SUBAGENT_STOP: &str = "subagent-stop";
+pub const COPILOT_HOOK_PRE_TOOL_USE: &str = "pre-tool-use";
+pub const COPILOT_HOOK_POST_TOOL_USE: &str = "post-tool-use";
+pub const COPILOT_HOOK_ERROR_OCCURRED: &str = "error-occurred";
 
 pub const CODEX_HOOK_SESSION_START: &str = "session-start";
 pub const CODEX_HOOK_STOP: &str = "stop";
@@ -156,7 +167,7 @@ impl LifecycleAgentAdapter for GeminiCliLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::gemini_cli::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::engine::agent::gemini::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -271,6 +282,50 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
     }
 }
 
+static COPILOT_AGENT_FOR_LIFECYCLE: CopilotCliAgent = CopilotCliAgent;
+
+#[derive(Default)]
+pub struct CopilotCliLifecycleAdapter;
+
+impl LifecycleAgentAdapter for CopilotCliLifecycleAdapter {
+    fn agent_name(&self) -> &'static str {
+        crate::engine::agent::AGENT_NAME_COPILOT
+    }
+
+    fn parse_hook_event(
+        &self,
+        hook_name: &str,
+        stdin: &mut dyn std::io::Read,
+    ) -> Result<Option<LifecycleEvent>> {
+        crate::engine::agent::copilot::lifecycle::parse_hook_event(hook_name, stdin)
+    }
+
+    fn hook_names(&self) -> Vec<&'static str> {
+        vec![
+            COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+            COPILOT_HOOK_SESSION_START,
+            COPILOT_HOOK_AGENT_STOP,
+            COPILOT_HOOK_SESSION_END,
+            COPILOT_HOOK_SUBAGENT_STOP,
+            COPILOT_HOOK_PRE_TOOL_USE,
+            COPILOT_HOOK_POST_TOOL_USE,
+            COPILOT_HOOK_ERROR_OCCURRED,
+        ]
+    }
+
+    fn format_resume_command(&self, session_id: &str) -> String {
+        format!("copilot --resume {session_id}")
+    }
+
+    fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
+        Some(&COPILOT_AGENT_FOR_LIFECYCLE)
+    }
+
+    fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
+        Some(&COPILOT_AGENT_FOR_LIFECYCLE)
+    }
+}
+
 #[derive(Default)]
 pub struct CursorLifecycleAdapter;
 
@@ -338,19 +393,42 @@ pub fn route_hook_command_to_lifecycle(
     hook_name: &str,
     stdin: &str,
 ) -> Result<()> {
-    let adapter: Box<dyn LifecycleAgentAdapter> = match agent_name {
-        crate::engine::agent::AGENT_NAME_CLAUDE_CODE => Box::new(ClaudeCodeLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_CODEX => Box::new(CodexLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_CURSOR => Box::new(CursorLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_GEMINI => Box::new(GeminiCliLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_OPEN_CODE => Box::new(OpenCodeLifecycleAdapter),
+    let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
+    let descriptor = resolved.registration.descriptor();
+    let family = descriptor.protocol_family.id;
+    let profile = descriptor.target_profile.id;
+    let correlation_id = resolved.trace.correlation_id;
+
+    let adapter: Box<dyn LifecycleAgentAdapter> = match (family, profile) {
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CLAUDE_CODE) => {
+            Box::new(ClaudeCodeLifecycleAdapter)
+        }
+        ("json-event", crate::engine::agent::AGENT_NAME_COPILOT) => {
+            Box::new(CopilotCliLifecycleAdapter)
+        }
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CODEX) => Box::new(CodexLifecycleAdapter),
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CURSOR) => Box::new(CursorLifecycleAdapter),
+        ("json-event", crate::engine::agent::AGENT_TYPE_GEMINI) => {
+            Box::new(GeminiCliLifecycleAdapter)
+        }
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_OPEN_CODE) => {
+            Box::new(OpenCodeLifecycleAdapter)
+        }
         _ => return Err(anyhow!("unsupported lifecycle agent: {agent_name}")),
     };
 
     let mut input = std::io::Cursor::new(stdin.as_bytes());
-    let event = adapter.parse_hook_event(hook_name, &mut input)?;
+    let event = adapter.parse_hook_event(hook_name, &mut input).map_err(|err| {
+        anyhow!(
+            "failed to parse lifecycle hook '{hook_name}' for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
+        )
+    })?;
     if let Some(event) = event {
-        dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event))?;
+        dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event)).map_err(|err| {
+            anyhow!(
+                "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
+            )
+        })?;
     }
     Ok(())
 }

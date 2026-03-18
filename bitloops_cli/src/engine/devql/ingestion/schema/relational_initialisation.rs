@@ -8,6 +8,9 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     init_sqlite_semantic_features_schema(sqlite_path)
         .await
         .context("creating SQLite semantic feature tables")?;
+    init_sqlite_semantic_embeddings_schema(sqlite_path)
+        .await
+        .context("creating SQLite semantic embedding tables")?;
     Ok(())
 }
 
@@ -38,6 +41,9 @@ async fn init_postgres_schema(
     init_postgres_semantic_features_schema(pg_client)
         .await
         .context("creating Postgres semantic feature tables")?;
+    init_postgres_semantic_embeddings_schema(pg_client)
+        .await
+        .context("creating Postgres semantic embedding tables")?;
     let checkpoint_schema_sql = checkpoint_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await

@@ -195,9 +195,6 @@ fn TestLoadDispatchContextDetectsAgents() {
         let context = load_dispatch_context().expect("dispatch context");
         assert_eq!(context.strategy, "manual-commit");
         assert!(context.is_bitloops_enabled);
-        assert_eq!(
-            context.agent,
-            "claude-code,codex,gemini-cli,cursor,opencode"
-        );
+        assert_eq!(context.agent, "claude-code,codex,gemini,cursor,opencode");
     });
 }
