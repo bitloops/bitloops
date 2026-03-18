@@ -108,8 +108,18 @@ pub fn build_semantic_feature_inputs_from_artefacts(
 
     artefacts
         .iter()
-        .map(|row| build_semantic_feature_input_from_artefact(row, blob_content, &by_id))
+        .filter_map(|row| {
+            let input = build_semantic_feature_input_from_artefact(row, blob_content, &by_id);
+            is_semantic_enrichment_candidate(&input).then_some(input)
+        })
         .collect()
+}
+
+pub fn is_semantic_enrichment_candidate(input: &SemanticFeatureInput) -> bool {
+    if input.canonical_kind.eq_ignore_ascii_case("import") {
+        return false;
+    }
+    true
 }
 
 fn build_semantic_feature_input_from_artefact(
@@ -407,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_include_import_artefacts_when_present() {
+    fn semantic_features_exclude_import_artefacts_when_present() {
         let artefacts = vec![
             PreStageArtefactRow {
                 artefact_id: "import-1".to_string(),
@@ -435,9 +445,7 @@ mod tests {
 
         let inputs = build_semantic_feature_inputs_from_artefacts(&artefacts, content);
 
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].artefact_id, "import-1");
-        assert_eq!(inputs[0].canonical_kind, "import");
-        assert_eq!(inputs[1].artefact_id, "artefact-1");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].artefact_id, "artefact-1");
     }
 }

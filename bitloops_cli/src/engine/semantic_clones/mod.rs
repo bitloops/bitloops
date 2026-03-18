@@ -97,10 +97,14 @@ pub struct SymbolCloneBuildResult {
 }
 
 pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolCloneBuildResult {
+    let candidates = inputs
+        .iter()
+        .filter(|input| is_meaningful_clone_candidate(input))
+        .collect::<Vec<_>>();
     let mut edges = Vec::new();
 
-    for source in inputs {
-        let mut source_edges = inputs
+    for source in &candidates {
+        let mut source_edges = candidates
             .iter()
             .filter(|target| {
                 target.symbol_id != source.symbol_id && target.repo_id == source.repo_id
@@ -121,7 +125,7 @@ pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolC
 
     SymbolCloneBuildResult {
         edges,
-        sources_considered: inputs.len(),
+        sources_considered: candidates.len(),
     }
 }
 
@@ -438,6 +442,13 @@ fn same_clone_kind(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
 
+fn is_meaningful_clone_candidate(input: &SymbolCloneCandidateInput) -> bool {
+    if input.canonical_kind.eq_ignore_ascii_case("import") {
+        return false;
+    }
+    true
+}
+
 fn signature_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
@@ -649,6 +660,26 @@ mod tests {
         let result = build_symbol_clone_edges(&[source, target]);
 
         assert!(result.edges.is_empty());
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_skips_import_candidates() {
+        let mut source = sample_input("source", "import_src");
+        source.canonical_kind = "import".to_string();
+        source.normalized_signature = Some("import foo from 'bar'".to_string());
+        source.identifier_tokens = vec!["foo".to_string(), "bar".to_string(), "import".to_string()];
+        source.normalized_body_tokens = vec!["import".to_string(), "foo".to_string()];
+
+        let mut target = sample_input("target", "import_target");
+        target.canonical_kind = "import".to_string();
+        target.normalized_signature = Some("import baz from 'bar'".to_string());
+        target.identifier_tokens = vec!["baz".to_string(), "bar".to_string(), "import".to_string()];
+        target.normalized_body_tokens = vec!["import".to_string(), "baz".to_string()];
+
+        let result = build_symbol_clone_edges(&[source, target]);
+
+        assert!(result.edges.is_empty());
+        assert_eq!(result.sources_considered, 0);
     }
 
     #[test]
