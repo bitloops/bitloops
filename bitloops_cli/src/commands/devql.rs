@@ -1,13 +1,13 @@
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::engine::devql::capabilities::knowledge::run_add_command;
+use crate::engine::devql::capabilities::knowledge::{run_add_command, run_associate_command};
 use crate::engine::devql::{DevqlConfig, resolve_repo_identity, run_ingest, run_init, run_query};
 use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
-const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql knowledge add`";
+const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
@@ -66,6 +66,8 @@ pub struct DevqlKnowledgeArgs {
 pub enum DevqlKnowledgeCommand {
     /// Manually add repository-scoped external knowledge by URL.
     Add(DevqlKnowledgeAddArgs),
+    /// Associate existing knowledge to a typed Bitloops target.
+    Associate(DevqlKnowledgeAssociateArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -74,6 +76,14 @@ pub struct DevqlKnowledgeAddArgs {
 
     #[arg(long)]
     pub commit: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlKnowledgeAssociateArgs {
+    pub source_ref: String,
+
+    #[arg(long = "to")]
+    pub target_ref: String,
 }
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
@@ -92,6 +102,15 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         return match args.command {
             DevqlKnowledgeCommand::Add(add) => {
                 run_add_command(&repo_root, &repo, &add.url, add.commit.as_deref()).await
+            }
+            DevqlKnowledgeCommand::Associate(associate) => {
+                run_associate_command(
+                    &repo_root,
+                    &repo,
+                    &associate.source_ref,
+                    &associate.target_ref,
+                )
+                .await
             }
         };
     }
@@ -177,10 +196,55 @@ mod tests {
         let Some(DevqlCommand::Knowledge(knowledge)) = args.command else {
             panic!("expected devql knowledge command");
         };
-        let DevqlKnowledgeCommand::Add(add) = knowledge.command;
+        let DevqlKnowledgeCommand::Add(add) = knowledge.command else {
+            panic!("expected knowledge add command");
+        };
 
         assert_eq!(add.url, "https://github.com/bitloops/bitloops/issues/42");
         assert_eq!(add.commit.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn devql_cli_parses_knowledge_associate_command() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "devql",
+            "knowledge",
+            "associate",
+            "knowledge:item-1",
+            "--to",
+            "commit:abc123",
+        ])
+        .expect("devql knowledge associate should parse");
+
+        let Some(Commands::Devql(args)) = parsed.command else {
+            panic!("expected devql command");
+        };
+        let Some(DevqlCommand::Knowledge(knowledge)) = args.command else {
+            panic!("expected devql knowledge command");
+        };
+        let DevqlKnowledgeCommand::Associate(associate) = knowledge.command else {
+            panic!("expected knowledge associate command");
+        };
+
+        assert_eq!(associate.source_ref, "knowledge:item-1");
+        assert_eq!(associate.target_ref, "commit:abc123");
+    }
+
+    #[test]
+    fn devql_cli_rejects_knowledge_associate_without_to() {
+        let err = match Cli::try_parse_from([
+            "bitloops",
+            "devql",
+            "knowledge",
+            "associate",
+            "knowledge:item-1",
+        ]) {
+            Ok(_) => panic!("knowledge associate without --to must fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("--to"));
     }
 
     #[test]

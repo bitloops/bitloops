@@ -1,14 +1,14 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::RepoIdentity;
-use crate::engine::strategy::manual_commit::run_git;
 use crate::store_config::{
     resolve_provider_config_for_repo, resolve_store_backend_config_for_repo,
 };
 
 use super::provenance::{build_association_provenance, build_ingestion_provenance};
+use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target_ref};
 use super::providers::{
     ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient, KnowledgeProviderClient,
 };
@@ -22,7 +22,7 @@ use super::types::{
     AssociateKnowledgeRequest, AssociateKnowledgeResult, BoxFuture, FetchedKnowledgeDocument,
     IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeAssociationTarget,
     KnowledgeHostContext, KnowledgeItemStatus, KnowledgeProvider, KnowledgeVersionStatus,
-    ParsedKnowledgeUrl, format_knowledge_add_result,
+    ParsedKnowledgeUrl, format_knowledge_add_result, format_knowledge_associate_result,
 };
 use super::url::parse_knowledge_url;
 
@@ -231,12 +231,10 @@ impl KnowledgeCapability for KnowledgePlugin {
         Box::pin(async move {
             host.relational_store.initialise_schema()?;
 
-            let KnowledgeAssociationTarget::Commit { sha } = &request.target;
-            validate_commit_exists(&host.repo_root, sha)?;
-
             let target_type = request.target.target_type().to_string();
             let target_id = request.target.target_id().to_string();
             let provenance = build_association_provenance(
+                &request.command,
                 &request.source_document_version_id,
                 &target_type,
                 &target_id,
@@ -284,8 +282,7 @@ pub async fn run_add_command(
 ) -> Result<()> {
     let registry = crate::engine::devql::capabilities::DevqlCapabilityRegistry::builtin()?;
     let host = build_host_context(repo_root, repo)?;
-    let (ingest_result, association_result) =
-        run_add_flow(registry.knowledge(), &host, repo_root, url, commit).await?;
+    let (ingest_result, association_result) = run_add_flow(registry.knowledge(), &host, url, commit).await?;
 
     println!(
         "{}",
@@ -318,37 +315,12 @@ pub fn build_host_context(
     })
 }
 
-fn validate_commit_exists(repo_root: &std::path::Path, commit: &str) -> Result<()> {
-    let trimmed = commit.trim();
-    if trimmed.is_empty() {
-        bail!("commit sha must not be empty");
-    }
-
-    run_git(repo_root, &["rev-parse", "--verify", trimmed])
-        .with_context(|| format!("validating commit `{trimmed}`"))?;
-    Ok(())
-}
-
-fn preflight_validate_commit_target(
-    repo_root: &std::path::Path,
-    commit: Option<&str>,
-) -> Result<()> {
-    if let Some(commit) = commit {
-        validate_commit_exists(repo_root, commit)?;
-    }
-
-    Ok(())
-}
-
 pub(crate) async fn run_add_flow(
     capability: &dyn KnowledgeCapability,
     host: &KnowledgeHostContext,
-    repo_root: &std::path::Path,
     url: &str,
     commit: Option<&str>,
 ) -> Result<(IngestKnowledgeResult, Option<AssociateKnowledgeResult>)> {
-    preflight_validate_commit_target(repo_root, commit)?;
-
     let ingest_result = capability
         .ingest_source(
             host,
@@ -358,12 +330,10 @@ pub(crate) async fn run_add_flow(
         )
         .await?;
     let association_result = if let Some(commit) = commit {
+        let target = resolve_target_ref(host, &format!("commit:{commit}"))?;
         Some(
             capability
-                .associate(
-                    host,
-                    build_commit_association_request(&ingest_result, commit),
-                )
+                .associate(host, build_commit_association_request(&ingest_result, target))
                 .await?,
         )
     } else {
@@ -375,15 +345,58 @@ pub(crate) async fn run_add_flow(
 
 fn build_commit_association_request(
     ingest_result: &IngestKnowledgeResult,
-    commit: &str,
+    target: ResolvedKnowledgeTargetRef,
 ) -> AssociateKnowledgeRequest {
+    let ResolvedKnowledgeTargetRef::Commit { sha } = target;
+
     AssociateKnowledgeRequest {
         knowledge_item_id: ingest_result.knowledge_item_id.clone(),
         source_document_version_id: ingest_result.document_version_id.clone(),
-        target: KnowledgeAssociationTarget::Commit {
-            sha: commit.to_string(),
-        },
+        target: KnowledgeAssociationTarget::Commit { sha },
         relation_type: "associated_with".to_string(),
         association_method: "manual_attachment".to_string(),
+        command: "bitloops devql knowledge add".to_string(),
     }
+}
+
+pub async fn run_associate_command(
+    repo_root: &std::path::Path,
+    repo: &RepoIdentity,
+    source_ref: &str,
+    target_ref: &str,
+) -> Result<()> {
+    let registry = crate::engine::devql::capabilities::DevqlCapabilityRegistry::builtin()?;
+    let host = build_host_context(repo_root, repo)?;
+    let result = run_associate_flow(registry.knowledge(), &host, source_ref, target_ref).await?;
+
+    println!("{}", format_knowledge_associate_result(&result));
+    Ok(())
+}
+
+pub(crate) async fn run_associate_flow(
+    capability: &dyn KnowledgeCapability,
+    host: &KnowledgeHostContext,
+    source_ref: &str,
+    target_ref: &str,
+) -> Result<AssociateKnowledgeResult> {
+    let resolved_source = resolve_source_ref(host, source_ref)?;
+    let resolved_target = resolve_target_ref(host, target_ref)?;
+
+    let target = match resolved_target {
+        ResolvedKnowledgeTargetRef::Commit { sha } => KnowledgeAssociationTarget::Commit { sha },
+    };
+
+    capability
+        .associate(
+            host,
+            AssociateKnowledgeRequest {
+                knowledge_item_id: resolved_source.knowledge_item_id,
+                source_document_version_id: resolved_source.source_document_version_id,
+                target,
+                relation_type: "associated_with".to_string(),
+                association_method: "manual_attachment".to_string(),
+                command: "bitloops devql knowledge associate".to_string(),
+            },
+        )
+        .await
 }

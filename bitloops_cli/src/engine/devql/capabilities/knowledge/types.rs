@@ -133,6 +133,7 @@ pub struct AssociateKnowledgeRequest {
     pub target: KnowledgeAssociationTarget,
     pub relation_type: String,
     pub association_method: String,
+    pub command: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,4 +226,15 @@ pub fn format_knowledge_add_result(
     }
 
     lines.join("\n")
+}
+
+pub fn format_knowledge_associate_result(result: &AssociateKnowledgeResult) -> String {
+    [
+        "Knowledge associated".to_string(),
+        format!("  relation assertion: {}", result.relation_assertion_id),
+        format!("  target: {}:{}", result.target_type, result.target_id),
+        format!("  relation: {}", result.relation_type),
+        format!("  method: {}", result.association_method),
+    ]
+    .join("\n")
 }

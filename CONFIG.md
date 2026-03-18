@@ -53,15 +53,20 @@ Important:
       "github": {
         "token": "${GITHUB_TOKEN}"
       },
-      "jira": {
+      "atlassian": {
         "site_url": "https://bitloops.atlassian.net",
         "email": "${ATLASSIAN_EMAIL}",
         "token": "${ATLASSIAN_TOKEN}"
       },
+      "jira": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_JIRA_TOKEN}"
+      },
       "confluence": {
         "site_url": "https://bitloops.atlassian.net",
         "email": "${ATLASSIAN_EMAIL}",
-        "token": "${ATLASSIAN_TOKEN}"
+        "token": "${ATLASSIAN_CONFLUENCE_TOKEN}"
       }
     }
   },
@@ -105,12 +110,15 @@ These live under `knowledge.providers`.
 | Key                                       | Type   | Default | Notes                                                                                       |
 | ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------- |
 | `knowledge.providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                           |
-| `knowledge.providers.jira.site_url`       | string | none    | Required for Jira issue knowledge ingestion. Must match the Atlassian site in the URL.      |
-| `knowledge.providers.jira.email`          | string | none    | Required for Jira basic auth.                                                               |
-| `knowledge.providers.jira.token`          | string | none    | Required for Jira basic auth.                                                               |
-| `knowledge.providers.confluence.site_url` | string | none    | Required for Confluence page knowledge ingestion. Must match the Atlassian site in the URL. |
-| `knowledge.providers.confluence.email`    | string | none    | Required for Confluence basic auth.                                                         |
-| `knowledge.providers.confluence.token`    | string | none    | Required for Confluence basic auth.                                                         |
+| `knowledge.providers.atlassian.site_url`  | string | none    | Shared default Atlassian site for Jira and Confluence. Must match the Atlassian site URL.   |
+| `knowledge.providers.atlassian.email`     | string | none    | Shared default Atlassian email for Jira and Confluence basic auth.                          |
+| `knowledge.providers.atlassian.token`     | string | none    | Shared default Atlassian token for Jira and Confluence basic auth.                          |
+| `knowledge.providers.jira.site_url`       | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
+| `knowledge.providers.jira.email`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
+| `knowledge.providers.jira.token`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
+| `knowledge.providers.confluence.site_url` | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
+| `knowledge.providers.confluence.email`    | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
+| `knowledge.providers.confluence.token`    | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
 
 Provider values support `${ENV_VAR}` interpolation in `<repo>/.bitloops/config.json`. That interpolation is intentionally limited to `knowledge.providers`.
 

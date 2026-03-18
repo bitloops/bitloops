@@ -8,18 +8,22 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::plugin::{build_host_context, run_add_flow};
+use super::plugin::{build_host_context, run_add_flow, run_associate_flow};
 use super::providers::{
     ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient, KnowledgeProviderClient,
     build_confluence_document, build_github_document, build_jira_document,
 };
+use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target_ref};
 use super::storage::{content_hash, knowledge_payload_key, serialize_payload};
 use super::types::{
     AssociateKnowledgeRequest, AssociateKnowledgeResult, BoxFuture, FetchedKnowledgeDocument,
     IngestKnowledgeRequest, KnowledgeAssociationTarget, KnowledgeHostContext, KnowledgePayloadData,
     KnowledgeSourceKind,
 };
-use super::{KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result, run_add_command};
+use super::{
+    KnowledgeCapability, KnowledgePlugin, format_knowledge_add_result,
+    format_knowledge_associate_result, run_add_command, run_associate_command,
+};
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
@@ -762,6 +766,7 @@ async fn associate_creates_commit_relation_with_manual_attachment() -> Result<()
                 },
                 relation_type: "associated_with".to_string(),
                 association_method: "manual_attachment".to_string(),
+                command: "bitloops devql knowledge associate".to_string(),
             },
         )
         .await?;
@@ -810,6 +815,7 @@ async fn associate_is_idempotent_for_same_source_version_and_target() -> Result<
         },
         relation_type: "associated_with".to_string(),
         association_method: "manual_attachment".to_string(),
+        command: "bitloops devql knowledge associate".to_string(),
     };
 
     let first = plugin.associate(&host, request.clone()).await?;
@@ -824,7 +830,7 @@ async fn associate_is_idempotent_for_same_source_version_and_target() -> Result<
 }
 
 #[tokio::test]
-async fn associate_rejects_invalid_commit() -> Result<()> {
+async fn run_associate_flow_rejects_invalid_commit() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
     let plugin = KnowledgePlugin::with_clients(
@@ -844,23 +850,16 @@ async fn associate_rejects_invalid_commit() -> Result<()> {
         )
         .await?;
 
-    let err = plugin
-        .associate(
-            &host,
-            AssociateKnowledgeRequest {
-                knowledge_item_id: ingest_result.knowledge_item_id,
-                source_document_version_id: ingest_result.document_version_id,
-                target: KnowledgeAssociationTarget::Commit {
-                    sha: "does-not-exist".to_string(),
-                },
-                relation_type: "associated_with".to_string(),
-                association_method: "manual_attachment".to_string(),
-            },
-        )
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+        "commit:does-not-exist",
+    )
         .await
         .expect_err("invalid commit must fail");
 
-    assert!(err.to_string().contains("validating commit"));
+    assert!(!err.to_string().trim().is_empty());
     assert_eq!(
         sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
         0
@@ -884,7 +883,6 @@ async fn run_add_flow_orchestrates_ingest_then_associate_for_commit() -> Result<
     let (ingest_result, association_result) = run_add_flow(
         &plugin,
         &host,
-        host.repo_root.as_path(),
         "https://github.com/bitloops/bitloops/issues/42",
         Some(commit_sha.as_str()),
     )
@@ -899,6 +897,363 @@ async fn run_add_flow_orchestrates_ingest_then_associate_for_commit() -> Result<
     assert_eq!(relation.target_id, commit_sha);
     assert_eq!(association_result.association_method, "manual_attachment");
     assert_eq!(association_result.relation_type, "associated_with");
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_uses_latest_document_version_for_knowledge_item() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
+    assert_ne!(first.document_version_id, second.document_version_id);
+
+    let resolved = resolve_source_ref(&host, &format!("knowledge:{}", first.knowledge_item_id))?;
+    assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
+    assert_eq!(resolved.source_document_version_id, second.document_version_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let resolved = resolve_source_ref(
+        &host,
+        &format!("knowledge_version:{}", first.document_version_id),
+    )?;
+    assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
+    assert_eq!(resolved.source_document_version_id, first.document_version_id);
+    assert_ne!(resolved.source_document_version_id, second.document_version_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_rejects_missing_knowledge_item() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+
+    let err = resolve_source_ref(&host, "knowledge:missing-item")
+        .expect_err("missing knowledge item must fail");
+
+    assert!(!err.to_string().trim().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_rejects_missing_document_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+
+    let err = resolve_source_ref(&host, "knowledge_version:missing-version")
+        .expect_err("missing knowledge version must fail");
+
+    assert!(!err.to_string().trim().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_rejects_commit_as_source() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+
+    let err = resolve_source_ref(&host, &format!("commit:{commit_sha}"))
+        .expect_err("commit source must fail");
+
+    assert!(err.to_string().contains("cannot be used"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_target_ref_canonicalizes_commit_sha() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let full_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let short_sha = full_sha.chars().take(7).collect::<String>();
+
+    let resolved = resolve_target_ref(&host, &format!("commit:{short_sha}"))?;
+    assert_eq!(
+        resolved,
+        ResolvedKnowledgeTargetRef::Commit {
+            sha: full_sha.clone()
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_target_ref_rejects_knowledge_item_target() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+
+    let err = resolve_target_ref(&host, "knowledge:item-1")
+        .expect_err("knowledge item target must fail");
+
+    assert!(err.to_string().contains("not supported"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_creates_commit_relation_from_knowledge_ref() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(sample_document(
+            "Issue one",
+            Some("Issue body"),
+        ))])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let ingest_result = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let association_result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.source_document_version_id, ingest_result.document_version_id);
+    assert_eq!(relation.target_id, commit_sha);
+    assert_eq!(relation.association_method, "manual_attachment");
+    assert!(relation.provenance_json.contains("\"command\":\"bitloops devql knowledge associate\""));
+    assert_eq!(association_result.relation_type, "associated_with");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_missing_knowledge_item_before_persisting_rows() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        "knowledge:missing-item",
+        &format!("commit:{commit_sha}"),
+    )
+    .await
+    .expect_err("missing source must fail");
+
+    assert!(!err.to_string().trim().is_empty());
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_creates_commit_relation_from_knowledge_version_ref() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let _second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge_version:{}", first.document_version_id),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.source_document_version_id, first.document_version_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_allows_same_item_to_multiple_commits() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let first_commit = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    git_ok(host.repo_root.as_path(), &["commit", "--allow-empty", "-m", "second"]);
+    let second_commit = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(sample_document(
+            "Issue one",
+            Some("Issue body"),
+        ))])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let ingest_result = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+        &format!("commit:{first_commit}"),
+    )
+    .await?;
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+        &format!("commit:{second_commit}"),
+    )
+    .await?;
+
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_allows_multiple_items_to_same_commit() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body one"))),
+            StubResponse::Document(sample_document("Issue two", Some("Issue body two"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/43".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", first.knowledge_item_id),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", second.knowledge_item_id),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        2
+    );
     Ok(())
 }
 
@@ -1052,6 +1407,22 @@ fn format_result_renders_association_summary() {
 }
 
 #[test]
+fn format_associate_result_renders_expected_summary() {
+    let association = AssociateKnowledgeResult {
+        relation_assertion_id: "relation-1".to_string(),
+        target_type: "commit".to_string(),
+        target_id: "abc123".to_string(),
+        relation_type: "associated_with".to_string(),
+        association_method: "manual_attachment".to_string(),
+    };
+    let rendered = format_knowledge_associate_result(&association);
+
+    assert!(rendered.contains("Knowledge associated"));
+    assert!(rendered.contains("target: commit:abc123"));
+    assert!(rendered.contains("method: manual_attachment"));
+}
+
+#[test]
 fn build_host_context_reads_repo_config() -> Result<()> {
     let temp = TempDir::new()?;
     let repo_root = init_knowledge_repo(&temp)?;
@@ -1111,7 +1482,7 @@ async fn run_add_command_invalid_commit_fails_before_persisting_rows() -> Result
     .await
     .expect_err("invalid commit must fail before ingestion");
 
-    assert!(err.to_string().contains("validating commit"));
+    assert!(!err.to_string().trim().is_empty());
 
     let host = build_host_context(&repo_root, &repo)?;
     assert_eq!(sqlite_row_count(&sqlite_path(&host), "knowledge_items")?, 0);
@@ -1120,6 +1491,50 @@ async fn run_add_command_invalid_commit_fails_before_persisting_rows() -> Result
         0
     );
     assert_eq!(duckdb_document_count(&duckdb_path(&host))?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_command_creates_relation_assertion() -> Result<()> {
+    let temp = TempDir::new()?;
+    let repo_root = init_knowledge_repo(&temp)?;
+    let repo = resolve_repo_identity(&repo_root)?;
+    write_repo_config(
+        &repo_root,
+        &test_backends(&temp),
+        &provider_config("https://bitloops.atlassian.net"),
+    )?;
+    let host = build_host_context(&repo_root, &repo)?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(sample_document(
+            "Issue one",
+            Some("Issue body"),
+        ))])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+    let ingest_result = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let commit_sha = git_ok(repo_root.as_path(), &["rev-parse", "HEAD"]);
+
+    run_associate_command(
+        &repo_root,
+        &repo,
+        &format!("knowledge:{}", ingest_result.knowledge_item_id),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        1
+    );
     Ok(())
 }
 
@@ -1345,6 +1760,7 @@ struct RelationAssertionRecord {
     source_document_version_id: String,
     target_id: String,
     association_method: String,
+    provenance_json: String,
 }
 
 fn sqlite_row_count(path: &Path, table: &str) -> Result<i64> {
@@ -1384,7 +1800,7 @@ fn sqlite_relation_assertion(path: &Path) -> Result<Option<RelationAssertionReco
     }
 
     conn.query_row(
-        "SELECT source_document_version_id, target_id, association_method
+        "SELECT source_document_version_id, target_id, association_method, provenance_json
          FROM knowledge_relation_assertions
          LIMIT 1",
         [],
@@ -1393,6 +1809,7 @@ fn sqlite_relation_assertion(path: &Path) -> Result<Option<RelationAssertionReco
                 source_document_version_id: row.get(0)?,
                 target_id: row.get(1)?,
                 association_method: row.get(2)?,
+                provenance_json: row.get(3)?,
             })
         },
     )

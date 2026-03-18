@@ -150,6 +150,34 @@ impl SqliteKnowledgeRelationalStore {
             .map_err(anyhow::Error::from)
         })
     }
+
+    pub fn find_item_by_id(
+        &self,
+        repo_id: &str,
+        knowledge_item_id: &str,
+    ) -> Result<Option<KnowledgeItemRow>> {
+        self.sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_document_version_id, provenance_json
+                 FROM knowledge_items
+                 WHERE repo_id = ?1 AND knowledge_item_id = ?2
+                 LIMIT 1",
+                params![repo_id, knowledge_item_id],
+                |row| {
+                    Ok(KnowledgeItemRow {
+                        knowledge_item_id: row.get(0)?,
+                        repo_id: row.get(1)?,
+                        knowledge_source_id: row.get(2)?,
+                        item_kind: row.get(3)?,
+                        latest_document_version_id: row.get(4)?,
+                        provenance_json: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+    }
 }
 
 pub struct DuckdbKnowledgeDocumentStore {
@@ -256,6 +284,57 @@ impl DuckdbKnowledgeDocumentStore {
         )
         .context("deleting DuckDB knowledge document version")?;
         Ok(())
+    }
+
+    pub fn find_document_version(
+        &self,
+        document_version_id: &str,
+    ) -> Result<Option<KnowledgeDocumentVersionRow>> {
+        ensure_parent_dir(&self.path)?;
+        let conn = duckdb::Connection::open(&self.path).with_context(|| {
+            format!(
+                "opening DuckDB knowledge database at {}",
+                self.path.display()
+            )
+        })?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT document_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                        title, state, author, updated_at, body_preview, normalized_fields_json,
+                        storage_backend, storage_path, payload_mime_type, payload_size_bytes,
+                        provenance_json
+                 FROM knowledge_document_versions
+                 WHERE document_version_id = ?
+                 LIMIT 1",
+            )
+            .context("preparing DuckDB document-version by id lookup")?;
+        let mut rows = stmt
+            .query(duckdb::params![document_version_id])
+            .context("querying DuckDB document-version by id lookup")?;
+        if let Some(row) = rows.next().context("reading DuckDB document-version row")? {
+            Ok(Some(KnowledgeDocumentVersionRow {
+                document_version_id: row.get(0).context("reading document_version_id")?,
+                knowledge_item_id: row.get(1).context("reading knowledge_item_id")?,
+                provider: row.get(2).context("reading provider")?,
+                source_kind: row.get(3).context("reading source_kind")?,
+                content_hash: row.get(4).context("reading content_hash")?,
+                title: row.get(5).context("reading title")?,
+                state: row.get(6).context("reading state")?,
+                author: row.get(7).context("reading author")?,
+                updated_at: row.get(8).context("reading updated_at")?,
+                body_preview: row.get(9).context("reading body_preview")?,
+                normalized_fields_json: row
+                    .get(10)
+                    .context("reading normalized_fields_json")?,
+                storage_backend: row.get(11).context("reading storage_backend")?,
+                storage_path: row.get(12).context("reading storage_path")?,
+                payload_mime_type: row.get(13).context("reading payload_mime_type")?,
+                payload_size_bytes: row.get(14).context("reading payload_size_bytes")?,
+                provenance_json: row.get(15).context("reading provenance_json")?,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -544,6 +623,42 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_relational_store_finds_item_by_id() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("knowledge-relational.db");
+        let pool = SqliteConnectionPool::connect(sqlite_path).expect("sqlite pool");
+        let store = SqliteKnowledgeRelationalStore::new(pool);
+        store.initialise_schema().expect("initialise schema");
+
+        let source = KnowledgeSourceRow {
+            knowledge_source_id: "source-1".to_string(),
+            provider: "github".to_string(),
+            source_kind: "github_issue".to_string(),
+            canonical_external_id: "github://bitloops/bitloops/issues/42".to_string(),
+            canonical_url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+        let item = KnowledgeItemRow {
+            knowledge_item_id: "item-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            knowledge_source_id: source.knowledge_source_id.clone(),
+            item_kind: "github_issue".to_string(),
+            latest_document_version_id: "version-1".to_string(),
+            provenance_json: source.provenance_json.clone(),
+        };
+        store
+            .persist_ingestion(&source, &item)
+            .expect("persist ingestion");
+
+        let found = store
+            .find_item_by_id(&item.repo_id, &item.knowledge_item_id)
+            .expect("find item by id")
+            .expect("item row");
+
+        assert_eq!(found, item);
+    }
+
+    #[test]
     fn sqlite_relational_store_inserts_relation_assertion() {
         let temp = TempDir::new().expect("temp dir");
         let sqlite_path = temp.path().join("knowledge-relational.db");
@@ -620,5 +735,43 @@ mod tests {
                 .expect("lookup after delete")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn duckdb_document_store_finds_document_version_by_id() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("knowledge-documents.duckdb");
+        let store = DuckdbKnowledgeDocumentStore::new(path);
+        store.initialise_schema().expect("initialise schema");
+
+        let row = KnowledgeDocumentVersionRow {
+            document_version_id: "version-1".to_string(),
+            knowledge_item_id: "item-1".to_string(),
+            provider: "github".to_string(),
+            source_kind: "github_issue".to_string(),
+            content_hash: "hash-1".to_string(),
+            title: "Issue title".to_string(),
+            state: Some("open".to_string()),
+            author: Some("spiros".to_string()),
+            updated_at: Some("2026-03-16T10:00:00Z".to_string()),
+            body_preview: Some("Issue body".to_string()),
+            normalized_fields_json: "{\"title\":\"Issue title\"}".to_string(),
+            storage_backend: "local".to_string(),
+            storage_path: "knowledge/repo-1/item-1/version-1/payload.json".to_string(),
+            payload_mime_type: "application/json".to_string(),
+            payload_size_bytes: 32,
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+
+        store
+            .insert_document_version(&row)
+            .expect("insert document version");
+
+        let found = store
+            .find_document_version(&row.document_version_id)
+            .expect("find document version by id")
+            .expect("document version row");
+
+        assert_eq!(found, row);
     }
 }

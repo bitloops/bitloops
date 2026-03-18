@@ -15,6 +15,7 @@ pub fn build_ingestion_provenance(parsed: &ParsedKnowledgeUrl) -> Value {
 }
 
 pub fn build_association_provenance(
+    command: &str,
     source_document_version_id: &str,
     target_type: &str,
     target_id: &str,
@@ -24,7 +25,7 @@ pub fn build_association_provenance(
         "capability": "knowledge",
         "plugin_type": "first_party",
         "operation": "knowledge.associate",
-        "command": "bitloops devql knowledge add",
+        "command": command,
         "association_method": association_method,
         "target_type": target_type,
         "target_id": target_id,
