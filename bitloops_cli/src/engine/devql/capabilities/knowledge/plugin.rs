@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 
 use crate::engine::db::SqliteConnectionPool;
@@ -332,11 +332,14 @@ pub(crate) async fn run_add_flow(
         .await?;
     let association_result = if let Some(commit) = commit {
         let target = resolve_target_ref(host, &format!("commit:{commit}"))?;
+        let ResolvedKnowledgeTargetRef::Commit { sha } = target else {
+            bail!("internal: expected commit target from commit ref");
+        };
         Some(
             capability
                 .associate(
                     host,
-                    build_commit_association_request(&ingest_result, target),
+                    build_commit_association_request(&ingest_result, sha),
                 )
                 .await?,
         )
@@ -349,10 +352,8 @@ pub(crate) async fn run_add_flow(
 
 fn build_commit_association_request(
     ingest_result: &IngestKnowledgeResult,
-    target: ResolvedKnowledgeTargetRef,
+    sha: String,
 ) -> AssociateKnowledgeRequest {
-    let ResolvedKnowledgeTargetRef::Commit { sha } = target;
-
     AssociateKnowledgeRequest {
         knowledge_item_id: ingest_result.knowledge_item_id.clone(),
         source_document_version_id: ingest_result.document_version_id.clone(),
@@ -388,6 +389,9 @@ pub(crate) async fn run_associate_flow(
 
     let target = match resolved_target {
         ResolvedKnowledgeTargetRef::Commit { sha } => KnowledgeAssociationTarget::Commit { sha },
+        ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id } => {
+            KnowledgeAssociationTarget::KnowledgeItem { knowledge_item_id }
+        }
     };
 
     capability

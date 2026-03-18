@@ -1043,14 +1043,15 @@ async fn resolve_target_ref_canonicalizes_commit_sha() -> Result<()> {
 }
 
 #[tokio::test]
-async fn resolve_target_ref_rejects_knowledge_item_target() -> Result<()> {
+async fn resolve_target_ref_rejects_missing_knowledge_item_as_target() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    host.relational_store.initialise_schema()?;
 
-    let err =
-        resolve_target_ref(&host, "knowledge:item-1").expect_err("knowledge item target must fail");
+    let err = resolve_target_ref(&host, "knowledge:nonexistent-item")
+        .expect_err("missing knowledge item target must fail");
 
-    assert!(err.to_string().contains("not supported"));
+    assert!(!err.to_string().trim().is_empty());
     Ok(())
 }
 
@@ -1273,6 +1274,367 @@ async fn run_associate_flow_allows_multiple_items_to_same_commit() -> Result<()>
     assert_eq!(
         sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
         2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_target_ref_resolves_knowledge_item_target() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let ingest_result = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let resolved =
+        resolve_target_ref(&host, &format!("knowledge:{}", ingest_result.knowledge_item_id))?;
+
+    assert_eq!(
+        resolved,
+        ResolvedKnowledgeTargetRef::KnowledgeItem {
+            knowledge_item_id: ingest_result.knowledge_item_id
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_target_ref_rejects_knowledge_version_as_target_via_flow() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+
+    let err = resolve_target_ref(&host, "knowledge_version:some-version-id")
+        .expect_err("knowledge_version as target must fail");
+
+    assert!(err.to_string().contains("not supported as a target"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_creates_knowledge_to_knowledge_relation() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Jira ticket", Some("Jira body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let target = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+
+    let result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target.knowledge_item_id),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.target_type, "knowledge_item");
+    assert_eq!(relation.target_id, target.knowledge_item_id);
+    assert_eq!(
+        relation.source_document_version_id,
+        source.document_version_id
+    );
+    assert_eq!(relation.association_method, "manual_attachment");
+    assert_eq!(result.relation_type, "associated_with");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_knowledge_with_explicit_source_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Jira ticket", Some("Jira body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let _second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let target = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge_version:{}", first.document_version_id),
+        &format!("knowledge:{}", target.knowledge_item_id),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.source_document_version_id, first.document_version_id);
+    assert_eq!(relation.target_type, "knowledge_item");
+    assert_eq!(relation.target_id, target.knowledge_item_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_knowledge_is_idempotent() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Jira ticket", Some("Jira body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let target = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+
+    let first = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target.knowledge_item_id),
+    )
+    .await?;
+    let second = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target.knowledge_item_id),
+    )
+    .await?;
+
+    assert_eq!(first.relation_assertion_id, second.relation_assertion_id);
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_one_knowledge_item_to_multiple_knowledge_targets() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Jira ticket A", Some("Body A"))),
+            StubResponse::Document(sample_document("Jira ticket B", Some("Body B"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let target_a = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+    let target_b = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1371".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target_a.knowledge_item_id),
+    )
+    .await?;
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target_b.knowledge_item_id),
+    )
+    .await?;
+
+    let rows = sqlite_all_relation_assertions(&sqlite_path(&host))?;
+    assert_eq!(rows.len(), 2);
+    assert!(rows
+        .iter()
+        .all(|r| r.target_type == "knowledge_item"
+            && r.source_document_version_id == source.document_version_id));
+    let target_ids: Vec<&str> = rows.iter().map(|r| r.target_id.as_str()).collect();
+    assert!(target_ids.contains(&target_a.knowledge_item_id.as_str()));
+    assert!(target_ids.contains(&target_b.knowledge_item_id.as_str()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_missing_knowledge_target() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "knowledge:nonexistent-target-id",
+    )
+    .await
+    .expect_err("missing target must fail");
+
+    assert!(err.to_string().contains("not found"));
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_knowledge_stamps_correct_provenance() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Jira ticket", Some("Jira body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let target = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("knowledge:{}", target.knowledge_item_id),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    let provenance: serde_json::Value = serde_json::from_str(&relation.provenance_json)?;
+    assert_eq!(provenance["capability"], "knowledge");
+    assert_eq!(provenance["plugin_type"], "first_party");
+    assert_eq!(provenance["operation"], "knowledge.associate");
+    assert_eq!(
+        provenance["command"],
+        "bitloops devql knowledge associate"
     );
     Ok(())
 }
@@ -1777,6 +2139,7 @@ fn duckdb_path(host: &KnowledgeHostContext) -> PathBuf {
 
 struct RelationAssertionRecord {
     source_document_version_id: String,
+    target_type: String,
     target_id: String,
     association_method: String,
     provenance_json: String,
@@ -1819,16 +2182,17 @@ fn sqlite_relation_assertion(path: &Path) -> Result<Option<RelationAssertionReco
     }
 
     conn.query_row(
-        "SELECT source_document_version_id, target_id, association_method, provenance_json
+        "SELECT source_document_version_id, target_type, target_id, association_method, provenance_json
          FROM knowledge_relation_assertions
          LIMIT 1",
         [],
         |row: &rusqlite::Row<'_>| {
             Ok(RelationAssertionRecord {
                 source_document_version_id: row.get(0)?,
-                target_id: row.get(1)?,
-                association_method: row.get(2)?,
-                provenance_json: row.get(3)?,
+                target_type: row.get(1)?,
+                target_id: row.get(2)?,
+                association_method: row.get(3)?,
+                provenance_json: row.get(4)?,
             })
         },
     )
@@ -1837,6 +2201,37 @@ fn sqlite_relation_assertion(path: &Path) -> Result<Option<RelationAssertionReco
         rusqlite::Error::QueryReturnedNoRows => Ok(None),
         other => Err(other.into()),
     })
+}
+
+fn sqlite_all_relation_assertions(path: &Path) -> Result<Vec<RelationAssertionRecord>> {
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let conn = rusqlite::Connection::open(path)
+        .with_context(|| format!("opening sqlite db at {}", path.display()))?;
+    let exists = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_relation_assertions'",
+        [],
+        |row: &rusqlite::Row<'_>| row.get::<_, i64>(0),
+    )?;
+    if exists == 0 {
+        return Ok(vec![]);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT source_document_version_id, target_type, target_id, association_method, provenance_json
+         FROM knowledge_relation_assertions
+         ORDER BY rowid",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(RelationAssertionRecord {
+            source_document_version_id: row.get(0)?,
+            target_type: row.get(1)?,
+            target_id: row.get(2)?,
+            association_method: row.get(3)?,
+            provenance_json: row.get(4)?,
+        })
+    })?;
+    rows.map(|r| r.map_err(anyhow::Error::from)).collect()
 }
 
 fn duckdb_document_count(path: &Path) -> Result<i64> {

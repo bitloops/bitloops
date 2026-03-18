@@ -110,18 +110,21 @@ pub struct IngestKnowledgeRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnowledgeAssociationTarget {
     Commit { sha: String },
+    KnowledgeItem { knowledge_item_id: String },
 }
 
 impl KnowledgeAssociationTarget {
     pub fn target_type(&self) -> &'static str {
         match self {
             Self::Commit { .. } => "commit",
+            Self::KnowledgeItem { .. } => "knowledge_item",
         }
     }
 
     pub fn target_id(&self) -> &str {
         match self {
             Self::Commit { sha } => sha.as_str(),
+            Self::KnowledgeItem { knowledge_item_id } => knowledge_item_id.as_str(),
         }
     }
 }

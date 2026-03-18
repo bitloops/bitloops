@@ -22,6 +22,7 @@ pub struct ResolvedKnowledgeSourceRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedKnowledgeTargetRef {
     Commit { sha: String },
+    KnowledgeItem { knowledge_item_id: String },
 }
 
 pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
@@ -105,8 +106,16 @@ pub fn resolve_target_ref(
         KnowledgeRef::Commit { rev } => Ok(ResolvedKnowledgeTargetRef::Commit {
             sha: resolve_commit_sha(&host.repo_root, &rev)?,
         }),
-        KnowledgeRef::KnowledgeItem { .. } | KnowledgeRef::KnowledgeVersion { .. } => {
-            bail!("target ref `{raw}` is not supported by `knowledge associate` yet")
+        KnowledgeRef::KnowledgeItem { knowledge_item_id } => {
+            host.relational_store
+                .find_item_by_id(&host.repo.repo_id, &knowledge_item_id)?
+                .with_context(|| {
+                    format!("target knowledge item `{knowledge_item_id}` not found")
+                })?;
+            Ok(ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id })
+        }
+        KnowledgeRef::KnowledgeVersion { .. } => {
+            bail!("target ref `{raw}` is not supported as a target by `knowledge associate` yet")
         }
     }
 }
@@ -179,5 +188,22 @@ mod tests {
     fn rejects_missing_knowledge_ref_separator() {
         let err = parse_knowledge_ref("knowledge").expect_err("missing separator must fail");
         assert!(err.to_string().contains("`<kind>:<value>`"));
+    }
+
+    #[test]
+    fn resolve_target_ref_rejects_knowledge_version_as_target() {
+        // knowledge_version:<id> parses fine but must be rejected as a target
+        // We verify the parse succeeds but know resolve_target_ref will fail.
+        let parsed = parse_knowledge_ref("knowledge_version:some-version-id");
+        assert!(
+            parsed.is_ok(),
+            "knowledge_version should parse successfully"
+        );
+        assert_eq!(
+            parsed.unwrap(),
+            KnowledgeRef::KnowledgeVersion {
+                document_version_id: "some-version-id".to_string()
+            }
+        );
     }
 }

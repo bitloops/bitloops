@@ -58,11 +58,13 @@ Important:
         "email": "${ATLASSIAN_EMAIL}",
         "token": "${ATLASSIAN_TOKEN}"
       },
+      //optional
       "jira": {
         "site_url": "https://bitloops.atlassian.net",
         "email": "${ATLASSIAN_EMAIL}",
         "token": "${ATLASSIAN_JIRA_TOKEN}"
       },
+      // optional
       "confluence": {
         "site_url": "https://bitloops.atlassian.net",
         "email": "${ATLASSIAN_EMAIL}",
@@ -107,15 +109,15 @@ Important:
 
 These live under `knowledge.providers`.
 
-| Key                                       | Type   | Default | Notes                                                                                       |
-| ----------------------------------------- | ------ | ------- | ------------------------------------------------------------------------------------------- |
-| `knowledge.providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                           |
-| `knowledge.providers.atlassian.site_url`  | string | none    | Shared default Atlassian site for Jira and Confluence. Must match the Atlassian site URL.   |
-| `knowledge.providers.atlassian.email`     | string | none    | Shared default Atlassian email for Jira and Confluence basic auth.                          |
-| `knowledge.providers.atlassian.token`     | string | none    | Shared default Atlassian token for Jira and Confluence basic auth.                          |
-| `knowledge.providers.jira.site_url`       | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
-| `knowledge.providers.jira.email`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
-| `knowledge.providers.jira.token`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.      |
+| Key                                       | Type   | Default | Notes                                                                                              |
+| ----------------------------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------- |
+| `knowledge.providers.github.token`        | string | none    | Required for GitHub issue/PR knowledge ingestion.                                                  |
+| `knowledge.providers.atlassian.site_url`  | string | none    | Shared default Atlassian site for Jira and Confluence. Must match the Atlassian site URL.          |
+| `knowledge.providers.atlassian.email`     | string | none    | Shared default Atlassian email for Jira and Confluence basic auth.                                 |
+| `knowledge.providers.atlassian.token`     | string | none    | Shared default Atlassian token for Jira and Confluence basic auth.                                 |
+| `knowledge.providers.jira.site_url`       | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.             |
+| `knowledge.providers.jira.email`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.             |
+| `knowledge.providers.jira.token`          | string | none    | Optional Jira override. If absent, Jira falls back to `knowledge.providers.atlassian`.             |
 | `knowledge.providers.confluence.site_url` | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
 | `knowledge.providers.confluence.email`    | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
 | `knowledge.providers.confluence.token`    | string | none    | Optional Confluence override. If absent, Confluence falls back to `knowledge.providers.atlassian`. |
