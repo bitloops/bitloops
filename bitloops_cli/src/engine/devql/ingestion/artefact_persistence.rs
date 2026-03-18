@@ -489,8 +489,19 @@ fn incoming_revision_is_newer(existing: Option<(String, i64)>, commit_sha: &str,
         None => true,
         Some((existing_commit_sha, existing_commit_unix)) => {
             commit_unix > existing_commit_unix
-                || (commit_unix == existing_commit_unix && commit_sha > existing_commit_sha.as_str())
+                || (commit_unix == existing_commit_unix
+                    && revision_id_is_newer(commit_sha, &existing_commit_sha))
         }
+    }
+}
+
+fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
+    match (
+        incoming.strip_prefix("temp:").and_then(|v| v.parse::<u64>().ok()),
+        existing.strip_prefix("temp:").and_then(|v| v.parse::<u64>().ok()),
+    ) {
+        (Some(incoming_idx), Some(existing_idx)) => incoming_idx > existing_idx,
+        _ => incoming > existing,
     }
 }
 
@@ -843,8 +854,8 @@ async fn upsert_current_state_for_content(
     let file_artefact =
         build_file_artefact_row_from_content(&cfg.repo.repo_id, rev.path, rev.blob_sha, Some(content));
 
-    let (items, dependency_edges, file_docstring) =
-        if is_supported_symbol_language(&file_artefact.language) {
+    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(&file_artefact.language) {
+        let extraction = || -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
             let items = if file_artefact.language == "rust" {
                 extract_rust_artefacts(content, rev.path)?
             } else {
@@ -860,10 +871,30 @@ async fn upsert_current_state_for_content(
             } else {
                 None
             };
-            (items, edges, file_docstring)
-        } else {
-            (Vec::new(), Vec::new(), None)
+            Ok((items, edges, file_docstring))
         };
+
+        match extraction() {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "devql watcher extraction failed for `{}`; keeping file-level current state only: {err:#}",
+                    rev.path
+                );
+                (
+                    Vec::new(),
+                    Vec::new(),
+                    if file_artefact.language == "rust" {
+                        extract_rust_file_docstring(content)
+                    } else {
+                        None
+                    },
+                )
+            }
+        }
+    } else {
+        (Vec::new(), Vec::new(), None)
+    };
 
     let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items);
     refresh_current_state_for_path(

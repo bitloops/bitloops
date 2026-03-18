@@ -25,7 +25,9 @@ pub(crate) fn capture_temporary_checkpoint_batch(
             continue;
         }
         if path.exists() {
-            modified.push(rel);
+            if path.is_file() {
+                modified.push(rel);
+            }
         } else {
             deleted.push(rel);
         }
@@ -99,8 +101,20 @@ pub(crate) fn capture_temporary_checkpoint_batch(
 
     runtime.block_on(async {
         for rel_path in &modified {
-            let content = load_file_from_tree(repo_root, &tree_hash, rel_path)?;
-            let blob_sha = load_blob_sha_from_tree(repo_root, &tree_hash, rel_path)?;
+            let content = match load_file_from_tree(repo_root, &tree_hash, rel_path) {
+                Ok(value) => value,
+                Err(err) => {
+                    log::warn!("devql watcher skipped `{rel_path}`: {err:#}");
+                    continue;
+                }
+            };
+            let blob_sha = match load_blob_sha_from_tree(repo_root, &tree_hash, rel_path) {
+                Ok(value) => value,
+                Err(err) => {
+                    log::warn!("devql watcher skipped `{rel_path}` blob lookup: {err:#}");
+                    continue;
+                }
+            };
             let revision = crate::engine::devql::FileRevision {
                 commit_sha: &revision_id,
                 commit_unix: revision_unix,
@@ -117,9 +131,12 @@ pub(crate) fn capture_temporary_checkpoint_batch(
             .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
         }
         for rel_path in &deleted {
-            crate::engine::devql::delete_current_state_for_path(cfg, &relational, rel_path)
-                .await
-                .with_context(|| format!("deleting current DevQL state for {rel_path}"))?;
+            if let Err(err) =
+                crate::engine::devql::delete_current_state_for_path(cfg, &relational, rel_path)
+                    .await
+            {
+                log::warn!("devql watcher failed deleting `{rel_path}` current state: {err:#}");
+            }
         }
         Ok::<(), anyhow::Error>(())
     })?;
@@ -219,5 +236,35 @@ mod tests {
             )
             .expect("count current artefact rows");
         assert!(artefact_rows >= 2, "expected file + function artefacts");
+    }
+
+    #[test]
+    fn capture_ignores_directory_events_and_still_updates_file_state() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn third() -> i32 {\n    3\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(
+            &cfg,
+            &[dir.path().join("src"), dir.path().join("src/lib.rs")],
+        )
+        .expect("capture with mixed dir and file events");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let current_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current file state rows");
+        assert_eq!(current_rows, 1);
     }
 }

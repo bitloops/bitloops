@@ -231,11 +231,18 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
 }
 
 fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+
     let current_exe =
         std::env::current_exe().context("resolving current executable for watcher")?;
     let mut command = Command::new(current_exe);
     command.arg(WATCHER_COMMAND_NAME);
     command.arg("--repo-root").arg(repo_root);
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
     Ok(command)
 }
 
@@ -322,8 +329,13 @@ async fn wait_for_shutdown_signal() {
     {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+        let ctrl_c = async {
+            if tokio::signal::ctrl_c().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
+            _ = ctrl_c => {}
             _ = async {
                 if let Some(sigterm) = sigterm.as_mut() {
                     sigterm.recv().await;
@@ -336,6 +348,8 @@ async fn wait_for_shutdown_signal() {
 
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
 }

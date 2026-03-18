@@ -227,6 +227,16 @@ fn incoming_revision_is_newer_prefers_newer_timestamp_then_sha() {
         "bbb",
         10
     ));
+    assert!(incoming_revision_is_newer(
+        Some(("temp:9".to_string(), 10)),
+        "temp:10",
+        10
+    ));
+    assert!(!incoming_revision_is_newer(
+        Some(("temp:10".to_string(), 10)),
+        "temp:9",
+        10
+    ));
 }
 
 #[test]
@@ -299,4 +309,3 @@ fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
     assert_eq!(info.subject, "checkpoint without trailer");
     assert!(info.commit_unix > 0);
 }
-
