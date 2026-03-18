@@ -224,23 +224,8 @@ fn init_and_enable(repo: &Path) {
     let out = run_cmd(repo, &["enable"], None);
     assert_success(&out, "bitloops enable");
 
-    // Pre-track repo-local storage paths so stash -u scenarios don't conflict
-    // on untracked DevQL/Blob files between prompts.
-    let devql_dir = repo.join(".bitloops/devql");
-    fs::create_dir_all(&devql_dir).expect("create .bitloops/devql");
-    let sqlite_path = devql_dir.join("relational.db");
-    if !sqlite_path.exists() {
-        fs::File::create(&sqlite_path).expect("create .bitloops/devql/relational.db");
-    }
-    let blobs_dir = repo.join(".bitloops/blobs");
-    fs::create_dir_all(&blobs_dir).expect("create .bitloops/blobs");
-    let keep = blobs_dir.join(".gitkeep");
-    if !keep.exists() {
-        fs::write(&keep, "").expect("create .bitloops/blobs/.gitkeep");
-    }
-
     // Keep infrastructure files tracked so stash/pop scenarios do not conflict
-    // on .claude/.bitloops untracked paths.
+    // on .claude/.bitloops control files. Repo-local stores stay ignored.
     run_git_expect_success(
         repo,
         &["add", ".claude/settings.json", ".bitloops"],
@@ -2119,12 +2104,6 @@ fn cli_1159_scenario6_stash_second_prompt_unstash_commit_all() {
         transcript_path_p2.to_string_lossy().as_ref(),
     );
 
-    // Reconcile tracked SQLite changes so stash pop can restore stashed untracked files.
-    run_git_expect_success(
-        dir.path(),
-        &["restore", "--worktree", ".bitloops/devql/relational.db"],
-        "restore relational.db before stash pop",
-    );
     run_git_expect_success(dir.path(), &["stash", "pop"], "stash pop combo_b/combo_c");
     run_git_expect_success(
         dir.path(),

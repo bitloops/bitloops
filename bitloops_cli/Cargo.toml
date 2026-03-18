@@ -38,6 +38,7 @@ tar = "0.4"
 zstd = "0.13"
 duckdb = { version = "1", features = ["bundled"] }
 object_store = { version = "0.12.4", features = ["aws", "gcp"] }
+fastembed = "5.12.1"
 
 [dev-dependencies]
 cucumber = "0.22.1"

@@ -105,7 +105,6 @@ pub fn build_semantic_feature_inputs_from_artefacts(
 
     artefacts
         .iter()
-        .filter(|row| row.canonical_kind != "import")
         .map(|row| build_semantic_feature_input_from_artefact(row, blob_content, &by_id))
         .collect()
 }
@@ -359,5 +358,39 @@ mod tests {
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=a" }),
             build_semantic_feature_input_hash(&input, &HashTestProvider { key: "provider=b" })
         );
+    }
+
+    #[test]
+    fn semantic_features_include_import_artefacts_when_present() {
+        let artefacts = vec![
+            PreStageArtefactRow {
+                artefact_id: "import-1".to_string(),
+                symbol_id: Some("symbol-import-1".to_string()),
+                repo_id: "repo-1".to_string(),
+                blob_sha: "blob-1".to_string(),
+                path: "src/services/user.ts".to_string(),
+                language: "typescript".to_string(),
+                canonical_kind: "import".to_string(),
+                language_kind: "import_statement".to_string(),
+                symbol_fqn: "src/services/user.ts::import::import@1".to_string(),
+                parent_artefact_id: None,
+                start_line: Some(1),
+                end_line: Some(1),
+                start_byte: Some(0),
+                end_byte: Some(21),
+                signature: Some("import x from 'y';".to_string()),
+                docstring: None,
+                content_hash: Some("hash-import-1".to_string()),
+            },
+            sample_row(),
+        ];
+        let content = "import x from 'y';\n\nexport class UserService {\n  async getById(id: string) {\n    return db.users.findById(id);\n  }\n}\n";
+
+        let inputs = build_semantic_feature_inputs_from_artefacts(&artefacts, content);
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].artefact_id, "import-1");
+        assert_eq!(inputs[0].canonical_kind, "import");
+        assert_eq!(inputs[1].artefact_id, "artefact-1");
     }
 }

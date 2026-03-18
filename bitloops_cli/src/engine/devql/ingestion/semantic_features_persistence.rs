@@ -36,6 +36,44 @@ ON symbol_features (repo_id, blob_sha);
 "#
 }
 
+fn semantic_features_sqlite_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
+ON symbol_semantics (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_features (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
+ON symbol_features (repo_id, blob_sha);
+"#
+}
+
 fn semantic_features_postgres_upgrade_sql() -> &'static str {
     r#"
 ALTER TABLE symbol_semantics ADD COLUMN IF NOT EXISTS docstring_summary TEXT;
@@ -62,22 +100,24 @@ async fn init_postgres_semantic_features_schema(pg_client: &tokio_postgres::Clie
     postgres_exec(pg_client, semantic_features_postgres_upgrade_sql()).await
 }
 
+async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
+    sqlite_exec_path_allow_create(sqlite_path, semantic_features_sqlite_schema_sql()).await
+}
+
 async fn load_pre_stage_artefacts_for_blob(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     repo_id: &str,
     blob_sha: &str,
     path: &str,
 ) -> Result<Vec<semantic::PreStageArtefactRow>> {
-    let rows = pg_query_rows(
-        pg_client,
-        &build_semantic_get_artefacts_sql(repo_id, blob_sha, path),
-    )
-    .await?;
+    let rows = relational
+        .query_rows(&build_semantic_get_artefacts_sql(repo_id, blob_sha, path))
+        .await?;
     parse_semantic_artefact_rows(rows)
 }
 
 async fn upsert_semantic_feature_rows(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
 ) -> Result<semantic::SemanticFeatureIngestionStats> {
@@ -86,7 +126,7 @@ async fn upsert_semantic_feature_rows(
     for input in inputs {
         let next_input_hash =
             semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
-        let state = load_semantic_index_state(pg_client, &input.artefact_id).await?;
+        let state = load_semantic_index_state(relational, &input.artefact_id).await?;
         if !semantic::semantic_features_require_reindex(&state, &next_input_hash) {
             stats.skipped += 1;
             continue;
@@ -99,7 +139,7 @@ async fn upsert_semantic_feature_rows(
         })
         .await
         .context("building semantic feature rows on blocking worker")?;
-        persist_semantic_feature_rows(pg_client, &rows).await?;
+        persist_semantic_feature_rows(relational, &rows).await?;
         stats.upserted += 1;
     }
 
@@ -107,18 +147,22 @@ async fn upsert_semantic_feature_rows(
 }
 
 async fn load_semantic_index_state(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     artefact_id: &str,
 ) -> Result<semantic::SemanticFeatureIndexState> {
-    let rows = pg_query_rows(pg_client, &build_semantic_get_index_state_sql(artefact_id)).await?;
+    let rows = relational
+        .query_rows(&build_semantic_get_index_state_sql(artefact_id))
+        .await?;
     Ok(parse_semantic_index_state_rows(&rows))
 }
 
 async fn persist_semantic_feature_rows(
-    pg_client: &tokio_postgres::Client,
+    relational: &RelationalStorage,
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
-    postgres_exec(pg_client, &build_semantic_persist_rows_sql(rows)?).await
+    relational
+        .exec(&build_semantic_persist_rows_sql(rows, relational.dialect())?)
+        .await
 }
 
 fn build_semantic_get_artefacts_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
@@ -172,7 +216,17 @@ fn parse_semantic_index_state_rows(rows: &[Value]) -> semantic::SemanticFeatureI
     }
 }
 
-fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Result<String> {
+fn semantic_generated_at_now_sql(dialect: RelationalDialect) -> &'static str {
+    match dialect {
+        RelationalDialect::Postgres => "now()",
+        RelationalDialect::Sqlite => "datetime('now')",
+    }
+}
+
+fn build_semantic_persist_rows_sql(
+    rows: &semantic::SemanticFeatureRows,
+    dialect: RelationalDialect,
+) -> Result<String> {
     let semantics = &rows.semantics;
     let features = &rows.features;
 
@@ -181,17 +235,19 @@ fn build_semantic_persist_rows_sql(rows: &semantic::SemanticFeatureRows) -> Resu
     let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
-    let identifier_tokens_expr = sql_jsonb_string(&features.identifier_tokens)?;
-    let body_tokens_expr = sql_jsonb_string(&features.normalized_body_tokens)?;
-    let context_tokens_expr = sql_jsonb_string(&features.context_tokens)?;
+    let identifier_tokens_expr = sql_json_string_for_dialect(&features.identifier_tokens, dialect)?;
+    let body_tokens_expr =
+        sql_json_string_for_dialect(&features.normalized_body_tokens, dialect)?;
+    let context_tokens_expr = sql_json_string_for_dialect(&features.context_tokens, dialect)?;
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
 
     Ok(format!(
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
 VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now(); \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}; \
 INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
 VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = now()",
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
         blob_sha = esc_pg(&semantics.blob_sha),
@@ -212,6 +268,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         body_tokens = body_tokens_expr,
         parent_kind = parent_kind_expr,
         context_tokens = context_tokens_expr,
+        generated_at = generated_at_sql,
     ))
 }
 
@@ -223,11 +280,15 @@ fn sql_optional_string(value: Option<&str>) -> String {
     value.map(sql_string).unwrap_or_else(|| "NULL".to_string())
 }
 
-fn sql_jsonb_string<T: serde::Serialize>(value: &T) -> Result<String> {
-    Ok(format!(
-        "'{}'::jsonb",
-        esc_pg(&serde_json::to_string(value)?)
-    ))
+fn sql_json_string_for_dialect<T: serde::Serialize>(
+    value: &T,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let json = esc_pg(&serde_json::to_string(value)?);
+    Ok(match dialect {
+        RelationalDialect::Postgres => format!("'{json}'::jsonb"),
+        RelationalDialect::Sqlite => format!("'{json}'"),
+    })
 }
 
 #[cfg(test)]
@@ -298,11 +359,26 @@ mod semantic_feature_persistence_tests {
 
     #[test]
     fn semantic_feature_persistence_builds_postgres_persist_sql() {
-        let sql = build_semantic_persist_rows_sql(&sample_semantic_rows()).expect("persist SQL");
+        let sql = build_semantic_persist_rows_sql(
+            &sample_semantic_rows(),
+            RelationalDialect::Postgres,
+        )
+        .expect("persist SQL");
         assert!(sql.contains("INSERT INTO symbol_semantics"));
         assert!(sql.contains("INSERT INTO symbol_features"));
         assert!(sql.contains("docstring_summary"));
         assert!(sql.contains("Fetches O''Brien by id."));
         assert!(sql.contains("::jsonb"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_sqlite_persist_sql() {
+        let sql =
+            build_semantic_persist_rows_sql(&sample_semantic_rows(), RelationalDialect::Sqlite)
+                .expect("persist SQL");
+        assert!(sql.contains("INSERT INTO symbol_semantics"));
+        assert!(sql.contains("INSERT INTO symbol_features"));
+        assert!(sql.contains("generated_at = datetime('now')"));
+        assert!(!sql.contains("::jsonb"));
     }
 }

@@ -11,6 +11,7 @@ use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
 use crate::engine::agent::codex::hooks as codex_hooks;
+use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
 use crate::engine::agent::open_code::agent::OpenCodeAgent;
@@ -54,7 +55,14 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
 }
 
 /// Entries that must be present in `.bitloops/.gitignore`.
-const GITIGNORE_ENTRIES: &[&str] = &["tmp/", SETTINGS_LOCAL_FILE, "metadata/", "logs/"];
+const GITIGNORE_ENTRIES: &[&str] = &[
+    "tmp/",
+    SETTINGS_LOCAL_FILE,
+    "metadata/",
+    "logs/",
+    "stores/",
+    "embeddings/",
+];
 
 /// Ensures the `.bitloops/` directory and its `.gitignore` exist.
 fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
@@ -163,6 +171,9 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
     if claude_hooks::are_hooks_installed(repo_root) {
         agents.push("claude-code".to_string());
     }
+    if HookSupport::are_hooks_installed(&CopilotCliAgent) {
+        agents.push("copilot".to_string());
+    }
     if HookSupport::are_hooks_installed(&CursorAgent) {
         agents.push("cursor".to_string());
     }
@@ -264,6 +275,7 @@ pub fn run_uninstall(
     let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
     let codex_hooks_installed = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_hooks_installed = HookSupport::are_hooks_installed(&CursorAgent);
+    let copilot_hooks_installed = HookSupport::are_hooks_installed(&CopilotCliAgent);
     let gemini_hooks_installed = HookSupport::are_hooks_installed(&GeminiCliAgent);
     let opencode_hooks_installed = HookSupport::are_hooks_installed(&OpenCodeAgent);
 
@@ -271,6 +283,7 @@ pub fn run_uninstall(
         && !git_hooks_installed
         && session_state_count == 0
         && !claude_hooks_installed
+        && !copilot_hooks_installed
         && !codex_hooks_installed
         && !cursor_hooks_installed
         && !gemini_hooks_installed
@@ -300,6 +313,9 @@ pub fn run_uninstall(
         let mut agents = Vec::new();
         if claude_hooks_installed {
             agents.push("Claude Code");
+        }
+        if copilot_hooks_installed {
+            agents.push("Copilot");
         }
         if cursor_hooks_installed {
             agents.push("Cursor");
@@ -390,6 +406,12 @@ fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
         writeln!(out, "  Removed Claude Code hooks")?;
     }
 
+    let copilot = CopilotCliAgent;
+    if HookSupport::are_hooks_installed(&copilot) {
+        HookSupport::uninstall_hooks(&copilot)?;
+        writeln!(out, "  Removed Copilot hooks")?;
+    }
+
     let cursor = CursorAgent;
     if HookSupport::are_hooks_installed(&cursor) {
         HookSupport::uninstall_hooks(&cursor)?;
@@ -433,11 +455,17 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         return (false, String::new(), String::new());
     }
     let claude_enabled = claude_hooks::are_hooks_installed(repo_root);
+    let copilot_enabled = HookSupport::are_hooks_installed(&CopilotCliAgent);
     let codex_enabled = codex_hooks::are_hooks_installed_at(repo_root);
     let cursor_enabled = HookSupport::are_hooks_installed(&CursorAgent);
     let gemini_enabled = HookSupport::are_hooks_installed(&GeminiCliAgent);
     let opencode_enabled = HookSupport::are_hooks_installed(&OpenCodeAgent);
-    if !claude_enabled && !codex_enabled && !cursor_enabled && !gemini_enabled && !opencode_enabled
+    if !claude_enabled
+        && !codex_enabled
+        && !copilot_enabled
+        && !cursor_enabled
+        && !gemini_enabled
+        && !opencode_enabled
     {
         return (false, String::new(), String::new());
     }
@@ -448,6 +476,8 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     };
     let agent = if claude_enabled {
         "Claude Code"
+    } else if copilot_enabled {
+        "Copilot"
     } else if codex_enabled {
         "Codex CLI"
     } else if cursor_enabled {

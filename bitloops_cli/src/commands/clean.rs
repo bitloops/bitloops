@@ -223,7 +223,11 @@ fn is_valid_cleanup_id(id: &str) -> bool {
 #[allow(non_snake_case)]
 mod tests {
     use super::{CleanupItem, CleanupType, run_clean, run_clean_with_items};
+    use crate::engine::db::SqliteConnectionPool;
     use crate::engine::session::state::SessionState;
+    use crate::store_config::{
+        resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    };
     use crate::test_support::process_state::{git_command, with_process_state};
     use std::io::Cursor;
     use std::path::Path;
@@ -250,6 +254,24 @@ mod tests {
         with_process_state(Some(cwd), &[], f)
     }
 
+    fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+        let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            crate::engine::paths::default_relational_db_path(repo_root)
+        }
+    }
+
+    fn ensure_relational_store_file(repo_root: &Path) {
+        let sqlite = SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
+    }
+
     fn setup_clean_test_repo() -> TempDir {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path();
@@ -271,6 +293,7 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        ensure_relational_store_file(root);
         dir
     }
 

@@ -234,7 +234,16 @@ fn when_execute_query_without_pg_client(
             with_logger_test_lock(|| {
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
-                let result = run_ready_future(execute_devql_query(&cfg, &parsed, None));
+                let events_cfg = EventsBackendConfig {
+                    provider: EventsProvider::DuckDb,
+                    duckdb_path: None,
+                    clickhouse_url: None,
+                    clickhouse_user: None,
+                    clickhouse_password: None,
+                    clickhouse_database: None,
+                };
+                let result =
+                    run_ready_future(execute_devql_query(&cfg, &parsed, &events_cfg, None));
                 logging::close();
                 result.expect_err("query should fail without a Postgres client")
             })

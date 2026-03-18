@@ -321,6 +321,7 @@ fn legacy_bitloops_hooks_codex_usage_is_allowlisted() {
         "src/engine/agent/codex/hooks.rs",
         "src/engine/agent/codex/hooks_tests.rs",
         "src/commands/init.rs",
+        "src/commands/init/tests.rs",
         "src/commands/root_test.rs",
     ];
     let mut violations = Vec::new();

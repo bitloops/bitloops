@@ -178,6 +178,10 @@ mod tests {
         branch_exists_locally, checkout_branch, first_line, get_current_branch,
         resume_from_current_branch, run_resume,
     };
+    use crate::engine::db::SqliteConnectionPool;
+    use crate::store_config::{
+        resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
+    };
     use std::fs;
     use std::path::Path;
     use std::process::Command;
@@ -194,6 +198,24 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).to_string(),
             String::from_utf8_lossy(&out.stderr).to_string(),
         )
+    }
+
+    fn checkpoint_sqlite_path(repo_root: &Path) -> std::path::PathBuf {
+        let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            crate::engine::paths::default_relational_db_path(repo_root)
+        }
+    }
+
+    fn ensure_relational_store_file(repo_root: &Path) {
+        let sqlite = SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
     }
 
     fn setup_resume_test_repo(create_feature_branch: bool) -> TempDir {
@@ -218,6 +240,7 @@ mod tests {
             ],
         );
         assert!(ok, "initial commit failed: {err}");
+        ensure_relational_store_file(root);
 
         if create_feature_branch {
             let (ok, _, err) = run_git(root, &["branch", "feature"]);

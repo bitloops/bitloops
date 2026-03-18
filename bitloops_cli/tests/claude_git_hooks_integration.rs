@@ -116,6 +116,26 @@ fn session_backend(repo: &Path) -> Box<dyn SessionBackend> {
     create_session_backend_or_local(repo)
 }
 
+fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
+    let cfg = bitloops_cli::store_config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+    }
+}
+
+fn ensure_relational_store_file(repo_root: &Path) {
+    let sqlite =
+        bitloops_cli::engine::db::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+}
+
 fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "t@t.com"]);
@@ -215,6 +235,7 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
 }
 
 fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {
+    ensure_relational_store_file(repo);
     let backend = session_backend(repo);
     backend
         .save_session(&SessionState {

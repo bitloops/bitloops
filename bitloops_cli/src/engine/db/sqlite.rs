@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone)]
 pub struct SqliteConnectionPool {
@@ -9,6 +9,14 @@ pub struct SqliteConnectionPool {
 
 impl SqliteConnectionPool {
     pub fn connect(db_path: PathBuf) -> Result<Self> {
+        create_sqlite_file_if_missing(&db_path)?;
+        let pool = Self { db_path };
+        pool.with_connection(|_| Ok(()))?;
+        Ok(pool)
+    }
+
+    pub fn connect_existing(db_path: PathBuf) -> Result<Self> {
+        ensure_sqlite_file_exists(&db_path)?;
         let pool = Self { db_path };
         pool.with_connection(|_| Ok(()))?;
         Ok(pool)
@@ -20,7 +28,13 @@ impl SqliteConnectionPool {
 
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
         self.execute_batch(crate::engine::devql::checkpoint_schema_sql_sqlite())
-            .context("initialising SQLite checkpoint schema")
+            .context("initialising SQLite checkpoint schema")?;
+        self.with_connection(|conn| match conn.execute_batch("ALTER TABLE sessions ADD COLUMN ended_at TEXT;") {
+            Ok(()) => Ok(()),
+            Err(err) if err.to_string().contains("duplicate column name: ended_at") => Ok(()),
+            Err(err) => Err(err).context("executing SQLite ended_at migration"),
+        })
+        .context("migrating SQLite checkpoint schema for sessions.ended_at")
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
@@ -51,10 +65,35 @@ fn ensure_sqlite_parent_dir(db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+fn create_sqlite_file_if_missing(db_path: &Path) -> Result<()> {
     ensure_sqlite_parent_dir(db_path)?;
+    if db_path.exists() {
+        return Ok(());
+    }
+
     let conn = rusqlite::Connection::open(db_path)
-        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        .with_context(|| format!("creating SQLite database at {}", db_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(30))
+        .context("setting SQLite busy timeout")?;
+    Ok(())
+}
+
+fn ensure_sqlite_file_exists(db_path: &Path) -> Result<()> {
+    if db_path.is_file() {
+        return Ok(());
+    }
+
+    bail!(
+        "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
+        db_path.display()
+    )
+}
+
+fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_file_exists(db_path)?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
     Ok(conn)

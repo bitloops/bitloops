@@ -13,10 +13,11 @@ fn resolve_commit_selector(cfg: &DevqlConfig, parsed: &ParsedDevqlQuery) -> Resu
     }
 }
 
-fn build_postgres_deps_query(
+fn build_relational_deps_query(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     repo_id: &str,
+    dialect: RelationalDialect,
 ) -> Result<String> {
     validate_deps_filter(&parsed.deps)?;
     let use_historical_tables = parsed.as_of.is_some();
@@ -80,6 +81,18 @@ fn build_postgres_deps_query(
         edge_filters.push("e.to_artefact_id IS NOT NULL".to_string());
     }
 
+    let order_clause = match dialect {
+        RelationalDialect::Postgres => {
+            "e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST".to_string()
+        }
+        RelationalDialect::Sqlite => {
+            "e.edge_kind, e.from_artefact_id, \
+CASE WHEN e.to_artefact_id IS NULL THEN 1 ELSE 0 END, e.to_artefact_id, \
+CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
+                .to_string()
+        }
+    };
+
     let direction = parsed.deps.direction.to_ascii_lowercase();
     let sql = if direction == "in" {
         format!(
@@ -89,7 +102,7 @@ FROM {} e \
 JOIN {} at ON at.artefact_id = e.to_artefact_id \
 JOIN {} af ON af.artefact_id = e.from_artefact_id \
 WHERE {} AND {} \
-ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
@@ -100,6 +113,7 @@ LIMIT {}",
                 .map(|f| f.replace("a.", "at."))
                 .collect::<Vec<_>>()
                 .join(" AND "),
+            order_clause,
             parsed.limit.max(1)
         )
     } else if direction == "both" {
@@ -118,7 +132,7 @@ af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.s
 FROM (SELECT * FROM out_edges UNION ALL SELECT * FROM in_edges) e \
 JOIN {} af ON af.artefact_id = e.from_artefact_id \
 LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
-ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
@@ -130,6 +144,7 @@ LIMIT {}",
             source_filters.join(" AND "),
             artefacts_table,
             artefacts_table,
+            order_clause,
             parsed.limit.max(1)
         )
     } else {
@@ -140,7 +155,7 @@ FROM {} e \
 JOIN {} af ON af.artefact_id = e.from_artefact_id \
 LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
 WHERE {} AND {} \
-ORDER BY e.edge_kind, e.from_artefact_id, e.to_artefact_id NULLS LAST, e.to_symbol_ref NULLS LAST \
+ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
@@ -151,9 +166,19 @@ LIMIT {}",
                 .map(|f| f.replace("a.", "af."))
                 .collect::<Vec<_>>()
                 .join(" AND "),
+            order_clause,
             parsed.limit.max(1)
         )
     };
 
     Ok(sql)
+}
+
+#[cfg(test)]
+fn build_postgres_deps_query(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    repo_id: &str,
+) -> Result<String> {
+    build_relational_deps_query(cfg, parsed, repo_id, RelationalDialect::Postgres)
 }

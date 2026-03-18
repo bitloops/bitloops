@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::{Cli, Commands};
 use crate::engine::agent::codex::hooks as codex_hooks;
+use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
 use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
@@ -305,7 +306,14 @@ fn setup_bitloops_dir_writes_all_required_gitignore_entries() {
     let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore"))
         .expect("expected .bitloops/.gitignore to exist");
 
-    for required in ["tmp/", "settings.local.json", "metadata/", "logs/"] {
+    for required in [
+        "tmp/",
+        "settings.local.json",
+        "metadata/",
+        "logs/",
+        "stores/",
+        "embeddings/",
+    ] {
         assert!(
             gitignore.contains(required),
             "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"
@@ -331,7 +339,14 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
         gitignore.contains("custom-entry/"),
         "existing content should be preserved:\n{gitignore}"
     );
-    for required in ["tmp/", "settings.local.json", "metadata/", "logs/"] {
+    for required in [
+        "tmp/",
+        "settings.local.json",
+        "metadata/",
+        "logs/",
+        "stores/",
+        "embeddings/",
+    ] {
         assert!(
             gitignore.contains(required),
             "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"
@@ -844,5 +859,17 @@ fn initialized_agents_detects_claude_and_cursor() {
         assert!(agents.contains(&"claude-code".to_string()));
         assert!(agents.contains(&"codex".to_string()));
         assert!(agents.contains(&"cursor".to_string()));
+    });
+}
+
+#[test]
+fn initialized_agents_detects_copilot() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    with_repo_cwd(dir.path(), || {
+        HookSupport::install_hooks(&CopilotCliAgent, false, false).unwrap();
+
+        let agents = initialized_agents(dir.path());
+        assert!(agents.contains(&"copilot".to_string()));
     });
 }

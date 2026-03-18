@@ -7,10 +7,9 @@ use serde::de::DeserializeOwned;
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
 use super::state::{PrePromptState, PreTaskState, SessionState};
-use crate::devql_config::{resolve_devql_backend_config, resolve_sqlite_db_path};
 use crate::engine::db::SqliteConnectionPool;
-use crate::engine::paths;
 use crate::engine::validation::validators::{validate_session_id, validate_tool_use_id};
+use crate::store_config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
 
 pub struct DbSessionBackend {
     repo_id: String,
@@ -30,7 +29,7 @@ impl DbSessionBackend {
     }
 
     pub fn from_sqlite_path(repo_id: impl Into<String>, sqlite_path: PathBuf) -> Result<Self> {
-        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        let sqlite = SqliteConnectionPool::connect_existing(sqlite_path)?;
         Self::new(repo_id, sqlite)
     }
 
@@ -66,7 +65,7 @@ impl DbSessionBackend {
             worktree_path: row.get("worktree_path").context("reading worktree_path")?,
             worktree_id: row.get("worktree_id").context("reading worktree_id")?,
             started_at: row.get("started_at").unwrap_or_default(),
-            ended_at: None,
+            ended_at: row.get("ended_at").unwrap_or(None),
             phase: SessionPhase::from_string(
                 &row.get::<_, String>("phase").context("reading phase")?,
             ),
@@ -125,7 +124,7 @@ impl SessionBackend for DbSessionBackend {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT session_id, cli_version, base_commit, attribution_base_commit, worktree_path,
-                        worktree_id, started_at, phase, turn_id, step_count, checkpoint_transcript_start,
+                        worktree_id, started_at, ended_at, phase, turn_id, step_count, checkpoint_transcript_start,
                         transcript_path, first_prompt, agent_type, last_checkpoint_id,
                         last_interaction_time, files_touched, untracked_files_at_start,
                         turn_checkpoint_ids, transcript_identifier_at_start, token_usage,
@@ -156,7 +155,7 @@ impl SessionBackend for DbSessionBackend {
             let mut stmt = conn
                 .prepare(
                     "SELECT session_id, cli_version, base_commit, attribution_base_commit, worktree_path,
-                            worktree_id, started_at, phase, turn_id, step_count, checkpoint_transcript_start,
+                            worktree_id, started_at, ended_at, phase, turn_id, step_count, checkpoint_transcript_start,
                             transcript_path, first_prompt, agent_type, last_checkpoint_id,
                             last_interaction_time, files_touched, untracked_files_at_start,
                             turn_checkpoint_ids, transcript_identifier_at_start, token_usage,
@@ -196,7 +195,7 @@ impl SessionBackend for DbSessionBackend {
             conn.execute(
                 "INSERT INTO sessions (
                     session_id, repo_id, cli_version, base_commit, attribution_base_commit,
-                    worktree_path, worktree_id, started_at, phase, turn_id, step_count,
+                    worktree_path, worktree_id, started_at, ended_at, phase, turn_id, step_count,
                     checkpoint_transcript_start, transcript_path, first_prompt, agent_type,
                     last_checkpoint_id, last_interaction_time, files_touched,
                     untracked_files_at_start, turn_checkpoint_ids, transcript_identifier_at_start,
@@ -204,11 +203,11 @@ impl SessionBackend for DbSessionBackend {
                  )
                  VALUES (
                     ?1, ?2, ?3, ?4, ?5,
-                    ?6, ?7, ?8, ?9, ?10, ?11,
-                    ?12, ?13, ?14, ?15,
-                    ?16, ?17, ?18,
-                    ?19, ?20, ?21,
-                    ?22, ?23, ?24, datetime('now')
+                    ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16,
+                    ?17, ?18, ?19,
+                    ?20, ?21, ?22,
+                    ?23, ?24, ?25, datetime('now')
                  )
                  ON CONFLICT(session_id) DO UPDATE SET
                     repo_id = excluded.repo_id,
@@ -218,6 +217,7 @@ impl SessionBackend for DbSessionBackend {
                     worktree_path = excluded.worktree_path,
                     worktree_id = excluded.worktree_id,
                     started_at = excluded.started_at,
+                    ended_at = excluded.ended_at,
                     phase = excluded.phase,
                     turn_id = excluded.turn_id,
                     step_count = excluded.step_count,
@@ -244,6 +244,7 @@ impl SessionBackend for DbSessionBackend {
                     state.worktree_path.as_str(),
                     state.worktree_id.as_str(),
                     empty_as_none(&state.started_at),
+                    state.ended_at.as_deref(),
                     state.phase.as_str(),
                     state.turn_id.as_str(),
                     i64::from(state.step_count),
@@ -408,17 +409,14 @@ impl SessionBackend for DbSessionBackend {
 }
 
 fn resolve_repo_scoped_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg =
-        resolve_devql_backend_config().context("resolving DevQL backend config for session DB")?;
+    let cfg = resolve_store_backend_config_for_repo(repo_root)
+        .context("resolving backend config for session DB")?;
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return resolve_sqlite_db_path(Some(path))
+        return resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .context("resolving configured SQLite path for session DB");
     }
 
-    Ok(repo_root
-        .join(paths::BITLOOPS_DIR)
-        .join("devql")
-        .join("relational.db"))
+    Ok(crate::engine::paths::default_relational_db_path(repo_root))
 }
 
 fn parse_json_column<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T> {
@@ -458,6 +456,7 @@ mod tests {
     fn setup(repo_id: &str) -> (TempDir, DbSessionBackend) {
         let dir = tempfile::tempdir().unwrap();
         let sqlite_path = dir.path().join("relational.sqlite");
+        let _ = rusqlite::Connection::open(&sqlite_path).expect("create sqlite file for tests");
         let backend = DbSessionBackend::from_sqlite_path(repo_id.to_string(), sqlite_path).unwrap();
         (dir, backend)
     }
