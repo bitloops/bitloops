@@ -392,6 +392,9 @@ pub(crate) async fn run_associate_flow(
         ResolvedKnowledgeTargetRef::Checkpoint { checkpoint_id } => {
             KnowledgeAssociationTarget::Checkpoint { checkpoint_id }
         }
+        ResolvedKnowledgeTargetRef::Artefact { artefact_id } => {
+            KnowledgeAssociationTarget::Artefact { artefact_id }
+        }
     };
 
     capability

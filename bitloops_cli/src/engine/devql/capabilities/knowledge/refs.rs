@@ -15,6 +15,7 @@ pub enum KnowledgeRef {
     KnowledgeVersion { document_version_id: String },
     Commit { rev: String },
     Checkpoint { checkpoint_id: String },
+    Artefact { artefact_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +29,7 @@ pub enum ResolvedKnowledgeTargetRef {
     Commit { sha: String },
     KnowledgeItem { knowledge_item_id: String },
     Checkpoint { checkpoint_id: String },
+    Artefact { artefact_id: String },
 }
 
 pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
@@ -52,6 +54,9 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
         }),
         "checkpoint" => Ok(KnowledgeRef::Checkpoint {
             checkpoint_id: value.to_string(),
+        }),
+        "artefact" => Ok(KnowledgeRef::Artefact {
+            artefact_id: value.to_string(),
         }),
         _ => bail!("unsupported knowledge ref kind `{kind}`"),
     }
@@ -106,6 +111,9 @@ pub fn resolve_source_ref(
         KnowledgeRef::Checkpoint { .. } => {
             bail!("`checkpoint:<id>` cannot be used as a knowledge association source")
         }
+        KnowledgeRef::Artefact { .. } => {
+            bail!("`artefact:<id>` cannot be used as a knowledge association source")
+        }
     }
 }
 
@@ -135,6 +143,17 @@ pub fn resolve_target_ref(
                 resolve_checkpoint_id(&sqlite_path, &host.repo.repo_id, &checkpoint_id)?;
             Ok(ResolvedKnowledgeTargetRef::Checkpoint {
                 checkpoint_id: validated,
+            })
+        }
+        KnowledgeRef::Artefact { artefact_id } => {
+            let sqlite_path = host
+                .backends
+                .relational
+                .resolve_sqlite_db_path()
+                .context("resolving SQLite path for artefact resolution")?;
+            let validated = resolve_artefact_id(&sqlite_path, &host.repo.repo_id, &artefact_id)?;
+            Ok(ResolvedKnowledgeTargetRef::Artefact {
+                artefact_id: validated,
             })
         }
         KnowledgeRef::KnowledgeVersion { .. } => {
@@ -193,6 +212,76 @@ pub fn resolve_checkpoint_id(
         .with_context(|| format!("checkpoint `{trimmed}` not found in current repository"))
 }
 
+pub fn resolve_artefact_id(sqlite_path: &Path, repo_id: &str, artefact_id: &str) -> Result<String> {
+    let trimmed = artefact_id.trim();
+    if trimmed.is_empty() {
+        bail!("artefact id must not be empty");
+    }
+    if !is_valid_artefact_id(trimmed) {
+        bail!(
+            "artefact id `{trimmed}` is not a valid artefact identifier \
+             (expected deterministic UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+        );
+    }
+
+    let pool = SqliteConnectionPool::connect(sqlite_path.to_path_buf())
+        .context("opening database for artefact resolution")?;
+
+    let exists = pool.with_connection(|conn| {
+        let current = conn
+            .query_row(
+                "SELECT artefact_id FROM artefacts_current \
+                 WHERE repo_id = ?1 AND artefact_id = ?2 LIMIT 1",
+                rusqlite::params![repo_id, trimmed],
+                |row| row.get::<_, String>(0),
+            )
+            .optional();
+
+        match current {
+            Ok(Some(id)) => return Ok(Some(id)),
+            Ok(None) => {}
+            Err(e) if e.to_string().contains("no such table") => {}
+            Err(e) => return Err(anyhow::Error::from(e)),
+        }
+
+        let historical = conn
+            .query_row(
+                "SELECT artefact_id FROM artefacts \
+                 WHERE repo_id = ?1 AND artefact_id = ?2 LIMIT 1",
+                rusqlite::params![repo_id, trimmed],
+                |row| row.get::<_, String>(0),
+            )
+            .optional();
+
+        match historical {
+            Ok(result) => Ok(result),
+            Err(e) if e.to_string().contains("no such table") => Ok(None),
+            Err(e) => Err(anyhow::Error::from(e)),
+        }
+    })?;
+
+    exists
+        .map(|id| id.trim().to_string())
+        .with_context(|| format!("artefact `{trimmed}` not found in current repository"))
+}
+
+fn is_valid_artefact_id(id: &str) -> bool {
+    let parts: Vec<&str> = id.split('-').collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    let expected_lengths = [8, 4, 4, 4, 12];
+    parts
+        .iter()
+        .zip(expected_lengths.iter())
+        .all(|(part, &len)| {
+            part.len() == len
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,7 +333,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_knowledge_ref_kind() {
-        let err = parse_knowledge_ref("artefact:abc123").expect_err("unknown kind must fail");
+        let err = parse_knowledge_ref("webhook:abc123").expect_err("unknown kind must fail");
         assert!(err.to_string().contains("unsupported knowledge ref kind"));
     }
 
@@ -262,8 +351,6 @@ mod tests {
 
     #[test]
     fn resolve_target_ref_rejects_knowledge_version_as_target() {
-        // knowledge_version:<id> parses fine but must be rejected as a target
-        // We verify the parse succeeds but know resolve_target_ref will fail.
         let parsed = parse_knowledge_ref("knowledge_version:some-version-id");
         assert!(
             parsed.is_ok(),
@@ -275,5 +362,39 @@ mod tests {
                 document_version_id: "some-version-id".to_string()
             }
         );
+    }
+
+    #[test]
+    fn parses_artefact_ref() {
+        let parsed = parse_knowledge_ref("artefact:a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+            .expect("artefact ref");
+        assert_eq!(
+            parsed,
+            KnowledgeRef::Artefact {
+                artefact_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn is_valid_artefact_id_accepts_well_formed_uuid() {
+        assert!(is_valid_artefact_id("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+    }
+
+    #[test]
+    fn is_valid_artefact_id_rejects_uppercase() {
+        assert!(!is_valid_artefact_id(
+            "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+        ));
+    }
+
+    #[test]
+    fn is_valid_artefact_id_rejects_wrong_length() {
+        assert!(!is_valid_artefact_id("a1b2c3d4-e5f6-7890-abcd-ef12345678"));
+    }
+
+    #[test]
+    fn is_valid_artefact_id_rejects_missing_dashes() {
+        assert!(!is_valid_artefact_id("a1b2c3d4e5f67890abcdef1234567890"));
     }
 }

@@ -2502,3 +2502,347 @@ async fn run_associate_flow_knowledge_to_checkpoint_stamps_correct_provenance() 
     assert_eq!(provenance["target_id"], "a1b2c3d4e5f6");
     Ok(())
 }
+
+// ── artefact association tests ──────────────────────────────────────
+
+const TEST_ARTEFACT_ID: &str = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+fn insert_test_artefact(sqlite_path: &Path, artefact_id: &str, repo_id: &str) -> Result<()> {
+    let pool = SqliteConnectionPool::connect(sqlite_path.to_path_buf())?;
+    pool.with_connection(|conn| {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS artefacts_current (
+                repo_id TEXT NOT NULL,
+                symbol_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                canonical_kind TEXT,
+                language_kind TEXT,
+                symbol_fqn TEXT,
+                parent_symbol_id TEXT,
+                parent_artefact_id TEXT,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL,
+                signature TEXT,
+                modifiers TEXT NOT NULL DEFAULT '[]',
+                docstring TEXT,
+                content_hash TEXT,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (repo_id, symbol_id)
+            );
+            CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
+            ON artefacts_current (repo_id, artefact_id);",
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO artefacts_current \
+             (repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, \
+              start_line, end_line, start_byte, end_byte) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                repo_id,
+                "test-symbol-id",
+                artefact_id,
+                "0000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000",
+                "src/test.ts",
+                "typescript",
+                1,
+                10,
+                0,
+                100,
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn run_associate_flow_creates_knowledge_to_artefact_relation() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_artefact(&sqlite_path(&host), TEST_ARTEFACT_ID, &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("artefact:{TEST_ARTEFACT_ID}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.target_type, "artefact");
+    assert_eq!(relation.target_id, TEST_ARTEFACT_ID);
+    assert_eq!(
+        relation.source_document_version_id,
+        source.document_version_id
+    );
+    assert_eq!(relation.association_method, "manual_attachment");
+    assert_eq!(result.relation_type, "associated_with");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_artefact_with_explicit_source_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue v1", Some("Body v1"))),
+            StubResponse::Document(sample_document("Issue v2", Some("Body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_artefact(&sqlite_path(&host), TEST_ARTEFACT_ID, &host.repo.repo_id)?;
+
+    let first_ingest = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let first_version_id = first_ingest.document_version_id.clone();
+
+    let _second_ingest = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge_version:{first_version_id}"),
+        &format!("artefact:{TEST_ARTEFACT_ID}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.source_document_version_id, first_version_id);
+    assert_eq!(relation.target_type, "artefact");
+    assert_eq!(result.target_id, TEST_ARTEFACT_ID);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_artefact_is_idempotent() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_artefact(&sqlite_path(&host), TEST_ARTEFACT_ID, &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let source_ref = format!("knowledge:{}", source.knowledge_item_id);
+    let target_ref = format!("artefact:{TEST_ARTEFACT_ID}");
+    run_associate_flow(&plugin, &host, &source_ref, &target_ref).await?;
+    run_associate_flow(&plugin, &host, &source_ref, &target_ref).await?;
+
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_missing_artefact_target() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("artefact:{TEST_ARTEFACT_ID}"),
+    )
+    .await
+    .expect_err("missing artefact must fail");
+
+    assert!(err.to_string().contains("not found in current repository"));
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_invalid_artefact_format() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "artefact:not-a-valid-uuid",
+    )
+    .await
+    .expect_err("invalid artefact must fail");
+
+    assert!(err.to_string().contains("not a valid artefact identifier"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_artefact_stamps_correct_provenance() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_artefact(&sqlite_path(&host), TEST_ARTEFACT_ID, &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        &format!("artefact:{TEST_ARTEFACT_ID}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    let provenance: serde_json::Value = serde_json::from_str(&relation.provenance_json)?;
+    assert_eq!(provenance["capability"], "knowledge");
+    assert_eq!(provenance["plugin_type"], "first_party");
+    assert_eq!(provenance["operation"], "knowledge.associate");
+    assert_eq!(provenance["command"], "bitloops devql knowledge associate");
+    assert_eq!(provenance["target_type"], "artefact");
+    assert_eq!(provenance["target_id"], TEST_ARTEFACT_ID);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_same_knowledge_item_to_artefact_and_commit() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let repo_root = host.repo_root.clone();
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_artefact(&sqlite_path(&host), TEST_ARTEFACT_ID, &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let source_ref = format!("knowledge:{}", source.knowledge_item_id);
+    let commit_sha = git_ok(repo_root.as_path(), &["rev-parse", "HEAD"]);
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &source_ref,
+        &format!("artefact:{TEST_ARTEFACT_ID}"),
+    )
+    .await?;
+
+    run_associate_flow(&plugin, &host, &source_ref, &format!("commit:{commit_sha}")).await?;
+
+    let assertions = sqlite_all_relation_assertions(&sqlite_path(&host))?;
+    assert_eq!(assertions.len(), 2);
+    let target_types: Vec<&str> = assertions.iter().map(|a| a.target_type.as_str()).collect();
+    assert!(target_types.contains(&"artefact"));
+    assert!(target_types.contains(&"commit"));
+    Ok(())
+}
