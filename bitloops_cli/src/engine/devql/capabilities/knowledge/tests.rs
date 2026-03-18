@@ -989,6 +989,99 @@ async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_version
 }
 
 #[tokio::test]
+async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_item_colon_version()
+-> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let resolved = resolve_source_ref(
+        &host,
+        &format!(
+            "knowledge:{}:{}",
+            first.knowledge_item_id, first.document_version_id
+        ),
+    )?;
+    assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
+    assert_eq!(
+        resolved.source_document_version_id,
+        first.document_version_id
+    );
+    assert_ne!(
+        resolved.source_document_version_id,
+        second.document_version_id
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_source_ref_rejects_mismatched_item_and_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Jira ticket", Some("Jira body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            },
+        )
+        .await?;
+
+    let err = resolve_source_ref(
+        &host,
+        &format!(
+            "knowledge:{}:{}",
+            first.knowledge_item_id, second.document_version_id
+        ),
+    )
+    .expect_err("mismatched item/version must fail");
+    assert!(err.to_string().contains("does not belong"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn resolve_source_ref_rejects_missing_knowledge_item() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
@@ -1177,6 +1270,57 @@ async fn run_associate_flow_creates_commit_relation_from_knowledge_version_ref()
 }
 
 #[tokio::test]
+async fn run_associate_flow_creates_commit_relation_from_knowledge_item_colon_version_ref()
+-> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let commit_sha = git_ok(host.repo_root.as_path(), &["rev-parse", "HEAD"]);
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v1"))),
+            StubResponse::Document(sample_document("Issue one", Some("Issue body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let first = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let _second = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!(
+            "knowledge:{}:{}",
+            first.knowledge_item_id, first.document_version_id
+        ),
+        &format!("commit:{commit_sha}"),
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(
+        relation.source_document_version_id,
+        first.document_version_id
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn run_associate_flow_allows_same_item_to_multiple_commits() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
@@ -1320,6 +1464,18 @@ async fn resolve_target_ref_rejects_knowledge_version_as_target_via_flow() -> Re
 
     let err = resolve_target_ref(&host, "knowledge_version:some-version-id")
         .expect_err("knowledge_version as target must fail");
+
+    assert!(err.to_string().contains("not supported as a target"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolve_target_ref_rejects_knowledge_item_with_version_as_target_via_flow() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+
+    let err = resolve_target_ref(&host, "knowledge:item-1:version-1")
+        .expect_err("versioned knowledge as target must fail");
 
     assert!(err.to_string().contains("not supported as a target"));
     Ok(())

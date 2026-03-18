@@ -11,11 +11,22 @@ use super::types::KnowledgeHostContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnowledgeRef {
-    KnowledgeItem { knowledge_item_id: String },
-    KnowledgeVersion { document_version_id: String },
-    Commit { rev: String },
-    Checkpoint { checkpoint_id: String },
-    Artefact { artefact_id: String },
+    KnowledgeItem {
+        knowledge_item_id: String,
+        knowledge_item_version_id: Option<String>,
+    },
+    KnowledgeVersion {
+        document_version_id: String,
+    },
+    Commit {
+        rev: String,
+    },
+    Checkpoint {
+        checkpoint_id: String,
+    },
+    Artefact {
+        artefact_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +43,33 @@ pub enum ResolvedKnowledgeTargetRef {
     Artefact { artefact_id: String },
 }
 
+fn parse_knowledge_source_value(value: &str) -> Result<(String, Option<String>)> {
+    let segments: Vec<&str> = value.split(':').collect();
+    match segments.as_slice() {
+        [item] => {
+            let knowledge_item_id = item.trim();
+            if knowledge_item_id.is_empty() {
+                bail!("knowledge ref value must not be empty");
+            }
+            Ok((knowledge_item_id.to_string(), None))
+        }
+        [item, version] => {
+            let knowledge_item_id = item.trim();
+            let document_version_id = version.trim();
+            if knowledge_item_id.is_empty() || document_version_id.is_empty() {
+                bail!("knowledge ref must use `knowledge:<item_id>[:<version_id>]`");
+            }
+            Ok((
+                knowledge_item_id.to_string(),
+                Some(document_version_id.to_string()),
+            ))
+        }
+        _ => bail!(
+            "knowledge ref must use `knowledge:<item_id>` or `knowledge:<item_id>:<version_id>`"
+        ),
+    }
+}
+
 pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
     let trimmed = raw.trim();
     let (kind, value) = trimmed
@@ -43,9 +81,14 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
     }
 
     match kind {
-        "knowledge" => Ok(KnowledgeRef::KnowledgeItem {
-            knowledge_item_id: value.to_string(),
-        }),
+        "knowledge" => {
+            let (knowledge_item_id, knowledge_item_version_id) =
+                parse_knowledge_source_value(value)?;
+            Ok(KnowledgeRef::KnowledgeItem {
+                knowledge_item_id,
+                knowledge_item_version_id,
+            })
+        }
         "knowledge_version" => Ok(KnowledgeRef::KnowledgeVersion {
             document_version_id: value.to_string(),
         }),
@@ -67,24 +110,53 @@ pub fn resolve_source_ref(
     raw: &str,
 ) -> Result<ResolvedKnowledgeSourceRef> {
     match parse_knowledge_ref(raw)? {
-        KnowledgeRef::KnowledgeItem { knowledge_item_id } => {
+        KnowledgeRef::KnowledgeItem {
+            knowledge_item_id,
+            knowledge_item_version_id,
+        } => {
             let item = host
                 .relational_store
                 .find_item_by_id(&host.repo.repo_id, &knowledge_item_id)?
                 .with_context(|| format!("knowledge item `{knowledge_item_id}` not found"))?;
-            let source_document_version_id = item.latest_document_version_id.trim().to_string();
-            if source_document_version_id.is_empty() {
-                bail!("knowledge item `{knowledge_item_id}` has no latest document version");
-            }
 
-            Ok(ResolvedKnowledgeSourceRef {
-                knowledge_item_id,
-                source_document_version_id,
-            })
+            if let Some(source_document_version_id) = knowledge_item_version_id {
+                let version = host
+                    .document_store
+                    .find_document_version(&source_document_version_id)?
+                    .with_context(|| {
+                        format!(
+                            "knowledge document version `{source_document_version_id}` not found"
+                        )
+                    })?;
+
+                if version.knowledge_item_id != knowledge_item_id {
+                    bail!(
+                        "knowledge version `{source_document_version_id}` does not belong to knowledge item `{knowledge_item_id}`"
+                    );
+                }
+
+                Ok(ResolvedKnowledgeSourceRef {
+                    knowledge_item_id,
+                    source_document_version_id,
+                })
+            } else {
+                let source_document_version_id = item.latest_document_version_id.trim().to_string();
+                if source_document_version_id.is_empty() {
+                    bail!("knowledge item `{knowledge_item_id}` has no latest document version");
+                }
+
+                Ok(ResolvedKnowledgeSourceRef {
+                    knowledge_item_id,
+                    source_document_version_id,
+                })
+            }
         }
         KnowledgeRef::KnowledgeVersion {
             document_version_id,
         } => {
+            eprintln!(
+                "warning: `knowledge_version:<id>` is deprecated; use `knowledge:<knowledge_item_id>:<document_version_id>`"
+            );
             let version = host
                 .document_store
                 .find_document_version(&document_version_id)?
@@ -125,7 +197,10 @@ pub fn resolve_target_ref(
         KnowledgeRef::Commit { rev } => Ok(ResolvedKnowledgeTargetRef::Commit {
             sha: resolve_commit_sha(&host.repo_root, &rev)?,
         }),
-        KnowledgeRef::KnowledgeItem { knowledge_item_id } => {
+        KnowledgeRef::KnowledgeItem {
+            knowledge_item_id,
+            knowledge_item_version_id: None,
+        } => {
             host.relational_store
                 .find_item_by_id(&host.repo.repo_id, &knowledge_item_id)?
                 .with_context(|| {
@@ -156,7 +231,11 @@ pub fn resolve_target_ref(
                 artefact_id: validated,
             })
         }
-        KnowledgeRef::KnowledgeVersion { .. } => {
+        KnowledgeRef::KnowledgeItem {
+            knowledge_item_version_id: Some(_),
+            ..
+        }
+        | KnowledgeRef::KnowledgeVersion { .. } => {
             bail!("target ref `{raw}` is not supported as a target by `knowledge associate` yet")
         }
     }
@@ -292,13 +371,27 @@ mod tests {
         assert_eq!(
             parsed,
             KnowledgeRef::KnowledgeItem {
-                knowledge_item_id: "item-1".to_string()
+                knowledge_item_id: "item-1".to_string(),
+                knowledge_item_version_id: None
             }
         );
     }
 
     #[test]
-    fn parses_knowledge_version_ref() {
+    fn parses_knowledge_item_ref_with_version() {
+        let parsed =
+            parse_knowledge_ref("knowledge:item-1:version-1").expect("versioned knowledge ref");
+        assert_eq!(
+            parsed,
+            KnowledgeRef::KnowledgeItem {
+                knowledge_item_id: "item-1".to_string(),
+                knowledge_item_version_id: Some("version-1".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn parses_knowledge_version_ref_legacy_alias() {
         let parsed =
             parse_knowledge_ref("knowledge_version:version-1").expect("knowledge version ref");
         assert_eq!(
@@ -341,6 +434,26 @@ mod tests {
     fn rejects_missing_knowledge_ref_value() {
         let err = parse_knowledge_ref("knowledge:").expect_err("missing value must fail");
         assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn rejects_knowledge_ref_missing_item_segment() {
+        let err = parse_knowledge_ref("knowledge::version-1")
+            .expect_err("missing item segment must fail");
+        assert!(err.to_string().contains("knowledge:<item_id>"));
+    }
+
+    #[test]
+    fn rejects_knowledge_ref_missing_version_segment() {
+        let err = parse_knowledge_ref("knowledge:item-1:")
+            .expect_err("missing version segment must fail");
+        assert!(err.to_string().contains("knowledge:<item_id>"));
+    }
+
+    #[test]
+    fn rejects_knowledge_ref_with_too_many_segments() {
+        let err = parse_knowledge_ref("knowledge:a:b:c").expect_err("too many segments must fail");
+        assert!(err.to_string().contains("knowledge:<item_id>"));
     }
 
     #[test]
