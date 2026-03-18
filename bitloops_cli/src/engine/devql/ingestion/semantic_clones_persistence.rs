@@ -135,18 +135,8 @@ async fn load_symbol_clone_candidate_inputs(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            language: row
-                .get("language")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
             canonical_kind: row
                 .get("canonical_kind")
-                .and_then(Value::as_str)
-                .unwrap_or("symbol")
-                .to_string(),
-            language_kind: row
-                .get("language_kind")
                 .and_then(Value::as_str)
                 .unwrap_or("symbol")
                 .to_string(),
@@ -155,10 +145,6 @@ async fn load_symbol_clone_candidate_inputs(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            signature: row
-                .get("signature")
-                .and_then(Value::as_str)
-                .map(str::to_string),
             summary: row
                 .get("summary")
                 .and_then(Value::as_str)
@@ -173,13 +159,13 @@ async fn load_symbol_clone_candidate_inputs(
                 .get("normalized_signature")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            identifier_tokens: parse_json_string_array(row.get("identifier_tokens")),
-            normalized_body_tokens: parse_json_string_array(row.get("normalized_body_tokens")),
+            identifier_tokens: parse_clone_json_string_array(row.get("identifier_tokens")),
+            normalized_body_tokens: parse_clone_json_string_array(row.get("normalized_body_tokens")),
             parent_kind: row
                 .get("parent_kind")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            context_tokens: parse_json_string_array(row.get("context_tokens")),
+            context_tokens: parse_clone_json_string_array(row.get("context_tokens")),
             embedding,
             call_targets: call_targets_by_symbol_id
                 .get(symbol_id)
@@ -256,15 +242,10 @@ WHERE repo_id = '{}' AND edge_kind = 'calls'",
 }
 
 fn build_symbol_clone_candidate_lookup_sql(repo_id: &str) -> String {
-    let kinds = semantic_clones::clone_candidate_kinds()
-        .iter()
-        .map(|kind| kind.to_string())
-        .collect::<Vec<_>>();
     format!(
-        "SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, a.language, \
+        "SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, \
 LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) AS canonical_kind, \
-COALESCE(a.language_kind, COALESCE(a.canonical_kind, 'symbol')) AS language_kind, \
-COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, a.signature, ss.summary, \
+COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, ss.summary, \
 sf.normalized_name, sf.normalized_signature, sf.identifier_tokens, sf.normalized_body_tokens, sf.parent_kind, sf.context_tokens, \
 e.embedding \
 FROM artefacts_current a \
@@ -272,10 +253,8 @@ JOIN symbol_semantics ss ON ss.artefact_id = a.artefact_id \
 JOIN symbol_features sf ON sf.artefact_id = a.artefact_id \
 JOIN symbol_embeddings e ON e.artefact_id = a.artefact_id \
 WHERE a.repo_id = '{}' \
-  AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) IN ({}) \
 ORDER BY a.path, a.start_line, a.symbol_id",
         esc_pg(repo_id),
-        sql_string_list_pg(&kinds),
     )
 }
 
@@ -317,7 +296,7 @@ ON CONFLICT (repo_id, source_symbol_id, target_symbol_id) DO UPDATE SET source_a
     Ok(())
 }
 
-fn parse_json_string_array(value: Option<&Value>) -> Vec<String> {
+fn parse_clone_json_string_array(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values
             .iter()
@@ -371,13 +350,12 @@ mod semantic_clone_persistence_tests {
     }
 
     #[test]
-    fn semantic_clone_candidate_lookup_sql_filters_to_supported_kinds() {
+    fn semantic_clone_candidate_lookup_sql_loads_all_indexed_candidates() {
         let sql = build_symbol_clone_candidate_lookup_sql("repo'1");
 
         assert!(sql.contains("FROM artefacts_current a"));
         assert!(sql.contains("JOIN symbol_embeddings e"));
-        assert!(sql.contains("function"));
-        assert!(sql.contains("method"));
         assert!(sql.contains("repo''1"));
+        assert!(!sql.contains(" IN ("));
     }
 }

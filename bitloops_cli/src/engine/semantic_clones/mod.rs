@@ -23,11 +23,10 @@ const LEXICAL_WEIGHT_CONTEXT_OVERLAP: f32 = 0.20;
 const LEXICAL_WEIGHT_SIGNATURE_SIMILARITY: f32 = 0.15;
 const LEXICAL_WEIGHT_NAME_MATCH: f32 = 0.10;
 
-const STRUCTURAL_WEIGHT_SAME_KIND: f32 = 0.30;
-const STRUCTURAL_WEIGHT_SAME_PARENT_KIND: f32 = 0.15;
-const STRUCTURAL_WEIGHT_ARITY: f32 = 0.20;
-const STRUCTURAL_WEIGHT_PATH: f32 = 0.20;
-const STRUCTURAL_WEIGHT_CALL: f32 = 0.15;
+const STRUCTURAL_WEIGHT_SAME_KIND: f32 = 0.35;
+const STRUCTURAL_WEIGHT_SAME_PARENT_KIND: f32 = 0.20;
+const STRUCTURAL_WEIGHT_PATH: f32 = 0.25;
+const STRUCTURAL_WEIGHT_CALL: f32 = 0.20;
 const STRUCTURAL_SCORE_FLOOR_SAME_KIND_WEIGHT: f32 = 0.25;
 const STRUCTURAL_SCORE_FLOOR_NAME_MATCH_WEIGHT: f32 = 0.10;
 
@@ -47,9 +46,6 @@ const MISSING_PARENT_KIND_SCORE: f32 = 0.40;
 const MISSING_SIGNATURE_SCORE: f32 = 0.25;
 const PARTIAL_NAME_MATCH_SCORE: f32 = 0.75;
 const SINGLE_SHARED_NAME_PREFIX_SCORE: f32 = 0.50;
-const MISSING_ARITY_SCORE: f32 = 0.25;
-const ARITY_DELTA_ONE_SCORE: f32 = 0.75;
-const ARITY_DELTA_TWO_SCORE: f32 = 0.50;
 const SHARED_SIGNAL_EXPLANATION_LIMIT: usize = 8;
 
 pub const RELATION_KIND_EXACT_DUPLICATE: &str = "exact_duplicate";
@@ -58,29 +54,14 @@ pub const RELATION_KIND_SHARED_LOGIC_CANDIDATE: &str = "shared_logic_candidate";
 pub const RELATION_KIND_DIVERGED_IMPLEMENTATION: &str = "diverged_implementation";
 pub const LABEL_PREFERRED_LOCAL_PATTERN: &str = "preferred_local_pattern";
 
-const CLONE_CANDIDATE_KINDS: &[&str] = &[
-    "file",
-    "module",
-    "function",
-    "method",
-    "class",
-    "interface",
-    "enum",
-    "constructor",
-    "test",
-];
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolCloneCandidateInput {
     pub repo_id: String,
     pub symbol_id: String,
     pub artefact_id: String,
     pub path: String,
-    pub language: String,
     pub canonical_kind: String,
-    pub language_kind: String,
     pub symbol_fqn: String,
-    pub signature: Option<String>,
     pub summary: String,
     pub normalized_name: String,
     pub normalized_signature: Option<String>,
@@ -113,14 +94,6 @@ pub struct SymbolCloneEdgeRow {
 pub struct SymbolCloneBuildResult {
     pub edges: Vec<SymbolCloneEdgeRow>,
     pub sources_considered: usize,
-}
-
-pub fn clone_candidate_kinds() -> &'static [&'static str] {
-    CLONE_CANDIDATE_KINDS
-}
-
-pub fn is_clone_candidate_kind(kind: &str) -> bool {
-    CLONE_CANDIDATE_KINDS.contains(&kind.trim().to_ascii_lowercase().as_str())
 }
 
 pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolCloneBuildResult {
@@ -305,7 +278,6 @@ struct StructuralSignals {
     score: f32,
     same_kind: f32,
     same_parent_kind: f32,
-    arity_score: f32,
     path_score: f32,
     call_score: f32,
     shared_call_targets: Vec<String>,
@@ -334,13 +306,11 @@ fn structural_signals(
         (Some(_), Some(_)) => 0.0,
         _ => MISSING_PARENT_KIND_SCORE,
     };
-    let arity_score = arity_score(source.signature.as_deref(), target.signature.as_deref());
     let path_score = path_similarity(&source.path, &target.path);
     let (call_score, shared_call_targets) =
         jaccard_with_shared(&source.call_targets, &target.call_targets);
     let score = ((STRUCTURAL_WEIGHT_SAME_KIND * same_kind)
         + (STRUCTURAL_WEIGHT_SAME_PARENT_KIND * same_parent_kind)
-        + (STRUCTURAL_WEIGHT_ARITY * arity_score)
         + (STRUCTURAL_WEIGHT_PATH * path_score)
         + (STRUCTURAL_WEIGHT_CALL * call_score))
         .clamp(0.0, 1.0)
@@ -353,7 +323,6 @@ fn structural_signals(
         score,
         same_kind,
         same_parent_kind,
-        arity_score,
         path_score,
         call_score,
         shared_call_targets,
@@ -387,7 +356,7 @@ fn likely_shared_logic_candidate(
 fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
     let explanation = match ctx.relation_kind {
         RELATION_KIND_EXACT_DUPLICATE => {
-            "Same normalized body tokens and signature shape; treat as an exact duplicate."
+            "Same normalized body tokens and normalized signature; treat as an exact duplicate."
                 .to_string()
         }
         RELATION_KIND_DIVERGED_IMPLEMENTATION => {
@@ -423,7 +392,6 @@ fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
             "signature_similarity": ctx.lexical.signature_similarity,
             "same_kind": ctx.structural.same_kind,
             "same_parent_kind": ctx.structural.same_parent_kind,
-            "arity": ctx.structural.arity_score,
             "path_ancestry": ctx.structural.path_score,
             "call_overlap": ctx.structural.call_score,
         },
@@ -476,7 +444,7 @@ fn signature_similarity(
 ) -> f32 {
     match (&source.normalized_signature, &target.normalized_signature) {
         (Some(left), Some(right)) if left == right => 1.0,
-        (Some(_), Some(_)) => arity_score(source.signature.as_deref(), target.signature.as_deref()),
+        (Some(_), Some(_)) => MISSING_SIGNATURE_SCORE,
         (None, None) => 1.0,
         _ => MISSING_SIGNATURE_SCORE,
     }
@@ -505,60 +473,6 @@ fn name_match_score(left: &str, right: &str) -> f32 {
         1 => SINGLE_SHARED_NAME_PREFIX_SCORE,
         _ => 0.0,
     }
-}
-
-fn arity_score(left: Option<&str>, right: Option<&str>) -> f32 {
-    match (extract_arity(left), extract_arity(right)) {
-        (Some(left), Some(right)) if left == right => 1.0,
-        (Some(left), Some(right)) => {
-            let delta = left.abs_diff(right);
-            match delta {
-                0 => 1.0,
-                1 => ARITY_DELTA_ONE_SCORE,
-                2 => ARITY_DELTA_TWO_SCORE,
-                _ => 0.0,
-            }
-        }
-        (None, None) => 1.0,
-        _ => MISSING_ARITY_SCORE,
-    }
-}
-
-fn extract_arity(signature: Option<&str>) -> Option<usize> {
-    let signature = signature?.trim();
-    let open_idx = signature.find('(')?;
-    let mut depth = 0_i32;
-    let mut close_idx = None;
-    for (idx, ch) in signature[open_idx..].char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    close_idx = Some(open_idx + idx);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let close_idx = close_idx?;
-    let params = &signature[(open_idx + 1)..close_idx];
-    if params.trim().is_empty() {
-        return Some(0);
-    }
-
-    let mut count = 1usize;
-    let mut nesting = 0_i32;
-    for ch in params.chars() {
-        match ch {
-            '<' | '[' | '{' | '(' => nesting += 1,
-            '>' | ']' | '}' | ')' => nesting = (nesting - 1).max(0),
-            ',' if nesting == 0 => count += 1,
-            _ => {}
-        }
-    }
-    Some(count)
 }
 
 fn path_similarity(left: &str, right: &str) -> f32 {
@@ -630,7 +544,7 @@ fn normalized_signature_hash(input: &SymbolCloneCandidateInput) -> String {
         &json!({
             "kind": input.canonical_kind,
             "parent_kind": input.parent_kind,
-            "arity": extract_arity(input.signature.as_deref()),
+            "normalized_signature": input.normalized_signature,
         })
         .to_string(),
     )
@@ -663,11 +577,8 @@ mod tests {
             symbol_id: symbol_id.to_string(),
             artefact_id: format!("artefact-{symbol_id}"),
             path: "src/services/orders.ts".to_string(),
-            language: "typescript".to_string(),
             canonical_kind: "function".to_string(),
-            language_kind: "function_declaration".to_string(),
             symbol_fqn: format!("src/services/orders.ts::{name}"),
-            signature: Some(format!("function {name}(id: string, opts: number)")),
             summary: format!("Function {name}."),
             normalized_name: name.to_string(),
             normalized_signature: Some(format!("function {name}(id: string, opts: number)")),
@@ -687,18 +598,11 @@ mod tests {
     }
 
     #[test]
-    fn clone_candidate_kind_whitelist_covers_mvp_symbols() {
-        assert!(is_clone_candidate_kind("function"));
-        assert!(is_clone_candidate_kind("method"));
-        assert!(is_clone_candidate_kind("file"));
-        assert!(!is_clone_candidate_kind("variable"));
-        assert!(!is_clone_candidate_kind("import_statement"));
-    }
-
-    #[test]
     fn build_symbol_clone_edges_marks_exact_duplicates() {
         let source = sample_input("source", "fetch_order");
-        let target = sample_input("target", "fetch_order_copy");
+        let mut target = sample_input("target", "fetch_order");
+        target.path = "src/services/order_copies.ts".to_string();
+        target.symbol_fqn = "src/services/order_copies.ts::fetch_order".to_string();
 
         let result = build_symbol_clone_edges(&[source, target]);
 
@@ -739,9 +643,7 @@ mod tests {
 
         let mut target = sample_input("target", "root_ts");
         target.canonical_kind = "file".to_string();
-        target.language_kind = "file".to_string();
         target.symbol_fqn = "src/services/orders.ts".to_string();
-        target.signature = None;
         target.normalized_signature = None;
 
         let result = build_symbol_clone_edges(&[source, target]);

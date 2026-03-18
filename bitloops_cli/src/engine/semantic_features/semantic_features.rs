@@ -50,6 +50,8 @@ pub struct PreStageArtefactRow {
     pub end_byte: Option<i32>,
     #[serde(default)]
     pub signature: Option<String>,
+    #[serde(default)]
+    pub modifiers: Vec<String>,
     #[serde(default, alias = "doc_comment")]
     pub docstring: Option<String>,
     #[serde(default)]
@@ -69,6 +71,7 @@ pub struct SemanticFeatureInput {
     pub symbol_fqn: String,
     pub name: String,
     pub signature: Option<String>,
+    pub modifiers: Vec<String>,
     pub body: String,
     pub docstring: Option<String>,
     pub parent_kind: Option<String>,
@@ -134,6 +137,7 @@ fn build_semantic_feature_input_from_artefact(
         symbol_fqn: row.symbol_fqn.clone(),
         name,
         signature: row.signature.clone(),
+        modifiers: row.modifiers.clone(),
         body,
         docstring: row.docstring.clone(),
         parent_kind: parent.map(|parent_row| parent_row.canonical_kind.clone()),
@@ -203,6 +207,15 @@ pub fn build_semantic_feature_input_hash(
     input: &SemanticFeatureInput,
     summary_provider: &dyn SemanticSummaryProvider,
 ) -> String {
+    let mut normalized_modifiers = input
+        .modifiers
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized_modifiers.sort();
+    normalized_modifiers.dedup();
+
     sha256_hex(
         &json!({
             "fingerprint_version": SEMANTIC_FEATURES_FINGERPRINT_VERSION,
@@ -218,6 +231,7 @@ pub fn build_semantic_feature_input_hash(
             "symbol_fqn": &input.symbol_fqn,
             "name": normalize_name(&input.name),
             "signature": input.signature.as_deref().map(normalize_signature),
+            "modifiers": normalized_modifiers,
             "body_tokens": build_body_tokens(&input.body),
             "docstring": input
                 .docstring
@@ -271,6 +285,7 @@ mod tests {
             start_byte: None,
             end_byte: None,
             signature: Some("async getById(id: string): Promise<User> {".to_string()),
+            modifiers: vec!["public".to_string(), "async".to_string()],
             docstring: Some("Fetch a user by id.".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
@@ -306,6 +321,7 @@ mod tests {
             symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
             name: "normalizeEmail".to_string(),
             signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
             body: "return email.trim().toLowerCase();".to_string(),
             docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
@@ -313,6 +329,35 @@ mod tests {
         };
         let mut changed = base.clone();
         changed.docstring = Some("Normalizes email for storage.".to_string());
+
+        assert_ne!(
+            build_semantic_feature_input_hash(&base, &semantic::NoopSemanticSummaryProvider),
+            build_semantic_feature_input_hash(&changed, &semantic::NoopSemanticSummaryProvider)
+        );
+    }
+
+    #[test]
+    fn semantic_features_input_hash_changes_when_modifiers_change() {
+        let base = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return email.trim().toLowerCase();".to_string(),
+            docstring: Some("Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            content_hash: Some("hash-1".to_string()),
+        };
+        let mut changed = base.clone();
+        changed.modifiers.push("async".to_string());
 
         assert_ne!(
             build_semantic_feature_input_hash(&base, &semantic::NoopSemanticSummaryProvider),
@@ -348,6 +393,7 @@ mod tests {
             symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
             name: "normalizeEmail".to_string(),
             signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
             body: "return email.trim().toLowerCase();".to_string(),
             docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
@@ -379,6 +425,7 @@ mod tests {
                 start_byte: Some(0),
                 end_byte: Some(21),
                 signature: Some("import x from 'y';".to_string()),
+                modifiers: vec!["type-only".to_string()],
                 docstring: None,
                 content_hash: Some("hash-import-1".to_string()),
             },
