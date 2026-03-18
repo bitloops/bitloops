@@ -44,7 +44,6 @@ const SHARED_LOGIC_MIN_STRUCTURAL_SCORE: f32 = 0.58;
 const SHARED_LOGIC_MIN_SEMANTIC_SCORE: f32 = 0.42;
 
 const MISSING_PARENT_KIND_SCORE: f32 = 0.40;
-const COMPATIBLE_KIND_PARTIAL_SCORE: f32 = 0.75;
 const MISSING_SIGNATURE_SCORE: f32 = 0.25;
 const PARTIAL_NAME_MATCH_SCORE: f32 = 0.75;
 const SINGLE_SHARED_NAME_PREFIX_SCORE: f32 = 0.50;
@@ -157,6 +156,10 @@ fn build_symbol_clone_edge(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> Option<SymbolCloneEdgeRow> {
+    if !same_clone_kind(&source.canonical_kind, &target.canonical_kind) {
+        return None;
+    }
+
     let semantic_score = semantic_similarity(source, target);
     let lexical = lexical_signals(source, target);
     let structural = structural_signals(source, target, lexical.name_match);
@@ -457,19 +460,14 @@ fn build_clone_input_hash(
 }
 
 fn compatible_kind_score(left: &str, right: &str) -> f32 {
-    if left.eq_ignore_ascii_case(right) {
+    if same_clone_kind(left, right) {
         return 1.0;
     }
-    match (
-        left.to_ascii_lowercase().as_str(),
-        right.to_ascii_lowercase().as_str(),
-    ) {
-        ("function", "method")
-        | ("method", "function")
-        | ("file", "module")
-        | ("module", "file") => COMPATIBLE_KIND_PARTIAL_SCORE,
-        _ => 0.0,
-    }
+    0.0
+}
+
+fn same_clone_kind(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
 }
 
 fn signature_similarity(
@@ -733,6 +731,22 @@ mod tests {
                 .iter()
                 .any(|edge| edge.relation_kind == RELATION_KIND_DIVERGED_IMPLEMENTATION)
         );
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_skips_cross_kind_matches() {
+        let source = sample_input("source", "get_root_handler");
+
+        let mut target = sample_input("target", "root_ts");
+        target.canonical_kind = "file".to_string();
+        target.language_kind = "file".to_string();
+        target.symbol_fqn = "src/services/orders.ts".to_string();
+        target.signature = None;
+        target.normalized_signature = None;
+
+        let result = build_symbol_clone_edges(&[source, target]);
+
+        assert!(result.edges.is_empty());
     }
 
     #[test]
