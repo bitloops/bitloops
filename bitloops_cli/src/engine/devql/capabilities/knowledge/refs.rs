@@ -68,7 +68,9 @@ pub fn resolve_source_ref(
                 source_document_version_id,
             })
         }
-        KnowledgeRef::KnowledgeVersion { document_version_id } => {
+        KnowledgeRef::KnowledgeVersion {
+            document_version_id,
+        } => {
             let version = host
                 .document_store
                 .find_document_version(&document_version_id)?
@@ -115,8 +117,11 @@ pub fn resolve_commit_sha(repo_root: &Path, rev: &str) -> Result<String> {
         bail!("commit sha must not be empty");
     }
 
-    let resolved = run_git(repo_root, &["rev-parse", "--verify", &format!("{trimmed}^{{commit}}")])
-        .with_context(|| format!("validating commit `{trimmed}`"))?;
+    let resolved = run_git(
+        repo_root,
+        &["rev-parse", "--verify", &format!("{trimmed}^{{commit}}")],
+    )
+    .with_context(|| format!("validating commit `{trimmed}`"))?;
     Ok(resolved.trim().to_string())
 }
 

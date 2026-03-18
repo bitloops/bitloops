@@ -8,10 +8,10 @@ use crate::store_config::{
 };
 
 use super::provenance::{build_association_provenance, build_ingestion_provenance};
-use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target_ref};
 use super::providers::{
     ConfluenceKnowledgeClient, GitHubKnowledgeClient, JiraKnowledgeClient, KnowledgeProviderClient,
 };
+use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target_ref};
 use super::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentVersionRow,
     KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
@@ -282,7 +282,8 @@ pub async fn run_add_command(
 ) -> Result<()> {
     let registry = crate::engine::devql::capabilities::DevqlCapabilityRegistry::builtin()?;
     let host = build_host_context(repo_root, repo)?;
-    let (ingest_result, association_result) = run_add_flow(registry.knowledge(), &host, url, commit).await?;
+    let (ingest_result, association_result) =
+        run_add_flow(registry.knowledge(), &host, url, commit).await?;
 
     println!(
         "{}",
@@ -333,7 +334,10 @@ pub(crate) async fn run_add_flow(
         let target = resolve_target_ref(host, &format!("commit:{commit}"))?;
         Some(
             capability
-                .associate(host, build_commit_association_request(&ingest_result, target))
+                .associate(
+                    host,
+                    build_commit_association_request(&ingest_result, target),
+                )
                 .await?,
         )
     } else {

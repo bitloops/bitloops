@@ -323,9 +323,7 @@ impl DuckdbKnowledgeDocumentStore {
                 author: row.get(7).context("reading author")?,
                 updated_at: row.get(8).context("reading updated_at")?,
                 body_preview: row.get(9).context("reading body_preview")?,
-                normalized_fields_json: row
-                    .get(10)
-                    .context("reading normalized_fields_json")?,
+                normalized_fields_json: row.get(10).context("reading normalized_fields_json")?,
                 storage_backend: row.get(11).context("reading storage_backend")?,
                 storage_path: row.get(12).context("reading storage_path")?,
                 payload_mime_type: row.get(13).context("reading payload_mime_type")?,
