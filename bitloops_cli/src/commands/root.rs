@@ -385,9 +385,7 @@ pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Res
     // "__send_analytics" and "__devql-watcher" commands conflict with that
     // separator and cause a panic during completion generation, so we rename
     // them only in this generated tree. Runtime parsing remains unchanged.
-    cmd = cmd.mut_subcommand("__devql-watcher", |sub| {
-        sub.name("devql-watcher-internal")
-    });
+    cmd = cmd.mut_subcommand("__devql-watcher", |sub| sub.name("devql-watcher-internal"));
     cmd = cmd.mut_subcommand("__send_analytics", |sub| {
         sub.name("send-analytics-internal")
     });

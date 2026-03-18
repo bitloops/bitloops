@@ -1,9 +1,9 @@
 use super::*;
-use crate::commands::{Cli, Commands};
 use crate::commands::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
-use crate::test_support::process_state::enter_process_state;
+use crate::commands::{Cli, Commands};
 use crate::store_config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::env;
 use std::path::Path;
@@ -242,8 +242,8 @@ include!("devql_tests/postgres_integration.rs");
 
 #[test]
 fn devql_cli_parses_ingest_defaults() {
-    let parsed = Cli::try_parse_from(["bitloops", "devql", "ingest"])
-        .expect("devql ingest should parse");
+    let parsed =
+        Cli::try_parse_from(["bitloops", "devql", "ingest"]).expect("devql ingest should parse");
 
     let Some(Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");

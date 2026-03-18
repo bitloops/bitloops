@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
@@ -11,8 +12,9 @@ pub(crate) fn capture_temporary_checkpoint_batch(
     }
 
     let repo_root = &cfg.repo_root;
-    let base_commit = crate::engine::strategy::manual_commit::run_git(repo_root, &["rev-parse", "HEAD"])
-        .unwrap_or_default();
+    let base_commit =
+        crate::engine::strategy::manual_commit::run_git(repo_root, &["rev-parse", "HEAD"])
+            .unwrap_or_default();
 
     let mut modified = Vec::new();
     let mut deleted = Vec::new();
@@ -55,7 +57,7 @@ pub(crate) fn capture_temporary_checkpoint_batch(
         backend_cfg.relational.sqlite_path.as_deref(),
     )
     .context("resolving SQLite path for watcher capture")?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)?;
+    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path.clone())?;
     sqlite.initialise_checkpoint_schema()?;
     sqlite.initialise_devql_schema()?;
 
@@ -91,37 +93,131 @@ pub(crate) fn capture_temporary_checkpoint_batch(
     })?;
 
     let revision_id = format!("temp:{row_id}");
+    let revision_unix = current_unix_timestamp();
+    let relational = crate::engine::devql::RelationalStorage::Sqlite { path: sqlite_path };
+    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
 
-    // Temporary capture remains local-only by design.
-    sqlite.with_connection(|conn| {
+    runtime.block_on(async {
         for rel_path in &modified {
-            let content = load_file_from_tree(repo_root, &tree_hash, rel_path).unwrap_or_default();
-            let blob_sha = crate::engine::devql::deterministic_uuid(&format!("{tree_hash}|{rel_path}"));
-
-            conn.execute(
-                "INSERT INTO file_state (repo_id, revision_kind, revision_id, tree_hash, commit_sha, base_commit_sha, path, blob_sha)
-                 VALUES (?1, 'temporary', ?2, ?3, NULL, ?4, ?5, ?6)
-                 ON CONFLICT(repo_id, revision_kind, revision_id, path)
-                 DO UPDATE SET blob_sha = excluded.blob_sha",
-                rusqlite::params![repo_id, revision_id, tree_hash, base_commit, rel_path, blob_sha],
-            )?;
-
-            conn.execute(
-                "INSERT INTO current_file_state (repo_id, path, current_scope, revision_kind, revision_id, tree_hash, commit_sha, base_commit_sha, blob_sha, committed_at, updated_at)
-                 VALUES (?1, ?2, 'visible', 'temporary', ?3, ?4, NULL, ?5, ?6, datetime('now'), datetime('now'))
-                 ON CONFLICT(repo_id, path, current_scope)
-                 DO UPDATE SET revision_kind = excluded.revision_kind, revision_id = excluded.revision_id, tree_hash = excluded.tree_hash, base_commit_sha = excluded.base_commit_sha, blob_sha = excluded.blob_sha, updated_at = datetime('now')",
-                rusqlite::params![repo_id, rel_path, revision_id, tree_hash, base_commit, blob_sha],
-            )?;
-
-            let _ = content;
+            let content = load_file_from_tree(repo_root, &tree_hash, rel_path)?;
+            let blob_sha = load_blob_sha_from_tree(repo_root, &tree_hash, rel_path)?;
+            let revision = crate::engine::devql::FileRevision {
+                commit_sha: &revision_id,
+                commit_unix: revision_unix,
+                path: rel_path,
+                blob_sha: &blob_sha,
+            };
+            crate::engine::devql::upsert_current_state_for_content(
+                cfg,
+                &relational,
+                &revision,
+                &content,
+            )
+            .await
+            .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
         }
-        Ok(())
+        for rel_path in &deleted {
+            crate::engine::devql::delete_current_state_for_path(cfg, &relational, rel_path)
+                .await
+                .with_context(|| format!("deleting current DevQL state for {rel_path}"))?;
+        }
+        Ok::<(), anyhow::Error>(())
     })?;
 
     Ok(())
 }
 
 fn load_file_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
-    crate::engine::strategy::manual_commit::run_git(repo_root, &["show", &format!("{tree_hash}:{path}")])
+    crate::engine::strategy::manual_commit::run_git(
+        repo_root,
+        &["show", &format!("{tree_hash}:{path}")],
+    )
+}
+
+fn load_blob_sha_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
+    crate::engine::strategy::manual_commit::run_git(
+        repo_root,
+        &["rev-parse", &format!("{tree_hash}:{path}")],
+    )
+    .map(|value| value.trim().to_string())
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+    use rusqlite::Connection;
+    use tempfile::TempDir;
+
+    fn seed_repo() -> TempDir {
+        let dir = TempDir::new().expect("temp dir");
+        init_test_repo(
+            dir.path(),
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+        fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn first() -> i32 {\n    1\n}\n",
+        )
+        .expect("write initial file");
+        git_ok(dir.path(), &["add", "."]);
+        git_ok(dir.path(), &["commit", "-m", "initial"]);
+        dir
+    }
+
+    #[test]
+    fn capture_updates_current_devql_state_for_modified_file() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+            .expect("capture temporary checkpoint");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+
+        let temp_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
+                row.get(0)
+            })
+            .expect("count temporary checkpoints");
+        assert_eq!(temp_rows, 1);
+
+        let current_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current file state rows");
+        assert_eq!(current_rows, 1);
+
+        let artefact_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM artefacts_current WHERE path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current artefact rows");
+        assert!(artefact_rows >= 2, "expected file + function artefacts");
+    }
 }

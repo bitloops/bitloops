@@ -342,10 +342,15 @@ impl WatchFileConfig {
 
     pub fn from_json_value(value: &Value) -> Self {
         let root = value.as_object();
-        let watch = root.and_then(|map| map.get(WATCH_CONFIG_KEY)).and_then(Value::as_object);
-        let devql = root.and_then(|map| map.get(DEVQL_CONFIG_KEY)).and_then(Value::as_object);
-        let devql_watch =
-            devql.and_then(|map| map.get(WATCH_CONFIG_KEY)).and_then(Value::as_object);
+        let watch = root
+            .and_then(|map| map.get(WATCH_CONFIG_KEY))
+            .and_then(Value::as_object);
+        let devql = root
+            .and_then(|map| map.get(DEVQL_CONFIG_KEY))
+            .and_then(Value::as_object);
+        let devql_watch = devql
+            .and_then(|map| map.get(WATCH_CONFIG_KEY))
+            .and_then(Value::as_object);
 
         Self {
             watch_debounce_ms: read_any_u64_opt(watch, &[WATCH_DEBOUNCE_MS_KEY])
@@ -355,9 +360,7 @@ impl WatchFileConfig {
             watch_poll_fallback_ms: read_any_u64_opt(watch, &[WATCH_POLL_FALLBACK_MS_KEY])
                 .or_else(|| read_any_u64_opt(devql_watch, &[WATCH_POLL_FALLBACK_MS_KEY]))
                 .or_else(|| read_any_u64_opt(devql, &[WATCH_POLL_FALLBACK_MS_KEY]))
-                .or_else(|| {
-                    root.and_then(|map| read_any_u64(map, &[WATCH_POLL_FALLBACK_MS_KEY]))
-                }),
+                .or_else(|| root.and_then(|map| read_any_u64(map, &[WATCH_POLL_FALLBACK_MS_KEY]))),
         }
     }
 
@@ -366,11 +369,7 @@ impl WatchFileConfig {
         let mut section: Vec<String> = Vec::new();
 
         for raw_line in input.lines() {
-            let line = raw_line
-                .split('#')
-                .next()
-                .unwrap_or_default()
-                .trim();
+            let line = raw_line.split('#').next().unwrap_or_default().trim();
             if line.is_empty() {
                 continue;
             }
@@ -549,7 +548,10 @@ where
     }
 }
 
-fn resolve_watch_runtime_config_with<F>(file_cfg: WatchFileConfig, env_lookup: F) -> WatchRuntimeConfig
+fn resolve_watch_runtime_config_with<F>(
+    file_cfg: WatchFileConfig,
+    env_lookup: F,
+) -> WatchRuntimeConfig
 where
     F: Fn(&str) -> Option<String>,
 {

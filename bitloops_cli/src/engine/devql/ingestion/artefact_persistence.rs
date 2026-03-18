@@ -101,6 +101,30 @@ fn is_supported_symbol_language(language: &str) -> bool {
     matches!(language, "typescript" | "javascript" | "rust")
 }
 
+fn build_file_artefact_row_from_content(
+    repo_id: &str,
+    path: &str,
+    blob_sha: &str,
+    content: Option<&str>,
+) -> FileArtefactRow {
+    let line_count = content
+        .map(|value| value.lines().count() as i32)
+        .unwrap_or(1)
+        .max(1);
+    let byte_count = content
+        .map(|value| value.len() as i32)
+        .unwrap_or(0)
+        .max(0);
+
+    FileArtefactRow {
+        artefact_id: revision_artefact_id(repo_id, blob_sha, &file_symbol_id(path)),
+        symbol_id: file_symbol_id(path),
+        language: detect_language(path),
+        end_line: line_count,
+        end_byte: byte_count,
+    }
+}
+
 async fn upsert_file_artefact_row(
     repo_id: &str,
     repo_root: &Path,
@@ -807,6 +831,70 @@ async fn refresh_current_state_for_path(
     delete_current_artefacts_for_path_symbols(cfg, relational, rev.path, &deleted_symbol_ids)
         .await?;
     repair_inbound_current_edges(cfg, relational, &new_symbol_ids, &deleted_symbol_ids).await?;
+    Ok(())
+}
+
+async fn upsert_current_state_for_content(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    rev: &FileRevision<'_>,
+    content: &str,
+) -> Result<()> {
+    let file_artefact =
+        build_file_artefact_row_from_content(&cfg.repo.repo_id, rev.path, rev.blob_sha, Some(content));
+
+    let (items, dependency_edges, file_docstring) =
+        if is_supported_symbol_language(&file_artefact.language) {
+            let items = if file_artefact.language == "rust" {
+                extract_rust_artefacts(content, rev.path)?
+            } else {
+                extract_js_ts_artefacts(content, rev.path)?
+            };
+            let edges = if file_artefact.language == "rust" {
+                extract_rust_dependency_edges(content, rev.path, &items)?
+            } else {
+                extract_js_ts_dependency_edges(content, rev.path, &items)?
+            };
+            let file_docstring = if file_artefact.language == "rust" {
+                extract_rust_file_docstring(content)
+            } else {
+                None
+            };
+            (items, edges, file_docstring)
+        } else {
+            (Vec::new(), Vec::new(), None)
+        };
+
+    let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items);
+    refresh_current_state_for_path(
+        cfg,
+        relational,
+        rev,
+        &file_artefact,
+        file_docstring,
+        &symbol_records,
+        dependency_edges,
+    )
+    .await
+}
+
+async fn delete_current_state_for_path(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    path: &str,
+) -> Result<()> {
+    let deleted_symbol_ids = load_current_symbol_ids_for_path(cfg, relational, path).await?;
+    delete_current_outgoing_edges_for_path(cfg, relational, path).await?;
+
+    let sql = format!(
+        "DELETE FROM current_file_state WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(path),
+    );
+    relational.exec(&sql).await?;
+
+    delete_current_artefacts_for_path_symbols(cfg, relational, path, &deleted_symbol_ids).await?;
+    repair_inbound_current_edges(cfg, relational, &HashSet::new(), &deleted_symbol_ids).await?;
     Ok(())
 }
 

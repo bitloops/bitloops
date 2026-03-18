@@ -1,15 +1,12 @@
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::engine::devql::{
-    DevqlConfig, resolve_repo_identity, run_ingest, run_init, run_query,
-};
+use crate::engine::devql::{DevqlConfig, resolve_repo_identity, run_ingest, run_init, run_query};
 use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str =
-    "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {

@@ -61,7 +61,9 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
         let _ = fs::remove_file(&pid_file);
     }
 
-    let repo_root = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
+    let repo_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
     let mut command = build_watcher_spawn_command(&repo_root)?;
     command
         .current_dir(&repo_root)
@@ -145,8 +147,7 @@ fn run_notify_loop(
         move |event| {
             let _ = tx.send(event);
         },
-        Config::default()
-            .with_poll_interval(Duration::from_millis(opts.poll_fallback_ms.max(250))),
+        Config::default().with_poll_interval(Duration::from_millis(opts.poll_fallback_ms.max(250))),
     )
     .context("creating file watcher")?;
 
@@ -162,7 +163,8 @@ fn run_notify_loop(
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
                 for path in event.paths {
-                    if should_ignore_path(&cfg.repo_root, &path) || is_gitignored(&cfg.repo_root, &path)
+                    if should_ignore_path(&cfg.repo_root, &path)
+                        || is_gitignored(&cfg.repo_root, &path)
                     {
                         continue;
                     }
@@ -229,7 +231,8 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
 }
 
 fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {
-    let current_exe = std::env::current_exe().context("resolving current executable for watcher")?;
+    let current_exe =
+        std::env::current_exe().context("resolving current executable for watcher")?;
     let mut command = Command::new(current_exe);
     command.arg(WATCHER_COMMAND_NAME);
     command.arg("--repo-root").arg(repo_root);
@@ -250,7 +253,8 @@ fn read_pid_file(pid_file: &Path) -> Result<Option<u32>> {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err).with_context(|| format!("reading watcher pid file {}", pid_file.display()))
+            return Err(err)
+                .with_context(|| format!("reading watcher pid file {}", pid_file.display()));
         }
     };
 
@@ -261,7 +265,10 @@ fn process_is_running(pid: u32) -> bool {
     #[cfg(windows)]
     {
         Command::new("cmd")
-            .args(["/C", &format!("tasklist /FI \"PID eq {pid}\" | findstr {pid}")])
+            .args([
+                "/C",
+                &format!("tasklist /FI \"PID eq {pid}\" | findstr {pid}"),
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
