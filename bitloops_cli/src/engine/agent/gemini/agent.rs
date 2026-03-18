@@ -36,7 +36,7 @@ const BITLOOPS_HOOK_PREFIXES: [&str; 2] = ["bitloops ", "cargo run -- "];
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GeminiCliAgent;
 
-pub fn new_gemini_cli_agent() -> Box<dyn Agent + Send + Sync> {
+pub fn new_gemini_agent() -> Box<dyn Agent + Send + Sync> {
     Box::new(GeminiCliAgent)
 }
 
@@ -108,7 +108,7 @@ impl Agent for GeminiCliAgent {
     }
 
     fn description(&self) -> String {
-        "Gemini CLI - Google's AI coding assistant".to_string()
+        "Gemini - Google's AI coding assistant".to_string()
     }
 
     fn is_preview(&self) -> bool {

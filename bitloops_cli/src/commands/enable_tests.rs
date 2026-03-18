@@ -3,7 +3,7 @@ use crate::commands::{Cli, Commands};
 use crate::engine::agent::HookSupport;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
 use crate::engine::agent::codex::hooks as codex_hooks;
-use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
+use crate::engine::agent::copilot::agent::CopilotCliAgent;
 use crate::engine::agent::cursor::agent::CursorAgent;
 use crate::engine::settings::{SETTINGS_DIR, settings_local_path, settings_path};
 use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
@@ -456,7 +456,7 @@ fn run_uninstall_force_removes_codex_hooks() {
     );
 
     let output = String::from_utf8(out).unwrap();
-    assert!(output.contains("Removed Codex CLI hooks"), "{output}");
+    assert!(output.contains("Removed Codex hooks"), "{output}");
 }
 
 #[test]

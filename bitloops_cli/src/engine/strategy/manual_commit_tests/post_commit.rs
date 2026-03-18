@@ -790,14 +790,14 @@ fn save_step_uses_ctx_agent_type_when_no_session_state() {
     strategy
         .save_step(&StepContext {
             session_id: "save-agent-none".to_string(),
-            agent_type: "gemini-cli".to_string(),
+            agent_type: "gemini".to_string(),
             commit_message: "checkpoint".to_string(),
             ..Default::default()
         })
         .unwrap();
 
     let loaded = backend.load_session("save-agent-none").unwrap().unwrap();
-    assert_eq!(loaded.agent_type, "gemini-cli");
+    assert_eq!(loaded.agent_type, "gemini");
     assert_eq!(loaded.turn_id.len(), 12);
     assert!(
         loaded
@@ -827,14 +827,14 @@ fn save_step_uses_ctx_agent_type_when_partial_state() {
     strategy
         .save_step(&StepContext {
             session_id: "save-agent-partial".to_string(),
-            agent_type: "gemini-cli".to_string(),
+            agent_type: "gemini".to_string(),
             commit_message: "checkpoint".to_string(),
             ..Default::default()
         })
         .unwrap();
 
     let loaded = backend.load_session("save-agent-partial").unwrap().unwrap();
-    assert_eq!(loaded.agent_type, "gemini-cli");
+    assert_eq!(loaded.agent_type, "gemini");
     assert_eq!(loaded.turn_id.len(), 12);
     assert!(
         loaded

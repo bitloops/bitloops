@@ -55,56 +55,56 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 8] {
             HOOK_TYPE_USER_PROMPT_SUBMITTED,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
             ),
         ),
         (
             HOOK_TYPE_SESSION_START,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SESSION_START
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_START
             ),
         ),
         (
             HOOK_TYPE_AGENT_STOP,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_AGENT_STOP
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_AGENT_STOP
             ),
         ),
         (
             HOOK_TYPE_SESSION_END,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SESSION_END
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_END
             ),
         ),
         (
             HOOK_TYPE_SUBAGENT_STOP,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SUBAGENT_STOP
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP
             ),
         ),
         (
             HOOK_TYPE_PRE_TOOL_USE,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_PRE_TOOL_USE
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE
             ),
         ),
         (
             HOOK_TYPE_POST_TOOL_USE,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_POST_TOOL_USE
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE
             ),
         ),
         (
             HOOK_TYPE_ERROR_OCCURRED,
             format!(
                 "{prefix}{}",
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_ERROR_OCCURRED
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
             ),
         ),
     ]

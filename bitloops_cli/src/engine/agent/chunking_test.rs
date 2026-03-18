@@ -1,7 +1,7 @@
 use super::registry::AgentRegistry;
 use super::*;
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
-use crate::engine::agent::gemini_cli::transcript::{GeminiMessage, GeminiTranscript};
+use crate::engine::agent::gemini::agent::GeminiCliAgent;
+use crate::engine::agent::gemini::transcript::{GeminiMessage, GeminiTranscript};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

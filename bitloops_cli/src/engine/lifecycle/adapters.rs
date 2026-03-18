@@ -3,8 +3,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::engine::agent::AgentAdapterRegistry;
-use crate::engine::agent::copilot_cli::agent::CopilotCliAgent;
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
+use crate::engine::agent::copilot::agent::CopilotCliAgent;
+use crate::engine::agent::gemini::agent::GeminiCliAgent;
 use crate::engine::agent::{TokenCalculator, TranscriptAnalyzer};
 
 use super::{
@@ -167,7 +167,7 @@ impl LifecycleAgentAdapter for GeminiCliLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::gemini_cli::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::engine::agent::gemini::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -297,7 +297,7 @@ impl LifecycleAgentAdapter for CopilotCliLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::copilot_cli::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::engine::agent::copilot::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -393,21 +393,42 @@ pub fn route_hook_command_to_lifecycle(
     hook_name: &str,
     stdin: &str,
 ) -> Result<()> {
-    let canonical_agent = AgentAdapterRegistry::builtin().normalise_agent_name(agent_name)?;
-    let adapter: Box<dyn LifecycleAgentAdapter> = match canonical_agent.as_str() {
-        crate::engine::agent::AGENT_NAME_CLAUDE_CODE => Box::new(ClaudeCodeLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_COPILOT => Box::new(CopilotCliLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_CODEX => Box::new(CodexLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_CURSOR => Box::new(CursorLifecycleAdapter),
-        crate::engine::agent::AGENT_TYPE_GEMINI => Box::new(GeminiCliLifecycleAdapter),
-        crate::engine::agent::AGENT_NAME_OPEN_CODE => Box::new(OpenCodeLifecycleAdapter),
+    let resolved = AgentAdapterRegistry::builtin().resolve_with_trace(agent_name, None)?;
+    let descriptor = resolved.registration.descriptor();
+    let family = descriptor.protocol_family.id;
+    let profile = descriptor.target_profile.id;
+    let correlation_id = resolved.trace.correlation_id;
+
+    let adapter: Box<dyn LifecycleAgentAdapter> = match (family, profile) {
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CLAUDE_CODE) => {
+            Box::new(ClaudeCodeLifecycleAdapter)
+        }
+        ("json-event", crate::engine::agent::AGENT_NAME_COPILOT) => {
+            Box::new(CopilotCliLifecycleAdapter)
+        }
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CODEX) => Box::new(CodexLifecycleAdapter),
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CURSOR) => Box::new(CursorLifecycleAdapter),
+        ("json-event", crate::engine::agent::AGENT_TYPE_GEMINI) => {
+            Box::new(GeminiCliLifecycleAdapter)
+        }
+        ("jsonl-cli", crate::engine::agent::AGENT_NAME_OPEN_CODE) => {
+            Box::new(OpenCodeLifecycleAdapter)
+        }
         _ => return Err(anyhow!("unsupported lifecycle agent: {agent_name}")),
     };
 
     let mut input = std::io::Cursor::new(stdin.as_bytes());
-    let event = adapter.parse_hook_event(hook_name, &mut input)?;
+    let event = adapter.parse_hook_event(hook_name, &mut input).map_err(|err| {
+        anyhow!(
+            "failed to parse lifecycle hook '{hook_name}' for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
+        )
+    })?;
     if let Some(event) = event {
-        dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event))?;
+        dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event)).map_err(|err| {
+            anyhow!(
+                "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
+            )
+        })?;
     }
     Ok(())
 }

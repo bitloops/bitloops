@@ -12,7 +12,7 @@ pub(super) const AGENT_CODEX: &str = AGENT_NAME_CODEX;
 #[cfg(test)]
 pub(super) const AGENT_CURSOR: &str = AGENT_NAME_CURSOR;
 #[cfg(test)]
-pub(super) const AGENT_GEMINI_CLI: &str = AGENT_TYPE_GEMINI;
+pub(super) const AGENT_GEMINI: &str = AGENT_TYPE_GEMINI;
 pub(super) const DEFAULT_AGENT: &str = AGENT_CLAUDE_CODE;
 
 pub(super) fn install_agent_hooks(

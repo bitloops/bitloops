@@ -9,7 +9,7 @@ use std::convert::TryFrom;
 
 use anyhow::{Result, anyhow};
 
-use super::{agent_display_name, canonical_agent_key};
+use super::{AgentAdapterRegistry, agent_display_name, canonical_agent_key};
 use crate::engine::lifecycle::{LifecycleEvent, LifecycleEventType};
 
 fn canonicalise_agent_key(raw: impl AsRef<str>) -> String {
@@ -271,6 +271,15 @@ impl From<&LifecycleEvent> for CanonicalLifecycleEvent {
 
 /// Host-owned request sent into an invocation boundary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CanonicalCorrelationMetadata {
+    pub correlation_id: String,
+    pub protocol_family: String,
+    pub target_profile: String,
+    pub runtime: String,
+    pub resolution_path: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CanonicalInvocationRequest {
     pub agent: CanonicalAgentIdentity,
     pub session: CanonicalSessionDescriptor,
@@ -278,6 +287,7 @@ pub struct CanonicalInvocationRequest {
     pub prompt: Option<String>,
     pub tool_name: Option<String>,
     pub tool_use_id: Option<String>,
+    pub correlation: Option<CanonicalCorrelationMetadata>,
     pub capabilities: HostCapabilityFlags,
 }
 
@@ -290,6 +300,7 @@ impl CanonicalInvocationRequest {
             prompt: None,
             tool_name: None,
             tool_use_id: None,
+            correlation: None,
             capabilities: HostCapabilityFlags::default(),
         }
     }
@@ -325,6 +336,11 @@ impl CanonicalInvocationRequest {
         self
     }
 
+    pub fn with_correlation(mut self, correlation: CanonicalCorrelationMetadata) -> Self {
+        self.correlation = Some(correlation);
+        self
+    }
+
     pub fn with_capabilities(mut self, capabilities: HostCapabilityFlags) -> Self {
         self.capabilities = capabilities;
         self
@@ -334,7 +350,8 @@ impl CanonicalInvocationRequest {
         agent_type: impl AsRef<str>,
         event: &LifecycleEvent,
     ) -> Result<Self> {
-        let agent = CanonicalAgentIdentity::from_agent_type(agent_type)?;
+        let raw_agent_type = agent_type.as_ref().trim().to_string();
+        let agent = CanonicalAgentIdentity::from_agent_type(&raw_agent_type)?;
         let session = CanonicalSessionDescriptor::try_from(event)?;
         let lifecycle_event = CanonicalLifecycleEvent::from(event);
 
@@ -345,6 +362,25 @@ impl CanonicalInvocationRequest {
         if !event.tool_use_id.trim().is_empty() {
             request = request.with_tool_use_id(&event.tool_use_id);
         }
+
+        if let Ok(resolved) =
+            AgentAdapterRegistry::builtin().resolve_with_trace(&request.agent.agent_key, None)
+        {
+            let descriptor = resolved.registration.descriptor();
+            if let Ok(identity) =
+                CanonicalAgentIdentity::new(descriptor.agent_type, descriptor.display_name)
+            {
+                request.agent = identity;
+            }
+            request = request.with_correlation(CanonicalCorrelationMetadata {
+                correlation_id: resolved.trace.correlation_id,
+                protocol_family: descriptor.protocol_family.id.to_string(),
+                target_profile: descriptor.target_profile.id.to_string(),
+                runtime: resolved.trace.runtime,
+                resolution_path: resolved.trace.resolution_path,
+            });
+        }
+
         Ok(request)
     }
 }
@@ -460,9 +496,9 @@ mod tests {
         assert_eq!(identity.agent_key, "claude-code");
         assert_eq!(identity.display_name, "Claude Code");
 
-        let derived = CanonicalAgentIdentity::from_agent_type("gemini-cli").expect("identity");
-        assert_eq!(derived.agent_key, "gemini-cli");
-        assert_eq!(derived.display_name, "Gemini CLI");
+        let derived = CanonicalAgentIdentity::from_agent_type("gemini").expect("identity");
+        assert_eq!(derived.agent_key, "gemini");
+        assert_eq!(derived.display_name, "Gemini");
     }
 
     #[test]
@@ -560,6 +596,11 @@ mod tests {
         assert_eq!(request.prompt.as_deref(), Some("ping"));
         assert_eq!(request.tool_use_id.as_deref(), Some("tool-use-42"));
         assert!(request.lifecycle_event.is_some());
+        assert!(request.correlation.is_some());
+        let correlation = request.correlation.as_ref().expect("correlation");
+        assert_eq!(correlation.protocol_family, "jsonl-cli");
+        assert_eq!(correlation.target_profile, "claude-code");
+        assert!(!correlation.correlation_id.is_empty());
         assert!(request.capabilities == HostCapabilityFlags::default());
     }
 

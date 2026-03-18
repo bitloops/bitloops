@@ -482,17 +482,14 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     // Use transcript we already read (same bytes we copied to metadata); parse with Gemini or raw JSON
-    if let Ok(t) = crate::engine::agent::gemini_cli::transcript::parse_transcript(&transcript_data)
-    {
+    if let Ok(t) = crate::engine::agent::gemini::transcript::parse_transcript(&transcript_data) {
         let from_transcript =
-            crate::engine::agent::gemini_cli::transcript::extract_all_user_prompts_from_transcript(
-                &t,
-            );
+            crate::engine::agent::gemini::transcript::extract_all_user_prompts_from_transcript(&t);
         if !from_transcript.is_empty() {
             all_prompts = from_transcript;
         }
         for msg in t.messages.iter().rev() {
-            if msg.r#type == crate::engine::agent::gemini_cli::transcript::MESSAGE_TYPE_GEMINI
+            if msg.r#type == crate::engine::agent::gemini::transcript::MESSAGE_TYPE_GEMINI
                 && !msg.content.is_empty()
             {
                 summary = msg.content.clone();
@@ -527,7 +524,7 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     if summary.is_empty()
-        && let Ok(s) = crate::engine::agent::gemini_cli::transcript::extract_last_assistant_message(
+        && let Ok(s) = crate::engine::agent::gemini::transcript::extract_last_assistant_message(
             &transcript_data,
         )
     {
