@@ -1,8 +1,11 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use rusqlite::OptionalExtension;
 
+use crate::engine::db::SqliteConnectionPool;
 use crate::engine::strategy::manual_commit::run_git;
+use crate::engine::trailers::is_valid_checkpoint_id;
 
 use super::types::KnowledgeHostContext;
 
@@ -11,6 +14,7 @@ pub enum KnowledgeRef {
     KnowledgeItem { knowledge_item_id: String },
     KnowledgeVersion { document_version_id: String },
     Commit { rev: String },
+    Checkpoint { checkpoint_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +27,7 @@ pub struct ResolvedKnowledgeSourceRef {
 pub enum ResolvedKnowledgeTargetRef {
     Commit { sha: String },
     KnowledgeItem { knowledge_item_id: String },
+    Checkpoint { checkpoint_id: String },
 }
 
 pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
@@ -44,6 +49,9 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
         }),
         "commit" => Ok(KnowledgeRef::Commit {
             rev: value.to_string(),
+        }),
+        "checkpoint" => Ok(KnowledgeRef::Checkpoint {
+            checkpoint_id: value.to_string(),
         }),
         _ => bail!("unsupported knowledge ref kind `{kind}`"),
     }
@@ -95,6 +103,9 @@ pub fn resolve_source_ref(
         KnowledgeRef::Commit { .. } => {
             bail!("`commit:<sha>` cannot be used as a knowledge association source")
         }
+        KnowledgeRef::Checkpoint { .. } => {
+            bail!("`checkpoint:<id>` cannot be used as a knowledge association source")
+        }
     }
 }
 
@@ -114,6 +125,18 @@ pub fn resolve_target_ref(
                 })?;
             Ok(ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id })
         }
+        KnowledgeRef::Checkpoint { checkpoint_id } => {
+            let sqlite_path = host
+                .backends
+                .relational
+                .resolve_sqlite_db_path()
+                .context("resolving SQLite path for checkpoint resolution")?;
+            let validated =
+                resolve_checkpoint_id(&sqlite_path, &host.repo.repo_id, &checkpoint_id)?;
+            Ok(ResolvedKnowledgeTargetRef::Checkpoint {
+                checkpoint_id: validated,
+            })
+        }
         KnowledgeRef::KnowledgeVersion { .. } => {
             bail!("target ref `{raw}` is not supported as a target by `knowledge associate` yet")
         }
@@ -132,6 +155,42 @@ pub fn resolve_commit_sha(repo_root: &Path, rev: &str) -> Result<String> {
     )
     .with_context(|| format!("validating commit `{trimmed}`"))?;
     Ok(resolved.trim().to_string())
+}
+
+pub fn resolve_checkpoint_id(
+    sqlite_path: &Path,
+    repo_id: &str,
+    checkpoint_id: &str,
+) -> Result<String> {
+    let trimmed = checkpoint_id.trim();
+    if trimmed.is_empty() {
+        bail!("checkpoint id must not be empty");
+    }
+    if !is_valid_checkpoint_id(trimmed) {
+        bail!(
+            "checkpoint id `{trimmed}` is not a valid checkpoint identifier \
+             (expected 12-character lowercase hex)"
+        );
+    }
+
+    let pool = SqliteConnectionPool::connect(sqlite_path.to_path_buf())
+        .context("opening checkpoint database for checkpoint resolution")?;
+    pool.initialise_checkpoint_schema()
+        .context("initialising checkpoint schema for checkpoint resolution")?;
+
+    let exists = pool.with_connection(|conn| {
+        conn.query_row(
+            "SELECT checkpoint_id FROM checkpoints WHERE checkpoint_id = ?1 AND repo_id = ?2 LIMIT 1",
+            rusqlite::params![trimmed, repo_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })?;
+
+    exists
+        .map(|id| id.trim().to_string())
+        .with_context(|| format!("checkpoint `{trimmed}` not found in current repository"))
 }
 
 #[cfg(test)]
@@ -173,8 +232,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_checkpoint_ref() {
+        let parsed = parse_knowledge_ref("checkpoint:a1b2c3d4e5f6").expect("checkpoint ref");
+        assert_eq!(
+            parsed,
+            KnowledgeRef::Checkpoint {
+                checkpoint_id: "a1b2c3d4e5f6".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn rejects_unknown_knowledge_ref_kind() {
-        let err = parse_knowledge_ref("checkpoint:abc123").expect_err("unknown kind must fail");
+        let err = parse_knowledge_ref("artefact:abc123").expect_err("unknown kind must fail");
         assert!(err.to_string().contains("unsupported knowledge ref kind"));
     }
 

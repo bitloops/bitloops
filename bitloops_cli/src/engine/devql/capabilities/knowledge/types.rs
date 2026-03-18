@@ -111,6 +111,7 @@ pub struct IngestKnowledgeRequest {
 pub enum KnowledgeAssociationTarget {
     Commit { sha: String },
     KnowledgeItem { knowledge_item_id: String },
+    Checkpoint { checkpoint_id: String },
 }
 
 impl KnowledgeAssociationTarget {
@@ -118,6 +119,7 @@ impl KnowledgeAssociationTarget {
         match self {
             Self::Commit { .. } => "commit",
             Self::KnowledgeItem { .. } => "knowledge_item",
+            Self::Checkpoint { .. } => "checkpoint",
         }
     }
 
@@ -125,6 +127,7 @@ impl KnowledgeAssociationTarget {
         match self {
             Self::Commit { sha } => sha.as_str(),
             Self::KnowledgeItem { knowledge_item_id } => knowledge_item_id.as_str(),
+            Self::Checkpoint { checkpoint_id } => checkpoint_id.as_str(),
         }
     }
 }

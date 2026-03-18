@@ -2247,3 +2247,258 @@ fn duckdb_document_count(path: &Path) -> Result<i64> {
     )?;
     Ok(count)
 }
+
+fn insert_test_checkpoint(sqlite_path: &Path, checkpoint_id: &str, repo_id: &str) -> Result<()> {
+    let pool = SqliteConnectionPool::connect(sqlite_path.to_path_buf())?;
+    pool.initialise_checkpoint_schema()?;
+    pool.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO checkpoints (checkpoint_id, repo_id) VALUES (?1, ?2)",
+            rusqlite::params![checkpoint_id, repo_id],
+        )?;
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn run_associate_flow_creates_knowledge_to_checkpoint_relation() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_checkpoint(&sqlite_path(&host), "a1b2c3d4e5f6", &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "checkpoint:a1b2c3d4e5f6",
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.target_type, "checkpoint");
+    assert_eq!(relation.target_id, "a1b2c3d4e5f6");
+    assert_eq!(
+        relation.source_document_version_id,
+        source.document_version_id
+    );
+    assert_eq!(relation.association_method, "manual_attachment");
+    assert_eq!(result.relation_type, "associated_with");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_checkpoint_with_explicit_source_version() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![
+            StubResponse::Document(sample_document("Issue v1", Some("Body v1"))),
+            StubResponse::Document(sample_document("Issue v2", Some("Body v2"))),
+        ])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_checkpoint(&sqlite_path(&host), "a1b2c3d4e5f6", &host.repo.repo_id)?;
+
+    let first_ingest = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+    let first_version_id = first_ingest.document_version_id.clone();
+
+    let _second_ingest = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let result = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge_version:{first_version_id}"),
+        "checkpoint:a1b2c3d4e5f6",
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    assert_eq!(relation.source_document_version_id, first_version_id);
+    assert_eq!(relation.target_type, "checkpoint");
+    assert_eq!(result.target_id, "a1b2c3d4e5f6");
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_checkpoint_is_idempotent() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_checkpoint(&sqlite_path(&host), "a1b2c3d4e5f6", &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let source_ref = format!("knowledge:{}", source.knowledge_item_id);
+    run_associate_flow(&plugin, &host, &source_ref, "checkpoint:a1b2c3d4e5f6").await?;
+    run_associate_flow(&plugin, &host, &source_ref, "checkpoint:a1b2c3d4e5f6").await?;
+
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_missing_checkpoint_target() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "checkpoint:a1b2c3d4e5f6",
+    )
+    .await
+    .expect_err("missing checkpoint must fail");
+
+    assert!(err.to_string().contains("not found in current repository"));
+    assert_eq!(
+        sqlite_row_count(&sqlite_path(&host), "knowledge_relation_assertions")?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_rejects_invalid_checkpoint_format() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    let err = run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "checkpoint:not-valid",
+    )
+    .await
+    .expect_err("invalid checkpoint must fail");
+
+    assert!(
+        err.to_string()
+            .contains("not a valid checkpoint identifier")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_associate_flow_knowledge_to_checkpoint_stamps_correct_provenance() -> Result<()> {
+    let temp = TempDir::new()?;
+    let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
+    let plugin = KnowledgePlugin::with_clients(
+        Box::new(StubClient::new(vec![StubResponse::Document(
+            sample_document("Issue one", Some("Issue body")),
+        )])),
+        Box::new(StubClient::new(vec![])),
+        Box::new(StubClient::new(vec![])),
+    );
+
+    insert_test_checkpoint(&sqlite_path(&host), "a1b2c3d4e5f6", &host.repo.repo_id)?;
+
+    let source = plugin
+        .ingest_source(
+            &host,
+            IngestKnowledgeRequest {
+                url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            },
+        )
+        .await?;
+
+    run_associate_flow(
+        &plugin,
+        &host,
+        &format!("knowledge:{}", source.knowledge_item_id),
+        "checkpoint:a1b2c3d4e5f6",
+    )
+    .await?;
+
+    let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
+    let provenance: serde_json::Value = serde_json::from_str(&relation.provenance_json)?;
+    assert_eq!(provenance["capability"], "knowledge");
+    assert_eq!(provenance["plugin_type"], "first_party");
+    assert_eq!(provenance["operation"], "knowledge.associate");
+    assert_eq!(provenance["command"], "bitloops devql knowledge associate");
+    assert_eq!(provenance["target_type"], "checkpoint");
+    assert_eq!(provenance["target_id"], "a1b2c3d4e5f6");
+    Ok(())
+}
