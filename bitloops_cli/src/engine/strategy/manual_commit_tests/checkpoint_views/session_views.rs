@@ -292,7 +292,7 @@ fn list_committed_multi_session_info() {
 
     let mut one = idle_state("list-session-1", &head, vec!["file0.rs".to_string()], 1);
     let mut two = idle_state("list-session-2", &head, vec!["file1.rs".to_string()], 2);
-    two.agent_type = "gemini-cli".to_string();
+    two.agent_type = "gemini".to_string();
     condense_with_transcript(&strategy, &mut one, checkpoint_id, &head, r#"{"i": 0}"#);
     condense_with_transcript(&strategy, &mut two, checkpoint_id, &head, r#"{"i": 1}"#);
 
@@ -308,12 +308,12 @@ fn list_committed_multi_session_info() {
         "latest session id should be exposed"
     );
     assert_eq!(
-        found.agent, "gemini-cli",
+        found.agent, "gemini",
         "agent should come from latest session metadata"
     );
     assert_eq!(
         found.agents,
-        vec![AGENT_TYPE_CLAUDE_CODE.to_string(), "gemini-cli".to_string()],
+        vec![AGENT_TYPE_CLAUDE_CODE.to_string(), "gemini".to_string()],
         "agents should include all unique session agents in order"
     );
 }

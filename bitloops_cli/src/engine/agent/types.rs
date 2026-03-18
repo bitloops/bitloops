@@ -121,7 +121,7 @@ pub const AGENT_TYPE_CLAUDE_CODE: &str = AGENT_NAME_CLAUDE_CODE;
 pub const AGENT_TYPE_COPILOT: &str = AGENT_NAME_COPILOT;
 pub const AGENT_TYPE_CODEX: &str = AGENT_NAME_CODEX;
 pub const AGENT_TYPE_CURSOR: &str = AGENT_NAME_CURSOR;
-pub const AGENT_TYPE_GEMINI: &str = "gemini-cli";
+pub const AGENT_TYPE_GEMINI: &str = "gemini";
 pub const AGENT_TYPE_OPEN_CODE: &str = AGENT_NAME_OPEN_CODE;
 pub const AGENT_TYPE_UNKNOWN: &str = "unknown";
 
@@ -134,7 +134,7 @@ pub fn canonical_agent_key(agent: &str) -> String {
         AGENT_NAME_COPILOT | "copilot-cli" | "github-copilot" => AGENT_TYPE_COPILOT.to_string(),
         AGENT_NAME_CODEX => AGENT_TYPE_CODEX.to_string(),
         AGENT_NAME_CURSOR => AGENT_TYPE_CURSOR.to_string(),
-        AGENT_NAME_GEMINI | AGENT_TYPE_GEMINI => AGENT_TYPE_GEMINI.to_string(),
+        AGENT_NAME_GEMINI => AGENT_TYPE_GEMINI.to_string(),
         AGENT_NAME_OPEN_CODE | "open-code" => AGENT_TYPE_OPEN_CODE.to_string(),
         AGENT_TYPE_UNKNOWN => AGENT_TYPE_UNKNOWN.to_string(),
         _ => key,
@@ -145,10 +145,10 @@ pub fn agent_display_name(agent: &str) -> String {
     match canonical_agent_key(agent).as_str() {
         AGENT_TYPE_CLAUDE_CODE => "Claude Code".to_string(),
         AGENT_TYPE_COPILOT => "Copilot".to_string(),
-        AGENT_TYPE_CODEX => "Codex CLI".to_string(),
+        AGENT_TYPE_CODEX => "Codex".to_string(),
         AGENT_TYPE_CURSOR => "Cursor".to_string(),
-        AGENT_TYPE_GEMINI => "Gemini CLI".to_string(),
-        AGENT_TYPE_OPEN_CODE => "OpenCode".to_string(),
+        AGENT_TYPE_GEMINI => "Gemini".to_string(),
+        AGENT_TYPE_OPEN_CODE => "opencode".to_string(),
         AGENT_TYPE_UNKNOWN => "Unknown Agent".to_string(),
         "" => String::new(),
         other => other.to_string(),

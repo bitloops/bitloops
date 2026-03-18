@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::commands::enable::find_repo_root;
+use crate::engine::agent::{AgentAdapterRegistry, AgentReadinessStatus};
 use crate::engine::settings;
 
 mod agent_hooks;
@@ -22,7 +23,7 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini-cli|opencode)
+    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode)
     #[arg(long)]
     pub agent: Option<String>,
 
@@ -67,6 +68,19 @@ fn run_with_writer(
             writeln!(out, "Installed {count} {label} hook(s).")?;
         } else {
             writeln!(out, "{label} hooks are already initialized.")?;
+        }
+    }
+
+    let readiness = AgentAdapterRegistry::builtin().collect_readiness(&repo_root);
+    for selected in &selected_agents {
+        if let Some(report) = readiness.iter().find(|entry| entry.id == *selected)
+            && report.status == AgentReadinessStatus::NotReady
+        {
+            writeln!(out, "Readiness: {} is not ready.", report.display_name)?;
+            for failure in &report.failures {
+                writeln!(out, "  - {}: {}", failure.code, failure.message)?;
+            }
+            writeln!(out)?;
         }
     }
 

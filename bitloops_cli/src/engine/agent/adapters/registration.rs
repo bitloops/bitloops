@@ -1,0 +1,67 @@
+use anyhow::Result;
+use std::path::Path;
+
+use super::super::Agent;
+use super::types::AgentAdapterDescriptor;
+
+#[derive(Debug)]
+pub struct AgentAdapterRegistration {
+    descriptor: AgentAdapterDescriptor,
+    create_agent: fn() -> Box<dyn Agent + Send + Sync>,
+    detect_project_presence: fn(&Path) -> bool,
+    hooks_installed: fn(&Path) -> bool,
+    install_hooks: fn(&Path, bool, bool) -> Result<usize>,
+    uninstall_hooks: fn(&Path) -> Result<()>,
+    format_resume_command: fn(&str) -> String,
+}
+
+impl AgentAdapterRegistration {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        descriptor: AgentAdapterDescriptor,
+        create_agent: fn() -> Box<dyn Agent + Send + Sync>,
+        detect_project_presence: fn(&Path) -> bool,
+        hooks_installed: fn(&Path) -> bool,
+        install_hooks: fn(&Path, bool, bool) -> Result<usize>,
+        uninstall_hooks: fn(&Path) -> Result<()>,
+        format_resume_command: fn(&str) -> String,
+    ) -> Self {
+        Self {
+            descriptor,
+            create_agent,
+            detect_project_presence,
+            hooks_installed,
+            install_hooks,
+            uninstall_hooks,
+            format_resume_command,
+        }
+    }
+
+    pub fn descriptor(&self) -> &AgentAdapterDescriptor {
+        &self.descriptor
+    }
+
+    pub fn create_agent(&self) -> Box<dyn Agent + Send + Sync> {
+        (self.create_agent)()
+    }
+
+    pub fn is_project_detected(&self, repo_root: &Path) -> bool {
+        (self.detect_project_presence)(repo_root)
+    }
+
+    pub fn are_hooks_installed(&self, repo_root: &Path) -> bool {
+        (self.hooks_installed)(repo_root)
+    }
+
+    pub fn install_hooks(&self, repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
+        (self.install_hooks)(repo_root, local_dev, force)
+    }
+
+    pub fn uninstall_hooks(&self, repo_root: &Path) -> Result<()> {
+        (self.uninstall_hooks)(repo_root)
+    }
+
+    pub fn format_resume_command(&self, session_id: &str) -> String {
+        (self.format_resume_command)(session_id)
+    }
+}

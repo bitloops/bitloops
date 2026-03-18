@@ -14,11 +14,15 @@ struct MockAgent {
 
 impl MockAgent {
     fn named(name: &str) -> Self {
+        Self::named_with(name, false, Vec::new())
+    }
+
+    fn named_with(name: &str, detected: bool, dirs: Vec<&str>) -> Self {
         Self {
             name: name.to_string(),
             agent_type: MOCK_AGENT_TYPE.to_string(),
-            detected: false,
-            dirs: Vec::new(),
+            detected,
+            dirs: dirs.into_iter().map(|dir| dir.to_string()).collect(),
         }
     }
 }
@@ -44,73 +48,124 @@ impl Agent for MockAgent {
 #[test]
 #[allow(non_snake_case)]
 fn TestRegistryOperations() {
-    // Test: register and get an agent
-    {
-        let registry = AgentRegistry::new(vec![Box::new(MockAgent::named(MOCK_AGENT_NAME))]);
+    let cases = [
+        (
+            "registered agent lookup",
+            vec![Box::new(MockAgent::named(MOCK_AGENT_NAME)) as Box<dyn Agent + Send + Sync>],
+            MOCK_AGENT_NAME,
+            Some(MOCK_AGENT_NAME),
+        ),
+        (
+            "unknown agent lookup",
+            vec![Box::new(MockAgent::named(MOCK_AGENT_NAME)) as Box<dyn Agent + Send + Sync>],
+            "nonexistent-agent",
+            None,
+        ),
+        (
+            "sorted list",
+            vec![
+                Box::new(MockAgent::named("agent-b")) as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named("agent-a")) as Box<dyn Agent + Send + Sync>,
+            ],
+            "",
+            None,
+        ),
+    ];
 
-        let agent = registry
-            .get(MOCK_AGENT_NAME)
-            .expect("unexpected error retrieving registered agent");
-        assert_eq!(agent.name(), MOCK_AGENT_NAME);
-    }
+    for (name, agents, lookup_name, expected_name) in cases {
+        let registry = AgentRegistry::new(agents);
 
-    // Test: get unknown agent returns error
-    {
-        let registry = AgentRegistry::new(vec![Box::new(MockAgent::named(MOCK_AGENT_NAME))]);
-
-        let err = match registry.get("nonexistent-agent") {
-            Ok(_) => panic!("expected error for unknown agent"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("unknown agent"),
-            "error should mention unknown agent"
-        );
-    }
-
-    // Test: list is sorted
-    {
-        let registry = AgentRegistry::new(vec![
-            Box::new(MockAgent::named("agent-b")),
-            Box::new(MockAgent::named("agent-a")),
-        ]);
-
-        let names = registry.list();
-        assert_eq!(
-            names,
-            vec!["agent-a".to_string(), "agent-b".to_string()],
-            "list should be sorted"
-        );
+        match (name, expected_name) {
+            ("registered agent lookup", Some(expected_name)) => {
+                let agent = registry
+                    .get(lookup_name)
+                    .expect("unexpected error retrieving registered agent");
+                assert_eq!(agent.name(), expected_name);
+            }
+            ("unknown agent lookup", None) => {
+                let err = match registry.get(lookup_name) {
+                    Ok(_) => panic!("expected error for unknown agent"),
+                    Err(err) => err,
+                };
+                assert!(
+                    err.to_string().contains("unknown agent"),
+                    "error should mention unknown agent"
+                );
+            }
+            ("sorted list", None) => {
+                assert_eq!(
+                    registry.list(),
+                    vec!["agent-a".to_string(), "agent-b".to_string()],
+                    "list should be sorted"
+                );
+            }
+            _ => unreachable!("unexpected case wiring"),
+        }
     }
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestDetect() {
-    // Test: detect with no detected agents returns error
-    {
-        let registry = AgentRegistry::new(vec![Box::new(MockAgent::named("undetected"))]);
-        let err = match registry.detect() {
-            Ok(_) => panic!("expected no detected agent"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("no agent detected"),
-            "error should mention no agent detected"
-        );
-    }
+    let cases = [
+        (
+            "no detected agents",
+            vec![
+                Box::new(MockAgent::named("undetected")) as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named("also-undetected")) as Box<dyn Agent + Send + Sync>,
+            ],
+            None,
+            Some(r#"available: ["also-undetected", "undetected"]"#),
+        ),
+        (
+            "first detected agent follows sorted name order",
+            vec![
+                Box::new(MockAgent::named_with("zeta", true, vec![]))
+                    as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named_with("alpha", true, vec![]))
+                    as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named_with("middle", false, vec![]))
+                    as Box<dyn Agent + Send + Sync>,
+            ],
+            Some("alpha"),
+            None,
+        ),
+    ];
 
-    // Test: detect with a detected agent returns it
-    {
-        let registry = AgentRegistry::new(vec![Box::new(MockAgent {
-            name: "detectable".to_string(),
-            agent_type: MOCK_AGENT_TYPE.to_string(),
-            detected: true,
-            dirs: Vec::new(),
-        })]);
-
-        let agent = registry.detect().expect("expected a detected agent");
-        assert_eq!(agent.name(), "detectable");
+    for (name, agents, expected_detected, expected_error_fragment) in cases {
+        let registry = AgentRegistry::new(agents);
+        match expected_detected {
+            Some(expected_name) => {
+                let agent = registry.detect().expect("expected a detected agent");
+                assert_eq!(agent.name(), expected_name, "case {name} mismatch");
+                let detected_names = registry
+                    .detect_all()
+                    .into_iter()
+                    .map(|agent| agent.name())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    detected_names,
+                    vec![expected_name.to_string(), "zeta".to_string()],
+                    "case {name} should return detected agents in sorted order"
+                );
+            }
+            None => {
+                let err = match registry.detect() {
+                    Ok(_) => panic!("expected no detected agent"),
+                    Err(err) => err,
+                };
+                assert!(
+                    err.to_string().contains("no agent detected"),
+                    "error should mention no agent detected"
+                );
+                if let Some(fragment) = expected_error_fragment {
+                    assert!(
+                        err.to_string().contains(fragment),
+                        "case {name} should include the sorted available agents"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -134,84 +189,90 @@ fn TestDefaultAgentName() {
 #[test]
 #[allow(non_snake_case)]
 fn TestDefault() {
-    // Empty registry: default is None
-    {
-        let registry = AgentRegistry::new(vec![]);
-        let default = registry.default_agent();
-        assert!(
-            default.is_none(),
-            "default should be None when not registered"
-        );
-    }
+    let cases = [
+        (
+            "empty registry",
+            Vec::<Box<dyn Agent + Send + Sync>>::new(),
+            None,
+        ),
+        (
+            "default agent present",
+            vec![Box::new(MockAgent::named(DEFAULT_AGENT_NAME)) as Box<dyn Agent + Send + Sync>],
+            Some(DEFAULT_AGENT_NAME),
+        ),
+        (
+            "default agent not present",
+            vec![Box::new(MockAgent::named("other")) as Box<dyn Agent + Send + Sync>],
+            None,
+        ),
+    ];
 
-    // Registry with default agent: returns Some
-    {
-        let registry = AgentRegistry::new(vec![Box::new(MockAgent::named(DEFAULT_AGENT_NAME))]);
-        let default = registry.default_agent();
-        assert!(
-            default.is_some(),
-            "default should be Some after registering default"
-        );
+    for (name, agents, expected_default) in cases {
+        let registry = AgentRegistry::new(agents);
+        let default = registry.default_agent().map(|agent| agent.name());
+
+        match expected_default {
+            Some(expected_name) => {
+                assert_eq!(
+                    default,
+                    Some(expected_name.to_string()),
+                    "case {name} should resolve the default agent"
+                );
+            }
+            None => {
+                assert!(
+                    default.is_none(),
+                    "case {name} should not resolve a default agent"
+                );
+            }
+        }
     }
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestAllProtectedDirs() {
-    // Test: empty registry
-    {
-        let registry = AgentRegistry::new(vec![]);
-        let dirs = registry.all_protected_dirs();
-        assert!(dirs.is_empty(), "expected empty dirs for empty registry");
-    }
+    let cases = [
+        (
+            "empty registry",
+            Vec::<Box<dyn Agent + Send + Sync>>::new(),
+            Vec::<&str>::new(),
+        ),
+        (
+            "multiple agents with different dirs",
+            vec![
+                Box::new(MockAgent::named_with("agent-a", false, vec![".agent-a"]))
+                    as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named_with(
+                    "agent-b",
+                    false,
+                    vec![".agent-b", ".shared"],
+                )) as Box<dyn Agent + Send + Sync>,
+            ],
+            vec![".agent-a", ".agent-b", ".shared"],
+        ),
+        (
+            "duplicate dirs are deduplicated",
+            vec![
+                Box::new(MockAgent::named_with("agent-x", false, vec![".shared"]))
+                    as Box<dyn Agent + Send + Sync>,
+                Box::new(MockAgent::named_with("agent-y", false, vec![".shared"]))
+                    as Box<dyn Agent + Send + Sync>,
+            ],
+            vec![".shared"],
+        ),
+    ];
 
-    // Test: multiple agents with different dirs
-    {
-        let registry = AgentRegistry::new(vec![
-            Box::new(MockAgent {
-                name: "agent-a".to_string(),
-                agent_type: MOCK_AGENT_TYPE.to_string(),
-                detected: false,
-                dirs: vec![".agent-a".to_string()],
-            }),
-            Box::new(MockAgent {
-                name: "agent-b".to_string(),
-                agent_type: MOCK_AGENT_TYPE.to_string(),
-                detected: false,
-                dirs: vec![".agent-b".to_string(), ".shared".to_string()],
-            }),
-        ]);
-
+    for (name, agents, expected_dirs) in cases {
+        let registry = AgentRegistry::new(agents);
         let dirs = registry.all_protected_dirs();
         assert_eq!(
             dirs,
-            vec![
-                ".agent-a".to_string(),
-                ".agent-b".to_string(),
-                ".shared".to_string()
-            ],
-            "all_protected_dirs should return sorted union"
+            expected_dirs
+                .into_iter()
+                .map(|dir| dir.to_string())
+                .collect::<Vec<_>>(),
+            "case {name} mismatch"
         );
-    }
-
-    // Test: duplicate dirs are deduplicated
-    {
-        let registry = AgentRegistry::new(vec![
-            Box::new(MockAgent {
-                name: "agent-x".to_string(),
-                agent_type: MOCK_AGENT_TYPE.to_string(),
-                detected: false,
-                dirs: vec![".shared".to_string()],
-            }),
-            Box::new(MockAgent {
-                name: "agent-y".to_string(),
-                agent_type: MOCK_AGENT_TYPE.to_string(),
-                detected: false,
-                dirs: vec![".shared".to_string()],
-            }),
-        ]);
-
-        let dirs = registry.all_protected_dirs();
-        assert_eq!(dirs.len(), 1, "duplicate dirs should be deduplicated");
     }
 }

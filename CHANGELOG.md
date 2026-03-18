@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [0.0.10] - 2026-03-12
 
-- Added first-class Codex CLI support (current hook parity: `SessionStart` and `Stop`), including `bitloops init --agent codex`, lifecycle/runtime dispatch wiring, and managed Codex hook installation in `.codex/hooks.json` (Codex matcher format) with idempotent install/uninstall that preserves user-defined hook entries.
+- Added first-class Codex support (current hook parity: `SessionStart` and `Stop`), including `bitloops init --agent codex`, lifecycle/runtime dispatch wiring, and managed Codex hook installation in `.codex/hooks.json` (Codex matcher format) with idempotent install/uninstall that preserves user-defined hook entries.
 - Dashboard `/api/commits` now returns all checkpoint session agents via `checkpoint.agents` and no longer exposes a singular `checkpoint.agent` value.
 - Dashboard `/api/commits` now includes `checkpoint.first_prompt_preview` with the first 160 characters from the first prompt of the first checkpoint session, after stripping leading `<tag>...</tag>` blocks and trimming leading whitespace.
 - Dashboard agent filtering/aggregation now evaluates all session agents per checkpoint, so `/api/commits` agent filters, `/api/agents`, and KPI agent counts reflect multi-session checkpoints correctly.
