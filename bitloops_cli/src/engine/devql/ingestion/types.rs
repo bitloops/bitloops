@@ -10,6 +10,8 @@ struct IngestionCounters {
     semantic_feature_rows_skipped: usize,
     symbol_embedding_rows_upserted: usize,
     symbol_embedding_rows_skipped: usize,
+    symbol_clone_edges_upserted: usize,
+    symbol_clone_sources_scored: usize,
 }
 
 #[derive(Debug, Clone)]
