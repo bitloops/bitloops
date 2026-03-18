@@ -201,13 +201,6 @@ fn collect_js_ts_nodes_recursive(
     }
 }
 
-struct JsTsArtefactDescriptor<'a> {
-    language_kind: &'a str,
-    name: &'a str,
-    symbol_fqn: String,
-    parent_symbol_fqn: Option<String>,
-}
-
 fn push_js_ts_artefact(
     out: &mut Vec<JsTsArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
@@ -227,11 +220,7 @@ fn push_js_ts_artefact(
     }
 
     let start_line = node.start_position().row as i32 + 1;
-    if !seen.insert((
-        descriptor.language_kind.to_string(),
-        descriptor.name.to_string(),
-        start_line,
-    )) {
+    if !seen.insert((language_kind.to_string(), name.to_string(), start_line)) {
         return;
     }
 
@@ -244,11 +233,11 @@ fn push_js_ts_artefact(
         .to_string();
 
     out.push(JsTsArtefact {
-        canonical_kind: js_ts_canonical_kind(descriptor.language_kind).map(str::to_string),
-        language_kind: descriptor.language_kind.to_string(),
-        name: descriptor.name.to_string(),
-        symbol_fqn: descriptor.symbol_fqn,
-        parent_symbol_fqn: descriptor.parent_symbol_fqn,
+        canonical_kind: js_ts_canonical_kind(language_kind).map(str::to_string),
+        language_kind: language_kind.to_string(),
+        name: name.to_string(),
+        symbol_fqn,
+        parent_symbol_fqn,
         start_line,
         end_line: node.end_position().row as i32 + 1,
         start_byte: node.start_byte() as i32,
