@@ -443,6 +443,7 @@ edition = "2021"
 [dev-dependencies]
 proptest = "1"
 rstest = "0.24"
+rstest_reuse = "0.7"
 "#,
     );
 
@@ -490,7 +491,8 @@ pub fn documented_increment(value: u32) -> u32 {
 use std::path::PathBuf;
 
 use proptest::prelude::*;
-use rstest::{apply, rstest, template};
+use rstest::rstest;
+use rstest_reuse::{self, *};
 
 use crate::docs::documented_increment;
 use crate::numbers::{double, triple};

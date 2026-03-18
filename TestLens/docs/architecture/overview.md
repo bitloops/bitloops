@@ -60,8 +60,8 @@ flowchart TD
   subgraph write["Write Model / Ingestion"]
     init["testlens init<br/>src/db/mod.rs<br/>init_database()"]
     prod["testlens ingest-production-artefacts<br/>src/app/commands/ingest_production_artefacts.rs<br/>Tree-sitter TS + Rust production symbols"]
-    tests["testlens ingest-tests<br/>src/app/commands/ingest_tests.rs<br/>RustTestAdapter priority 0<br/>TypeScriptTestAdapter priority 1"]
-    testsdetail["Static linkage internals<br/>collect_rust_import_paths()<br/>collect_rust_scoped_call_import_paths()<br/>collect_typescript_import_paths()<br/>collect_rust_suites() / collect_typescript_suites()<br/>match_called_production_artefacts()"]
+    tests["testlens ingest-tests<br/>src/app/commands/ingest_tests.rs<br/>thin command handler"]
+    testsdetail["Structural mapping subsystem<br/>src/app/test_mapping/<br/>registry + shared IR + linker + materializer<br/>languages/rust + languages/typescript"]
     coverage["testlens ingest-coverage<br/>src/app/commands/ingest_coverage.rs<br/>parse_lcov_report()<br/>rebuild_classifications_from_coverage()"]
     results["testlens ingest-results<br/>src/app/commands/ingest_results.rs<br/>build_scenario_map()<br/>test_runs upsert"]
     prod --> tests
@@ -198,13 +198,14 @@ flowchart TD
 - `src/db/schema.rs` is the architectural spine. All commands materialize or read the same commit-addressed SQLite model.
 - `src/app.rs` acts as dispatcher only.
 - `src/domain/mod.rs` holds the shared write-side records passed between handlers and repositories. They are persistence-boundary domain objects, not a full aggregate model.
-- `src/app/commands/ingest_tests.rs` is intentionally Rust-first today. `RustTestAdapter` is registered before `TypeScriptTestAdapter`, with lower priority, so the adapter model stays open for more languages while keeping Rust as the primary target.
-- `testlens ingest-tests` in `src/app/commands/ingest_tests.rs` is responsible for two separate milestones: `Test Artefact Discovered` and `Static Test Link Established`.
+- `src/app/commands/ingest_tests.rs` is now a thin write-side entrypoint. The structural mapping implementation lives in `src/app/test_mapping/`, where a compile-time provider registry coordinates Rust-first and TypeScript providers behind a shared structural IR, linker, and materializer.
+- `src/app/test_mapping/languages/rust/` and `src/app/test_mapping/languages/typescript.rs` keep language-specific parsing local while the shared linker in `src/app/test_mapping/linker.rs` owns cross-language `test_scenario -> production_artefact` resolution.
+- `testlens ingest-tests` is still responsible for two separate milestones: `Test Artefact Discovered` and `Static Test Link Established`, but those are now materialized through the `src/app/test_mapping/` subsystem instead of one monolithic command file.
 - `testlens ingest-coverage` in `src/app/commands/ingest_coverage.rs` depends on static links already written by `testlens ingest-tests`, because coverage rows are attached through `test_links`; it also derives `Test Classification Derived`.
 - `testlens ingest-results` in `src/app/commands/ingest_results.rs` materializes the `Test Run Ingested` milestone into `test_runs`.
 - `src/repository/mod.rs` now carries both the write-side and query-side repository traits.
 - `src/repository/sqlite.rs` owns the SQLite infra details for both sides: SQL, transactions, and row mapping. Neither handlers nor `src/read/*` should import `rusqlite`.
 - `src/read/query_test_harness.rs` composes the query response from repository-returned records instead of reaching into SQLite directly.
 - Acceptance tests now live under `tests/e2e/`, with `tests/e2e.rs` as the integration harness and `tests/e2e/support/` for shared helpers.
-- Unit tests stay co-located inline in the implementation module files under `src/*.rs`.
+- Unit tests stay under `src/`, either inline in module files or in local subsystem test modules such as `src/app/test_mapping/tests.rs`.
 - `features/cli_1345.feature`, `features/cli_1346.feature`, and `features/rust_quickstart_e2e.feature` are the current executable architecture contract for discovery, static linkage, and Rust quickstart acceptance behavior.

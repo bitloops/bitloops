@@ -5,6 +5,7 @@ use crate::cli::{Cli, Commands};
 
 pub mod commands;
 pub mod queries;
+pub mod test_mapping;
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
