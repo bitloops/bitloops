@@ -1,5 +1,7 @@
 # Agent Adapter Family/Profile Playbook
 
+For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-playbook.md`.
+
 ## Purpose
 
 This guide explains when to add a **protocol family**, when to add a **target profile**, and when to add both.

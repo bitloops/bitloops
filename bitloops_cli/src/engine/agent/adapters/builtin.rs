@@ -6,8 +6,8 @@ use super::super::{
 use super::registration::AgentAdapterRegistration;
 use super::types::{
     AgentAdapterCapability, AgentAdapterCompatibility, AgentAdapterDescriptor,
-    AgentAdapterRuntimeCompatibility, AgentConfigSchema, AgentProtocolFamilyDescriptor,
-    AgentTargetProfileDescriptor,
+    AgentAdapterPackageDescriptor, AgentAdapterRuntimeCompatibility, AgentConfigSchema,
+    AgentProtocolFamilyDescriptor, AgentTargetProfileDescriptor,
 };
 use crate::engine::agent::claude_code::agent::ClaudeCodeAgent;
 use crate::engine::agent::claude_code::hooks as claude_hooks;
@@ -102,6 +102,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     &[],
                     BASE_CAPABILITIES,
                 ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_NAME_CLAUDE_CODE,
+                    "Claude Code",
+                ),
                 config_schema: AgentConfigSchema::empty("adapter.claude-code"),
             },
             || Box::new(ClaudeCodeAgent),
@@ -128,6 +132,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     PROTOCOL_FAMILY_JSON_EVENT,
                     &["copilot", "copilot-cli", "github-copilot"],
                     ANALYTICS_CAPABILITIES,
+                ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_NAME_COPILOT,
+                    "Copilot",
                 ),
                 config_schema: AgentConfigSchema::empty("adapter.copilot"),
             },
@@ -164,6 +172,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     &[],
                     BASE_CAPABILITIES,
                 ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_NAME_CODEX,
+                    "Codex",
+                ),
                 config_schema: AgentConfigSchema::empty("adapter.codex"),
             },
             || Box::new(CodexAgent),
@@ -197,6 +209,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     &[],
                     BASE_CAPABILITIES,
                 ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_NAME_CURSOR,
+                    "Cursor",
+                ),
                 config_schema: AgentConfigSchema::empty("adapter.cursor"),
             },
             || Box::new(CursorAgent),
@@ -226,6 +242,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     &[AGENT_NAME_GEMINI],
                     ANALYTICS_CAPABILITIES,
                 ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_TYPE_GEMINI,
+                    "Gemini",
+                ),
                 config_schema: AgentConfigSchema::empty("adapter.gemini"),
             },
             || Box::new(GeminiCliAgent),
@@ -254,6 +274,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     PROTOCOL_FAMILY_JSONL_CLI,
                     &["open-code"],
                     BASE_CAPABILITIES,
+                ),
+                package: AgentAdapterPackageDescriptor::first_party_linked(
+                    AGENT_NAME_OPEN_CODE,
+                    "OpenCode",
                 ),
                 config_schema: AgentConfigSchema::empty("adapter.opencode"),
             },

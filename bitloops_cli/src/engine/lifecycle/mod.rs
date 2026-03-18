@@ -6,8 +6,13 @@ use std::io::Read;
 use std::path::Path;
 use uuid::Uuid;
 
-use crate::engine::agent::TranscriptPositionProvider;
-use crate::engine::agent::canonical::CanonicalInvocationRequest;
+use crate::engine::agent::canonical::{
+    CanonicalContractCompatibility, CanonicalInvocationRequest, CanonicalProgressUpdate,
+    CanonicalResumableSession,
+};
+use crate::engine::agent::{
+    AgentAdapterCapability, AgentAdapterRegistry, TranscriptPositionProvider,
+};
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
@@ -126,8 +131,7 @@ pub fn handle_lifecycle_session_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    let canonical_request =
-        CanonicalInvocationRequest::for_lifecycle_event(agent.agent_name(), event)?;
+    let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
@@ -172,8 +176,7 @@ pub fn handle_lifecycle_turn_start(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    let canonical_request =
-        CanonicalInvocationRequest::for_lifecycle_event(agent.agent_name(), event)?;
+    let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
     let session_id = apply_session_id_policy(
         &canonical_request.session.session_id,
         SessionIdPolicy::Strict,
@@ -420,6 +423,10 @@ pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    if !event.session_id.is_empty() {
+        let _canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
+    }
+
     if event.session_ref.is_empty() {
         return Err(anyhow!("transcript file not specified"));
     }
@@ -756,6 +763,56 @@ fn truncate_prompt_for_storage(prompt: &str) -> String {
         100,
         "",
     )
+}
+
+fn build_phase3_canonical_request(
+    agent_name: &str,
+    event: &LifecycleEvent,
+) -> Result<CanonicalInvocationRequest> {
+    let request = CanonicalInvocationRequest::for_lifecycle_event(agent_name, event)?;
+    Ok(enrich_phase3_canonical_request(request))
+}
+
+fn enrich_phase3_canonical_request(
+    request: CanonicalInvocationRequest,
+) -> CanonicalInvocationRequest {
+    let Ok(resolved) =
+        AgentAdapterRegistry::builtin().resolve_with_trace(&request.agent.agent_key, None)
+    else {
+        return request;
+    };
+
+    let descriptor = resolved.registration.descriptor();
+    let supports_richer_contract = descriptor
+        .capabilities
+        .contains(&AgentAdapterCapability::TranscriptAnalysis)
+        || descriptor
+            .capabilities
+            .contains(&AgentAdapterCapability::TokenCalculation);
+
+    if !supports_richer_contract {
+        return request.with_compatibility(CanonicalContractCompatibility::simple());
+    }
+
+    let session_id = request.session.session_id.clone();
+    let session_ref = request.session.session_ref.clone().unwrap_or_default();
+    let resumable_session = CanonicalResumableSession::new(request.session.clone())
+        .with_checkpoint(session_ref)
+        .with_resume_token(session_id.as_str())
+        .with_note(format!(
+            "{}:{}",
+            descriptor.protocol_family.id, descriptor.target_profile.id
+        ))
+        .mark_resumable();
+
+    request
+        .with_compatibility(CanonicalContractCompatibility::rich())
+        .with_progress(
+            CanonicalProgressUpdate::new()
+                .with_label(descriptor.display_name)
+                .with_message("rich canonical lifecycle semantics enabled"),
+        )
+        .with_resumable_session(resumable_session)
 }
 
 fn collect_untracked_files_for_lifecycle(repo_root: &Path) -> Vec<String> {

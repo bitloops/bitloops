@@ -23,6 +23,9 @@ use super::{
     handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
+use crate::engine::agent::canonical::{
+    CanonicalContractCompatibility, CanonicalResumableSessionState,
+};
 
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
@@ -55,6 +58,48 @@ fn test_apply_session_id_policy_strict_rejects_empty() {
 fn test_apply_session_id_policy_turn_end_fallback_uses_unknown() {
     let session_id = apply_session_id_policy("", SessionIdPolicy::FallbackUnknown).expect("policy");
     assert_eq!(session_id, UNKNOWN_SESSION_ID);
+}
+
+#[test]
+fn test_phase3_canonical_request_enriches_rich_builtin_agents() {
+    let mut event = sample_event(LifecycleEventType::TurnStart);
+    event.session_id = String::from("gemini-session");
+    event.session_ref = String::from("/tmp/gemini-session.jsonl");
+    event.prompt = String::from("rich lifecycle path");
+
+    let request = super::build_phase3_canonical_request("Gemini", &event).expect("request");
+    assert_eq!(request.agent.agent_key, "gemini");
+    assert_eq!(
+        request.compatibility,
+        CanonicalContractCompatibility::rich()
+    );
+    assert!(request.progress.is_some());
+    let resumable = request
+        .resumable_session
+        .as_ref()
+        .expect("resumable session");
+    assert_eq!(resumable.state, CanonicalResumableSessionState::Resumable);
+    assert_eq!(
+        resumable.checkpoint.as_deref(),
+        Some("/tmp/gemini-session.jsonl")
+    );
+}
+
+#[test]
+fn test_phase3_canonical_request_collapses_simple_builtin_agents() {
+    let mut event = sample_event(LifecycleEventType::TurnStart);
+    event.session_id = String::from("claude-session");
+    event.session_ref = String::from("/tmp/claude-session.jsonl");
+    event.prompt = String::from("simple lifecycle path");
+
+    let request = super::build_phase3_canonical_request("Claude Code", &event).expect("request");
+    assert_eq!(request.agent.agent_key, "claude-code");
+    assert_eq!(
+        request.compatibility,
+        CanonicalContractCompatibility::default()
+    );
+    assert!(request.progress.is_none());
+    assert!(request.resumable_session.is_none());
 }
 
 fn setup_git_repo(dir: &tempfile::TempDir) {

@@ -1,5 +1,7 @@
 # Protocol Family vs Target Profile Playbook
 
+For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-playbook.md`.
+
 This playbook explains when to add a new **protocol family**, when to add a new **target profile**, and when to add both.
 
 ## Core model

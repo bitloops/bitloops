@@ -1,10 +1,16 @@
 use super::super::adapters::{
-    AgentAdapterConfiguration, AgentAdapterRegistry, AgentReadinessStatus,
+    AgentAdapterConfiguration, AgentAdapterPackageBoundary, AgentAdapterPackageCompatibility,
+    AgentAdapterPackageDescriptor, AgentAdapterPackageDiscoveryStatus,
+    AgentAdapterPackageLifecycle, AgentAdapterPackageLifecyclePhase,
+    AgentAdapterPackageMetadataVersion, AgentAdapterPackageResponsibility,
+    AgentAdapterPackageSource, AgentAdapterPackageTrustModel, AgentAdapterRegistry,
+    AgentReadinessStatus,
 };
 use super::fixtures::{
     ALIAS_ALPHA, ALIAS_BETA, ALPHA_CALLBACKS, ALPHA_REQUIRED_SCHEMA, BETA_CALLBACKS, EMPTY_SCHEMA,
     LOCAL_RUNTIME, NO_ALIASES, PROFILE_ALPHA_ALIASES, PROFILE_BETA_ALIASES, REMOTE_ONLY_RUNTIME,
-    SHARED_ALIAS, make_registration, test_family, test_profile,
+    SHARED_ALIAS, make_registration, make_registration_with_package, test_family, test_package,
+    test_profile,
 };
 
 #[test]
@@ -217,6 +223,253 @@ fn TestAgentAdapterRegistryRejectsInvalidRegistrations() {
             || runtime_text.contains("incompatible with host runtime"),
         "unexpected runtime mismatch text: {runtime_text}"
     );
+
+    let package_mismatch = match AgentAdapterRegistry::new(vec![make_registration_with_package(
+        "alpha",
+        "Alpha",
+        "alpha-type",
+        NO_ALIASES,
+        true,
+        ALPHA_CALLBACKS,
+        test_family("family-a", "test.family.a", LOCAL_RUNTIME),
+        test_profile(
+            "profile-alpha",
+            "family-a",
+            NO_ALIASES,
+            EMPTY_SCHEMA,
+            LOCAL_RUNTIME,
+        ),
+        LOCAL_RUNTIME,
+        test_package("alpha-package", "Alpha"),
+    )]) {
+        Ok(_) => panic!("expected package mismatch"),
+        Err(err) => err,
+    };
+    assert!(
+        package_mismatch
+            .to_string()
+            .contains("is linked to package alpha-package but expected alpha")
+    );
+
+    let missing_compatibility_claims =
+        match AgentAdapterRegistry::new(vec![make_registration_with_package(
+            "alpha",
+            "Alpha",
+            "alpha-type",
+            NO_ALIASES,
+            true,
+            ALPHA_CALLBACKS,
+            test_family("family-a", "test.family.a", LOCAL_RUNTIME),
+            test_profile(
+                "profile-alpha",
+                "family-a",
+                NO_ALIASES,
+                EMPTY_SCHEMA,
+                LOCAL_RUNTIME,
+            ),
+            LOCAL_RUNTIME,
+            AgentAdapterPackageDescriptor {
+                id: "alpha",
+                display_name: "Alpha",
+                version: "1.0.0",
+                metadata_version: AgentAdapterPackageMetadataVersion::current(),
+                source: AgentAdapterPackageSource::Manifest,
+                trust_model: AgentAdapterPackageTrustModel::HostVerifiedManifest,
+                boundary: AgentAdapterPackageBoundary::first_party_linked(),
+                lifecycle: AgentAdapterPackageLifecycle::default(),
+                compatibility: AgentAdapterPackageCompatibility::phase1(),
+            },
+        )]) {
+            Ok(_) => panic!("expected package trust validation failure"),
+            Err(err) => err,
+        };
+    assert!(
+        missing_compatibility_claims
+            .to_string()
+            .contains("must expose package compatibility claims")
+    );
+
+    let invalid_lifecycle = match AgentAdapterRegistry::new(vec![make_registration_with_package(
+        "alpha",
+        "Alpha",
+        "alpha-type",
+        NO_ALIASES,
+        true,
+        ALPHA_CALLBACKS,
+        test_family("family-a", "test.family.a", LOCAL_RUNTIME),
+        test_profile(
+            "profile-alpha",
+            "family-a",
+            NO_ALIASES,
+            EMPTY_SCHEMA,
+            LOCAL_RUNTIME,
+        ),
+        LOCAL_RUNTIME,
+        AgentAdapterPackageDescriptor {
+            id: "alpha",
+            display_name: "Alpha",
+            version: "1.0.0",
+            metadata_version: AgentAdapterPackageMetadataVersion::current(),
+            source: AgentAdapterPackageSource::FirstPartyLinked,
+            trust_model: AgentAdapterPackageTrustModel::FirstPartyLinked,
+            boundary: AgentAdapterPackageBoundary {
+                host_owned_responsibilities: &[
+                    AgentAdapterPackageResponsibility::HostResolution,
+                    AgentAdapterPackageResponsibility::HostValidation,
+                    AgentAdapterPackageResponsibility::HostLifecycleControl,
+                    AgentAdapterPackageResponsibility::HostAudit,
+                ],
+                package_owned_responsibilities: &[
+                    AgentAdapterPackageResponsibility::PackageIdentity,
+                    AgentAdapterPackageResponsibility::PackageManifest,
+                    AgentAdapterPackageResponsibility::PackageVersioning,
+                    AgentAdapterPackageResponsibility::PackageEntrypoint,
+                    AgentAdapterPackageResponsibility::PackageTargetBehaviour,
+                ],
+            },
+            lifecycle: AgentAdapterPackageLifecycle {
+                phases: &[
+                    AgentAdapterPackageLifecyclePhase::Discovered,
+                    AgentAdapterPackageLifecyclePhase::Validated,
+                ],
+                host_controls_activation: true,
+                host_controls_unload: true,
+            },
+            compatibility: AgentAdapterPackageCompatibility::phase1(),
+        },
+    )]) {
+        Ok(_) => panic!("expected lifecycle validation failure"),
+        Err(err) => err,
+    };
+    assert!(
+        invalid_lifecycle
+            .to_string()
+            .contains("unsupported lifecycle phases")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestAgentAdapterRegistryDiscoversPackageMetadataForLinkedAndManifestPackages() {
+    let registry = AgentAdapterRegistry::new(vec![
+        make_registration(
+            "alpha",
+            "Alpha",
+            "alpha-type",
+            ALIAS_ALPHA,
+            true,
+            ALPHA_CALLBACKS,
+            test_family("family-a", "test.family.a", LOCAL_RUNTIME),
+            test_profile(
+                "profile-alpha",
+                "family-a",
+                PROFILE_ALPHA_ALIASES,
+                EMPTY_SCHEMA,
+                LOCAL_RUNTIME,
+            ),
+            LOCAL_RUNTIME,
+        ),
+        make_registration_with_package(
+            "beta",
+            "Beta",
+            "beta-type",
+            ALIAS_BETA,
+            false,
+            BETA_CALLBACKS,
+            test_family("family-b", "test.family.b", LOCAL_RUNTIME),
+            test_profile(
+                "profile-beta",
+                "family-b",
+                PROFILE_BETA_ALIASES,
+                EMPTY_SCHEMA,
+                LOCAL_RUNTIME,
+            ),
+            LOCAL_RUNTIME,
+            AgentAdapterPackageDescriptor {
+                id: "beta",
+                display_name: "Beta",
+                version: "2.1.0",
+                metadata_version: AgentAdapterPackageMetadataVersion::current(),
+                source: AgentAdapterPackageSource::Manifest,
+                trust_model: AgentAdapterPackageTrustModel::HostVerifiedManifest,
+                boundary: AgentAdapterPackageBoundary::host_verified_manifest(),
+                lifecycle: AgentAdapterPackageLifecycle::default(),
+                compatibility: AgentAdapterPackageCompatibility::phase1(),
+            },
+        ),
+    ])
+    .expect("registry");
+
+    let reports = registry.discover_packages();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].adapter_id, "alpha");
+    assert_eq!(reports[0].package_id, "alpha");
+    assert_eq!(
+        reports[0].metadata_version,
+        AgentAdapterPackageMetadataVersion::current()
+    );
+    assert_eq!(
+        reports[0].source,
+        AgentAdapterPackageSource::FirstPartyLinked
+    );
+    assert_eq!(reports[0].status, AgentAdapterPackageDiscoveryStatus::Ready);
+    assert_eq!(reports[0].diagnostics.len(), 0);
+
+    assert_eq!(reports[1].adapter_id, "beta");
+    assert_eq!(reports[1].package_id, "beta");
+    assert_eq!(
+        reports[1].metadata_version,
+        AgentAdapterPackageMetadataVersion::current()
+    );
+    assert_eq!(reports[1].source, AgentAdapterPackageSource::Manifest);
+    assert_eq!(
+        reports[1].trust_model,
+        AgentAdapterPackageTrustModel::HostVerifiedManifest
+    );
+    assert_eq!(reports[1].status, AgentAdapterPackageDiscoveryStatus::Ready);
+    assert_eq!(reports[1].diagnostics.len(), 0);
+
+    assert_eq!(registry.validate_package_metadata().len(), 2);
+    assert_eq!(registry.package_discovery_reports().len(), 2);
+    assert_eq!(registry.package_validation_reports().len(), 2);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestAgentAdapterPackageValidationReportsInvalidMetadataDeterministically() {
+    let package = AgentAdapterPackageDescriptor {
+        id: "alpha",
+        display_name: "Alpha",
+        version: "not-a-version",
+        metadata_version: AgentAdapterPackageMetadataVersion::new(2),
+        source: AgentAdapterPackageSource::Manifest,
+        trust_model: AgentAdapterPackageTrustModel::FirstPartyLinked,
+        boundary: AgentAdapterPackageBoundary::first_party_linked(),
+        lifecycle: AgentAdapterPackageLifecycle::default(),
+        compatibility: AgentAdapterPackageCompatibility::phase1(),
+    };
+
+    let diagnostics = package.validation_diagnostics("package", "alpha");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "invalid_package_version"
+            && diagnostic.field.as_deref() == Some("version")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "unsupported_metadata_version"
+            && diagnostic.field.as_deref() == Some("metadata_version")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "package_source_mismatch"
+            && diagnostic.field.as_deref() == Some("source")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "package_trust_mismatch"
+            && diagnostic.field.as_deref() == Some("trust_model")
+    }));
+    assert_eq!(
+        package.discovery_report("package", "alpha").status,
+        AgentAdapterPackageDiscoveryStatus::Invalid
+    );
 }
 
 #[test]
@@ -304,6 +557,9 @@ fn TestAgentAdapterRegistryResolvesAliasesAndCollectsReadiness() {
     assert!(readiness[0].compatibility_ok);
     assert!(readiness[0].config_valid);
     assert_eq!(readiness[0].status, AgentReadinessStatus::Ready);
+    assert_eq!(readiness[0].package_id, "alpha");
+    assert_eq!(readiness[0].package_version, "1.0.0");
+    assert_eq!(readiness[0].package_trust_model, "first-party-linked");
     assert_eq!(readiness[0].protocol_family, "family-a");
     assert_eq!(readiness[0].target_profile, "profile-alpha");
 
@@ -459,6 +715,9 @@ fn TestAgentAdapterRegistryResolveWithTraceIncludesCorrelationMetadata() {
 
     assert_eq!(resolution.registration.descriptor().id, "alpha");
     assert_eq!(resolution.trace.correlation_id, "corr-123");
+    assert_eq!(resolution.trace.package_id, "alpha");
+    assert_eq!(resolution.trace.package_version, "1.0.0");
+    assert_eq!(resolution.trace.package_trust_model, "first-party-linked");
     assert_eq!(resolution.trace.protocol_family, "family-a");
     assert_eq!(resolution.trace.target_profile, "profile-alpha");
     assert_eq!(resolution.trace.resolution_path, "legacy-target-compat");
@@ -467,6 +726,9 @@ fn TestAgentAdapterRegistryResolveWithTraceIncludesCorrelationMetadata() {
     let observations = registry.registration_observability();
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].adapter_id, "alpha");
+    assert_eq!(observations[0].package_id, "alpha");
+    assert_eq!(observations[0].package_version, "1.0.0");
+    assert_eq!(observations[0].package_trust_model, "first-party-linked");
     assert_eq!(observations[0].protocol_family, "family-a");
     assert_eq!(observations[0].target_profile, "profile-alpha");
 }

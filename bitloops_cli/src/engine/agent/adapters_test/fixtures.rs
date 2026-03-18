@@ -4,9 +4,9 @@ use std::path::Path;
 use super::super::Agent;
 use super::super::adapters::{
     AgentAdapterCapability, AgentAdapterCompatibility, AgentAdapterDescriptor,
-    AgentAdapterRegistration, AgentAdapterRuntime, AgentAdapterRuntimeCompatibility,
-    AgentConfigField, AgentConfigSchema, AgentConfigValueKind, AgentProtocolFamilyDescriptor,
-    AgentTargetProfileDescriptor,
+    AgentAdapterPackageDescriptor, AgentAdapterRegistration, AgentAdapterRuntime,
+    AgentAdapterRuntimeCompatibility, AgentConfigField, AgentConfigSchema, AgentConfigValueKind,
+    AgentProtocolFamilyDescriptor, AgentTargetProfileDescriptor,
 };
 
 pub(super) const NO_ALIASES: &[&str] = &[];
@@ -172,8 +172,15 @@ pub(super) fn test_profile(
     }
 }
 
+pub(super) fn test_package(
+    package_id: &'static str,
+    display_name: &'static str,
+) -> AgentAdapterPackageDescriptor {
+    AgentAdapterPackageDescriptor::first_party_linked(package_id, display_name)
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(super) fn make_registration(
+pub(super) fn make_registration_with_package(
     id: &'static str,
     display_name: &'static str,
     agent_type: &'static str,
@@ -183,6 +190,7 @@ pub(super) fn make_registration(
     family: AgentProtocolFamilyDescriptor,
     profile: AgentTargetProfileDescriptor,
     runtime: AgentAdapterRuntimeCompatibility,
+    package: AgentAdapterPackageDescriptor,
 ) -> AgentAdapterRegistration {
     AgentAdapterRegistration::new(
         AgentAdapterDescriptor {
@@ -197,6 +205,7 @@ pub(super) fn make_registration(
             config_schema: EMPTY_SCHEMA,
             protocol_family: family,
             target_profile: profile,
+            package,
         },
         callbacks.create_agent,
         callbacks.detect_project_presence,
@@ -204,5 +213,31 @@ pub(super) fn make_registration(
         install_noop,
         uninstall_noop,
         callbacks.format_resume_command,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn make_registration(
+    id: &'static str,
+    display_name: &'static str,
+    agent_type: &'static str,
+    aliases: &'static [&'static str],
+    is_default: bool,
+    callbacks: AdapterCallbacks,
+    family: AgentProtocolFamilyDescriptor,
+    profile: AgentTargetProfileDescriptor,
+    runtime: AgentAdapterRuntimeCompatibility,
+) -> AgentAdapterRegistration {
+    make_registration_with_package(
+        id,
+        display_name,
+        agent_type,
+        aliases,
+        is_default,
+        callbacks,
+        family,
+        profile,
+        runtime,
+        test_package(id, display_name),
     )
 }

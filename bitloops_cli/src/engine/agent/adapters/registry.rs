@@ -7,10 +7,10 @@ use uuid::Uuid;
 use super::builtin::builtin_registrations;
 use super::registration::AgentAdapterRegistration;
 use super::types::{
-    AgentAdapterConfiguration, AgentAdapterReadiness, AgentAdapterRuntime,
-    AgentProtocolFamilyDescriptor, AgentReadinessFailure, AgentReadinessStatus,
-    AgentRegistrationObservation, AgentResolutionTrace, AgentResolvedRegistration,
-    AgentTargetProfileDescriptor, AliasResolutionSource, normalise_key,
+    AgentAdapterConfiguration, AgentAdapterPackageDiscovery, AgentAdapterReadiness,
+    AgentAdapterRuntime, AgentProtocolFamilyDescriptor, AgentReadinessFailure,
+    AgentReadinessStatus, AgentRegistrationObservation, AgentResolutionTrace,
+    AgentResolvedRegistration, AgentTargetProfileDescriptor, AliasResolutionSource, normalise_key,
 };
 
 pub struct AgentAdapterRegistry {
@@ -49,6 +49,15 @@ impl AgentAdapterRegistry {
             descriptor.compatibility.validate(&id, "adapter")?;
             descriptor.runtime.validate(&id, "adapter")?;
             descriptor.config_schema.validate_shape("adapter", &id)?;
+            descriptor.package.validate("package", &id)?;
+
+            if descriptor.package.display_name.trim() != descriptor.display_name.trim() {
+                bail!(
+                    "package {} must share the adapter display name {}",
+                    descriptor.package.id,
+                    descriptor.display_name,
+                );
+            }
 
             let agent_type = normalise_key(descriptor.agent_type)?;
             if !used_agent_types.insert(agent_type.clone()) {
@@ -224,6 +233,32 @@ impl AgentAdapterRegistry {
         ids
     }
 
+    pub fn discover_packages(&self) -> Vec<AgentAdapterPackageDiscovery> {
+        self.ordered_ids
+            .iter()
+            .filter_map(|id| {
+                self.registrations.get(id).map(|registration| {
+                    registration
+                        .descriptor()
+                        .package
+                        .discovery_report("package", registration.descriptor().id)
+                })
+            })
+            .collect()
+    }
+
+    pub fn validate_package_metadata(&self) -> Vec<AgentAdapterPackageDiscovery> {
+        self.discover_packages()
+    }
+
+    pub fn package_discovery_reports(&self) -> Vec<AgentAdapterPackageDiscovery> {
+        self.discover_packages()
+    }
+
+    pub fn package_validation_reports(&self) -> Vec<AgentAdapterPackageDiscovery> {
+        self.discover_packages()
+    }
+
     pub fn protocol_families(&self) -> Vec<AgentProtocolFamilyDescriptor> {
         let mut families = self.families.values().cloned().collect::<Vec<_>>();
         families.sort_by(|left, right| left.id.cmp(right.id));
@@ -358,6 +393,11 @@ impl AgentAdapterRegistry {
             correlation_id,
             requested: value.trim().to_string(),
             resolved_adapter_id: descriptor.id.to_string(),
+            package_id: descriptor.package.id.to_string(),
+            package_metadata_version: descriptor.package.metadata_version.value(),
+            package_version: descriptor.package.version.to_string(),
+            package_source: descriptor.package.source.as_str().to_string(),
+            package_trust_model: descriptor.package.trust_model.as_str().to_string(),
             protocol_family: descriptor.protocol_family.id.to_string(),
             target_profile: descriptor.target_profile.id.to_string(),
             runtime: AgentAdapterRuntime::LocalCli.as_str().to_string(),
@@ -366,6 +406,12 @@ impl AgentAdapterRegistry {
             diagnostics: vec![
                 format!("normalized_input={key}"),
                 format!("resolution_source={}", source.as_str()),
+                format!("package_id={}", descriptor.package.id),
+                format!("package_version={}", descriptor.package.version),
+                format!(
+                    "package_trust_model={}",
+                    descriptor.package.trust_model.as_str()
+                ),
                 format!("protocol_family={}", descriptor.protocol_family.id),
                 format!("target_profile={}", descriptor.target_profile.id),
             ],
@@ -585,6 +631,11 @@ impl AgentAdapterRegistry {
                 AgentAdapterReadiness {
                     id: descriptor.id.to_string(),
                     display_name: descriptor.display_name.to_string(),
+                    package_id: descriptor.package.id.to_string(),
+                    package_metadata_version: descriptor.package.metadata_version.value(),
+                    package_version: descriptor.package.version.to_string(),
+                    package_source: descriptor.package.source.as_str().to_string(),
+                    package_trust_model: descriptor.package.trust_model.as_str().to_string(),
                     protocol_family: descriptor.protocol_family.id.to_string(),
                     target_profile: descriptor.target_profile.id.to_string(),
                     runtime: AgentAdapterRuntime::LocalCli.as_str().to_string(),
@@ -608,6 +659,11 @@ impl AgentAdapterRegistry {
                 AgentRegistrationObservation {
                     id: descriptor.id.to_string(),
                     adapter_id: descriptor.id.to_string(),
+                    package_id: descriptor.package.id.to_string(),
+                    package_metadata_version: descriptor.package.metadata_version.value(),
+                    package_version: descriptor.package.version.to_string(),
+                    package_source: descriptor.package.source.as_str().to_string(),
+                    package_trust_model: descriptor.package.trust_model.as_str().to_string(),
                     protocol_family: descriptor.protocol_family.id.to_string(),
                     target_profile: descriptor.target_profile.id.to_string(),
                     runtime: AgentAdapterRuntime::LocalCli.as_str().to_string(),
@@ -629,9 +685,16 @@ impl AgentAdapterRegistry {
         let descriptor = registration.descriptor();
 
         descriptor
+            .package
+            .validate("package", descriptor.package.id)?;
+        descriptor
             .compatibility
             .validate(descriptor.id, "adapter")?;
         descriptor.runtime.validate(descriptor.id, "adapter")?;
+        descriptor
+            .package
+            .compatibility
+            .validate("package", descriptor.package.id)?;
         descriptor
             .protocol_family
             .compatibility
