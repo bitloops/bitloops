@@ -123,6 +123,7 @@ path: {path}\n\
 symbol_fqn: {symbol_fqn}\n\
 name: {name}\n\
 signature: {signature}\n\
+modifiers: {modifiers}\n\
 docstring: {docstring}\n\
 parent_kind: {parent_kind}\n\
 body:\n{body}",
@@ -133,6 +134,7 @@ body:\n{body}",
         symbol_fqn = input.symbol_fqn,
         name = input.name,
         signature = input.signature.as_deref().unwrap_or(""),
+        modifiers = input.modifiers.join(", "),
         docstring = input.docstring.as_deref().unwrap_or(""),
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
         body = body,
@@ -411,6 +413,7 @@ mod tests {
             symbol_fqn: format!("src/services/user.ts::{name}"),
             name: name.to_string(),
             signature: Some(format!("function {name}()")),
+            modifiers: vec!["export".to_string()],
             body: "return value;".to_string(),
             docstring: None,
             parent_kind: Some("module".to_string()),
@@ -447,6 +450,7 @@ mod tests {
 
         let prompt = build_semantic_summary_prompt(&input);
         assert!(prompt.contains("docstring: // Normalizes email."));
+        assert!(prompt.contains("modifiers: export"));
         let body_section = prompt
             .split("body:\n")
             .nth(1)

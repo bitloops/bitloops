@@ -28,6 +28,9 @@ fn test_cfg() -> DevqlConfig {
         semantic_model: None,
         semantic_api_key: None,
         semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
     }
 }
 
@@ -232,6 +235,7 @@ fn test_unresolved_call_edge(
 
 include!("devql_tests/core_and_ingestion.rs");
 include!("devql_tests/query_pipeline.rs");
+include!("devql_tests/query_executor.rs");
 include!("devql_tests/config_and_status.rs");
 include!("devql_tests/extraction_js_ts.rs");
 include!("devql_tests/extraction_rust.rs");
@@ -318,3 +322,5 @@ async fn devql_run_init_uses_default_sqlite_duckdb_after_repo_resolution() {
         "default DevQL backends should initialise after repo resolution: {result:#?}"
     );
 }
+include!("devql_tests/clones.rs");
+include!("devql_tests/semantic.rs");

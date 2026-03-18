@@ -13,11 +13,13 @@ use crate::engine::agent::cursor::types::{
     CursorSessionInfoRaw,
 };
 use crate::engine::agent::{
-    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
+    AGENT_NAME_GEMINI,
 };
 use crate::engine::lifecycle::adapters::{
-    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, GEMINI_HOOK_AFTER_TOOL,
-    GEMINI_HOOK_BEFORE_TOOL, route_hook_command_to_lifecycle,
+    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, COPILOT_HOOK_POST_TOOL_USE,
+    COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
+    route_hook_command_to_lifecycle,
 };
 use crate::engine::logging;
 use crate::engine::paths;
@@ -56,6 +58,8 @@ pub enum HooksAgent {
     Codex(CodexHooksArgs),
     #[command(name = "cursor")]
     Cursor(CursorHooksArgs),
+    #[command(name = "copilot")]
+    Copilot(CopilotHooksArgs),
     #[command(name = "gemini")]
     Gemini(GeminiHooksArgs),
     /// Git hook handlers (called by git hooks, not users).
@@ -139,6 +143,12 @@ pub struct CursorHooksArgs {
     pub verb: CursorHookVerb,
 }
 
+#[derive(Args)]
+pub struct CopilotHooksArgs {
+    #[command(subcommand)]
+    pub verb: CopilotHookVerb,
+}
+
 #[derive(Subcommand)]
 pub enum CursorHookVerb {
     #[command(name = "session-start")]
@@ -159,6 +169,26 @@ pub enum CursorHookVerb {
     SubagentStart,
     #[command(name = "subagent-stop")]
     SubagentStop,
+}
+
+#[derive(Subcommand)]
+pub enum CopilotHookVerb {
+    #[command(name = "user-prompt-submitted")]
+    UserPromptSubmitted,
+    #[command(name = "session-start")]
+    SessionStart,
+    #[command(name = "agent-stop")]
+    AgentStop,
+    #[command(name = "session-end")]
+    SessionEnd,
+    #[command(name = "subagent-stop")]
+    SubagentStop,
+    #[command(name = "pre-tool-use")]
+    PreToolUse,
+    #[command(name = "post-tool-use")]
+    PostToolUse,
+    #[command(name = "error-occurred")]
+    ErrorOccurred,
 }
 
 impl ClaudeCodeHookVerb {
@@ -218,6 +248,25 @@ impl CursorHookVerb {
     }
 }
 
+impl CopilotHookVerb {
+    pub fn hook_name(&self) -> &'static str {
+        match self {
+            Self::UserPromptSubmitted => {
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+            }
+            Self::SessionStart => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_START,
+            Self::AgentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_AGENT_STOP,
+            Self::SessionEnd => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_END,
+            Self::SubagentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP,
+            Self::PreToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE,
+            Self::PostToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE,
+            Self::ErrorOccurred => {
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
+            }
+        }
+    }
+}
+
 fn current_hook_agent_name_store() -> &'static Mutex<String> {
     static STORE: OnceLock<Mutex<String>> = OnceLock::new();
     STORE.get_or_init(|| Mutex::new(String::new()))
@@ -256,7 +305,11 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
             crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
             | crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP,
         ) => "subagent",
+        (AGENT_NAME_COPILOT, crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP) => {
+            "subagent"
+        }
         (AGENT_NAME_GEMINI, GEMINI_HOOK_BEFORE_TOOL | GEMINI_HOOK_AFTER_TOOL) => "tool",
+        (AGENT_NAME_COPILOT, COPILOT_HOOK_PRE_TOOL_USE | COPILOT_HOOK_POST_TOOL_USE) => "tool",
         _ => "agent",
     }
 }
@@ -510,6 +563,17 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
                         hook_name,
                     )
                 },
+            )
+        }
+        HooksAgent::Copilot(copilot) => {
+            let hook_name = copilot.verb.hook_name();
+            let stdin = read_stdin()?;
+            run_agent_hook_with_logging(
+                &repo_root,
+                AGENT_NAME_COPILOT,
+                hook_name,
+                &strategy_name,
+                || route_hook_command_to_lifecycle(AGENT_NAME_COPILOT, hook_name, &stdin),
             )
         }
         HooksAgent::Git(_) => unreachable!(),

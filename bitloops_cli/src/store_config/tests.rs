@@ -1,5 +1,17 @@
 use super::*;
-use crate::test_support::process_state::with_cwd;
+use crate::test_support::process_state::{with_cwd, with_process_state};
+use std::fs;
+
+fn write_repo_config(repo_root: &Path, value: serde_json::Value) {
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let parent = config_path.parent().expect("config parent");
+    fs::create_dir_all(parent).expect("create config dir");
+    fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&value).expect("serialize config"),
+    )
+    .expect("write config");
+}
 
 #[test]
 fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
@@ -125,6 +137,72 @@ fn semantic_config_honors_env_over_file_precedence() {
 }
 
 #[test]
+fn embedding_config_reads_values_from_devql_file() {
+    let value = serde_json::json!({
+        "stores": {
+            "embedding_provider": "voyage",
+            "embedding_model": "voyage-code-3",
+            "embedding_api_key": "voyage-key"
+        }
+    });
+    let file_cfg = StoreFileConfig::from_json_value(&value);
+
+    let cfg = resolve_store_embedding_config_for_tests(file_cfg, &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("voyage"));
+    assert_eq!(cfg.embedding_model.as_deref(), Some("voyage-code-3"));
+    assert_eq!(cfg.embedding_api_key.as_deref(), Some("voyage-key"));
+}
+
+#[test]
+fn embedding_config_honors_env_over_file_precedence() {
+    let value = serde_json::json!({
+        "stores": {
+            "embedding_provider": "voyage",
+            "embedding_model": "voyage-code-3",
+            "embedding_api_key": "file-key"
+        }
+    });
+    let file_cfg = StoreFileConfig::from_json_value(&value);
+    let env = [
+        (ENV_EMBEDDING_PROVIDER, "openai"),
+        (ENV_EMBEDDING_MODEL, "text-embedding-3-large"),
+        (ENV_EMBEDDING_API_KEY, "env-key"),
+    ];
+
+    let cfg = resolve_store_embedding_config_for_tests(file_cfg, &env);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
+    assert_eq!(
+        cfg.embedding_model.as_deref(),
+        Some("text-embedding-3-large")
+    );
+    assert_eq!(cfg.embedding_api_key.as_deref(), Some("env-key"));
+}
+
+#[test]
+fn embedding_config_defaults_provider_to_local_when_settings_exist() {
+    let value = serde_json::json!({
+        "stores": {
+            "embedding_model": "jinaai/jina-embeddings-v2-base-code"
+        }
+    });
+    let file_cfg = StoreFileConfig::from_json_value(&value);
+
+    let cfg = resolve_store_embedding_config_for_tests(file_cfg, &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("local"));
+    assert_eq!(
+        cfg.embedding_model.as_deref(),
+        Some("jinaai/jina-embeddings-v2-base-code")
+    );
+}
+
+#[test]
+fn embedding_config_defaults_provider_to_local_when_no_embedding_settings_exist() {
+    let cfg = resolve_store_embedding_config_for_tests(StoreFileConfig::default(), &[]);
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("local"));
+    assert_eq!(cfg.embedding_model, None);
+}
+
+#[test]
 fn events_backend_duckdb_path_defaults_under_repo_store_directory() {
     let events = EventsBackendConfig {
         provider: EventsProvider::DuckDb,
@@ -157,6 +235,40 @@ fn events_backend_duckdb_path_preserves_explicit_path() {
     assert_eq!(
         events.duckdb_path_or_default(),
         PathBuf::from("/tmp/custom-events.duckdb")
+    );
+}
+
+#[test]
+fn events_backend_clickhouse_endpoint_uses_defaults() {
+    let events = EventsBackendConfig {
+        provider: EventsProvider::ClickHouse,
+        duckdb_path: None,
+        clickhouse_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: None,
+    };
+
+    assert_eq!(
+        events.clickhouse_endpoint(),
+        "http://localhost:8123/?database=default"
+    );
+}
+
+#[test]
+fn events_backend_clickhouse_endpoint_trims_trailing_slash() {
+    let events = EventsBackendConfig {
+        provider: EventsProvider::ClickHouse,
+        duckdb_path: None,
+        clickhouse_url: Some("http://localhost:8123/".to_string()),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: Some("bitloops".to_string()),
+    };
+
+    assert_eq!(
+        events.clickhouse_endpoint(),
+        "http://localhost:8123/?database=bitloops"
     );
 }
 
@@ -343,4 +455,203 @@ fn watch_runtime_config_prefers_env_over_file() {
 
     assert_eq!(cfg.watch_debounce_ms, 850);
     assert_eq!(cfg.watch_poll_fallback_ms, 3100);
+    fn dashboard_file_config_load_reads_repo_config_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "dashboard": {
+                    "use_bitloops_local": true
+                }
+            }),
+        );
+
+        with_cwd(temp.path(), || {
+            let cfg = DashboardFileConfig::load();
+            assert_eq!(cfg.use_bitloops_local, Some(true));
+        });
+    }
+
+    #[test]
+    fn dashboard_use_bitloops_local_reads_repo_config_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "dashboard": {
+                    "use_bitloops_local": true
+                }
+            }),
+        );
+
+        with_cwd(temp.path(), || {
+            assert!(dashboard_use_bitloops_local());
+        });
+    }
+
+    #[test]
+    fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "stores": {
+                    "relational": {
+                        "provider": "postgres",
+                        "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops"
+                    },
+                    "events": {
+                        "provider": "clickhouse",
+                        "clickhouse_url": "http://localhost:8123",
+                        "clickhouse_database": "bitloops"
+                    },
+                    "blob": {
+                        "provider": "local",
+                        "local_path": "tmp/blobs"
+                    }
+                }
+            }),
+        );
+
+        with_cwd(temp.path(), || {
+            let cfg = resolve_store_backend_config().expect("store backend config");
+            assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
+            assert_eq!(
+                cfg.relational.postgres_dsn.as_deref(),
+                Some("postgres://user:pass@localhost:5432/bitloops")
+            );
+            assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+            assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
+            assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
+            assert_eq!(cfg.blobs.local_path.as_deref(), Some("tmp/blobs"));
+        });
+    }
+
+    #[test]
+    fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "stores": {
+                    "relational": {
+                        "provider": "sqlite",
+                        "sqlite_path": "data/devql.sqlite"
+                    },
+                    "event": {
+                        "provider": "duckdb",
+                        "duckdb_path": "data/events.duckdb"
+                    }
+                }
+            }),
+        );
+
+        let cfg = resolve_store_backend_config_for_repo(temp.path()).expect("store backend config");
+        assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
+        assert_eq!(
+            cfg.relational.sqlite_path.as_deref(),
+            Some("data/devql.sqlite")
+        );
+        assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
+        assert_eq!(
+            cfg.events.duckdb_path.as_deref(),
+            Some("data/events.duckdb")
+        );
+    }
+
+    #[test]
+    fn store_file_config_load_reads_repo_config_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "stores": {
+                    "relational": {
+                        "provider": "postgres"
+                    },
+                    "events": {
+                        "provider": "clickhouse"
+                    }
+                }
+            }),
+        );
+
+        with_cwd(temp.path(), || {
+            let cfg = StoreFileConfig::load();
+            assert_eq!(cfg.relational_provider.as_deref(), Some("postgres"));
+            assert_eq!(cfg.events_provider.as_deref(), Some("clickhouse"));
+        });
+    }
+
+    #[test]
+    fn resolve_store_semantic_config_reads_file_and_env() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "semantic": {
+                    "provider": "openai",
+                    "model": "gpt-4.1-mini",
+                    "api_key": "file-key",
+                    "base_url": "http://localhost:11434/v1/chat/completions"
+                }
+            }),
+        );
+
+        with_process_state(
+            Some(temp.path()),
+            &[
+                (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
+                (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
+                (ENV_SEMANTIC_API_KEY, Some("env-key")),
+                (
+                    ENV_SEMANTIC_BASE_URL,
+                    Some("http://localhost:9999/v1/chat/completions"),
+                ),
+            ],
+            || {
+                let cfg = resolve_store_semantic_config();
+                assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
+                assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
+                assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
+                assert_eq!(
+                    cfg.semantic_base_url.as_deref(),
+                    Some("http://localhost:9999/v1/chat/completions")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_store_embedding_config_reads_file_and_env() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_repo_config(
+            temp.path(),
+            serde_json::json!({
+                "stores": {
+                    "embedding_provider": "voyage",
+                    "embedding_model": "voyage-code-3",
+                    "embedding_api_key": "file-key"
+                }
+            }),
+        );
+
+        with_process_state(
+            Some(temp.path()),
+            &[
+                (ENV_EMBEDDING_PROVIDER, Some("openai")),
+                (ENV_EMBEDDING_MODEL, Some("text-embedding-3-large")),
+                (ENV_EMBEDDING_API_KEY, Some("env-key")),
+            ],
+            || {
+                let cfg = resolve_store_embedding_config();
+                assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
+                assert_eq!(
+                    cfg.embedding_model.as_deref(),
+                    Some("text-embedding-3-large")
+                );
+                assert_eq!(cfg.embedding_api_key.as_deref(), Some("env-key"));
+            },
+        );
+    }
 }

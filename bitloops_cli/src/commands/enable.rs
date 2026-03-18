@@ -7,13 +7,8 @@ use std::{env, fs};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::engine::agent::HookSupport;
+use crate::engine::agent::AgentAdapterRegistry;
 use crate::engine::agent::claude_code::git_hooks;
-use crate::engine::agent::claude_code::hooks as claude_hooks;
-use crate::engine::agent::codex::hooks as codex_hooks;
-use crate::engine::agent::cursor::agent::CursorAgent;
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
-use crate::engine::agent::open_code::agent::OpenCodeAgent;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
@@ -54,7 +49,14 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
 }
 
 /// Entries that must be present in `.bitloops/.gitignore`.
-const GITIGNORE_ENTRIES: &[&str] = &["tmp/", SETTINGS_LOCAL_FILE, "metadata/", "logs/"];
+const GITIGNORE_ENTRIES: &[&str] = &[
+    "tmp/",
+    SETTINGS_LOCAL_FILE,
+    "metadata/",
+    "logs/",
+    "stores/",
+    "embeddings/",
+];
 
 /// Ensures the `.bitloops/` directory and its `.gitignore` exist.
 fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
@@ -159,23 +161,7 @@ pub async fn run(args: EnableArgs) -> Result<()> {
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
-    let mut agents = Vec::new();
-    if claude_hooks::are_hooks_installed(repo_root) {
-        agents.push("claude-code".to_string());
-    }
-    if HookSupport::are_hooks_installed(&CursorAgent) {
-        agents.push("cursor".to_string());
-    }
-    if codex_hooks::are_hooks_installed_at(repo_root) {
-        agents.push("codex".to_string());
-    }
-    if HookSupport::are_hooks_installed(&GeminiCliAgent) {
-        agents.push("gemini-cli".to_string());
-    }
-    if HookSupport::are_hooks_installed(&OpenCodeAgent) {
-        agents.push("opencode".to_string());
-    }
-    agents
+    AgentAdapterRegistry::builtin().installed_agents(repo_root)
 }
 
 // ── internal helpers used by tests ──────────────────────────────────────────
@@ -261,20 +247,21 @@ pub fn run_uninstall(
     let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);
     let session_state_count = count_session_states(repo_root);
     let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
-    let claude_hooks_installed = claude_hooks::are_hooks_installed(repo_root);
-    let codex_hooks_installed = codex_hooks::are_hooks_installed_at(repo_root);
-    let cursor_hooks_installed = HookSupport::are_hooks_installed(&CursorAgent);
-    let gemini_hooks_installed = HookSupport::are_hooks_installed(&GeminiCliAgent);
-    let opencode_hooks_installed = HookSupport::are_hooks_installed(&OpenCodeAgent);
+    let installed_agents = AgentAdapterRegistry::builtin().installed_agents(repo_root);
+    let installed_agent_labels = installed_agents
+        .iter()
+        .map(|agent| {
+            AgentAdapterRegistry::builtin()
+                .agent_display(agent)
+                .unwrap_or("Unknown")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
 
     if !bitloops_dir_exists
         && !git_hooks_installed
         && session_state_count == 0
-        && !claude_hooks_installed
-        && !codex_hooks_installed
-        && !cursor_hooks_installed
-        && !gemini_hooks_installed
-        && !opencode_hooks_installed
+        && installed_agents.is_empty()
     {
         writeln!(out, "Bitloops is not installed in this repository.")?;
         return Ok(());
@@ -297,24 +284,12 @@ pub fn run_uninstall(
         if session_state_count > 0 {
             writeln!(out, "  - Session state files ({session_state_count})")?;
         }
-        let mut agents = Vec::new();
-        if claude_hooks_installed {
-            agents.push("Claude Code");
-        }
-        if cursor_hooks_installed {
-            agents.push("Cursor");
-        }
-        if codex_hooks_installed {
-            agents.push("Codex CLI");
-        }
-        if gemini_hooks_installed {
-            agents.push("Gemini CLI");
-        }
-        if opencode_hooks_installed {
-            agents.push("OpenCode");
-        }
-        if !agents.is_empty() {
-            writeln!(out, "  - Agent hooks ({})", agents.join(", "))?;
+        if !installed_agent_labels.is_empty() {
+            writeln!(
+                out,
+                "  - Agent hooks ({})",
+                installed_agent_labels.join(", ")
+            )?;
         }
 
         write!(
@@ -385,32 +360,12 @@ fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
 }
 
 fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
-    if claude_hooks::are_hooks_installed(repo_root) {
-        claude_hooks::uninstall_hooks(repo_root)?;
-        writeln!(out, "  Removed Claude Code hooks")?;
-    }
-
-    let cursor = CursorAgent;
-    if HookSupport::are_hooks_installed(&cursor) {
-        HookSupport::uninstall_hooks(&cursor)?;
-        writeln!(out, "  Removed Cursor hooks")?;
-    }
-
-    if codex_hooks::are_hooks_installed_at(repo_root) {
-        codex_hooks::uninstall_hooks_at(repo_root)?;
-        writeln!(out, "  Removed Codex CLI hooks")?;
-    }
-
-    let gemini = GeminiCliAgent;
-    if HookSupport::are_hooks_installed(&gemini) {
-        HookSupport::uninstall_hooks(&gemini)?;
-        writeln!(out, "  Removed Gemini CLI hooks")?;
-    }
-
-    let opencode = OpenCodeAgent;
-    if HookSupport::are_hooks_installed(&opencode) {
-        HookSupport::uninstall_hooks(&opencode)?;
-        writeln!(out, "  Removed OpenCode hooks")?;
+    let registry = AgentAdapterRegistry::builtin();
+    for agent in registry.available_agents() {
+        if registry.are_agent_hooks_installed(repo_root, &agent)? {
+            let label = registry.uninstall_agent_hooks(repo_root, &agent)?;
+            writeln!(out, "  Removed {label} hooks")?;
+        }
     }
 
     Ok(())
@@ -432,13 +387,9 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     if !git_hooks::is_git_hook_installed(repo_root) {
         return (false, String::new(), String::new());
     }
-    let claude_enabled = claude_hooks::are_hooks_installed(repo_root);
-    let codex_enabled = codex_hooks::are_hooks_installed_at(repo_root);
-    let cursor_enabled = HookSupport::are_hooks_installed(&CursorAgent);
-    let gemini_enabled = HookSupport::are_hooks_installed(&GeminiCliAgent);
-    let opencode_enabled = HookSupport::are_hooks_installed(&OpenCodeAgent);
-    if !claude_enabled && !codex_enabled && !cursor_enabled && !gemini_enabled && !opencode_enabled
-    {
+    let registry = AgentAdapterRegistry::builtin();
+    let enabled_agents = registry.installed_agents(repo_root);
+    if enabled_agents.is_empty() {
         return (false, String::new(), String::new());
     }
     let config = if settings_local_path(repo_root).exists() {
@@ -446,17 +397,9 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     } else {
         "settings.json"
     };
-    let agent = if claude_enabled {
-        "Claude Code"
-    } else if codex_enabled {
-        "Codex CLI"
-    } else if cursor_enabled {
-        "Cursor"
-    } else if gemini_enabled {
-        "Gemini CLI"
-    } else {
-        "OpenCode"
-    };
+    let agent = registry
+        .agent_display(&enabled_agents[0])
+        .unwrap_or("Unknown");
     (true, agent.to_string(), config.to_string())
 }
 

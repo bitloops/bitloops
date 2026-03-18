@@ -1862,7 +1862,7 @@ fn codex_hooks_cmd_has_logging_hooks() {
 }
 
 #[test]
-fn gemini_cli_hooks_cmd_has_logging_hooks() {
+fn gemini_hooks_cmd_has_logging_hooks() {
     let hooks_cmd =
         <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
     let has_gemini = hooks_cmd
@@ -1879,6 +1879,16 @@ fn cursor_hooks_cmd_has_logging_hooks() {
         .get_subcommands()
         .any(|cmd| cmd.get_name() == "cursor");
     assert!(has_cursor);
+}
+
+#[test]
+fn copilot_hooks_cmd_has_logging_hooks() {
+    let hooks_cmd =
+        <HooksAgent as clap::Subcommand>::augment_subcommands(clap::Command::new("hooks"));
+    let has_copilot = hooks_cmd
+        .get_subcommands()
+        .any(|cmd| cmd.get_name() == "copilot");
+    assert!(has_copilot);
 }
 
 #[test]

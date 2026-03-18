@@ -1,0 +1,303 @@
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
+
+use super::{EmbeddingInputType, EmbeddingProvider};
+
+pub(super) fn build(
+    provider: &str,
+    model: String,
+    api_key: Option<String>,
+) -> Result<Box<dyn EmbeddingProvider>> {
+    let endpoint = resolve_endpoint(provider)?;
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("building embedding HTTP client")?;
+
+    Ok(Box::new(EmbeddingsHttpProvider {
+        provider: provider.to_string(),
+        model,
+        api_key,
+        endpoint,
+        output_dimension: default_output_dimension(provider),
+        client,
+    }))
+}
+
+pub(super) fn resolve_endpoint(provider: &str) -> Result<String> {
+    match provider {
+        "voyage" => Ok("https://api.voyageai.com/v1/embeddings".to_string()),
+        "openai" => Ok("https://api.openai.com/v1/embeddings".to_string()),
+        other => {
+            bail!("unsupported embedding provider `{other}`. Use `local`, `voyage`, or `openai`")
+        }
+    }
+}
+
+fn default_output_dimension(provider: &str) -> Option<usize> {
+    match provider {
+        "voyage" => Some(1024),
+        _ => None,
+    }
+}
+
+struct EmbeddingsHttpProvider {
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    endpoint: String,
+    output_dimension: Option<usize>,
+    client: reqwest::blocking::Client,
+}
+
+impl EmbeddingProvider for EmbeddingsHttpProvider {
+    fn provider_name(&self) -> &str {
+        &self.provider
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    fn output_dimension(&self) -> Option<usize> {
+        self.output_dimension
+    }
+
+    fn cache_key(&self) -> String {
+        match self.output_dimension {
+            Some(output_dimension) => format!(
+                "provider={}::model={}::dimension={output_dimension}",
+                self.provider, self.model
+            ),
+            None => format!("provider={}::model={}", self.provider, self.model),
+        }
+    }
+
+    fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+        let mut request = self.client.post(&self.endpoint);
+        if let Some(api_key) = self.api_key.as_deref().filter(|value| !value.is_empty()) {
+            request = request.bearer_auth(api_key);
+        }
+
+        let response = request
+            .json(&build_embedding_payload(
+                &self.provider,
+                &self.model,
+                input,
+                input_type,
+                self.output_dimension,
+            ))
+            .send()
+            .with_context(|| {
+                format!(
+                    "sending embedding request to provider={} model={}",
+                    self.provider, self.model
+                )
+            })?;
+
+        let status = response.status();
+        let value: Value = response
+            .json()
+            .with_context(|| format!("parsing embedding response from {}", self.provider))?;
+        if !status.is_success() {
+            let detail = value
+                .get("error")
+                .and_then(Value::as_object)
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .or_else(|| value.get("detail").and_then(Value::as_str))
+                .unwrap_or("request failed");
+            bail!(
+                "embedding provider request failed: provider={}, model={}, status={}, detail={}",
+                self.provider,
+                self.model,
+                status,
+                detail
+            );
+        }
+
+        extract_embedding(&value).with_context(|| {
+            format!(
+                "reading embedding vector from provider={} model={}",
+                self.provider, self.model
+            )
+        })
+    }
+}
+
+fn build_embedding_payload(
+    provider: &str,
+    model: &str,
+    input: &str,
+    input_type: EmbeddingInputType,
+    output_dimension: Option<usize>,
+) -> Value {
+    let mut payload = json!({
+        "input": [input],
+        "model": model,
+    });
+
+    match provider {
+        "voyage" => {
+            payload["input_type"] = json!(input_type.as_str());
+            payload["truncation"] = json!(true);
+            if let Some(output_dimension) = output_dimension {
+                payload["output_dimension"] = json!(output_dimension);
+            }
+        }
+        _ => {
+            if let Some(output_dimension) = output_dimension {
+                payload["dimensions"] = json!(output_dimension);
+            }
+        }
+    }
+
+    payload
+}
+fn extract_embedding(value: &Value) -> Result<Vec<f32>> {
+    let embedding = value
+        .pointer("/data/0/embedding")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("response did not include `/data/0/embedding` array"))?;
+
+    let mut out = Vec::with_capacity(embedding.len());
+    for item in embedding {
+        let Some(number) = item.as_f64() else {
+            bail!("embedding response contained non-numeric value");
+        };
+        let value = number as f32;
+        if !value.is_finite() {
+            bail!("embedding response contained non-finite value");
+        }
+        out.push(value);
+    }
+
+    if out.is_empty() {
+        bail!("embedding response returned an empty vector");
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn embeddings_http_resolves_known_endpoints_and_errors() {
+        assert_eq!(
+            resolve_endpoint("voyage").expect("voyage endpoint"),
+            "https://api.voyageai.com/v1/embeddings"
+        );
+        assert_eq!(
+            resolve_endpoint("openai").expect("openai endpoint"),
+            "https://api.openai.com/v1/embeddings"
+        );
+        assert!(
+            resolve_endpoint("custom")
+                .expect_err("unsupported provider should fail")
+                .to_string()
+                .contains("unsupported embedding provider")
+        );
+    }
+
+    #[test]
+    fn embeddings_http_build_constructs_provider_defaults() {
+        let provider = build(
+            "voyage",
+            "voyage-code-3".to_string(),
+            Some("test-key".to_string()),
+        )
+        .expect("provider should build");
+
+        assert_eq!(provider.provider_name(), "voyage");
+        assert_eq!(provider.model_name(), "voyage-code-3");
+        assert_eq!(provider.output_dimension(), Some(1024));
+        assert_eq!(
+            provider.cache_key(),
+            "provider=voyage::model=voyage-code-3::dimension=1024"
+        );
+    }
+
+    #[test]
+    fn embeddings_http_builds_voyage_payload_with_dimension_and_input_type() {
+        let payload = build_embedding_payload(
+            "voyage",
+            "voyage-code-3",
+            "fn normalize_email() {}",
+            EmbeddingInputType::Document,
+            Some(1024),
+        );
+        assert_eq!(payload["model"], "voyage-code-3");
+        assert_eq!(payload["input_type"], "document");
+        assert_eq!(payload["output_dimension"], 1024);
+        assert_eq!(payload["truncation"], true);
+    }
+
+    #[test]
+    fn embeddings_http_builds_openai_payload_with_dimensions() {
+        let payload = build_embedding_payload(
+            "openai",
+            "text-embedding-3-large",
+            "fn normalize_email() {}",
+            EmbeddingInputType::Document,
+            Some(1536),
+        );
+        assert_eq!(payload["model"], "text-embedding-3-large");
+        assert_eq!(payload["dimensions"], 1536);
+        assert!(payload.get("input_type").is_none());
+    }
+
+    #[test]
+    fn embeddings_http_embed_surfaces_request_errors() {
+        let provider = EmbeddingsHttpProvider {
+            provider: "voyage".to_string(),
+            model: "voyage-code-3".to_string(),
+            api_key: Some("secret".to_string()),
+            endpoint: "http://127.0.0.1:1".to_string(),
+            output_dimension: Some(1024),
+            client: reqwest::blocking::Client::builder()
+                .connect_timeout(Duration::from_millis(25))
+                .timeout(Duration::from_millis(50))
+                .build()
+                .expect("client should build"),
+        };
+
+        let err = provider
+            .embed("fn normalize_email() {}", EmbeddingInputType::Document)
+            .expect_err("request should fail without a listening server");
+
+        assert!(
+            err.to_string()
+                .contains("sending embedding request to provider=voyage model=voyage-code-3")
+        );
+    }
+
+    #[test]
+    fn embeddings_http_extracts_embedding_vector() {
+        let payload = json!({
+            "data": [
+                { "embedding": [0.1, -0.2, 0.3] }
+            ]
+        });
+        assert_eq!(
+            extract_embedding(&payload).expect("embedding should parse"),
+            vec![0.1_f32, -0.2_f32, 0.3_f32]
+        );
+    }
+
+    #[test]
+    fn embeddings_http_rejects_missing_embedding_payload() {
+        let payload = json!({ "data": [] });
+        assert!(
+            extract_embedding(&payload)
+                .expect_err("missing embedding should fail")
+                .to_string()
+                .contains("/data/0/embedding")
+        );
+    }
+}

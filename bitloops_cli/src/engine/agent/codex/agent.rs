@@ -25,7 +25,7 @@ impl Agent for CodexAgent {
     }
 
     fn description(&self) -> String {
-        "Codex CLI - OpenAI coding agent".to_string()
+        "Codex - OpenAI coding agent".to_string()
     }
 
     fn is_preview(&self) -> bool {

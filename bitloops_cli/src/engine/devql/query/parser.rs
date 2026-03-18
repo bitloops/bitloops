@@ -7,10 +7,12 @@ struct ParsedDevqlQuery {
     file: Option<String>,
     files_path: Option<String>,
     artefacts: ArtefactFilter,
+    clones: CloneFilter,
     checkpoints: CheckpointFilter,
     telemetry: TelemetryFilter,
     deps: DepsFilter,
     has_artefacts_stage: bool,
+    has_clones_stage: bool,
     has_deps_stage: bool,
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
@@ -34,6 +36,12 @@ struct ArtefactFilter {
     lines: Option<(i32, i32)>,
     agent: Option<String>,
     since: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CloneFilter {
+    relation_kind: Option<String>,
+    min_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,6 +157,28 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 
         if stage == "artefacts()" {
             parsed.has_artefacts_stage = true;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("clones(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_clones_stage = true;
+            parsed.clones.relation_kind = args.get("relation_kind").cloned();
+            if let Some(min_score) = args.get("min_score") {
+                parsed.clones.min_score = Some(
+                    min_score
+                        .parse::<f32>()
+                        .map_err(|_| anyhow!("invalid clones min_score value: {min_score}"))?,
+                );
+            }
+            continue;
+        }
+
+        if stage == "clones()" {
+            parsed.has_clones_stage = true;
             continue;
         }
 

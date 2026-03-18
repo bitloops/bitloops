@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use tempfile::tempdir;
 
 use super::*;
-use crate::engine::agent::gemini_cli::transcript::GeminiToolCall;
+use crate::engine::agent::gemini::transcript::GeminiToolCall;
 use crate::engine::agent::{
     AGENT_NAME_GEMINI, AGENT_TYPE_GEMINI, Agent, AgentSession, HookInput, HookSupport,
     MAX_CHUNK_SIZE,
@@ -15,7 +15,7 @@ use crate::test_support::process_state::{with_cwd, with_env_var};
 #[test]
 #[allow(non_snake_case)]
 fn TestNewGeminiCLIAgent() {
-    let agent = new_gemini_cli_agent();
+    let agent = new_gemini_agent();
     assert_eq!(agent.name(), AGENT_NAME_GEMINI);
     assert_eq!(agent.agent_type(), AGENT_TYPE_GEMINI);
 }
@@ -32,10 +32,7 @@ fn TestName() {
 #[allow(non_snake_case)]
 fn TestDescription() {
     let agent = GeminiCliAgent;
-    assert_eq!(
-        agent.description(),
-        "Gemini CLI - Google's AI coding assistant"
-    );
+    assert_eq!(agent.description(), "Gemini - Google's AI coding assistant");
     assert!(agent.is_preview());
 }
 

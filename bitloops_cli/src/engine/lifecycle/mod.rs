@@ -4,8 +4,15 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
+use uuid::Uuid;
 
-use crate::engine::agent::TranscriptPositionProvider;
+use crate::engine::agent::canonical::{
+    CanonicalContractCompatibility, CanonicalInvocationRequest, CanonicalProgressUpdate,
+    CanonicalResumableSession,
+};
+use crate::engine::agent::{
+    AgentAdapterCapability, AgentAdapterRegistry, TranscriptPositionProvider,
+};
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::{
     Event as SessionEvent, NoOpActionHandler as SessionNoOpActionHandler,
@@ -35,6 +42,7 @@ pub struct LifecycleEvent {
     pub prompt: String,
     pub tool_use_id: String,
     pub subagent_id: String,
+    pub model: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -120,22 +128,136 @@ pub fn dispatch_lifecycle_event(
 }
 
 pub fn handle_lifecycle_session_start(
-    _agent: &dyn LifecycleAgentAdapter,
+    agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict).is_err() {
-        return Err(anyhow!("no session_id in SessionStart event"));
+    let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
+    let session_id = apply_session_id_policy(
+        &canonical_request.session.session_id,
+        SessionIdPolicy::Strict,
+    )
+    .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
+    let repo_root = crate::engine::paths::repo_root()?;
+    let backend = create_session_backend_or_local(&repo_root);
+
+    let mut state = backend.load_session(&session_id)?.unwrap_or_else(|| {
+        crate::engine::session::state::SessionState {
+            session_id: session_id.clone(),
+            ..Default::default()
+        }
+    });
+
+    let transition = transition_session_with_context(
+        state.phase,
+        SessionEvent::SessionStart,
+        SessionTransitionContext::default(),
+    );
+    apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
+    if let Some(session_ref) = canonical_request.session.session_ref.as_ref() {
+        state.transcript_path = session_ref.clone();
     }
+    state.last_interaction_time = Some(now_rfc3339());
+    state.worktree_path = repo_root.to_string_lossy().into_owned();
+    state.worktree_id = crate::engine::paths::get_worktree_id(&repo_root)?;
+    if state.agent_type.trim().is_empty() {
+        state.agent_type = canonical_request.agent.agent_key.clone();
+    }
+    if state.first_prompt.is_empty()
+        && let Some(prompt) = canonical_request.prompt.as_ref()
+    {
+        state.first_prompt = truncate_prompt_for_storage(prompt);
+    }
+
+    backend.save_session(&state)?;
     Ok(())
 }
 
 pub fn handle_lifecycle_turn_start(
-    _agent: &dyn LifecycleAgentAdapter,
+    agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if apply_session_id_policy(&event.session_id, SessionIdPolicy::Strict).is_err() {
-        return Err(anyhow!("no session_id in TurnStart event"));
+    let canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
+    let session_id = apply_session_id_policy(
+        &canonical_request.session.session_id,
+        SessionIdPolicy::Strict,
+    )
+    .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
+    let repo_root = crate::engine::paths::repo_root()?;
+    let backend = create_session_backend_or_local(&repo_root);
+
+    let transcript_offset = agent
+        .as_transcript_analyzer()
+        .and_then(|analyzer| analyzer.get_transcript_position(&event.session_ref).ok())
+        .unwrap_or(0);
+
+    let pre_prompt = crate::engine::session::state::PrePromptState {
+        session_id: session_id.clone(),
+        timestamp: now_rfc3339(),
+        prompt: truncate_prompt_for_storage(
+            canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
+        ),
+        transcript_path: canonical_request
+            .session
+            .session_ref
+            .clone()
+            .unwrap_or_else(|| event.session_ref.clone()),
+        untracked_files: collect_untracked_files_for_lifecycle(&repo_root),
+        transcript_offset: transcript_offset as i64,
+        ..crate::engine::session::state::PrePromptState::default()
+    };
+    backend.save_pre_prompt(&pre_prompt)?;
+
+    let registry = crate::engine::strategy::registry::StrategyRegistry::builtin();
+    let strategy = registry.get(
+        crate::engine::strategy::registry::STRATEGY_NAME_MANUAL_COMMIT,
+        &repo_root,
+    )?;
+    if let Err(err) = strategy.initialize_session(
+        &session_id,
+        agent.agent_name(),
+        &event.session_ref,
+        &event.prompt,
+    ) {
+        eprintln!("[bitloops] Warning: failed to initialize session state: {err}");
     }
+
+    let mut state = backend.load_session(&session_id)?.unwrap_or_else(|| {
+        crate::engine::session::state::SessionState {
+            session_id: session_id.clone(),
+            started_at: now_rfc3339(),
+            ..Default::default()
+        }
+    });
+    let should_replace_bootstrap_prompt = state.step_count == 0
+        && state.turn_id.trim().is_empty()
+        && state.phase == crate::engine::session::phase::SessionPhase::Idle;
+    if state.first_prompt.is_empty() || should_replace_bootstrap_prompt {
+        state.first_prompt = truncate_prompt_for_storage(
+            canonical_request.prompt.as_deref().unwrap_or(&event.prompt),
+        );
+    }
+
+    let transition = transition_session_with_context(
+        state.phase,
+        SessionEvent::TurnStart,
+        SessionTransitionContext::default(),
+    );
+    apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
+    state.transcript_path = canonical_request
+        .session
+        .session_ref
+        .clone()
+        .unwrap_or_else(|| event.session_ref.clone());
+    state.last_interaction_time = Some(now_rfc3339());
+    if state.turn_id.trim().is_empty() {
+        state.turn_id = generate_lifecycle_turn_id();
+    }
+    state.turn_checkpoint_ids.clear();
+    if state.agent_type.trim().is_empty() {
+        state.agent_type = canonical_request.agent.agent_key.clone();
+    }
+
+    backend.save_session(&state)?;
     Ok(())
 }
 
@@ -301,6 +423,10 @@ pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
+    if !event.session_id.is_empty() {
+        let _canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
+    }
+
     if event.session_ref.is_empty() {
         return Err(anyhow!("transcript file not specified"));
     }
@@ -363,17 +489,14 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     // Use transcript we already read (same bytes we copied to metadata); parse with Gemini or raw JSON
-    if let Ok(t) = crate::engine::agent::gemini_cli::transcript::parse_transcript(&transcript_data)
-    {
+    if let Ok(t) = crate::engine::agent::gemini::transcript::parse_transcript(&transcript_data) {
         let from_transcript =
-            crate::engine::agent::gemini_cli::transcript::extract_all_user_prompts_from_transcript(
-                &t,
-            );
+            crate::engine::agent::gemini::transcript::extract_all_user_prompts_from_transcript(&t);
         if !from_transcript.is_empty() {
             all_prompts = from_transcript;
         }
         for msg in t.messages.iter().rev() {
-            if msg.r#type == crate::engine::agent::gemini_cli::transcript::MESSAGE_TYPE_GEMINI
+            if msg.r#type == crate::engine::agent::gemini::transcript::MESSAGE_TYPE_GEMINI
                 && !msg.content.is_empty()
             {
                 summary = msg.content.clone();
@@ -408,7 +531,7 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     if summary.is_empty()
-        && let Ok(s) = crate::engine::agent::gemini_cli::transcript::extract_last_assistant_message(
+        && let Ok(s) = crate::engine::agent::gemini::transcript::extract_last_assistant_message(
             &transcript_data,
         )
     {
@@ -561,8 +684,27 @@ pub fn handle_lifecycle_compaction(
 
 pub fn handle_lifecycle_session_end(
     _agent: &dyn LifecycleAgentAdapter,
-    _event: &LifecycleEvent,
+    event: &LifecycleEvent,
 ) -> Result<()> {
+    let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::PreserveEmpty)?;
+    if session_id.is_empty() {
+        return Ok(());
+    }
+
+    let repo_root = crate::engine::paths::repo_root()?;
+    let backend = create_session_backend_or_local(&repo_root);
+    if let Some(mut state) = backend.load_session(&session_id)? {
+        let context = SessionTransitionContext {
+            has_files_touched: !state.files_touched.is_empty(),
+            is_rebase_in_progress: false,
+        };
+        let transition =
+            transition_session_with_context(state.phase, SessionEvent::SessionStop, context);
+        apply_session_transition(&mut state, transition, &mut SessionNoOpActionHandler)?;
+        state.ended_at = Some(now_rfc3339());
+        state.last_interaction_time = Some(now_rfc3339());
+        backend.save_session(&state)?;
+    }
     Ok(())
 }
 
@@ -613,6 +755,124 @@ pub fn capture_pre_prompt_state(
         ..SessionPrePromptState::default()
     };
     backend.save_pre_prompt(&state)
+}
+
+fn truncate_prompt_for_storage(prompt: &str) -> String {
+    crate::engine::stringutil::truncate_runes(
+        &prompt.split_whitespace().collect::<Vec<_>>().join(" "),
+        100,
+        "",
+    )
+}
+
+fn build_phase3_canonical_request(
+    agent_name: &str,
+    event: &LifecycleEvent,
+) -> Result<CanonicalInvocationRequest> {
+    let request = CanonicalInvocationRequest::for_lifecycle_event(agent_name, event)?;
+    Ok(enrich_phase3_canonical_request(request))
+}
+
+fn enrich_phase3_canonical_request(
+    request: CanonicalInvocationRequest,
+) -> CanonicalInvocationRequest {
+    let Ok(resolved) =
+        AgentAdapterRegistry::builtin().resolve_with_trace(&request.agent.agent_key, None)
+    else {
+        return request;
+    };
+
+    let descriptor = resolved.registration.descriptor();
+    let supports_richer_contract = descriptor
+        .capabilities
+        .contains(&AgentAdapterCapability::TranscriptAnalysis)
+        || descriptor
+            .capabilities
+            .contains(&AgentAdapterCapability::TokenCalculation);
+
+    if !supports_richer_contract {
+        return request.with_compatibility(CanonicalContractCompatibility::simple());
+    }
+
+    let session_id = request.session.session_id.clone();
+    let session_ref = request.session.session_ref.clone().unwrap_or_default();
+    let resumable_session = CanonicalResumableSession::new(request.session.clone())
+        .with_checkpoint(session_ref)
+        .with_resume_token(session_id.as_str())
+        .with_note(format!(
+            "{}:{}",
+            descriptor.protocol_family.id, descriptor.target_profile.id
+        ))
+        .mark_resumable();
+
+    request
+        .with_compatibility(CanonicalContractCompatibility::rich())
+        .with_progress(
+            CanonicalProgressUpdate::new()
+                .with_label(descriptor.display_name)
+                .with_message("rich canonical lifecycle semantics enabled"),
+        )
+        .with_resumable_session(resumable_session)
+}
+
+fn collect_untracked_files_for_lifecycle(repo_root: &Path) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(repo_root)
+        .output();
+
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && !crate::engine::paths::is_infrastructure_path(path))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn generate_lifecycle_turn_id() -> String {
+    let id = Uuid::new_v4().simple().to_string();
+    id[..12].to_string()
+}
+
+fn now_rfc3339() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (y, mo, d, h, mi, s) = unix_to_ymdhms(secs);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
+fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = secs % 60;
+    let mins = secs / 60;
+    let mi = mins % 60;
+    let hours = mins / 60;
+    let h = hours % 24;
+    let days = hours / 24;
+
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if mo <= 2 { 1 } else { 0 };
+
+    (year as u64, mo as u64, d as u64, h, mi, s)
 }
 
 pub fn resolve_transcript_offset(

@@ -527,7 +527,7 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
         "session_id": "session-2",
         "checkpoints_count": 2,
         "strategy": "manual-commit",
-        "agent": "gemini-cli",
+        "agent": "gemini",
         "created_at": "2026-02-27T12:10:00Z",
         "cli_version": "0.0.3",
         "files_touched": ["app.rs"],
@@ -627,7 +627,7 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
                 SeedCheckpointSession {
                     session_index: 1,
                     session_id: "session-2",
-                    agent: "gemini-cli",
+                    agent: "gemini",
                     created_at: "2026-02-27T12:10:00Z",
                     checkpoints_count: 2,
                     transcript: session_one_transcript,
@@ -920,7 +920,7 @@ fn dashboard_user_falls_back_to_name_key_when_email_missing() {
 fn canonical_agent_key_normalizes_to_kebab_case() {
     assert_eq!(canonical_agent_key("Claude Code"), "claude-code");
     assert_eq!(canonical_agent_key("Codex"), "codex");
-    assert_eq!(canonical_agent_key(" Gemini CLI "), "gemini-cli");
+    assert_eq!(canonical_agent_key("Gemini"), "gemini");
     assert_eq!(canonical_agent_key("cursor"), "cursor");
     assert_eq!(canonical_agent_key(""), "");
 }
@@ -1076,7 +1076,7 @@ async fn api_commits_filters_by_user_agent_and_time() {
     assert_eq!(user_filtered.as_array().map(Vec::len), Some(0));
 
     let (status, agent_filtered) =
-        request_json(app.clone(), "/api/commits?branch=main&agent=gemini-cli").await;
+        request_json(app.clone(), "/api/commits?branch=main&agent=gemini").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(agent_filtered.as_array().map(Vec::len), Some(0));
 
@@ -1134,7 +1134,7 @@ async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
     assert_eq!(checkpoint["checkpoint_id"], "112233445566");
     assert_eq!(
         checkpoint["agents"].as_array().cloned().unwrap_or_default(),
-        vec![json!("claude-code"), json!("gemini-cli")]
+        vec![json!("claude-code"), json!("gemini")]
     );
     let expected_preview = "A".repeat(160);
     assert_eq!(
@@ -1149,7 +1149,7 @@ async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
     assert_eq!(claude_filtered.as_array().map(Vec::len), Some(1));
 
     let (status, gemini_filtered) =
-        request_json(app.clone(), "/api/commits?branch=main&agent=gemini-cli").await;
+        request_json(app.clone(), "/api/commits?branch=main&agent=gemini").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(gemini_filtered.as_array().map(Vec::len), Some(1));
 
@@ -1157,7 +1157,7 @@ async fn api_commits_includes_all_checkpoint_agents_and_first_prompt_preview() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         agents_payload.as_array().cloned().unwrap_or_default(),
-        vec![json!({"key": "claude-code"}), json!({"key": "gemini-cli"})]
+        vec![json!({"key": "claude-code"}), json!({"key": "gemini"})]
     );
 }
 

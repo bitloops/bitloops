@@ -29,7 +29,7 @@ struct AgentHookRaw {
     prompt: String,
 }
 
-/// Translates a Gemini CLI hook into a normalized lifecycle LifecycleEvent.
+/// Translates a Gemini hook into a normalized lifecycle LifecycleEvent.
 /// Returns None if the hook has no lifecycle significance (pass-through hooks).
 pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<LifecycleEvent>> {
     match hook_name {
