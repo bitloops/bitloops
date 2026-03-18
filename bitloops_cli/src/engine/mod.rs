@@ -10,6 +10,7 @@ pub mod lifecycle;
 pub mod logging;
 pub mod paths;
 pub mod providers;
+pub mod semantic_clones;
 pub mod semantic_embeddings;
 pub mod semantic_features;
 pub mod session;

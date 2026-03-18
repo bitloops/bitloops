@@ -125,6 +125,7 @@ pub fn build_symbol_embedding_inputs(
 ) -> Vec<SymbolEmbeddingInput> {
     inputs
         .iter()
+        .filter(|input| crate::engine::semantic_features::is_semantic_enrichment_candidate(input))
         .filter_map(|input| {
             let summary = summary_by_artefact_id
                 .get(&input.artefact_id)?
@@ -317,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_inputs_include_all_summarized_kinds() {
+    fn symbol_embedding_inputs_exclude_non_semantic_candidates() {
         let inputs = vec![
             SemanticFeatureInput {
                 artefact_id: "function-1".to_string(),
@@ -331,7 +332,8 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
                 name: "normalizeEmail".to_string(),
                 signature: None,
-                body: "return email;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return email.trim().toLowerCase();".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
                 content_hash: None,
@@ -348,6 +350,7 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::import::import@1".to_string(),
                 name: "import@1".to_string(),
                 signature: None,
+                modifiers: vec!["type-only".to_string()],
                 body: "import x from 'y';".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
@@ -363,9 +366,8 @@ mod tests {
         ]);
 
         let rows = build_symbol_embedding_inputs(&inputs, &summaries);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
-        assert_eq!(rows[1].artefact_id, "import-1");
     }
 
     #[test]
@@ -383,7 +385,8 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
                 name: "normalizeEmail".to_string(),
                 signature: None,
-                body: "return email;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return email.trim().toLowerCase();".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
                 content_hash: None,
@@ -400,7 +403,8 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeName".to_string(),
                 name: "normalizeName".to_string(),
                 signature: None,
-                body: "return name;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return name.trim().replace(/\\s+/g, ' ');".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
                 content_hash: None,

@@ -13,6 +13,7 @@ use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
 use crate::engine::providers::embeddings::EmbeddingProvider;
+use crate::engine::semantic_clones;
 use crate::engine::semantic_embeddings;
 use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
@@ -507,8 +508,12 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         counters.checkpoints_processed += 1;
     }
 
+    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id).await?;
+    counters.symbol_clone_edges_upserted += clone_result.edges.len();
+    counters.symbol_clone_sources_scored += clone_result.sources_considered;
+
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
@@ -516,7 +521,9 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         counters.semantic_feature_rows_upserted,
         counters.semantic_feature_rows_skipped,
         counters.symbol_embedding_rows_upserted,
-        counters.symbol_embedding_rows_skipped
+        counters.symbol_embedding_rows_skipped,
+        counters.symbol_clone_edges_upserted,
+        counters.symbol_clone_sources_scored
     );
     Ok(())
 }
@@ -576,6 +583,8 @@ include!("ingestion/artefact_persistence.rs");
 include!("ingestion/semantic_features_persistence.rs");
 // ingestion: Stage 2 embedding persistence
 include!("ingestion/semantic_embeddings_persistence.rs");
+// ingestion: Stage 3 clone persistence
+include!("ingestion/semantic_clones_persistence.rs");
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)

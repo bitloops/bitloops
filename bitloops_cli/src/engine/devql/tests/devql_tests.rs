@@ -240,4 +240,5 @@ include!("devql_tests/extraction_js_ts.rs");
 include!("devql_tests/extraction_rust.rs");
 include!("devql_tests/identity_and_schema.rs");
 include!("devql_tests/postgres_integration.rs");
+include!("devql_tests/clones.rs");
 include!("devql_tests/semantic.rs");
