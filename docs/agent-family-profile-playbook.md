@@ -1,6 +1,6 @@
 # Agent Adapter Family/Profile Playbook
 
-For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-playbook.md`.
+For package-ready/runtime guidance, see `docs/agent-extension-playbook.md`.
 
 ## Purpose
 

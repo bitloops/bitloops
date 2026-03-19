@@ -1,6 +1,6 @@
 # Protocol Family vs Target Profile Playbook
 
-For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-playbook.md`.
+For package-ready/runtime guidance, see `docs/agent-extension-playbook.md`.
 
 This playbook explains when to add a new **protocol family**, when to add a new **target profile**, and when to add both.
 
@@ -14,31 +14,37 @@ This playbook explains when to add a new **protocol family**, when to add a new 
 ## Decision criteria
 
 Add a new protocol family when:
+
 - Hook/event semantics differ in a way that cannot be represented as profile-only variation.
 - Transcript/session primitives differ enough that multiple profiles would otherwise duplicate core mechanics.
 - Runtime/config/readiness rules are shared by a new cluster of targets but not by existing families.
 
 Add a new target profile when:
+
 - The target uses an existing family’s protocol mechanics.
 - Differences are target-specific (aliases, naming, quirks, defaults, small capability deltas).
 - Reuse of existing family validation/readiness/compatibility logic remains correct.
 
 Add both when:
+
 - The new environment introduces genuinely new protocol mechanics and also has target-specific overlays.
 
 ## What belongs where
 
 Family-level concerns:
+
 - Reusable protocol mechanics.
 - Family runtime compatibility and family config schema.
 - Shared family-level capabilities.
 
 Profile-level concerns:
+
 - Target identity and aliases.
 - Target-specific quirks or policy overlays.
 - Profile runtime compatibility and profile config schema.
 
 Adapter-level concerns:
+
 - Concrete host wiring (`create_agent`, hook install/uninstall, project detection, resume command).
 - Adapter-specific config schema when needed.
 
@@ -67,6 +73,7 @@ These examples show one family supporting several profiles while preserving targ
 ## Test checklist
 
 When adding a family/profile:
+
 - Registration rejects invalid descriptors (collisions, invalid family/profile links).
 - `resolve_composed` succeeds for valid family/profile and fails for invalid combinations.
 - Runtime compatibility failures are explicit.
@@ -77,11 +84,13 @@ When adding a family/profile:
 ## Thought experiment: adding a new target
 
 If a new target “X” reuses `json-event` semantics but has different naming and one extra target quirk:
+
 - Add `profile-x` under `json-event`.
 - Keep family unchanged.
 - Add profile/adapter tests and readiness/config coverage.
 
 If target “Y” introduces a fundamentally different hook/event contract:
+
 - Add a new family for that contract.
 - Add one or more profiles under it.
 - Add family-level tests before expanding profile coverage.
