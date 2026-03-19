@@ -457,6 +457,59 @@ mod tests {
     }
 
     #[test]
+    fn capture_only_revises_affected_symbols_for_follow_up_temp_changes() {
+        let dir = seed_repo();
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let target = dir.path().join("src/lib.rs");
+
+        fs::write(
+            &target,
+            "pub fn first() -> i32 {\n    10\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("write first temp version");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture first temp batch");
+
+        fs::write(
+            &target,
+            "pub fn first() -> i32 {\n    11\n}\n\npub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("write second temp version");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture second temp batch");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let file_revision: String = conn
+            .query_row(
+                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
+                |row| row.get(0),
+            )
+            .expect("read file revision");
+        let first_revision: String = conn
+            .query_row(
+                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::first'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read first revision");
+        let second_revision: String = conn
+            .query_row(
+                "SELECT revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_fqn = 'src/lib.rs::second'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read second revision");
+
+        assert_eq!(file_revision, "temp:2");
+        assert_eq!(first_revision, "temp:2");
+        assert_eq!(second_revision, "temp:1");
+    }
+
+    #[test]
     fn capture_skips_no_content_change_events() {
         let dir = seed_repo();
 

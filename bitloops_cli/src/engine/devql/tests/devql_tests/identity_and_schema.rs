@@ -188,12 +188,10 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 
 #[test]
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
-    let state = |commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
+    let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
         CurrentFileRevisionRecord {
-            commit_sha: commit_sha.to_string(),
             revision_kind: revision_kind.to_string(),
             revision_id: revision_id.to_string(),
-            temp_checkpoint_id: None,
             blob_sha: "blob".to_string(),
             updated_at_unix,
         }

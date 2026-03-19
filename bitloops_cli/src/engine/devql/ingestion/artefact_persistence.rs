@@ -17,10 +17,8 @@ struct RevisionRef<'a> {
 
 #[derive(Debug, Clone)]
 struct CurrentFileRevisionRecord {
-    commit_sha: String,
     revision_kind: String,
     revision_id: String,
-    temp_checkpoint_id: Option<i64>,
     blob_sha: String,
     updated_at_unix: i64,
 }
@@ -233,12 +231,36 @@ fn build_file_current_record(
     }
 }
 
+fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -> &'a str {
+    let len = content.len();
+    let start = usize::try_from(item.start_byte).unwrap_or_default().min(len);
+    let end = usize::try_from(item.end_byte).unwrap_or_default().min(len);
+    if start >= end {
+        return "";
+    }
+
+    content.get(start..end).unwrap_or("")
+}
+
+fn symbol_content_hash(item: &JsTsArtefact, content: &str) -> String {
+    deterministic_uuid(&format!(
+        "{}|{}|{}|{}|{}|{}",
+        item.canonical_kind.as_deref().unwrap_or("<null>"),
+        item.language_kind,
+        item.signature,
+        serde_json::to_string(&item.modifiers).unwrap_or_else(|_| "[]".to_string()),
+        item.docstring.as_deref().unwrap_or(""),
+        artefact_source_slice(content, item)
+    ))
+}
+
 fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
     blob_sha: &str,
     file_artefact: &FileArtefactRow,
     items: &[JsTsArtefact],
+    content: &str,
 ) -> Vec<PersistedArtefactRecord> {
     let mut out = Vec::with_capacity(items.len());
     let mut symbol_to_artefact_id: HashMap<String, String> = HashMap::new();
@@ -254,15 +276,7 @@ fn build_symbol_records(
             .map(String::as_str);
         let symbol_id = structural_symbol_id_for_artefact(item, semantic_parent_symbol_id);
         let artefact_id = revision_artefact_id(&cfg.repo.repo_id, blob_sha, &symbol_id);
-        let content_hash = deterministic_uuid(&format!(
-            "{}|{}|{}|{}|{}|{}",
-            blob_sha,
-            path,
-            item.canonical_kind.as_deref().unwrap_or("<null>"),
-            item.name,
-            item.start_line,
-            item.end_line
-        ));
+        let content_hash = symbol_content_hash(item, content);
         let parent_symbol_id = item
             .parent_symbol_fqn
             .as_ref()
@@ -508,7 +522,7 @@ async fn load_current_file_revision(
 ) -> Result<Option<CurrentFileRevisionRecord>> {
     let updated_at_unix_expr = updated_at_unix_expr(relational);
     let sql = format!(
-        "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, {} AS updated_at_unix \
+        "SELECT revision_kind, revision_id, blob_sha, {} AS updated_at_unix \
 FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
         updated_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
@@ -519,11 +533,6 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
         return Ok(None);
     };
 
-    let commit_sha = row
-        .get("commit_sha")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
     let revision_kind = row
         .get("revision_kind")
         .and_then(Value::as_str)
@@ -534,11 +543,6 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let temp_checkpoint_id = row.get("temp_checkpoint_id").and_then(|value| {
-        value
-            .as_i64()
-            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
-    });
     let blob_sha = row
         .get("blob_sha")
         .and_then(Value::as_str)
@@ -553,10 +557,8 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
         })
         .unwrap_or_default();
     Ok(Some(CurrentFileRevisionRecord {
-        commit_sha,
         revision_kind,
         revision_id,
-        temp_checkpoint_id,
         blob_sha,
         updated_at_unix,
     }))
@@ -810,6 +812,7 @@ fn artefact_payload_equal(lhs: &PersistedArtefactRecord, rhs: &PersistedArtefact
         && lhs.signature == rhs.signature
         && lhs.modifiers == rhs.modifiers
         && lhs.docstring == rhs.docstring
+        && lhs.content_hash == rhs.content_hash
 }
 
 fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeRecord) -> bool {
@@ -1143,12 +1146,6 @@ async fn refresh_current_state_for_path(
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
     let existing = load_current_file_revision(cfg, relational, rev.path).await?;
-    let revision_metadata_changed = existing.as_ref().is_some_and(|state| {
-        state.commit_sha != rev.commit_sha
-            || state.revision_kind != rev.revision.kind
-            || state.revision_id != rev.revision.id
-            || state.temp_checkpoint_id != rev.revision.temp_checkpoint_id
-    });
     if !incoming_revision_is_newer(
         existing.as_ref(),
         rev.revision.kind,
@@ -1185,7 +1182,7 @@ async fn refresh_current_state_for_path(
             .get(&record.symbol_id)
             .map(|state| artefact_payload_equal(&state.record, record))
             .unwrap_or(false);
-        if unchanged && !revision_metadata_changed {
+        if unchanged {
             if let Some(state) = old_symbol_records.get(&record.symbol_id) {
                 current_by_fqn.insert(state.symbol_fqn.clone(), state.record.clone());
             }
@@ -1240,7 +1237,7 @@ async fn refresh_current_state_for_path(
             .get(&record.edge_id)
             .map(|existing| edge_payload_equal(&existing.record, &record))
             .unwrap_or(false);
-        if unchanged && !revision_metadata_changed {
+        if unchanged {
             continue;
         }
         upsert_current_edge(cfg, relational, rev, &record).await?;
@@ -1311,7 +1308,8 @@ async fn upsert_current_state_for_content(
         (Vec::new(), Vec::new(), None)
     };
 
-    let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items);
+    let symbol_records =
+        build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items, content);
     refresh_current_state_for_path(
         cfg,
         relational,
@@ -1347,7 +1345,7 @@ async fn upsert_language_artefacts(
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
 ) -> Result<()> {
-    let (items, dependency_edges, file_docstring) =
+    let (items, dependency_edges, file_docstring, source_content) =
         if is_supported_symbol_language(&file_artefact.language) {
             let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
                 return Ok(());
@@ -1367,12 +1365,13 @@ async fn upsert_language_artefacts(
             } else {
                 None
             };
-            (items, edges, file_docstring)
+            (items, edges, file_docstring, content)
         } else {
-            (Vec::new(), Vec::new(), None)
+            (Vec::new(), Vec::new(), None, String::new())
         };
 
-    let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items);
+    let symbol_records =
+        build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items, &source_content);
     for record in &symbol_records {
         persist_historical_artefact(
             cfg,
