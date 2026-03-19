@@ -148,6 +148,14 @@ pub(crate) fn build_github_record(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn build_github_document(
+    parsed: &ParsedKnowledgeUrl,
+    payload: Value,
+) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+    Ok(build_github_record(parsed, payload)?.into())
+}
+
 fn optional_string(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -172,4 +180,100 @@ fn preview_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed_issue() -> ParsedKnowledgeUrl {
+        ParsedKnowledgeUrl {
+            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Github,
+            source_kind:
+                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::GithubIssue,
+            canonical_external_id: "github://bitloops/bitloops/issues/42".to_string(),
+            canonical_url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            provider_site: Some("https://github.com".to_string()),
+            locator: KnowledgeLocator::GithubIssue {
+                owner: "bitloops".to_string(),
+                repo: "bitloops".to_string(),
+                number: 42,
+            },
+        }
+    }
+
+    fn parsed_pull_request() -> ParsedKnowledgeUrl {
+        ParsedKnowledgeUrl {
+            source_kind:
+                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::GithubPullRequest,
+            canonical_external_id: "github://bitloops/bitloops/pull/1370".to_string(),
+            canonical_url: "https://github.com/bitloops/bitloops/pull/1370".to_string(),
+            provider_site: Some("https://github.com".to_string()),
+            locator: KnowledgeLocator::GithubPullRequest {
+                owner: "bitloops".to_string(),
+                repo: "bitloops".to_string(),
+                number: 1370,
+            },
+            ..parsed_issue()
+        }
+    }
+
+    #[test]
+    fn can_handle_only_github_urls() {
+        let adapter = GitHubKnowledgeAdapter::new().expect("adapter");
+        assert!(adapter.can_handle(&parsed_issue()));
+        assert!(adapter.can_handle(&parsed_pull_request()));
+    }
+
+    #[test]
+    fn build_document_maps_issue_payload() {
+        let document = build_github_document(
+            &parsed_issue(),
+            serde_json::json!({
+                "title": " Issue title ",
+                "state": " open ",
+                "updated_at": "2026-03-16T10:00:00Z",
+                "body": "  Issue body  ",
+                "user": { "login": "spiros" }
+            }),
+        )
+        .expect("document");
+
+        assert_eq!(document.external_id, "github://bitloops/bitloops/issues/42");
+        assert_eq!(document.title, "Issue title");
+        assert_eq!(document.state.as_deref(), Some("open"));
+        assert_eq!(document.author.as_deref(), Some("spiros"));
+        assert_eq!(document.body_preview.as_deref(), Some("Issue body"));
+        assert_eq!(
+            document.payload.body_text.as_deref(),
+            Some("Issue body")
+        );
+    }
+
+    #[test]
+    fn build_document_rejects_pull_request_payload_for_issue_url() {
+        let err = build_github_document(
+            &parsed_issue(),
+            serde_json::json!({
+                "title": "PR payload",
+                "pull_request": { "url": "https://api.github.com/repos/bitloops/bitloops/pulls/42" }
+            }),
+        )
+        .expect_err("issue payload must reject pull request payload");
+
+        assert!(err.to_string().contains("pull request payload"));
+    }
+
+    #[test]
+    fn build_document_rejects_missing_title() {
+        let err = build_github_document(
+            &parsed_pull_request(),
+            serde_json::json!({
+                "state": "open"
+            }),
+        )
+        .expect_err("missing title must fail");
+
+        assert!(err.to_string().contains("missing `title`"));
+    }
 }

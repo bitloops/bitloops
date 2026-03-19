@@ -283,3 +283,28 @@ impl StoreHealthGateway for LocalStoreHealthGateway {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn default_provenance_builder_wraps_details() {
+        let builder = DefaultProvenanceBuilder;
+        let value = builder.build("knowledge", "ingest", json!({ "id": 1 }));
+
+        assert_eq!(value["capability"], json!("knowledge"));
+        assert_eq!(value["operation"], json!("ingest"));
+        assert_eq!(value["details"]["id"], json!(1));
+    }
+
+    #[test]
+    fn local_store_health_gateway_returns_ok() {
+        let gateway = LocalStoreHealthGateway;
+
+        assert!(gateway.check_relational().is_ok());
+        assert!(gateway.check_documents().is_ok());
+        assert!(gateway.check_blobs().is_ok());
+    }
+}

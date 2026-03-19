@@ -171,6 +171,7 @@ impl KnowledgePlugin {
                 payload_mime_type: payload_ref.mime_type.clone(),
                 payload_size_bytes: payload_ref.size_bytes,
                 provenance_json: provenance_json.clone(),
+                created_at: None,
             };
 
             if let Err(err) = host

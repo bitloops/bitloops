@@ -202,3 +202,106 @@ impl IngesterRegistration {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+    use serde_json::json;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct HelperPayload {
+        name: String,
+        limit: Option<usize>,
+    }
+
+    #[test]
+    fn stage_request_helpers_parse_and_limit() {
+        let request = StageRequest::new(json!({ "name": "alpha", "limit": 7 }));
+
+        assert_eq!(request.limit(), Some(7));
+        let parsed: HelperPayload = request.parse_json().expect("parse stage request");
+        assert_eq!(
+            parsed,
+            HelperPayload {
+                name: "alpha".to_string(),
+                limit: Some(7),
+            }
+        );
+    }
+
+    #[test]
+    fn stage_request_parse_json_rejects_wrong_shape() {
+        let request = StageRequest::new(json!({ "limit": "not-a-number" }));
+
+        let err = request
+            .parse_json::<HelperPayload>()
+            .expect_err("invalid stage payload must fail");
+
+        assert!(err.to_string().contains("invalid type"));
+    }
+
+    #[test]
+    fn stage_response_and_ingest_result_render_helpers() {
+        let stage = StageResponse::json(json!({ "ok": true }));
+        assert!(stage.render_human().contains("\"ok\": true"));
+
+        let ingest = IngestResult::new(json!({ "created": true }), "created");
+        assert_eq!(ingest.render_human(), "created");
+        assert_eq!(ingest.payload, json!({ "created": true }));
+    }
+
+    #[test]
+    fn ingest_request_parse_json_and_result_json_roundtrip() {
+        let request = IngestRequest::new(json!({ "name": "beta", "limit": 3 }));
+        let parsed: HelperPayload = request.parse_json().expect("parse ingest request");
+
+        assert_eq!(
+            parsed,
+            HelperPayload {
+                name: "beta".to_string(),
+                limit: Some(3),
+            }
+        );
+
+        let result = IngestResult::json(json!({ "status": "ok" }));
+        assert!(result.render_human().contains("\"status\": \"ok\""));
+    }
+
+    #[test]
+    fn registration_constructors_store_values() {
+        struct DummyStageHandler;
+        impl StageHandler for DummyStageHandler {
+            fn execute<'a>(
+                &'a self,
+                _request: StageRequest,
+                _ctx: &'a mut dyn CapabilityExecutionContext,
+            ) -> BoxFuture<'a, Result<StageResponse>> {
+                Box::pin(async move { Ok(StageResponse::new(json!({}), "")) })
+            }
+        }
+
+        struct DummyIngesterHandler;
+        impl IngesterHandler for DummyIngesterHandler {
+            fn ingest<'a>(
+                &'a self,
+                _request: IngestRequest,
+                _ctx: &'a mut dyn CapabilityIngestContext,
+            ) -> BoxFuture<'a, Result<IngestResult>> {
+                Box::pin(async move { Ok(IngestResult::new(json!({}), "")) })
+            }
+        }
+
+        let stage = StageRegistration::new("knowledge", "knowledge.stage", Arc::new(DummyStageHandler));
+        let ingester = IngesterRegistration::new(
+            "knowledge",
+            "knowledge.ingest",
+            Arc::new(DummyIngesterHandler),
+        );
+
+        assert_eq!(stage.capability_id, "knowledge");
+        assert_eq!(stage.stage_name, "knowledge.stage");
+        assert_eq!(ingester.capability_id, "knowledge");
+        assert_eq!(ingester.ingester_name, "knowledge.ingest");
+    }
+}

@@ -153,6 +153,14 @@ pub(crate) fn build_jira_record(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn build_jira_document(
+    parsed: &ParsedKnowledgeUrl,
+    payload: Value,
+) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+    Ok(build_jira_record(parsed, payload)?.into())
+}
+
 fn jira_config(provider_config: &crate::store_config::ProviderConfig) -> Option<&AtlassianProviderConfig> {
     provider_config.jira.as_ref().or(provider_config.atlassian.as_ref())
 }
@@ -193,5 +201,92 @@ fn collect_text(value: &Value, output: &mut String) {
             }
         }
         Value::Bool(_) | Value::Null | Value::Number(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed_issue() -> ParsedKnowledgeUrl {
+        ParsedKnowledgeUrl {
+            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Jira,
+            source_kind: crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::JiraIssue,
+            canonical_external_id: "jira://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            canonical_url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
+            provider_site: Some("https://bitloops.atlassian.net".to_string()),
+            locator: KnowledgeLocator::JiraIssue {
+                site: "https://bitloops.atlassian.net".to_string(),
+                key: "CLI-1370".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn can_handle_only_jira_urls() {
+        let adapter = JiraKnowledgeAdapter::new().expect("adapter");
+        assert!(adapter.can_handle(&parsed_issue()));
+    }
+
+    #[test]
+    fn build_document_maps_nested_description() {
+        let document = build_jira_document(
+            &parsed_issue(),
+            serde_json::json!({
+                "fields": {
+                    "summary": " Jira title ",
+                    "updated": "2026-03-16T11:00:00Z",
+                    "status": { "name": "In Progress" },
+                    "reporter": { "displayName": "Spiros" },
+                    "description": {
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "Jira body" }]
+                            }
+                        ]
+                    }
+                }
+            }),
+        )
+        .expect("document");
+
+        assert_eq!(document.external_id, "jira://bitloops.atlassian.net/browse/CLI-1370");
+        assert_eq!(document.title, " Jira title ");
+        assert_eq!(document.state.as_deref(), Some("In Progress"));
+        assert_eq!(document.author.as_deref(), Some("Spiros"));
+        assert_eq!(document.body_preview.as_deref(), Some("Jira body"));
+        assert_eq!(
+            document.payload.body_text.as_deref(),
+            Some("Jira body")
+        );
+        assert!(document.payload.body_adf.is_some());
+    }
+
+    #[test]
+    fn build_document_collects_plain_string_description() {
+        let document = build_jira_document(
+            &parsed_issue(),
+            serde_json::json!({
+                "fields": {
+                    "summary": "Jira title",
+                    "description": "  Plain Jira body  "
+                }
+            }),
+        )
+        .expect("document");
+
+        assert_eq!(document.body_preview.as_deref(), Some("Plain Jira body"));
+        assert_eq!(document.payload.body_text.as_deref(), Some("Plain Jira body"));
+        assert!(document.payload.body_adf.is_some());
+    }
+
+    #[test]
+    fn build_document_rejects_missing_fields_object() {
+        let err = build_jira_document(&parsed_issue(), serde_json::json!({}))
+            .expect_err("missing fields must fail");
+
+        assert!(err.to_string().contains("missing `fields` object"));
     }
 }

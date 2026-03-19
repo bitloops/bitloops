@@ -306,3 +306,139 @@ pub fn format_knowledge_versions_result(result: &ListVersionsResult) -> String {
 
     lines.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    #[test]
+    fn provider_and_source_kind_string_values_are_stable() {
+        assert_eq!(KnowledgeProvider::Github.as_str(), "github");
+        assert_eq!(KnowledgeProvider::Jira.as_str(), "jira");
+        assert_eq!(KnowledgeProvider::Confluence.as_str(), "confluence");
+
+        assert_eq!(KnowledgeSourceKind::GithubIssue.as_str(), "github_issue");
+        assert_eq!(
+            KnowledgeSourceKind::GithubPullRequest.as_str(),
+            "github_pull_request"
+        );
+        assert_eq!(KnowledgeSourceKind::JiraIssue.as_str(), "jira_issue");
+        assert_eq!(KnowledgeSourceKind::ConfluencePage.as_str(), "confluence_page");
+    }
+
+    #[test]
+    fn association_target_helpers_return_expected_type_and_id() {
+        let commit = KnowledgeAssociationTarget::Commit {
+            sha: "abc123".to_string(),
+        };
+        assert_eq!(commit.target_type(), "commit");
+        assert_eq!(commit.target_id(), "abc123");
+
+        let knowledge = KnowledgeAssociationTarget::KnowledgeItem {
+            knowledge_item_id: "item-1".to_string(),
+        };
+        assert_eq!(knowledge.target_type(), "knowledge_item");
+        assert_eq!(knowledge.target_id(), "item-1");
+
+        let checkpoint = KnowledgeAssociationTarget::Checkpoint {
+            checkpoint_id: "deadbeef1234".to_string(),
+        };
+        assert_eq!(checkpoint.target_type(), "checkpoint");
+        assert_eq!(checkpoint.target_id(), "deadbeef1234");
+
+        let artefact = KnowledgeAssociationTarget::Artefact {
+            artefact_id: "artefact-42".to_string(),
+        };
+        assert_eq!(artefact.target_type(), "artefact");
+        assert_eq!(artefact.target_id(), "artefact-42");
+    }
+
+    #[test]
+    fn formatters_render_human_output_with_expected_sections() {
+        let ingest = IngestKnowledgeResult {
+            provider: "github".to_string(),
+            source_kind: "github_issue".to_string(),
+            repo_identity: "repo://bitloops".to_string(),
+            knowledge_item_id: "item-1".to_string(),
+            knowledge_item_version_id: "version-1".to_string(),
+            item_status: KnowledgeItemStatus::Created,
+            version_status: KnowledgeVersionStatus::Created,
+        };
+        let association = AssociateKnowledgeResult {
+            relation_assertion_id: "relation-1".to_string(),
+            target_type: "commit".to_string(),
+            target_id: "abc123".to_string(),
+            relation_type: "associated_with".to_string(),
+            association_method: "manual_attachment".to_string(),
+        };
+
+        let add_output = format_knowledge_add_result(&ingest, Some(&association));
+        assert!(add_output.contains("Knowledge added"));
+        assert!(add_output.contains("Association created"));
+        assert!(add_output.contains("status: new item, new version"));
+
+        let add_without_association = format_knowledge_add_result(&ingest, None);
+        assert!(add_without_association.contains("Association: none"));
+
+        let associate_output = format_knowledge_associate_result(&association);
+        assert!(associate_output.contains("Knowledge associated"));
+        assert!(associate_output.contains("target: commit:abc123"));
+
+        let refresh_output = format_knowledge_refresh_result(&RefreshSourceResult {
+            knowledge_item_id: "item-1".to_string(),
+            latest_document_version_id: "version-2".to_string(),
+            content_changed: true,
+            new_version_created: true,
+        });
+        assert!(refresh_output.contains("Knowledge refreshed"));
+        assert!(refresh_output.contains("content changed: true"));
+
+        let versions_output = format_knowledge_versions_result(&ListVersionsResult {
+            knowledge_item_id: "item-1".to_string(),
+            versions: vec![
+                DocumentVersionSummary {
+                    knowledge_item_version_id: "version-2".to_string(),
+                    content_hash: "hash-2".to_string(),
+                    title: "Issue title".to_string(),
+                    updated_at: Some("2026-03-19T10:00:00Z".to_string()),
+                    created_at: Some("2026-03-19T10:01:00Z".to_string()),
+                },
+                DocumentVersionSummary {
+                    knowledge_item_version_id: "version-1".to_string(),
+                    content_hash: "hash-1".to_string(),
+                    title: "Issue title".to_string(),
+                    updated_at: None,
+                    created_at: None,
+                },
+            ],
+        });
+        assert!(versions_output.contains("Knowledge versions"));
+        assert!(versions_output.contains("versions: 2"));
+        assert!(versions_output.contains("hash=hash-2"));
+        assert!(versions_output.contains("updated_at=<none>"));
+
+        let document = FetchedKnowledgeDocument {
+            external_id: "github://bitloops/bitloops/issues/42".to_string(),
+            title: "Issue title".to_string(),
+            web_url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
+            state: Some("open".to_string()),
+            author: Some("spiros".to_string()),
+            updated_at: Some("2026-03-19T10:00:00Z".to_string()),
+            body_preview: Some("Issue body".to_string()),
+            normalized_fields: json!({ "title": "Issue title" }),
+            payload: KnowledgePayloadEnvelope {
+                raw_payload: json!({ "title": "Issue title" }),
+                body_text: Some("Issue body".to_string()),
+                body_html: None,
+                body_adf: None,
+                discussion: None,
+            },
+        };
+        assert_eq!(
+            document.payload.raw_payload.get("title").and_then(Value::as_str),
+            Some("Issue title")
+        );
+    }
+}

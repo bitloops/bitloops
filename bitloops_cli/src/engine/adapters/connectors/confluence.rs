@@ -156,6 +156,14 @@ pub(crate) fn build_confluence_record(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn build_confluence_document(
+    parsed: &ParsedKnowledgeUrl,
+    payload: Value,
+) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+    Ok(build_confluence_record(parsed, payload)?.into())
+}
+
 fn confluence_config(
     provider_config: &crate::store_config::ProviderConfig,
 ) -> Option<&AtlassianProviderConfig> {
@@ -175,4 +183,74 @@ fn strip_html_tags(raw: &str) -> String {
 fn html_tag_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| Regex::new(r"<[^>]+>").expect("valid html strip regex"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed_page() -> ParsedKnowledgeUrl {
+        ParsedKnowledgeUrl {
+            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Confluence,
+            source_kind:
+                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::ConfluencePage,
+            canonical_external_id: "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548".to_string(),
+            canonical_url:
+                "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge".to_string(),
+            provider_site: Some("https://bitloops.atlassian.net".to_string()),
+            locator: KnowledgeLocator::ConfluencePage {
+                site: "https://bitloops.atlassian.net".to_string(),
+                page_id: "438337548".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn can_handle_only_confluence_urls() {
+        let adapter = ConfluenceKnowledgeAdapter::new().expect("adapter");
+        assert!(adapter.can_handle(&parsed_page()));
+    }
+
+    #[test]
+    fn build_document_maps_page_payload() {
+        let document = build_confluence_document(
+            &parsed_page(),
+            serde_json::json!({
+                "title": " Knowledge page ",
+                "version": {
+                    "when": "2026-03-16T12:00:00Z",
+                    "by": { "displayName": "Docs User" }
+                },
+                "body": {
+                    "storage": {
+                        "value": "<p>Hello <strong>world</strong></p>"
+                    }
+                }
+            }),
+        )
+        .expect("document");
+
+        assert_eq!(document.external_id, "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548");
+        assert_eq!(document.title, " Knowledge page ");
+        assert_eq!(document.author.as_deref(), Some("Docs User"));
+        assert_eq!(document.body_preview.as_deref(), Some("Hello world"));
+        assert_eq!(document.payload.body_text.as_deref(), Some("Hello world"));
+        assert_eq!(
+            document.payload.body_html.as_deref(),
+            Some("<p>Hello <strong>world</strong></p>")
+        );
+    }
+
+    #[test]
+    fn build_document_rejects_missing_title() {
+        let err = build_confluence_document(
+            &parsed_page(),
+            serde_json::json!({
+                "version": { "when": "2026-03-16T12:00:00Z" }
+            }),
+        )
+        .expect_err("missing title must fail");
+
+        assert!(err.to_string().contains("missing `title`"));
+    }
 }
