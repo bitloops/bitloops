@@ -455,7 +455,10 @@ fn watch_runtime_config_prefers_env_over_file() {
 
     assert_eq!(cfg.watch_debounce_ms, 850);
     assert_eq!(cfg.watch_poll_fallback_ms, 3100);
-    fn dashboard_file_config_load_reads_repo_config_file() {
+}
+
+#[test]
+fn dashboard_file_config_load_reads_repo_config_file() {
         let temp = tempfile::tempdir().expect("temp dir");
         write_repo_config(
             temp.path(),
@@ -654,4 +657,3 @@ fn watch_runtime_config_prefers_env_over_file() {
             },
         );
     }
-}
