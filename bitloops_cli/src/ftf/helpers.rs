@@ -1,4 +1,7 @@
 use super::world::FtfWorld;
+use crate::engine::agent::AGENT_NAME_CLAUDE_CODE;
+use crate::engine::session::create_session_backend_or_local;
+use crate::engine::strategy::manual_commit::{read_commit_checkpoint_mappings, read_committed};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::Serialize;
 use std::ffi::OsString;
@@ -11,6 +14,11 @@ use time::{Duration, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 use uuid::Uuid;
 
 pub const BITLOOPS_REPO_NAME: &str = "bitloops";
+const DEFAULT_CLAUDE_CODE_COMMAND: &str =
+    "claude --model haiku --permission-mode bypassPermissions -p";
+const FIRST_CLAUDE_PROMPT: &str =
+    "Remove the Vite example code from the project and replace it with a simple hello world page";
+const SECOND_CLAUDE_PROMPT: &str = "Change the hello world color to blue";
 
 #[derive(Debug, Serialize)]
 struct RunMetadata<'a> {
@@ -178,6 +186,22 @@ pub fn run_enable_cli_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result<
     run_bitloops_success(world, &["enable"], "bitloops enable")
 }
 
+pub fn run_first_change_using_claude_code_for_repo(
+    world: &mut FtfWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_claude_code_prompt(world, FIRST_CLAUDE_PROMPT)
+}
+
+pub fn run_second_change_using_claude_code_for_repo(
+    world: &mut FtfWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_claude_code_prompt(world, SECOND_CLAUDE_PROMPT)
+}
+
 pub fn commit_for_relative_day_for_repo(
     world: &mut FtfWorld,
     repo_name: &str,
@@ -234,6 +258,64 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &FtfWorld, repo_name: &str) 
         events.exists(),
         "expected events store at {}",
         events.display()
+    );
+    Ok(())
+}
+
+pub fn assert_claude_session_exists_for_repo(world: &FtfWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let backend = create_session_backend_or_local(world.repo_dir());
+    let sessions = backend
+        .list_sessions()
+        .context("listing persisted Bitloops sessions")?;
+
+    let Some(session) = sessions
+        .iter()
+        .find(|session| session.agent_type == AGENT_NAME_CLAUDE_CODE)
+    else {
+        bail!("expected at least one persisted claude-code session");
+    };
+
+    ensure!(
+        !session.session_id.is_empty(),
+        "expected claude-code session to have a session id"
+    );
+    ensure!(
+        !session.transcript_path.is_empty(),
+        "expected claude-code session to record a transcript path"
+    );
+    Ok(())
+}
+
+pub fn assert_checkpoint_mapping_exists_for_repo(world: &FtfWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
+        .context("reading Bitloops checkpoint mappings")?;
+    let Some(checkpoint_id) = mappings.values().next() else {
+        bail!("expected at least one Bitloops checkpoint mapping");
+    };
+
+    let summary = read_committed(world.repo_dir(), checkpoint_id)
+        .with_context(|| format!("reading committed checkpoint summary for {checkpoint_id}"))?;
+    ensure!(
+        summary.is_some(),
+        "expected committed checkpoint summary for {checkpoint_id}"
+    );
+    Ok(())
+}
+
+pub fn assert_checkpoint_mapping_count_at_least_for_repo(
+    world: &FtfWorld,
+    repo_name: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
+        .context("reading Bitloops checkpoint mappings")?;
+    ensure!(
+        mappings.len() >= min_count,
+        "expected at least {min_count} Bitloops checkpoint mappings, got {}",
+        mappings.len()
     );
     Ok(())
 }
@@ -314,10 +396,36 @@ fn configure_git_identity(world: &FtfWorld) -> Result<()> {
     Ok(())
 }
 
+fn run_claude_code_prompt(world: &FtfWorld, prompt: &str) -> Result<()> {
+    let command_spec = std::env::var("BITLOOPS_FTF_CLAUDE_CMD")
+        .unwrap_or_else(|_| DEFAULT_CLAUDE_CODE_COMMAND.to_string());
+    let output = run_command_capture(
+        world,
+        "claude prompt",
+        build_host_shell_command(
+            world,
+            &format!("{command_spec} {}", shell_single_quote(prompt)),
+        )?,
+    )
+    .context("running external Claude Code prompt")?;
+    ensure_success(&output, "claude prompt")
+}
+
 fn run_bitloops_success(world: &FtfWorld, args: &[&str], label: &str) -> Result<()> {
     let output = run_command_capture(world, label, build_bitloops_command(world, args)?)
         .with_context(|| format!("running {label}"))?;
     ensure_success(&output, label)
+}
+
+fn build_host_shell_command(world: &FtfWorld, script: &str) -> Result<Command> {
+    let mut command = Command::new("bash");
+    command
+        .args(["-lc", script])
+        .current_dir(world.repo_dir())
+        .env("PWD", world.repo_dir())
+        .env("ACCESSIBLE", "1")
+        .env("BITLOOPS_FTF_ACTIVE", "1");
+    Ok(command)
 }
 
 fn run_git_success(
@@ -492,6 +600,10 @@ fn short_run_id() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_string()
 }
 
+fn shell_single_quote(input: &str) -> String {
+    format!("'{}'", input.replace('\'', r#"'"'"'"#))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,5 +650,11 @@ mod tests {
                 .join("main.tsx")
                 .exists()
         );
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_single_quotes() {
+        assert_eq!(shell_single_quote("plain"), "'plain'");
+        assert_eq!(shell_single_quote("it's ok"), "'it'\"'\"'s ok'");
     }
 }

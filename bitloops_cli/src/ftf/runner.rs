@@ -14,9 +14,9 @@ use uuid::Uuid;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct FtfArgs {
-    /// Run every available ftf feature instead of the smoke subset.
+    /// Run the lightweight foundation smoke suite instead of the default Claude Code suite.
     #[arg(long, default_value_t = false)]
-    pub full: bool,
+    pub smoke: bool,
 
     /// Run a specific feature file or feature directory.
     #[arg(long)]
@@ -121,7 +121,7 @@ fn resolve_feature_path(args: &FtfArgs) -> Result<PathBuf> {
         return Ok(resolved);
     }
 
-    Ok(default_feature_path(&feature_root(), args.full))
+    Ok(default_feature_path(&feature_root(), args.smoke))
 }
 
 fn feature_root() -> PathBuf {
@@ -130,11 +130,11 @@ fn feature_root() -> PathBuf {
         .join("features")
 }
 
-fn default_feature_path(feature_root: &Path, full: bool) -> PathBuf {
-    if full {
-        feature_root.to_path_buf()
-    } else {
+fn default_feature_path(feature_root: &Path, smoke: bool) -> PathBuf {
+    if smoke {
         feature_root.join("smoke")
+    } else {
+        feature_root.join("claude-code")
     }
 }
 
@@ -143,9 +143,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_feature_path_prefers_smoke_suite() {
+    fn default_feature_path_defaults_to_claude_suite() {
         let root = PathBuf::from("/tmp/ftf/features");
-        assert_eq!(default_feature_path(&root, false), root.join("smoke"));
-        assert_eq!(default_feature_path(&root, true), root);
+        assert_eq!(default_feature_path(&root, false), root.join("claude-code"));
+        assert_eq!(default_feature_path(&root, true), root.join("smoke"));
     }
 }

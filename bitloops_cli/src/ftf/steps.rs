@@ -100,6 +100,32 @@ fn given_enable_cli(world: &mut FtfWorld, ctx: cucumber::step::Context) -> Local
     })
 }
 
+fn given_first_claude_change(
+    world: &mut FtfWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I make a first change using Claude Code",
+            helpers::run_first_change_using_claude_code_for_repo(world, &repo_name),
+        );
+    })
+}
+
+fn given_second_claude_change(
+    world: &mut FtfWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I make a second change using Claude Code",
+            helpers::run_second_change_using_claude_code_for_repo(world, &repo_name),
+        );
+    })
+}
+
 fn given_commit_yesterday(
     world: &mut FtfWorld,
     ctx: cucumber::step::Context,
@@ -164,6 +190,51 @@ fn then_commit_timeline_is_correct(
     })
 }
 
+fn then_claude_session_exists(
+    world: &mut FtfWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "claude-code session exists",
+            helpers::assert_claude_session_exists_for_repo(world, &repo_name),
+        );
+    })
+}
+
+fn then_checkpoint_mapping_exists(
+    world: &mut FtfWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "checkpoint mapping exists",
+            helpers::assert_checkpoint_mapping_exists_for_repo(world, &repo_name),
+        );
+    })
+}
+
+fn then_checkpoint_mapping_count_at_least(
+    world: &mut FtfWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let min_count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("checkpoint mapping count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "checkpoint mapping count is at least",
+            helpers::assert_checkpoint_mapping_count_at_least_for_repo(
+                world, &repo_name, min_count,
+            ),
+        );
+    })
+}
+
 pub fn collection() -> Collection<FtfWorld> {
     Collection::new()
         .given(
@@ -208,6 +279,16 @@ pub fn collection() -> Collection<FtfWorld> {
         )
         .given(
             None,
+            regex(r"^I make a first change using Claude Code to (\S+)$"),
+            step_fn(given_first_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I make a second change using Claude Code to (\S+)$"),
+            step_fn(given_second_claude_change),
+        )
+        .given(
+            None,
             regex(r"^I committed yesterday in (\S+)$"),
             step_fn(given_commit_yesterday),
         )
@@ -225,5 +306,20 @@ pub fn collection() -> Collection<FtfWorld> {
             None,
             regex(r"^commit timeline and contents are correct in (\S+)$"),
             step_fn(then_commit_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r"^claude-code session exists in (\S+)$"),
+            step_fn(then_claude_session_exists),
+        )
+        .then(
+            None,
+            regex(r"^checkpoint mapping exists in (\S+)$"),
+            step_fn(then_checkpoint_mapping_exists),
+        )
+        .then(
+            None,
+            regex(r"^checkpoint mapping count is at least (\d+) in (\S+)$"),
+            step_fn(then_checkpoint_mapping_count_at_least),
         )
 }
