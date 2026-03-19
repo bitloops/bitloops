@@ -70,7 +70,8 @@ impl DevqlCapabilityHost {
     pub fn register_pack(&mut self, pack: &dyn CapabilityPack) -> Result<()> {
         lifecycle::register_pack(self, pack)?;
         let descriptor = pack.descriptor();
-        self.descriptors.insert(descriptor.id.to_string(), descriptor);
+        self.descriptors
+            .insert(descriptor.id.to_string(), descriptor);
         self.migrations.extend_from_slice(pack.migrations());
         self.health_checks
             .entry(descriptor.id.to_string())
@@ -115,9 +116,7 @@ impl DevqlCapabilityHost {
             .get(&(capability_id.to_string(), ingester_name.to_string()))
             .cloned();
         let Some(handler) = handler else {
-            bail!(
-                "ingester `{ingester_name}` is not registered for capability `{capability_id}`"
-            );
+            bail!("ingester `{ingester_name}` is not registered for capability `{capability_id}`");
         };
 
         let request = IngestRequest::new(payload);
@@ -174,7 +173,10 @@ impl DevqlCapabilityHost {
 
 impl CapabilityRegistrar for DevqlCapabilityHost {
     fn register_stage(&mut self, stage: StageRegistration) -> Result<()> {
-        let key = (stage.capability_id.to_string(), stage.stage_name.to_string());
+        let key = (
+            stage.capability_id.to_string(),
+            stage.stage_name.to_string(),
+        );
         if self.stages.contains_key(&key) {
             bail!(
                 "stage `{}` is already registered for capability `{}`",
@@ -523,7 +525,10 @@ mod tests {
             .register_pack(&StageOnlyPack)
             .expect_err("duplicate stage should fail");
 
-        assert!(err.to_string().contains("stage `knowledge.stage` is already registered"));
+        assert!(
+            err.to_string()
+                .contains("stage `knowledge.stage` is already registered")
+        );
     }
 
     #[test]

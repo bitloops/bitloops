@@ -325,7 +325,10 @@ mod tests {
             "github_pull_request"
         );
         assert_eq!(KnowledgeSourceKind::JiraIssue.as_str(), "jira_issue");
-        assert_eq!(KnowledgeSourceKind::ConfluencePage.as_str(), "confluence_page");
+        assert_eq!(
+            KnowledgeSourceKind::ConfluencePage.as_str(),
+            "confluence_page"
+        );
     }
 
     #[test]
@@ -437,7 +440,11 @@ mod tests {
             },
         };
         assert_eq!(
-            document.payload.raw_payload.get("title").and_then(Value::as_str),
+            document
+                .payload
+                .raw_payload
+                .get("title")
+                .and_then(Value::as_str),
             Some("Issue title")
         );
     }

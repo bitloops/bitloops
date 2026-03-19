@@ -15,7 +15,11 @@ pub use refresh::KnowledgeRefreshIngester;
 pub use versions::KnowledgeVersionsIngester;
 
 pub fn build_knowledge_add_ingester(services: Arc<KnowledgeServices>) -> IngesterRegistration {
-    IngesterRegistration::new("knowledge", "knowledge.add", Arc::new(KnowledgeAddIngester::new(services)))
+    IngesterRegistration::new(
+        "knowledge",
+        "knowledge.add",
+        Arc::new(KnowledgeAddIngester::new(services)),
+    )
 }
 
 pub fn build_knowledge_associate_ingester(

@@ -9,7 +9,9 @@ use crate::engine::devql::capabilities::knowledge::{
 };
 use crate::store_config::AtlassianProviderConfig;
 
-use super::types::{BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter};
+use super::types::{
+    BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
+};
 
 pub struct ConfluenceKnowledgeAdapter {
     client: Client,
@@ -167,7 +169,10 @@ pub(crate) fn build_confluence_document(
 fn confluence_config(
     provider_config: &crate::store_config::ProviderConfig,
 ) -> Option<&AtlassianProviderConfig> {
-    provider_config.confluence.as_ref().or(provider_config.atlassian.as_ref())
+    provider_config
+        .confluence
+        .as_ref()
+        .or(provider_config.atlassian.as_ref())
 }
 
 fn strip_html_tags(raw: &str) -> String {
@@ -194,9 +199,11 @@ mod tests {
             provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Confluence,
             source_kind:
                 crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::ConfluencePage,
-            canonical_external_id: "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548".to_string(),
+            canonical_external_id:
+                "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548".to_string(),
             canonical_url:
-                "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge".to_string(),
+                "https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548/Knowledge"
+                    .to_string(),
             provider_site: Some("https://bitloops.atlassian.net".to_string()),
             locator: KnowledgeLocator::ConfluencePage {
                 site: "https://bitloops.atlassian.net".to_string(),
@@ -230,7 +237,10 @@ mod tests {
         )
         .expect("document");
 
-        assert_eq!(document.external_id, "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548");
+        assert_eq!(
+            document.external_id,
+            "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548"
+        );
         assert_eq!(document.title, " Knowledge page ");
         assert_eq!(document.author.as_deref(), Some("Docs User"));
         assert_eq!(document.body_preview.as_deref(), Some("Hello world"));

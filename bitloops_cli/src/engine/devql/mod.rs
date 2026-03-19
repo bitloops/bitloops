@@ -26,8 +26,8 @@ use crate::store_config::{
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
-pub mod capability_host;
 pub mod capabilities;
+pub mod capability_host;
 pub(crate) mod identity;
 
 pub(crate) use identity::deterministic_uuid;

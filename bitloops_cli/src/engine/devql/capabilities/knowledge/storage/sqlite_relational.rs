@@ -3,7 +3,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::capability_host::gateways::KnowledgeRelationalGateway;
-use crate::engine::devql::{knowledge_schema_sql_sqlite};
+use crate::engine::devql::knowledge_schema_sql_sqlite;
 use crate::engine::trailers::is_valid_checkpoint_id;
 
 use super::models::{KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow};
@@ -112,7 +112,10 @@ impl SqliteKnowledgeRelationalStore {
         })
     }
 
-    pub fn find_source_by_id(&self, knowledge_source_id: &str) -> Result<Option<KnowledgeSourceRow>> {
+    pub fn find_source_by_id(
+        &self,
+        knowledge_source_id: &str,
+    ) -> Result<Option<KnowledgeSourceRow>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
                 "SELECT knowledge_source_id, provider, source_kind, canonical_external_id, canonical_url, provenance_json
@@ -136,7 +139,11 @@ impl SqliteKnowledgeRelationalStore {
         })
     }
 
-    pub fn list_items_for_repo(&self, repo_id: &str, limit: usize) -> Result<Vec<KnowledgeItemRow>> {
+    pub fn list_items_for_repo(
+        &self,
+        repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeItemRow>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn
                 .prepare(

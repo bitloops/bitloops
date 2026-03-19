@@ -54,7 +54,10 @@ impl ConnectorRegistry for BuiltinConnectorRegistry {
         if adapter.can_handle(parsed) {
             Ok(adapter)
         } else {
-            bail!("no connector adapter can handle `{}`", parsed.canonical_external_id)
+            bail!(
+                "no connector adapter can handle `{}`",
+                parsed.canonical_external_id
+            )
         }
     }
 }

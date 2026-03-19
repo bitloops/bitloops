@@ -450,8 +450,8 @@ mod tests {
         CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
     };
     use crate::store_config::{
-        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider, ProviderConfig,
-        RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
+        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
+        ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
@@ -463,15 +463,20 @@ mod tests {
 
     impl KnowledgeConnectorAdapter for StubAdapter {
         fn can_handle(&self, parsed: &super::super::types::ParsedKnowledgeUrl) -> bool {
-            matches!(parsed.provider, super::super::types::KnowledgeProvider::Github)
+            matches!(
+                parsed.provider,
+                super::super::types::KnowledgeProvider::Github
+            )
         }
 
         fn fetch<'a>(
             &'a self,
             _parsed: &'a super::super::types::ParsedKnowledgeUrl,
             _ctx: &'a dyn ConnectorContext,
-        ) -> crate::engine::adapters::connectors::types::BoxFuture<'a, Result<ExternalKnowledgeRecord>>
-        {
+        ) -> crate::engine::adapters::connectors::types::BoxFuture<
+            'a,
+            Result<ExternalKnowledgeRecord>,
+        > {
             Box::pin(async move {
                 let mut records = self.records.lock().expect("stub records mutex");
                 let Some(record) = records.pop_front() else {
@@ -624,7 +629,12 @@ mod tests {
             },
             blobs: BlobStorageConfig {
                 provider: BlobStorageProvider::Local,
-                local_path: Some(temp.path().join("knowledge-blobs").to_string_lossy().to_string()),
+                local_path: Some(
+                    temp.path()
+                        .join("knowledge-blobs")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
                 s3_bucket: None,
                 s3_region: None,
                 s3_access_key_id: None,
@@ -690,7 +700,8 @@ mod tests {
         let repo = test_repo_identity(repo_root.as_path());
         let backends = test_backends(temp);
         let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
-        let relational = SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
+        let relational =
+            SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
         relational.initialise_schema()?;
         let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
         documents.initialise_schema()?;
@@ -822,7 +833,9 @@ mod tests {
         )?;
         assert_eq!(stage_rows.len(), 1);
         assert_eq!(
-            stage_rows[0].get("knowledge_item_id").and_then(Value::as_str),
+            stage_rows[0]
+                .get("knowledge_item_id")
+                .and_then(Value::as_str),
             Some(first.knowledge_item_id.as_str())
         );
 

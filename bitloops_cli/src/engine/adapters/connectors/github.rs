@@ -6,7 +6,9 @@ use crate::engine::devql::capabilities::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, KnowledgeSourceKind, ParsedKnowledgeUrl,
 };
 
-use super::types::{BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter};
+use super::types::{
+    BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
+};
 
 const GITHUB_ACCEPT_HEADER: &str = "application/vnd.github+json";
 const GITHUB_USER_AGENT: &str = "bitloops-cli";
@@ -48,17 +50,21 @@ impl KnowledgeConnectorAdapter for GitHubKnowledgeAdapter {
         ctx: &'a dyn ConnectorContext,
     ) -> BoxFuture<'a, Result<ExternalKnowledgeRecord>> {
         Box::pin(async move {
-            let github = ctx
-                .provider_config()
-                .github
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing `knowledge.providers.github` configuration"))?;
+            let github = ctx.provider_config().github.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("missing `knowledge.providers.github` configuration")
+            })?;
 
             let (owner, repo, number) = match &parsed.locator {
-                KnowledgeLocator::GithubIssue { owner, repo, number }
-                | KnowledgeLocator::GithubPullRequest { owner, repo, number } => {
-                    (owner.as_str(), repo.as_str(), *number)
+                KnowledgeLocator::GithubIssue {
+                    owner,
+                    repo,
+                    number,
                 }
+                | KnowledgeLocator::GithubPullRequest {
+                    owner,
+                    repo,
+                    number,
+                } => (owner.as_str(), repo.as_str(), *number),
                 _ => bail!("GitHub adapter received non-GitHub locator"),
             };
 
@@ -244,10 +250,7 @@ mod tests {
         assert_eq!(document.state.as_deref(), Some("open"));
         assert_eq!(document.author.as_deref(), Some("spiros"));
         assert_eq!(document.body_preview.as_deref(), Some("Issue body"));
-        assert_eq!(
-            document.payload.body_text.as_deref(),
-            Some("Issue body")
-        );
+        assert_eq!(document.payload.body_text.as_deref(), Some("Issue body"));
     }
 
     #[test]

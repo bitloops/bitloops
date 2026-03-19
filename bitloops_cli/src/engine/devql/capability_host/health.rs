@@ -40,10 +40,7 @@ impl CapabilityHealthResult {
         if self.healthy {
             Ok(())
         } else {
-            Err(anyhow::anyhow!(
-                "{}",
-                self.details.unwrap_or(self.message)
-            ))
+            Err(anyhow::anyhow!("{}", self.details.unwrap_or(self.message)))
         }
     }
 }

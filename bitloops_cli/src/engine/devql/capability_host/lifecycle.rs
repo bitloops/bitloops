@@ -50,12 +50,7 @@ pub fn run_health_checks(
 ) -> Vec<(String, CapabilityHealthResult)> {
     checks
         .iter()
-        .map(|check| {
-            (
-                format!("{capability_id}.{}", check.name),
-                (check.run)(ctx),
-            )
-        })
+        .map(|check| (format!("{capability_id}.{}", check.name), (check.run)(ctx)))
         .collect()
 }
 
@@ -73,8 +68,7 @@ mod tests {
         CapabilityMigrationContext,
     };
     use crate::engine::devql::capability_host::gateways::{
-        ConnectorRegistry, KnowledgeDocumentGateway, KnowledgeRelationalGateway,
-        StoreHealthGateway,
+        ConnectorRegistry, KnowledgeDocumentGateway, KnowledgeRelationalGateway, StoreHealthGateway,
     };
     use crate::engine::devql::capability_host::health::{
         CapabilityHealthCheck, CapabilityHealthResult,
@@ -155,7 +149,8 @@ mod tests {
         }
 
         fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()> {
-            self.query_examples.extend(examples.iter().map(|example| example.name));
+            self.query_examples
+                .extend(examples.iter().map(|example| example.name));
             Ok(())
         }
     }
@@ -181,7 +176,14 @@ mod tests {
             _ctx: &'a mut dyn CapabilityIngestContext,
         ) -> BoxFuture<'a, Result<crate::engine::devql::capability_host::registrar::IngestResult>>
         {
-            Box::pin(async move { Ok(crate::engine::devql::capability_host::registrar::IngestResult::new(json!({}), "")) })
+            Box::pin(async move {
+                Ok(
+                    crate::engine::devql::capability_host::registrar::IngestResult::new(
+                        json!({}),
+                        "",
+                    ),
+                )
+            })
         }
     }
 
@@ -337,7 +339,8 @@ mod tests {
             SqliteConnectionPool::connect(paths::default_relational_db_path(&repo_root))
                 .expect("sqlite pool"),
         );
-        let documents = DuckdbKnowledgeDocumentStore::new(paths::default_events_db_path(&repo_root));
+        let documents =
+            DuckdbKnowledgeDocumentStore::new(paths::default_events_db_path(&repo_root));
 
         MigrationContext {
             _temp: temp,

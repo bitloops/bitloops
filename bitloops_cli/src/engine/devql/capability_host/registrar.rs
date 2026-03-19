@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
 use super::descriptor::CapabilityDescriptor;
-use super::migrations::CapabilityMigration;
 use super::health::CapabilityHealthCheck;
+use super::migrations::CapabilityMigration;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -292,7 +292,8 @@ mod tests {
             }
         }
 
-        let stage = StageRegistration::new("knowledge", "knowledge.stage", Arc::new(DummyStageHandler));
+        let stage =
+            StageRegistration::new("knowledge", "knowledge.stage", Arc::new(DummyStageHandler));
         let ingester = IngesterRegistration::new(
             "knowledge",
             "knowledge.ingest",

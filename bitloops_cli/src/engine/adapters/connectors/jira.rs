@@ -7,7 +7,9 @@ use crate::engine::devql::capabilities::knowledge::{
 };
 use crate::store_config::AtlassianProviderConfig;
 
-use super::types::{BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter};
+use super::types::{
+    BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
+};
 
 pub struct JiraKnowledgeAdapter {
     client: Client,
@@ -161,8 +163,13 @@ pub(crate) fn build_jira_document(
     Ok(build_jira_record(parsed, payload)?.into())
 }
 
-fn jira_config(provider_config: &crate::store_config::ProviderConfig) -> Option<&AtlassianProviderConfig> {
-    provider_config.jira.as_ref().or(provider_config.atlassian.as_ref())
+fn jira_config(
+    provider_config: &crate::store_config::ProviderConfig,
+) -> Option<&AtlassianProviderConfig> {
+    provider_config
+        .jira
+        .as_ref()
+        .or(provider_config.atlassian.as_ref())
 }
 
 fn collect_text_preview(value: &Value) -> Option<String> {
@@ -211,7 +218,8 @@ mod tests {
     fn parsed_issue() -> ParsedKnowledgeUrl {
         ParsedKnowledgeUrl {
             provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Jira,
-            source_kind: crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::JiraIssue,
+            source_kind:
+                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::JiraIssue,
             canonical_external_id: "jira://bitloops.atlassian.net/browse/CLI-1370".to_string(),
             canonical_url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
             provider_site: Some("https://bitloops.atlassian.net".to_string()),
@@ -252,15 +260,15 @@ mod tests {
         )
         .expect("document");
 
-        assert_eq!(document.external_id, "jira://bitloops.atlassian.net/browse/CLI-1370");
+        assert_eq!(
+            document.external_id,
+            "jira://bitloops.atlassian.net/browse/CLI-1370"
+        );
         assert_eq!(document.title, " Jira title ");
         assert_eq!(document.state.as_deref(), Some("In Progress"));
         assert_eq!(document.author.as_deref(), Some("Spiros"));
         assert_eq!(document.body_preview.as_deref(), Some("Jira body"));
-        assert_eq!(
-            document.payload.body_text.as_deref(),
-            Some("Jira body")
-        );
+        assert_eq!(document.payload.body_text.as_deref(), Some("Jira body"));
         assert!(document.payload.body_adf.is_some());
     }
 
@@ -278,7 +286,10 @@ mod tests {
         .expect("document");
 
         assert_eq!(document.body_preview.as_deref(), Some("Plain Jira body"));
-        assert_eq!(document.payload.body_text.as_deref(), Some("Plain Jira body"));
+        assert_eq!(
+            document.payload.body_text.as_deref(),
+            Some("Plain Jira body")
+        );
         assert!(document.payload.body_adf.is_some());
     }
 

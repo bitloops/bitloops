@@ -202,7 +202,9 @@ pub fn resolve_target_ref(
         } => {
             ctx.knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
-                .with_context(|| format!("target knowledge item `{knowledge_item_id}` not found"))?;
+                .with_context(|| {
+                    format!("target knowledge item `{knowledge_item_id}` not found")
+                })?;
             Ok(ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id })
         }
         KnowledgeRef::Checkpoint { checkpoint_id } => {
@@ -256,17 +258,19 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use crate::engine::adapters::connectors::{ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter};
+    use crate::engine::adapters::connectors::{
+        ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
+    };
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::storage::{
-        KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgePayloadRef, KnowledgeRelationAssertionRow,
-        KnowledgeSourceRow,
+        KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgePayloadRef,
+        KnowledgeRelationAssertionRow, KnowledgeSourceRow,
     };
+    use crate::engine::devql::capability_host::CapabilityIngestContext;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::{
         BlobPayloadGateway, KnowledgeDocumentGateway, KnowledgeRelationalGateway, ProvenanceBuilder,
     };
-    use crate::engine::devql::capability_host::CapabilityIngestContext;
     use crate::store_config::ProviderConfig;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
@@ -287,7 +291,9 @@ mod tests {
             &self,
             _parsed: &crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
         ) -> Result<&dyn KnowledgeConnectorAdapter> {
-            Err(anyhow!("connector lookup should not be called in refs tests"))
+            Err(anyhow!(
+                "connector lookup should not be called in refs tests"
+            ))
         }
     }
 
@@ -337,7 +343,11 @@ mod tests {
             Ok(())
         }
 
-        fn persist_ingestion(&self, _source: &KnowledgeSourceRow, _item: &KnowledgeItemRow) -> Result<()> {
+        fn persist_ingestion(
+            &self,
+            _source: &KnowledgeSourceRow,
+            _item: &KnowledgeItemRow,
+        ) -> Result<()> {
             Ok(())
         }
 
@@ -363,14 +373,21 @@ mod tests {
                 .filter(|item| item.knowledge_item_id == knowledge_item_id))
         }
 
-        fn find_source_by_id(&self, knowledge_source_id: &str) -> Result<Option<KnowledgeSourceRow>> {
+        fn find_source_by_id(
+            &self,
+            knowledge_source_id: &str,
+        ) -> Result<Option<KnowledgeSourceRow>> {
             Ok(self
                 .source
                 .clone()
                 .filter(|source| source.knowledge_source_id == knowledge_source_id))
         }
 
-        fn list_items_for_repo(&self, _repo_id: &str, _limit: usize) -> Result<Vec<KnowledgeItemRow>> {
+        fn list_items_for_repo(
+            &self,
+            _repo_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<KnowledgeItemRow>> {
             Ok(self.item.clone().into_iter().collect())
         }
 
@@ -644,7 +661,10 @@ mod tests {
 
         let resolved_deprecated = resolve_source_ref(&ctx, "knowledge_version:version-1")?;
         assert_eq!(resolved_deprecated.knowledge_item_id, "item-1");
-        assert_eq!(resolved_deprecated.source_knowledge_item_version_id, "version-1");
+        assert_eq!(
+            resolved_deprecated.source_knowledge_item_version_id,
+            "version-1"
+        );
 
         assert!(resolve_source_ref(&ctx, "commit:abc123").is_err());
         assert!(resolve_source_ref(&ctx, "checkpoint:deadbeef").is_err());

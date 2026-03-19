@@ -87,7 +87,10 @@ impl LocalCapabilityRuntimeResources {
     }
 }
 
-fn build_capability_config_root(backends: &StoreBackendConfig, providers: &ProviderConfig) -> Value {
+fn build_capability_config_root(
+    backends: &StoreBackendConfig,
+    providers: &ProviderConfig,
+) -> Value {
     serde_json::json!({
         "knowledge": {
             "providers": {

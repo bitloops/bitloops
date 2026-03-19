@@ -12,7 +12,10 @@ pub struct BlobKnowledgePayloadStore {
 }
 
 impl BlobKnowledgePayloadStore {
-    pub fn from_backend_config(repo_root: &std::path::Path, cfg: &StoreBackendConfig) -> Result<Self> {
+    pub fn from_backend_config(
+        repo_root: &std::path::Path,
+        cfg: &StoreBackendConfig,
+    ) -> Result<Self> {
         let resolved = create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
             .context("initialising knowledge payload blob store")?;
         Ok(Self {

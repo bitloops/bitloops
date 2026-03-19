@@ -171,7 +171,10 @@ impl DuckdbKnowledgeDocumentStore {
         }
     }
 
-    pub fn list_versions_for_item(&self, knowledge_item_id: &str) -> Result<Vec<KnowledgeDocumentVersionRow>> {
+    pub fn list_versions_for_item(
+        &self,
+        knowledge_item_id: &str,
+    ) -> Result<Vec<KnowledgeDocumentVersionRow>> {
         ensure_parent_dir(&self.path)?;
         let conn = duckdb::Connection::open(&self.path).with_context(|| {
             format!(
@@ -234,7 +237,11 @@ impl KnowledgeDocumentGateway for DuckdbKnowledgeDocumentStore {
         knowledge_item_id: &str,
         content_hash: &str,
     ) -> Result<Option<String>> {
-        DuckdbKnowledgeDocumentStore::has_knowledge_item_version(self, knowledge_item_id, content_hash)
+        DuckdbKnowledgeDocumentStore::has_knowledge_item_version(
+            self,
+            knowledge_item_id,
+            content_hash,
+        )
     }
 
     fn insert_knowledge_item_version(&self, row: &KnowledgeDocumentVersionRow) -> Result<()> {
@@ -252,7 +259,10 @@ impl KnowledgeDocumentGateway for DuckdbKnowledgeDocumentStore {
         DuckdbKnowledgeDocumentStore::find_knowledge_item_version(self, knowledge_item_version_id)
     }
 
-    fn list_versions_for_item(&self, knowledge_item_id: &str) -> Result<Vec<KnowledgeDocumentVersionRow>> {
+    fn list_versions_for_item(
+        &self,
+        knowledge_item_id: &str,
+    ) -> Result<Vec<KnowledgeDocumentVersionRow>> {
         DuckdbKnowledgeDocumentStore::list_versions_for_item(self, knowledge_item_id)
     }
 }
