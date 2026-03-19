@@ -204,49 +204,333 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 }
 
 #[test]
-fn incoming_revision_is_newer_prefers_newer_timestamp_then_sha() {
-    let state = |revision_id: &str, committed_at_unix: i64| CurrentFileStateRecord {
-        revision_id: revision_id.to_string(),
-        blob_sha: "blob".to_string(),
-        committed_at_unix,
-    };
-    assert!(incoming_revision_is_newer(None, "bbb", 10));
-    let existing_1 = state("aaa", 9);
+fn incoming_revision_is_newer_prefers_revision_kind_then_timestamp_then_sha() {
+    let state =
+        |commit_sha: &str, revision_kind: &str, revision_id: &str, committed_at_unix: i64| {
+            CurrentFileStateRecord {
+                commit_sha: commit_sha.to_string(),
+                revision_kind: revision_kind.to_string(),
+                revision_id: revision_id.to_string(),
+                blob_sha: "blob".to_string(),
+                committed_at_unix,
+            }
+        };
+    assert!(incoming_revision_is_newer(None, "commit", "bbb", 10));
+    let existing_1 = state("aaa", "commit", "aaa", 9);
     assert!(incoming_revision_is_newer(
         Some(&existing_1),
+        "commit",
         "bbb",
         10
     ));
-    let existing_2 = state("zzz", 11);
+    let existing_2 = state("zzz", "commit", "zzz", 11);
     assert!(!incoming_revision_is_newer(
         Some(&existing_2),
+        "commit",
         "bbb",
         10
     ));
-    let existing_3 = state("aaa", 10);
+    let existing_3 = state("aaa", "commit", "aaa", 10);
     assert!(incoming_revision_is_newer(
         Some(&existing_3),
+        "commit",
         "bbb",
         10
     ));
-    let existing_4 = state("ccc", 10);
+    let existing_4 = state("ccc", "commit", "ccc", 10);
     assert!(!incoming_revision_is_newer(
         Some(&existing_4),
+        "commit",
         "bbb",
         10
     ));
-    let existing_5 = state("temp:9", 10);
+    let existing_5 = state("temp:9", "temporary", "temp:9", 10);
     assert!(incoming_revision_is_newer(
         Some(&existing_5),
+        "temporary",
         "temp:10",
         10
     ));
-    let existing_6 = state("temp:10", 10);
+    let existing_6 = state("temp:10", "temporary", "temp:10", 10);
     assert!(!incoming_revision_is_newer(
         Some(&existing_6),
+        "temporary",
         "temp:9",
         10
     ));
+    let existing_7 = state("commit-a", "commit", "commit-a", 100);
+    assert!(!incoming_revision_is_newer(
+        Some(&existing_7),
+        "temporary",
+        "temp:200",
+        200
+    ));
+    let existing_8 = state("commit-a", "temporary", "temp:88", 100);
+    assert!(incoming_revision_is_newer(
+        Some(&existing_8),
+        "commit",
+        "commit-b",
+        100
+    ));
+}
+
+#[tokio::test]
+async fn commit_revision_replaces_temporary_current_metadata_for_unchanged_content() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.db");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let path = "src/train.txt";
+    let blob_sha = "blob-stable";
+
+    upsert_current_state_for_content(
+        &cfg,
+        &relational,
+        &FileRevision {
+            commit_sha: "commit-old",
+            revision: RevisionRef {
+                kind: "temporary",
+                id: "temp:7",
+                temp_checkpoint_id: Some(7),
+            },
+            commit_unix: 100,
+            path,
+            blob_sha,
+        },
+        "hello world\n",
+    )
+    .await
+    .expect("write temporary current state");
+
+    upsert_current_state_for_content(
+        &cfg,
+        &relational,
+        &FileRevision {
+            commit_sha: "commit-new",
+            revision: RevisionRef {
+                kind: "commit",
+                id: "commit-new",
+                temp_checkpoint_id: None,
+            },
+            commit_unix: 100,
+            path,
+            blob_sha,
+        },
+        "hello world\n",
+    )
+    .await
+    .expect("write committed current state");
+
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let file_row: (String, String, String, Option<i64>) = conn
+        .query_row(
+            "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id \
+             FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![cfg.repo.repo_id, path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("fetch current file row");
+    assert_eq!(file_row.0, "commit-new");
+    assert_eq!(file_row.1, "commit");
+    assert_eq!(file_row.2, "commit-new");
+    assert!(file_row.3.is_none());
+
+    let artefact_row: (String, String, String, Option<i64>) = conn
+        .query_row(
+            "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id \
+             FROM artefacts_current WHERE repo_id = ?1 AND symbol_id = ?2",
+            rusqlite::params![cfg.repo.repo_id, file_symbol_id(path)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("fetch current file artefact row");
+    assert_eq!(artefact_row.0, "commit-new");
+    assert_eq!(artefact_row.1, "commit");
+    assert_eq!(artefact_row.2, "commit-new");
+    assert!(artefact_row.3.is_none());
+}
+
+#[tokio::test]
+async fn refresh_current_state_deletes_stale_edge_ids_before_upserting_new_natural_edge() {
+    let cfg = test_cfg();
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.db");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let path = "src/main.ts";
+    let blob_sha = "blob-123";
+    let file_artefact = test_file_row(&cfg, path, blob_sha, 20, 200);
+    let source = test_symbol_record(&cfg, path, blob_sha, "source-symbol", "source", 1, 5);
+    let edge = test_unresolved_call_edge(&source.symbol_fqn, "pkg::remote", 4);
+    let edge_metadata = edge.metadata.to_value().to_string();
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO artefact_edges_current (
+            edge_id, repo_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
+            blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id,
+            to_symbol_ref, edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "legacy-edge-id",
+            cfg.repo.repo_id,
+            "commit-old",
+            "commit",
+            "commit-old",
+            "blob-old",
+            path,
+            source.symbol_id,
+            source.artefact_id,
+            "pkg::remote",
+            "calls",
+            "typescript",
+            4_i64,
+            4_i64,
+            edge_metadata,
+        ],
+    )
+    .expect("insert stale edge row with legacy edge_id");
+
+    refresh_current_state_for_path(
+        &cfg,
+        &relational,
+        &FileRevision {
+            commit_sha: "commit-new",
+            revision: RevisionRef {
+                kind: "commit",
+                id: "commit-new",
+                temp_checkpoint_id: None,
+            },
+            commit_unix: 200,
+            path,
+            blob_sha,
+        },
+        &file_artefact,
+        None,
+        &[source],
+        vec![edge],
+    )
+    .await
+    .expect("refresh current state should replace stale edge ids");
+
+    let edge_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![cfg.repo.repo_id, path],
+            |row| row.get(0),
+        )
+        .expect("count current edges");
+    assert_eq!(edge_rows, 1);
+    let has_legacy: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND edge_id = 'legacy-edge-id'",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count legacy edge ids");
+    assert_eq!(has_legacy, 0);
+}
+
+#[tokio::test]
+async fn promote_temporary_rows_for_head_commit_updates_current_state_to_commit() {
+    let repo_dir = tempdir().expect("temp dir");
+    init_test_repo(
+        repo_dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::create_dir_all(repo_dir.path().join("src")).expect("create src dir");
+    std::fs::write(
+        repo_dir.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write initial source");
+    git_ok(repo_dir.path(), &["add", "."]);
+    git_ok(repo_dir.path(), &["commit", "-m", "initial"]);
+    let old_head = git_ok(repo_dir.path(), &["rev-parse", "HEAD"]);
+
+    let repo = resolve_repo_identity(repo_dir.path()).expect("resolve repo identity");
+    let cfg = DevqlConfig::from_env(repo_dir.path().to_path_buf(), repo).expect("build config");
+    let sqlite_path = repo_dir.path().join("devql-relational.db");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let path = "src/lib.rs";
+    let updated_content = "pub fn two() -> i32 {\n    2\n}\n";
+    std::fs::write(repo_dir.path().join(path), updated_content).expect("update source");
+    let blob_sha = git_ok(repo_dir.path(), &["hash-object", path]);
+
+    upsert_current_state_for_content(
+        &cfg,
+        &relational,
+        &FileRevision {
+            commit_sha: &old_head,
+            revision: RevisionRef {
+                kind: "temporary",
+                id: "temp:1",
+                temp_checkpoint_id: Some(1),
+            },
+            commit_unix: 100,
+            path,
+            blob_sha: &blob_sha,
+        },
+        updated_content,
+    )
+    .await
+    .expect("insert temporary current state");
+
+    git_ok(repo_dir.path(), &["add", path]);
+    git_ok(repo_dir.path(), &["commit", "-m", "update"]);
+    let new_head = git_ok(repo_dir.path(), &["rev-parse", "HEAD"]);
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "UPDATE current_file_state \
+SET revision_kind = 'commit', revision_id = 'temp:1', commit_sha = 'temp:1', temp_checkpoint_id = NULL \
+WHERE repo_id = ?1 AND path = ?2",
+        rusqlite::params![cfg.repo.repo_id, path],
+    )
+    .expect("force legacy temporary markers on current file state");
+    conn.execute(
+        "UPDATE artefacts_current \
+SET revision_kind = 'commit', revision_id = 'temp:1', commit_sha = 'temp:1', temp_checkpoint_id = NULL \
+WHERE repo_id = ?1 AND path = ?2",
+        rusqlite::params![cfg.repo.repo_id, path],
+    )
+    .expect("force legacy temporary markers on current artefacts");
+
+    let promoted = promote_temporary_current_rows_for_head_commit(&cfg, &relational)
+        .await
+        .expect("promote temporary rows");
+    assert_eq!(promoted, 1);
+
+    let row: (String, String, String, Option<i64>) = conn
+        .query_row(
+            "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id \
+             FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![cfg.repo.repo_id, path],
+            |record| {
+                Ok((
+                    record.get(0)?,
+                    record.get(1)?,
+                    record.get(2)?,
+                    record.get(3)?,
+                ))
+            },
+        )
+        .expect("read current file state");
+    assert_eq!(row.0, new_head);
+    assert_eq!(row.1, "commit");
+    assert_eq!(row.2, new_head);
+    assert!(row.3.is_none());
+
+    let temp_artefacts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2 AND revision_kind = 'temporary'",
+            rusqlite::params![cfg.repo.repo_id, path],
+            |record| record.get(0),
+        )
+        .expect("count temporary artefacts");
+    assert_eq!(temp_artefacts, 0);
 }
 
 #[test]

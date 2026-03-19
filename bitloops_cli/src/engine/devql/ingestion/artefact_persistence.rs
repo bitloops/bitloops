@@ -17,6 +17,8 @@ struct RevisionRef<'a> {
 
 #[derive(Debug, Clone)]
 struct CurrentFileStateRecord {
+    commit_sha: String,
+    revision_kind: String,
     revision_id: String,
     blob_sha: String,
     committed_at_unix: i64,
@@ -139,10 +141,7 @@ fn build_file_artefact_row_from_content(
         .map(|value| value.lines().count() as i32)
         .unwrap_or(1)
         .max(1);
-    let byte_count = content
-        .map(|value| value.len() as i32)
-        .unwrap_or(0)
-        .max(0);
+    let byte_count = content.map(|value| value.len() as i32).unwrap_or(0).max(0);
 
     FileArtefactRow {
         artefact_id: revision_artefact_id(repo_id, blob_sha, &file_symbol_id(path)),
@@ -497,7 +496,7 @@ async fn load_current_file_state(
         RelationalDialect::Sqlite => "CAST(strftime('%s', committed_at) AS INTEGER)".to_string(),
     };
     let sql = format!(
-        "SELECT revision_id, blob_sha, {} AS committed_at_unix \
+        "SELECT commit_sha, revision_kind, revision_id, blob_sha, {} AS committed_at_unix \
 FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         committed_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
@@ -508,6 +507,16 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         return Ok(None);
     };
 
+    let commit_sha = row
+        .get("commit_sha")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let revision_kind = row
+        .get("revision_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("commit")
+        .to_string();
     let revision_id = row
         .get("revision_id")
         .and_then(Value::as_str)
@@ -520,9 +529,15 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         .to_string();
     let committed_at_unix = row
         .get("committed_at_unix")
-        .and_then(|value| value.as_i64().or_else(|| value.as_str().and_then(|raw| raw.parse().ok())))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+        })
         .unwrap_or_default();
     Ok(Some(CurrentFileStateRecord {
+        commit_sha,
+        revision_kind,
         revision_id,
         blob_sha,
         committed_at_unix,
@@ -531,23 +546,32 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
 
 fn incoming_revision_is_newer(
     existing: Option<&CurrentFileStateRecord>,
+    revision_kind: &str,
     revision_id: &str,
     commit_unix: i64,
 ) -> bool {
     match existing {
         None => true,
-        Some(existing) => {
-            commit_unix > existing.committed_at_unix
-                || (commit_unix == existing.committed_at_unix
-                    && revision_id_is_newer(revision_id, &existing.revision_id))
-        }
+        Some(existing) => match (revision_kind, existing.revision_kind.as_str()) {
+            ("commit", "temporary") => true,
+            ("temporary", "commit") => false,
+            _ => {
+                commit_unix > existing.committed_at_unix
+                    || (commit_unix == existing.committed_at_unix
+                        && revision_id_is_newer(revision_id, &existing.revision_id))
+            }
+        },
     }
 }
 
 fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
     match (
-        incoming.strip_prefix("temp:").and_then(|v| v.parse::<u64>().ok()),
-        existing.strip_prefix("temp:").and_then(|v| v.parse::<u64>().ok()),
+        incoming
+            .strip_prefix("temp:")
+            .and_then(|v| v.parse::<u64>().ok()),
+        existing
+            .strip_prefix("temp:")
+            .and_then(|v| v.parse::<u64>().ok()),
     ) {
         (Some(incoming_idx), Some(existing_idx)) => incoming_idx > existing_idx,
         _ => incoming > existing,
@@ -946,7 +970,9 @@ fn build_current_edge_records(
             continue;
         }
 
-        let to_symbol_id = resolved_target.as_ref().map(|(symbol_id, _)| symbol_id.clone());
+        let to_symbol_id = resolved_target
+            .as_ref()
+            .map(|(symbol_id, _)| symbol_id.clone());
         let to_artefact_id = resolved_target
             .as_ref()
             .map(|(_, artefact_id)| artefact_id.clone());
@@ -1087,7 +1113,12 @@ async fn refresh_current_state_for_path(
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
     let existing = load_current_file_state(cfg, relational, rev.path).await?;
-    if !incoming_revision_is_newer(existing.as_ref(), rev.revision.id, rev.commit_unix) {
+    if !incoming_revision_is_newer(
+        existing.as_ref(),
+        rev.revision.kind,
+        rev.revision.id,
+        rev.commit_unix,
+    ) {
         return Ok(());
     }
     if rev.revision.kind == "temporary"
@@ -1097,12 +1128,14 @@ async fn refresh_current_state_for_path(
     {
         return Ok(());
     }
+    let revision_metadata_changed = existing.as_ref().is_some_and(|state| {
+        state.commit_sha != rev.commit_sha
+            || state.revision_kind != rev.revision.kind
+            || state.revision_id != rev.revision.id
+    });
 
     let old_symbol_records = load_current_artefacts_for_path(cfg, relational, rev.path).await?;
-    let old_symbol_ids = old_symbol_records
-        .keys()
-        .cloned()
-        .collect::<HashSet<_>>();
+    let old_symbol_ids = old_symbol_records.keys().cloned().collect::<HashSet<_>>();
     upsert_current_file_state(cfg, relational, rev).await?;
 
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
@@ -1121,7 +1154,7 @@ async fn refresh_current_state_for_path(
             .get(&record.symbol_id)
             .map(|state| artefact_payload_equal(&state.record, record))
             .unwrap_or(false);
-        if unchanged {
+        if unchanged && !revision_metadata_changed {
             if let Some(state) = old_symbol_records.get(&record.symbol_id) {
                 current_by_fqn.insert(state.symbol_fqn.clone(), state.record.clone());
             }
@@ -1143,7 +1176,11 @@ async fn refresh_current_state_for_path(
 
     let target_refs = edges
         .iter()
-        .filter_map(|edge| edge.to_symbol_ref.clone().or_else(|| edge.to_target_symbol_fqn.clone()))
+        .filter_map(|edge| {
+            edge.to_symbol_ref
+                .clone()
+                .or_else(|| edge.to_target_symbol_fqn.clone())
+        })
         .collect::<HashSet<_>>();
     let external_targets =
         load_current_external_target_lookup(cfg, relational, rev.path, &target_refs).await?;
@@ -1157,24 +1194,26 @@ async fn refresh_current_state_for_path(
     );
 
     let old_edges = load_current_outgoing_edges_for_path(cfg, relational, rev.path).await?;
-    let mut next_edge_ids = HashSet::new();
-    for record in current_edge_records {
-        next_edge_ids.insert(record.edge_id.clone());
-        let unchanged = old_edges
-            .get(&record.edge_id)
-            .map(|existing| edge_payload_equal(&existing.record, &record))
-            .unwrap_or(false);
-        if unchanged {
-            continue;
-        }
-        upsert_current_edge(cfg, relational, rev, &record).await?;
-    }
+    let next_edge_ids = current_edge_records
+        .iter()
+        .map(|record| record.edge_id.clone())
+        .collect::<HashSet<_>>();
     let old_edge_ids = old_edges.keys().cloned().collect::<HashSet<_>>();
     let deleted_edge_ids = old_edge_ids
         .difference(&next_edge_ids)
         .cloned()
         .collect::<HashSet<_>>();
     delete_current_outgoing_edges_for_ids(cfg, relational, &deleted_edge_ids).await?;
+    for record in current_edge_records {
+        let unchanged = old_edges
+            .get(&record.edge_id)
+            .map(|existing| edge_payload_equal(&existing.record, &record))
+            .unwrap_or(false);
+        if unchanged && !revision_metadata_changed {
+            continue;
+        }
+        upsert_current_edge(cfg, relational, rev, &record).await?;
+    }
 
     delete_current_artefacts_for_path_symbols(cfg, relational, rev.path, &deleted_symbol_ids)
         .await?;
@@ -1189,28 +1228,35 @@ async fn upsert_current_state_for_content(
     rev: &FileRevision<'_>,
     content: &str,
 ) -> Result<()> {
-    let file_artefact =
-        build_file_artefact_row_from_content(&cfg.repo.repo_id, rev.path, rev.blob_sha, Some(content));
+    let file_artefact = build_file_artefact_row_from_content(
+        &cfg.repo.repo_id,
+        rev.path,
+        rev.blob_sha,
+        Some(content),
+    );
 
-    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(&file_artefact.language) {
-        let extraction = || -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
-            let items = if file_artefact.language == "rust" {
-                extract_rust_artefacts(content, rev.path)?
-            } else {
-                extract_js_ts_artefacts(content, rev.path)?
+    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(
+        &file_artefact.language,
+    ) {
+        let extraction =
+            || -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
+                let items = if file_artefact.language == "rust" {
+                    extract_rust_artefacts(content, rev.path)?
+                } else {
+                    extract_js_ts_artefacts(content, rev.path)?
+                };
+                let edges = if file_artefact.language == "rust" {
+                    extract_rust_dependency_edges(content, rev.path, &items)?
+                } else {
+                    extract_js_ts_dependency_edges(content, rev.path, &items)?
+                };
+                let file_docstring = if file_artefact.language == "rust" {
+                    extract_rust_file_docstring(content)
+                } else {
+                    None
+                };
+                Ok((items, edges, file_docstring))
             };
-            let edges = if file_artefact.language == "rust" {
-                extract_rust_dependency_edges(content, rev.path, &items)?
-            } else {
-                extract_js_ts_dependency_edges(content, rev.path, &items)?
-            };
-            let file_docstring = if file_artefact.language == "rust" {
-                extract_rust_file_docstring(content)
-            } else {
-                None
-            };
-            Ok((items, edges, file_docstring))
-        };
 
         match extraction() {
             Ok(value) => value,
@@ -1277,29 +1323,30 @@ async fn upsert_language_artefacts(
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
 ) -> Result<()> {
-    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(&file_artefact.language) {
-        let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
-            return Ok(());
-        };
-        let items = if file_artefact.language == "rust" {
-            extract_rust_artefacts(&content, rev.path)?
+    let (items, dependency_edges, file_docstring) =
+        if is_supported_symbol_language(&file_artefact.language) {
+            let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
+                return Ok(());
+            };
+            let items = if file_artefact.language == "rust" {
+                extract_rust_artefacts(&content, rev.path)?
+            } else {
+                extract_js_ts_artefacts(&content, rev.path)?
+            };
+            let edges = if file_artefact.language == "rust" {
+                extract_rust_dependency_edges(&content, rev.path, &items)?
+            } else {
+                extract_js_ts_dependency_edges(&content, rev.path, &items)?
+            };
+            let file_docstring = if file_artefact.language == "rust" {
+                extract_rust_file_docstring(&content)
+            } else {
+                None
+            };
+            (items, edges, file_docstring)
         } else {
-            extract_js_ts_artefacts(&content, rev.path)?
+            (Vec::new(), Vec::new(), None)
         };
-        let edges = if file_artefact.language == "rust" {
-            extract_rust_dependency_edges(&content, rev.path, &items)?
-        } else {
-            extract_js_ts_dependency_edges(&content, rev.path, &items)?
-        };
-        let file_docstring = if file_artefact.language == "rust" {
-            extract_rust_file_docstring(&content)
-        } else {
-            None
-        };
-        (items, edges, file_docstring)
-    } else {
-        (Vec::new(), Vec::new(), None)
-    };
 
     let symbol_records = build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items);
     for record in &symbol_records {

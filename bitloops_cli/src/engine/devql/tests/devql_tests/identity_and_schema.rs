@@ -190,33 +190,42 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 
 #[test]
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
-    let state = |revision_id: &str, committed_at_unix: i64| CurrentFileStateRecord {
-        revision_id: revision_id.to_string(),
-        blob_sha: "blob".to_string(),
-        committed_at_unix,
-    };
-    assert!(incoming_revision_is_newer(None, "commit-b", 200));
-    let existing_1 = state("commit-a", 100);
+    let state =
+        |commit_sha: &str, revision_kind: &str, revision_id: &str, committed_at_unix: i64| {
+            CurrentFileStateRecord {
+                commit_sha: commit_sha.to_string(),
+                revision_kind: revision_kind.to_string(),
+                revision_id: revision_id.to_string(),
+                blob_sha: "blob".to_string(),
+                committed_at_unix,
+            }
+        };
+    assert!(incoming_revision_is_newer(None, "commit", "commit-b", 200));
+    let existing_1 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_1),
+        "commit",
         "commit-b",
         200
     ));
-    let existing_2 = state("commit-a", 100);
+    let existing_2 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_2),
+        "commit",
         "commit-b",
         100
     ));
-    let existing_3 = state("commit-b", 200);
+    let existing_3 = state("commit-b", "commit", "commit-b", 200);
     assert!(!incoming_revision_is_newer(
         Some(&existing_3),
+        "commit",
         "commit-a",
         100
     ));
-    let existing_4 = state("commit-z", 200);
+    let existing_4 = state("commit-z", "commit", "commit-z", 200);
     assert!(!incoming_revision_is_newer(
         Some(&existing_4),
+        "commit",
         "commit-a",
         200
     ));
