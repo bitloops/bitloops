@@ -4,9 +4,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
+#[allow(dead_code)]
 pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::engine::devql::DevqlConfig,
     changed_paths: &[PathBuf],
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
+    capture_temporary_checkpoint_batch_with_handle(cfg, changed_paths, runtime.handle())
+}
+
+pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
+    cfg: &crate::engine::devql::DevqlConfig,
+    changed_paths: &[PathBuf],
+    handle: &tokio::runtime::Handle,
 ) -> Result<()> {
     if changed_paths.is_empty() {
         return Ok(());
@@ -110,58 +120,74 @@ pub(crate) fn capture_temporary_checkpoint_batch(
         Ok(conn.last_insert_rowid())
     })?;
 
-    let revision_id = format!("temp:{row_id}");
     let revision_unix = current_unix_timestamp();
     let relational = crate::engine::devql::RelationalStorage::Sqlite { path: sqlite_path };
-    let runtime = tokio::runtime::Runtime::new().context("creating watcher capture runtime")?;
+    handle.block_on(apply_current_state_updates(
+        cfg,
+        &relational,
+        repo_root,
+        &base_commit,
+        &tree_hash,
+        row_id,
+        revision_unix,
+        &modified,
+        &deleted,
+    ))?;
 
-    runtime.block_on(async {
-        for rel_path in &modified {
-            let content = match load_file_from_tree(repo_root, &tree_hash, rel_path) {
-                Ok(value) => value,
-                Err(err) => {
-                    log::warn!("devql watcher skipped `{rel_path}`: {err:#}");
-                    continue;
-                }
-            };
-            let blob_sha = match load_blob_sha_from_tree(repo_root, &tree_hash, rel_path) {
-                Ok(value) => value,
-                Err(err) => {
-                    log::warn!("devql watcher skipped `{rel_path}` blob lookup: {err:#}");
-                    continue;
-                }
-            };
-            let revision = crate::engine::devql::FileRevision {
-                commit_sha: &base_commit,
-                revision: crate::engine::devql::RevisionRef {
-                    kind: "temporary",
-                    id: &revision_id,
-                    temp_checkpoint_id: Some(row_id),
-                },
-                commit_unix: revision_unix,
-                path: rel_path,
-                blob_sha: &blob_sha,
-            };
-            crate::engine::devql::upsert_current_state_for_content(
-                cfg,
-                &relational,
-                &revision,
-                &content,
-            )
-            .await
-            .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
-        }
-        for rel_path in &deleted {
-            if let Err(err) =
-                crate::engine::devql::delete_current_state_for_path(cfg, &relational, rel_path)
-                    .await
-            {
-                log::warn!("devql watcher failed deleting `{rel_path}` current state: {err:#}");
+    Ok(())
+}
+
+async fn apply_current_state_updates(
+    cfg: &crate::engine::devql::DevqlConfig,
+    relational: &crate::engine::devql::RelationalStorage,
+    repo_root: &Path,
+    base_commit: &str,
+    tree_hash: &str,
+    row_id: i64,
+    revision_unix: i64,
+    modified: &[String],
+    deleted: &[String],
+) -> Result<()> {
+    let revision_id = format!("temp:{row_id}");
+    for rel_path in modified {
+        let content = match load_file_from_tree(repo_root, tree_hash, rel_path) {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!("devql watcher skipped `{rel_path}`: {err:#}");
+                continue;
             }
+        };
+        let blob_sha = match load_blob_sha_from_tree(repo_root, tree_hash, rel_path) {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!("devql watcher skipped `{rel_path}` blob lookup: {err:#}");
+                continue;
+            }
+        };
+        let revision = crate::engine::devql::FileRevision {
+            commit_sha: base_commit,
+            revision: crate::engine::devql::RevisionRef {
+                kind: "temporary",
+                id: &revision_id,
+                temp_checkpoint_id: Some(row_id),
+            },
+            commit_unix: revision_unix,
+            path: rel_path,
+            blob_sha: &blob_sha,
+        };
+        crate::engine::devql::upsert_current_state_for_content(
+            cfg, relational, &revision, &content,
+        )
+        .await
+        .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
+    }
+    for rel_path in deleted {
+        if let Err(err) =
+            crate::engine::devql::delete_current_state_for_path(cfg, relational, rel_path).await
+        {
+            log::warn!("devql watcher failed deleting `{rel_path}` current state: {err:#}");
         }
-        Ok::<(), anyhow::Error>(())
-    })?;
-
+    }
     Ok(())
 }
 
@@ -265,7 +291,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .expect("fetch current revision row");
-        assert!(!revision_row.0.is_empty(), "watch capture should retain base commit sha");
+        assert!(
+            !revision_row.0.is_empty(),
+            "watch capture should retain base commit sha"
+        );
         assert_eq!(revision_row.1, "temporary");
         assert!(revision_row.2.starts_with("temp:"));
         assert!(revision_row.3.is_some());
@@ -321,7 +350,10 @@ mod tests {
                 row.get(0)
             })
             .expect("count temporary checkpoints");
-        assert_eq!(temp_rows, 0, "no-content-change capture should not persist temp rows");
+        assert_eq!(
+            temp_rows, 0,
+            "no-content-change capture should not persist temp rows"
+        );
     }
 
     #[test]
@@ -350,5 +382,95 @@ mod tests {
             })
             .expect("count temporary checkpoints");
         assert_eq!(temp_rows, 1, "duplicate tree hash should be deduplicated");
+    }
+
+    #[test]
+    fn capture_with_handle_updates_and_deletes_current_file_state() {
+        let dir = seed_repo();
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let target = dir.path().join("src/lib.rs");
+
+        fs::write(&target, "pub fn second() -> i32 {\n    2\n}\n").expect("update file");
+        capture_temporary_checkpoint_batch_with_handle(
+            &cfg,
+            std::slice::from_ref(&target),
+            runtime.handle(),
+        )
+        .expect("capture updated file using runtime handle");
+
+        fs::remove_file(&target).expect("delete file");
+        capture_temporary_checkpoint_batch_with_handle(
+            &cfg,
+            std::slice::from_ref(&target),
+            runtime.handle(),
+        )
+        .expect("capture deleted file using runtime handle");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let temp_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
+                row.get(0)
+            })
+            .expect("count temporary checkpoints");
+        assert_eq!(
+            temp_rows, 2,
+            "update and delete should produce two temp checkpoints"
+        );
+
+        let current_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current file state rows");
+        assert_eq!(
+            current_rows, 0,
+            "deleted file should be removed from current file state"
+        );
+    }
+
+    #[test]
+    fn capture_with_handle_skips_duplicate_tree_hash_batches() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
+        let target = dir.path().join("src/lib.rs");
+        capture_temporary_checkpoint_batch_with_handle(
+            &cfg,
+            std::slice::from_ref(&target),
+            runtime.handle(),
+        )
+        .expect("capture first batch with runtime handle");
+        capture_temporary_checkpoint_batch_with_handle(
+            &cfg,
+            std::slice::from_ref(&target),
+            runtime.handle(),
+        )
+        .expect("capture duplicate batch with runtime handle");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let temp_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
+                row.get(0)
+            })
+            .expect("count temporary checkpoints");
+        assert_eq!(
+            temp_rows, 1,
+            "duplicate tree hash should be deduplicated for handle capture path"
+        );
     }
 }
