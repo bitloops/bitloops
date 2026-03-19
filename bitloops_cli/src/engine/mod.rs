@@ -18,6 +18,7 @@ pub mod strategy;
 pub mod stringutil;
 pub mod summarize;
 pub mod telemetry;
+pub mod test_harness;
 pub mod textutil;
 pub mod trailers;
 pub mod transcript;

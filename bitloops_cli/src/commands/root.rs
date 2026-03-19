@@ -231,6 +231,7 @@ pub(crate) fn command_name(command: &crate::commands::Commands) -> &'static str 
         crate::commands::Commands::Explain(_) => "explain",
         crate::commands::Commands::Debug(_) => "debug",
         crate::commands::Commands::Devql(_) => "devql",
+        crate::commands::Commands::Testlens(_) => "testlens",
         crate::commands::Commands::Doctor(_) => "doctor",
         crate::commands::Commands::SendAnalytics(_) => "__send_analytics",
         crate::commands::Commands::Completion(_) => "completion",

@@ -311,7 +311,11 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
     match relational {
         RelationalStorage::Postgres(client) => init_postgres_schema(cfg, client).await,
         RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
-    }
+    }?;
+
+    crate::engine::test_harness::init_schema_for_repo(&cfg.repo_root)
+        .context("initialising test-harness schema alongside DevQL relational schema")?;
+    Ok(())
 }
 
 fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {

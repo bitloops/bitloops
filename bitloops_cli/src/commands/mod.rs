@@ -14,6 +14,7 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub mod status;
+pub mod testlens;
 pub mod versioncheck;
 
 /// Bitloops CLI
@@ -75,6 +76,8 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
+    /// Test harness ingestion and querying over DevQL production artefacts.
+    Testlens(testlens::TestLensArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -152,6 +155,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
+        Commands::Testlens(args) => testlens::run(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

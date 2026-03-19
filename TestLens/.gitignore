@@ -1,8 +1,0 @@
-/target
-node_modules
-/testlens.db
-/test-results.json
-
-# SWE benchmark repositories
-75a24bbc67aa31b825b6326cfb6e6afdf3ca90d5
-b2a0d68d70ee690ea871fe9b3317be43075ddb33
