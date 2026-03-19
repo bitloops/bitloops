@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use tree_sitter::{Node, Parser};
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
-use crate::app::test_mapping::file_discovery::{normalize_join, normalize_rel_path, read_source_file};
+use crate::app::test_mapping::file_discovery::{
+    normalize_join, normalize_rel_path, read_source_file,
+};
 use crate::app::test_mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
     ScenarioDiscoverySource,

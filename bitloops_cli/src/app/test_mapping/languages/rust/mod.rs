@@ -12,7 +12,9 @@ use anyhow::{Context, Result};
 use tree_sitter::Parser;
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 
-use crate::app::test_mapping::file_discovery::{looks_like_inline_rust_test_source, read_source_file};
+use crate::app::test_mapping::file_discovery::{
+    looks_like_inline_rust_test_source, read_source_file,
+};
 use crate::app::test_mapping::linker::{
     doctest_match_keys, normalized_enumerated_doctest_key, normalized_enumerated_test_key,
     source_scenario_match_keys,
