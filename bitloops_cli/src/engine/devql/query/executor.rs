@@ -348,7 +348,11 @@ async fn build_relational_artefacts_query(
             });
 
             if let Some(blob_sha) = git_blob {
-                where_clauses.push(format!("a.blob_sha = '{}'", esc_pg(&blob_sha)));
+                where_clauses.push(format!(
+                    "a.blob_sha = '{}' AND ({})",
+                    esc_pg(&blob_sha),
+                    sql_path_candidates_clause("a.path", &path_candidates),
+                ));
             } else {
                 where_clauses.push(format!(
                     "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",

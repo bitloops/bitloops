@@ -554,6 +554,314 @@ async fn execute_relational_pipeline_reads_commit_asof_deps_from_historical_tabl
 }
 
 #[tokio::test]
+async fn execute_relational_pipeline_scopes_commit_asof_artefacts_by_path_when_blob_is_shared() {
+    let dir = TempDir::new().expect("temp dir");
+    init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    std::fs::write(
+        dir.path().join("src/shared-a.ts"),
+        "export function shared() {\n  return 1;\n}\n",
+    )
+    .expect("write shared-a");
+    std::fs::write(
+        dir.path().join("src/shared-b.ts"),
+        "export function shared() {\n  return 1;\n}\n",
+    )
+    .expect("write shared-b");
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "add shared files"]);
+
+    let commit_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let shared_blob = git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")]);
+    assert_eq!(
+        shared_blob,
+        git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")])
+    );
+
+    let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let mut cfg = test_cfg();
+    cfg.repo_root = dir.path().to_path_buf();
+    cfg.repo = repo;
+
+    let events_cfg = default_events_cfg();
+    let sqlite_path = dir.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::shared-a",
+            "sym::shared-a",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "src/shared-a.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/shared-a.ts::shared",
+            1,
+            3,
+            0,
+            40,
+            "[]",
+            "hash-shared-a",
+        ],
+    )
+    .expect("insert shared-a artefact");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::shared-b",
+            "sym::shared-b",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "src/shared-b.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/shared-b.ts::shared",
+            1,
+            3,
+            0,
+            40,
+            "[]",
+            "hash-shared-b",
+        ],
+    )
+    .expect("insert shared-b artefact");
+
+    let parsed = parse_devql_query(&format!(
+        r#"asOf(commit:"{commit_sha}")->file("src/shared-a.ts")->artefacts(kind:"function")->limit(10)"#
+    ))
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute commit asOf artefacts query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["path"],
+        Value::String("src/shared-a.ts".to_string())
+    );
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_scopes_commit_asof_deps_by_path_when_blob_is_shared() {
+    let dir = TempDir::new().expect("temp dir");
+    init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    std::fs::write(
+        dir.path().join("src/shared-a.ts"),
+        "export function shared() {\n  return 1;\n}\n",
+    )
+    .expect("write shared-a");
+    std::fs::write(
+        dir.path().join("src/shared-b.ts"),
+        "export function shared() {\n  return 1;\n}\n",
+    )
+    .expect("write shared-b");
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "add shared files"]);
+
+    let commit_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+    let shared_blob = git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")]);
+    assert_eq!(
+        shared_blob,
+        git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")])
+    );
+
+    let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let mut cfg = test_cfg();
+    cfg.repo_root = dir.path().to_path_buf();
+    cfg.repo = repo;
+
+    let events_cfg = default_events_cfg();
+    let sqlite_path = dir.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::shared-a",
+            "sym::shared-a",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "src/shared-a.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/shared-a.ts::shared",
+            1,
+            3,
+            0,
+            40,
+            "[]",
+            "hash-shared-a",
+        ],
+    )
+    .expect("insert shared-a artefact");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::shared-b",
+            "sym::shared-b",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "src/shared-b.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/shared-b.ts::shared",
+            1,
+            3,
+            0,
+            40,
+            "[]",
+            "hash-shared-b",
+        ],
+    )
+    .expect("insert shared-b artefact");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::target-a",
+            "sym::target-a",
+            cfg.repo.repo_id.as_str(),
+            "blob-target-a",
+            "src/target-a.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target-a.ts::target",
+            1,
+            3,
+            0,
+            30,
+            "[]",
+            "hash-target-a",
+        ],
+    )
+    .expect("insert target-a artefact");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::target-b",
+            "sym::target-b",
+            cfg.repo.repo_id.as_str(),
+            "blob-target-b",
+            "src/target-b.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target-b.ts::target",
+            1,
+            3,
+            0,
+            30,
+            "[]",
+            "hash-target-b",
+        ],
+    )
+    .expect("insert target-b artefact");
+
+    conn.execute(
+        "INSERT INTO artefact_edges (
+            edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            "edge-a",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "artefact::shared-a",
+            "artefact::target-a",
+            "src/target-a.ts::target",
+            "calls",
+            "typescript",
+            2,
+            2,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert edge-a");
+    conn.execute(
+        "INSERT INTO artefact_edges (
+            edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            "edge-b",
+            cfg.repo.repo_id.as_str(),
+            shared_blob.as_str(),
+            "artefact::shared-b",
+            "artefact::target-b",
+            "src/target-b.ts::target",
+            "calls",
+            "typescript",
+            2,
+            2,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert edge-b");
+
+    let parsed = parse_devql_query(&format!(
+        r#"asOf(commit:"{commit_sha}")->file("src/shared-a.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#
+    ))
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute commit asOf deps query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["edge_id"], Value::String("edge-a".to_string()));
+    assert_eq!(
+        rows[0]["from_path"],
+        Value::String("src/shared-a.ts".to_string())
+    );
+    assert_eq!(
+        rows[0]["to_path"],
+        Value::String("src/target-a.ts".to_string())
+    );
+}
+
+#[tokio::test]
 async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_tables() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();

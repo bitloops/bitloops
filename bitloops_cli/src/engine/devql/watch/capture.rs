@@ -3,8 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
+use tokio::task;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn capture_temporary_checkpoint_batch(
     cfg: &crate::engine::devql::DevqlConfig,
     changed_paths: &[PathBuf],
@@ -150,14 +151,15 @@ async fn apply_current_state_updates(
 ) -> Result<()> {
     let revision_id = format!("temp:{row_id}");
     for rel_path in modified {
-        let content = match load_file_from_tree(repo_root, tree_hash, rel_path) {
+        let content = match load_file_from_tree_blocking(repo_root, tree_hash, rel_path).await {
             Ok(value) => value,
             Err(err) => {
                 log::warn!("devql watcher skipped `{rel_path}`: {err:#}");
                 continue;
             }
         };
-        let blob_sha = match load_blob_sha_from_tree(repo_root, tree_hash, rel_path) {
+        let blob_sha = match load_blob_sha_from_tree_blocking(repo_root, tree_hash, rel_path).await
+        {
             Ok(value) => value,
             Err(err) => {
                 log::warn!("devql watcher skipped `{rel_path}` blob lookup: {err:#}");
@@ -204,6 +206,30 @@ fn load_blob_sha_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Res
         &["rev-parse", &format!("{tree_hash}:{path}")],
     )
     .map(|value| value.trim().to_string())
+}
+
+async fn load_file_from_tree_blocking(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
+    let repo_root = repo_root.to_path_buf();
+    let tree_hash = tree_hash.to_string();
+    let path = path.to_string();
+    let path_for_log = path.clone();
+    task::spawn_blocking(move || load_file_from_tree(&repo_root, &tree_hash, &path))
+        .await
+        .with_context(|| format!("joining blocking git show task for `{path_for_log}`"))?
+}
+
+async fn load_blob_sha_from_tree_blocking(
+    repo_root: &Path,
+    tree_hash: &str,
+    path: &str,
+) -> Result<String> {
+    let repo_root = repo_root.to_path_buf();
+    let tree_hash = tree_hash.to_string();
+    let path = path.to_string();
+    let path_for_log = path.clone();
+    task::spawn_blocking(move || load_blob_sha_from_tree(&repo_root, &tree_hash, &path))
+        .await
+        .with_context(|| format!("joining blocking git rev-parse task for `{path_for_log}`"))?
 }
 
 fn current_unix_timestamp() -> i64 {
