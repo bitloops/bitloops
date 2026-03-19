@@ -7,8 +7,6 @@ use crate::engine::devql::EDGE_KIND_EXPORTS;
 
 use super::MAX_BODY_TOKENS;
 
-const MAX_COMPACT_DEPENDENCY_SEGMENT_TOKENS: usize = 4;
-
 pub(super) fn normalize_name(name: &str) -> String {
     let tokens = split_identifier_tokens(name);
     if tokens.is_empty() {
@@ -125,11 +123,7 @@ fn compact_dependency_segment(segment: &str, path_like: bool) -> String {
     if tokens.is_empty() {
         return segment.to_ascii_lowercase();
     }
-
-    let start = tokens
-        .len()
-        .saturating_sub(MAX_COMPACT_DEPENDENCY_SEGMENT_TOKENS);
-    tokens[start..].join("_")
+    tokens.join("_")
 }
 
 fn strip_trailing_path_suffix_token(tokens: &mut Vec<String>) {
