@@ -33,6 +33,7 @@ impl CheckpointDbConnections {
 
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
         self.sqlite.initialise_checkpoint_schema()?;
+        self.sqlite.initialise_devql_schema()?;
         if let Some(postgres) = &self.postgres {
             postgres.initialise_checkpoint_schema()?;
         }

@@ -141,12 +141,12 @@ Feature: DevQL ingestion BDD scenarios
       | imports    | src/sample.ts             | -                        | ./helpers              | -            | -              |
       | calls      | src/sample.ts::Service::run | src/sample.ts::normalizeId | -                   | resolution   | local          |
       | references | src/sample.ts::Service::run | src/sample.ts::User    | -                      | ref_kind     | type           |
-      | inherits   | src/sample.ts::Service   | src/sample.ts::BaseService | -                    | -            | -              |
+      | extends    | src/sample.ts::Service   | src/sample.ts::BaseService | -                    | -            | -              |
       | exports    | src/sample.ts            | -                        | ./helpers::helper      | export_name  | helperAlias    |
       | imports    | src/lib.rs               | -                        | crate::math::sum       | -            | -              |
       | implements | src/lib.rs::impl@13      | -                        | Repository             | -            | -              |
       | calls      | src/lib.rs::impl@13::load | src/lib.rs::helper      | -                      | resolution   | local          |
-      | inherits   | src/lib.rs::Repository   | src/lib.rs::Reader       | -                      | -            | -              |
+      | extends    | src/lib.rs::Repository   | src/lib.rs::Reader       | -                      | -            | -              |
       | exports    | src/lib.rs               | src/lib.rs::helper       | -                      | export_form  | pub_use        |
 
   @E1

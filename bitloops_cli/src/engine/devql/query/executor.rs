@@ -26,6 +26,15 @@ async fn execute_devql_query(
         bail!("chatHistory() requires an artefacts() stage in the query");
     }
 
+    if parsed.has_clones_stage && !parsed.has_artefacts_stage {
+        log_devql_validation_failure(
+            parsed,
+            "clones_requires_artefacts",
+            "clones() requires an artefacts() stage in the query",
+        );
+        bail!("clones() requires an artefacts() stage in the query");
+    }
+
     if parsed.has_deps_stage && parsed.has_chat_history_stage {
         log_devql_validation_failure(
             parsed,
@@ -33,6 +42,15 @@ async fn execute_devql_query(
             "deps() cannot be combined with chatHistory() stage",
         );
         bail!("deps() cannot be combined with chatHistory() stage");
+    }
+
+    if parsed.has_clones_stage && parsed.has_deps_stage {
+        log_devql_validation_failure(
+            parsed,
+            "clones_with_deps",
+            "clones() cannot be combined with deps() stage",
+        );
+        bail!("clones() cannot be combined with deps() stage");
     }
 
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
@@ -43,6 +61,24 @@ async fn execute_devql_query(
             "chatHistory() cannot be combined with checkpoints()/telemetry() stages",
         );
         bail!("chatHistory() cannot be combined with checkpoints()/telemetry() stages");
+    }
+
+    if parsed.has_clones_stage && parsed.has_chat_history_stage {
+        log_devql_validation_failure(
+            parsed,
+            "clones_with_chat_history",
+            "clones() cannot be combined with chatHistory() stage",
+        );
+        bail!("clones() cannot be combined with chatHistory() stage");
+    }
+
+    if parsed.has_clones_stage && parsed.as_of.is_some() {
+        log_devql_validation_failure(
+            parsed,
+            "clones_with_asof",
+            "clones() does not yet support asOf(...) queries",
+        );
+        bail!("clones() does not yet support asOf(...) queries");
     }
 
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
@@ -64,6 +100,7 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
             crate::engine::logging::string_attr("rule", rule),
             crate::engine::logging::string_attr("reason", reason),
             crate::engine::logging::bool_attr("has_deps_stage", parsed.has_deps_stage),
+            crate::engine::logging::bool_attr("has_clones_stage", parsed.has_clones_stage),
             crate::engine::logging::bool_attr(
                 "has_chat_history_stage",
                 parsed.has_chat_history_stage,
@@ -157,11 +194,20 @@ fn normalise_relational_result_row(row: Value) -> Value {
         return row;
     };
 
-    for key in ["modifiers", "metadata"] {
+    for key in ["modifiers", "metadata", "explanation_json"] {
         if let Some(raw) = obj.get(key).and_then(Value::as_str)
             && let Ok(parsed) = serde_json::from_str::<Value>(raw)
         {
             obj.insert(key.to_string(), parsed);
+        }
+    }
+
+    if let Some(edge_kind) = obj.get("edge_kind").and_then(Value::as_str)
+        && let Some(normalized) = normalise_edge_kind_value(edge_kind)
+    {
+        obj.insert("edge_kind".to_string(), Value::String(normalized.clone()));
+        if let Some(metadata) = obj.get_mut("metadata") {
+            normalise_edge_metadata(&normalized, metadata);
         }
     }
 
@@ -238,6 +284,11 @@ async fn execute_relational_pipeline(
     relational: &RelationalStorage,
 ) -> Result<Vec<Value>> {
     let repo_id = resolve_repo_id_for_query(cfg, parsed.repo.as_deref());
+
+    if parsed.has_clones_stage {
+        return execute_relational_clones_pipeline(cfg, events_cfg, parsed, relational, &repo_id)
+            .await;
+    }
 
     if parsed.has_deps_stage {
         return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
@@ -353,6 +404,97 @@ LIMIT {}",
     );
 
     Ok(sql)
+}
+
+async fn execute_relational_clones_pipeline(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+    parsed: &ParsedDevqlQuery,
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<Value>> {
+    let sql = build_relational_clones_query(cfg, events_cfg, parsed, relational, repo_id).await?;
+    Ok(relational
+        .query_rows(&sql)
+        .await?
+        .into_iter()
+        .map(normalise_relational_result_row)
+        .collect::<Vec<_>>())
+}
+
+async fn build_relational_clones_query(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+    parsed: &ParsedDevqlQuery,
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<String> {
+    let mut source_filters = vec![format!("src.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(kind) = parsed.artefacts.kind.as_deref() {
+        source_filters.push(format!("src.canonical_kind = '{}'", esc_pg(kind)));
+    }
+    if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
+        source_filters.push(format!("src.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
+    }
+    if let Some((start, end)) = parsed.artefacts.lines {
+        source_filters.push(format!("src.start_line <= {end} AND src.end_line >= {start}"));
+    }
+    if let Some(path) = parsed.file.as_deref() {
+        let path_candidates = build_path_candidates(path);
+        source_filters.push(format!(
+            "({})",
+            sql_path_candidates_clause("src.path", &path_candidates)
+        ));
+    }
+    if let Some(glob) = parsed.files_path.as_deref() {
+        let like = glob_to_sql_like(glob);
+        source_filters.push(format!("src.path LIKE '{}'", esc_pg(&like)));
+    }
+    if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
+        let blob_shas = blob_shas_changed_in_events(
+            cfg,
+            events_cfg,
+            relational,
+            repo_id,
+            parsed.artefacts.agent.as_deref(),
+            parsed.artefacts.since.as_deref(),
+        )
+        .await?;
+        if blob_shas.is_empty() {
+            source_filters.push("1 = 0".to_string());
+        } else {
+            source_filters.push(format!(
+                "src.blob_sha IN ({})",
+                sql_string_list_pg(&blob_shas)
+            ));
+        }
+    }
+
+    let mut clone_filters = vec![format!("ce.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(relation_kind) = parsed.clones.relation_kind.as_deref() {
+        clone_filters.push(format!("ce.relation_kind = '{}'", esc_pg(relation_kind)));
+    }
+    if let Some(min_score) = parsed.clones.min_score {
+        clone_filters.push(format!("ce.score >= {}", min_score.clamp(0.0, 1.0)));
+    }
+
+    Ok(format!(
+        "SELECT ce.relation_kind, ce.score, ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json, \
+src.artefact_id AS source_artefact_id, src.path AS source_path, src.symbol_fqn AS source_symbol_fqn, \
+tgt.artefact_id AS target_artefact_id, tgt.path AS target_path, tgt.symbol_fqn AS target_symbol_fqn, \
+tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_language_kind, tgt.language AS target_language, \
+ss.summary AS target_summary \
+FROM symbol_clone_edges ce \
+JOIN artefacts_current src ON src.repo_id = ce.repo_id AND src.symbol_id = ce.source_symbol_id \
+JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.symbol_id = ce.target_symbol_id \
+LEFT JOIN symbol_semantics ss ON ss.artefact_id = tgt.artefact_id \
+WHERE {} AND {} \
+ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn \
+LIMIT {}",
+        clone_filters.join(" AND "),
+        source_filters.join(" AND "),
+        parsed.limit.max(1),
+    ))
 }
 
 async fn execute_relational_deps_pipeline(

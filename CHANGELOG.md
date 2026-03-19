@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the user-home config file (`~/.bitloops/config.json`).
 - Updated Readme documentation
 - Add documetnation around Contributing, Security & Code of Conduct
+- Artefacts are now updated in real time whenever someone changes them and saved in the current_artefacts and current_artefact_edges tables. CLI-1391 is complete and enums are used instead of strings. 
 
 ### Changed
 

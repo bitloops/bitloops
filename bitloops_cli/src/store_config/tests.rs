@@ -959,6 +959,64 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
 }
 
 #[test]
+fn watch_file_config_reads_json_root_keys() {
+    let value = serde_json::json!({
+        "watch_debounce_ms": 750,
+        "watch_poll_fallback_ms": 2500
+    });
+
+    let cfg = WatchFileConfig::from_json_value(&value);
+    assert_eq!(cfg.watch_debounce_ms, Some(750));
+    assert_eq!(cfg.watch_poll_fallback_ms, Some(2500));
+}
+
+#[test]
+fn watch_file_config_reads_json_watch_block() {
+    let value = serde_json::json!({
+        "watch": {
+            "watch_debounce_ms": "900",
+            "watch_poll_fallback_ms": 2600
+        }
+    });
+
+    let cfg = WatchFileConfig::from_json_value(&value);
+    assert_eq!(cfg.watch_debounce_ms, Some(900));
+    assert_eq!(cfg.watch_poll_fallback_ms, Some(2600));
+}
+
+#[test]
+fn watch_file_config_reads_toml_watch_sections() {
+    let cfg = WatchFileConfig::from_toml_str(
+        r#"
+watch_debounce_ms = 700
+
+[devql.watch]
+watch_poll_fallback_ms = 2400
+"#,
+    );
+
+    assert_eq!(cfg.watch_debounce_ms, Some(700));
+    assert_eq!(cfg.watch_poll_fallback_ms, Some(2400));
+}
+
+#[test]
+fn watch_runtime_config_prefers_env_over_file() {
+    let cfg = resolve_watch_runtime_config_for_tests(
+        WatchFileConfig {
+            watch_debounce_ms: Some(500),
+            watch_poll_fallback_ms: Some(2000),
+        },
+        &[
+            (ENV_WATCH_DEBOUNCE_MS, "850"),
+            (ENV_WATCH_POLL_FALLBACK_MS, "3100"),
+        ],
+    );
+
+    assert_eq!(cfg.watch_debounce_ms, 850);
+    assert_eq!(cfg.watch_poll_fallback_ms, 3100);
+}
+
+#[test]
 fn dashboard_file_config_load_reads_repo_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
     write_repo_config(
@@ -991,6 +1049,41 @@ fn dashboard_use_bitloops_local_reads_repo_config_file() {
     with_cwd(temp.path(), || {
         assert!(dashboard_use_bitloops_local());
     });
+}
+
+#[test]
+fn resolve_store_semantic_config_reads_file_and_env() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    write_repo_config(
+        temp.path(),
+        serde_json::json!({
+            "semantic": {
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "api_key": "file-key",
+                "base_url": "http://localhost:11434/v1/chat/completions"
+            }
+        }),
+    );
+
+    with_process_state(
+        Some(temp.path()),
+        &[
+            (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
+            (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
+            (ENV_SEMANTIC_API_KEY, Some("env-key")),
+            (
+                ENV_SEMANTIC_BASE_URL,
+                Some("http://localhost:9999/v1/chat/completions"),
+            ),
+        ],
+        || {
+            let cfg = resolve_store_semantic_config();
+            assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
+            assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
+            assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
+        },
+    );
 }
 
 #[test]
@@ -1061,6 +1154,30 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
         cfg.events.duckdb_path.as_deref(),
         Some("data/events.duckdb")
     );
+}
+
+#[test]
+fn store_file_config_load_reads_repo_config_file() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    write_repo_config(
+        temp.path(),
+        serde_json::json!({
+            "stores": {
+                "relational": {
+                    "provider": "postgres"
+                },
+                "events": {
+                    "provider": "clickhouse"
+                }
+            }
+        }),
+    );
+
+    with_cwd(temp.path(), || {
+        let cfg = StoreFileConfig::load();
+        assert_eq!(cfg.relational_provider.as_deref(), Some("postgres"));
+        assert_eq!(cfg.events_provider.as_deref(), Some("clickhouse"));
+    });
 }
 
 #[test]

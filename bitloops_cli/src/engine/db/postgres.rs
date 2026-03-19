@@ -65,7 +65,7 @@ impl PostgresSyncConnection {
     }
 }
 
-async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
+pub(crate) async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
     let mut pg_cfg: tokio_postgres::Config = dsn.parse().context("parsing Postgres DSN")?;
     pg_cfg.connect_timeout(Duration::from_secs(10));
 

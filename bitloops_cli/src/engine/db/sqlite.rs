@@ -39,6 +39,11 @@ impl SqliteConnectionPool {
         .context("migrating SQLite checkpoint schema for sessions.ended_at")
     }
 
+    pub fn initialise_devql_schema(&self) -> Result<()> {
+        self.execute_batch(crate::engine::devql::devql_schema_sql_sqlite())
+            .context("initialising SQLite DevQL schema")
+    }
+
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
         self.with_connection(|conn| {
             conn.execute_batch(sql)

@@ -12,6 +12,7 @@ use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
 use crate::engine::providers::embeddings::EmbeddingProvider;
+use crate::engine::semantic_clones;
 use crate::engine::semantic_embeddings;
 use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
@@ -29,6 +30,7 @@ pub mod capabilities;
 pub(crate) mod identity;
 
 pub(crate) use identity::deterministic_uuid;
+pub mod watch;
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -440,6 +442,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
                 .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
             let Some(blob_sha) = blob_sha else {
+                delete_current_state_for_path(cfg, &relational, &normalized_path).await?;
                 continue;
             };
             let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
@@ -465,6 +468,11 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
+                    revision: RevisionRef {
+                        kind: "commit",
+                        id: &commit_sha,
+                        temp_checkpoint_id: None,
+                    },
                     commit_unix: commit_info
                         .expect("commit_info exists when sha exists")
                         .commit_unix,
@@ -511,18 +519,129 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         counters.checkpoints_processed += 1;
     }
 
+    counters.temporary_rows_promoted =
+        promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
+
+    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id).await?;
+    counters.symbol_clone_edges_upserted += clone_result.edges.len();
+    counters.symbol_clone_sources_scored += clone_result.sources_considered;
+
     println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}",
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
         counters.checkpoints_processed,
         counters.events_inserted,
         counters.artefacts_upserted,
         counters.checkpoints_without_commit,
+        counters.temporary_rows_promoted,
         counters.semantic_feature_rows_upserted,
         counters.semantic_feature_rows_skipped,
         counters.symbol_embedding_rows_upserted,
-        counters.symbol_embedding_rows_skipped
+        counters.symbol_embedding_rows_skipped,
+        counters.symbol_clone_edges_upserted,
+        counters.symbol_clone_sources_scored
     );
     Ok(())
+}
+
+async fn promote_temporary_current_rows_for_head_commit(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+) -> Result<usize> {
+    let head_sha = run_git(&cfg.repo_root, &["rev-parse", "HEAD"]).unwrap_or_default();
+    if head_sha.is_empty() {
+        return Ok(0);
+    }
+    let head_unix = run_git(&cfg.repo_root, &["show", "-s", "--format=%ct", &head_sha])
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .unwrap_or_default();
+    let now_sql = sql_now(relational);
+    let committed_at_assignment = if head_unix > 0 {
+        match relational.dialect() {
+            RelationalDialect::Postgres => format!(", committed_at = to_timestamp({head_unix})"),
+            RelationalDialect::Sqlite => {
+                format!(", committed_at = datetime({head_unix}, 'unixepoch')")
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    let sql = format!(
+        "SELECT path, blob_sha FROM current_file_state \
+WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+        esc_pg(&cfg.repo.repo_id),
+    );
+    let rows = relational.query_rows(&sql).await?;
+    let mut promoted = 0usize;
+
+    for row in rows {
+        let Some(path) = row.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(blob_sha) = row.get("blob_sha").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(head_blob_sha) = git_blob_sha_at_commit(&cfg.repo_root, &head_sha, path) else {
+            continue;
+        };
+        if head_blob_sha != blob_sha {
+            continue;
+        }
+
+        upsert_file_state_row(
+            &cfg.repo.repo_id,
+            relational,
+            &head_sha,
+            path,
+            &head_blob_sha,
+        )
+        .await?;
+
+        let sql_current = format!(
+            "UPDATE current_file_state \
+SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}'{}, updated_at = {} \
+WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+            esc_pg(&head_sha),
+            esc_pg(&head_sha),
+            esc_pg(&head_blob_sha),
+            committed_at_assignment,
+            now_sql,
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(path),
+        );
+        relational.exec(&sql_current).await?;
+
+        let sql_artefacts = format!(
+            "UPDATE artefacts_current \
+SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+            esc_pg(&head_sha),
+            esc_pg(&head_sha),
+            esc_pg(&head_blob_sha),
+            now_sql,
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(path),
+        );
+        relational.exec(&sql_artefacts).await?;
+
+        let sql_edges = format!(
+            "UPDATE artefact_edges_current \
+SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+            esc_pg(&head_sha),
+            esc_pg(&head_sha),
+            esc_pg(&head_blob_sha),
+            now_sql,
+            esc_pg(&cfg.repo.repo_id),
+            esc_pg(path),
+        );
+        relational.exec(&sql_edges).await?;
+
+        promoted += 1;
+    }
+
+    Ok(promoted)
 }
 
 pub async fn run_query(cfg: &DevqlConfig, query: &str, compact: bool) -> Result<()> {
@@ -562,6 +681,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
 }
 
 include!("canonical_mapping.rs");
+include!("vocab.rs");
 // ingestion: shared types
 include!("ingestion/types.rs");
 // ingestion: repo identity & git remote parsing
@@ -580,6 +700,8 @@ include!("ingestion/artefact_persistence.rs");
 include!("ingestion/semantic_features_persistence.rs");
 // ingestion: Stage 2 embedding persistence
 include!("ingestion/semantic_embeddings_persistence.rs");
+// ingestion: Stage 3 clone persistence
+include!("ingestion/semantic_clones_persistence.rs");
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)
