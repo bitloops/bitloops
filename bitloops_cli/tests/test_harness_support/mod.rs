@@ -10,7 +10,6 @@ use std::process::{Command, Output};
 use bitloops_cli::engine::paths;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
-use serde_json::json;
 use tempfile::TempDir;
 
 #[derive(Debug)]
@@ -201,110 +200,6 @@ describe("ts repo", () => {
   });
 });
 "#,
-    );
-}
-
-pub fn copy_real_typescript_fixture_subset(workspace: &Workspace) {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("testlens-fixture");
-
-    for relative_path in [
-        "package.json",
-        "tsconfig.json",
-        "jest.config.cjs",
-        "src",
-        "tests",
-        "coverage/lcov.info",
-    ] {
-        copy_fixture_path(
-            &source_root.join(relative_path),
-            &workspace.path(relative_path),
-        );
-    }
-}
-
-pub fn write_typescript_fixture_results_json(workspace: &Workspace, relative_path: &str) {
-    let user_repository_path = workspace.path("tests/UserRepository.test.ts");
-    let user_service_path = workspace.path("tests/UserService.test.ts");
-    let user_flow_path = workspace.path("tests/e2e/userFlow.test.ts");
-
-    let payload = json!({
-        "testResults": [
-            {
-                "name": user_repository_path.to_string_lossy(),
-                "assertionResults": [
-                    {
-                        "title": "should find user by id",
-                        "status": "passed",
-                        "ancestorTitles": ["UserRepository"],
-                        "duration": 4
-                    },
-                    {
-                        "title": "should find user by email",
-                        "status": "passed",
-                        "ancestorTitles": ["UserRepository"],
-                        "duration": 3
-                    },
-                    {
-                        "title": "should delete existing user",
-                        "status": "passed",
-                        "ancestorTitles": ["UserRepository"],
-                        "duration": 2
-                    }
-                ]
-            },
-            {
-                "name": user_service_path.to_string_lossy(),
-                "assertionResults": [
-                    {
-                        "title": "should create user",
-                        "status": "passed",
-                        "ancestorTitles": ["UserService"],
-                        "duration": 5
-                    },
-                    {
-                        "title": "should reject duplicate email",
-                        "status": "failed",
-                        "ancestorTitles": ["UserService"],
-                        "duration": 6
-                    }
-                ]
-            },
-            {
-                "name": user_flow_path.to_string_lossy(),
-                "assertionResults": [
-                    {
-                        "title": "full user creation flow",
-                        "status": "passed",
-                        "ancestorTitles": ["userFlow"],
-                        "duration": 9
-                    }
-                ]
-            }
-        ]
-    });
-
-    workspace.write_file(
-        relative_path,
-        &serde_json::to_string_pretty(&payload).expect("serialize jest fixture json"),
-    );
-}
-
-pub fn write_typescript_fixture_coverage_manifest(workspace: &Workspace, relative_path: &str) {
-    let payload = json!([
-        {
-            "format": "lcov",
-            "path": "coverage/lcov.info",
-            "scope": "workspace",
-            "tool": "jest"
-        }
-    ]);
-
-    workspace.write_file(
-        relative_path,
-        &serde_json::to_string_pretty(&payload).expect("serialize coverage manifest json"),
     );
 }
 
@@ -716,36 +611,6 @@ fn init_git_repo(repo_dir: &Path) {
         .status()
         .expect("run git init");
     assert!(status.success(), "git init should succeed");
-}
-
-fn copy_fixture_path(source: &Path, target: &Path) {
-    let metadata = fs::metadata(source)
-        .unwrap_or_else(|error| panic!("stat fixture path {}: {error}", source.display()));
-    if metadata.is_dir() {
-        fs::create_dir_all(target)
-            .unwrap_or_else(|error| panic!("create fixture dir {}: {error}", target.display()));
-        for entry in fs::read_dir(source)
-            .unwrap_or_else(|error| panic!("read fixture dir {}: {error}", source.display()))
-        {
-            let entry = entry.expect("read fixture entry");
-            let child_source = entry.path();
-            let child_target = target.join(entry.file_name());
-            copy_fixture_path(&child_source, &child_target);
-        }
-        return;
-    }
-
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .unwrap_or_else(|error| panic!("create fixture parent {}: {error}", parent.display()));
-    }
-    fs::copy(source, target).unwrap_or_else(|error| {
-        panic!(
-            "copy fixture file {} -> {}: {error}",
-            source.display(),
-            target.display()
-        )
-    });
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {

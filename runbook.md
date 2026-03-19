@@ -12,7 +12,7 @@ This runbook proves the end-to-end flow that matters now:
 6. run `bitloops testlens ingest-tests`
 7. verify that test links were created
 
-It uses the curated Rust fixture under `bitloops_cli/tests/fixtures/testlens-fixture-rust`, because that gives a deterministic proof with real production/test structure and non-zero links.
+It creates a small Rust repo inline, so the proof does not depend on any checked-in fixture repository.
 
 ## Preconditions
 
@@ -21,18 +21,198 @@ cd /Users/markos/code/bitloops/bitloops
 cargo install --path ./bitloops_cli --force
 ```
 
-## 1) Create a disposable repo from the Rust fixture
+## 1) Create a disposable Rust repo inline
 
 ```bash
 REPO=/tmp/test-harness-claude-proof
-FIXTURE=/Users/markos/code/bitloops/bitloops/bitloops_cli/tests/fixtures/testlens-fixture-rust
 
 rm -rf "$REPO"
 mkdir -p "$REPO"
-cp -R "$FIXTURE"/. "$REPO"/
-rm -rf "$REPO/target" "$REPO/.bitloops" "$REPO/.git"
-
 cd "$REPO"
+
+mkdir -p src/models src/repositories src/services tests/e2e
+
+cat > Cargo.toml <<'EOF'
+[package]
+name = "test_harness_proof"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+EOF
+
+cat > src/lib.rs <<'EOF'
+pub mod models;
+pub mod repositories;
+pub mod services;
+EOF
+
+cat > src/models/mod.rs <<'EOF'
+pub mod user;
+EOF
+
+cat > src/models/user.rs <<'EOF'
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct User {
+    pub id: u32,
+    pub email: String,
+    pub password_hash: String,
+}
+
+impl User {
+    pub fn new(id: u32, email: String, password_hash: String) -> Self {
+        Self {
+            id,
+            email,
+            password_hash,
+        }
+    }
+}
+EOF
+
+cat > src/repositories/mod.rs <<'EOF'
+pub mod user_repository;
+EOF
+
+cat > src/repositories/user_repository.rs <<'EOF'
+use crate::models::user::User;
+
+#[derive(Debug, Default, Clone)]
+pub struct UserRepository {
+    users: Vec<User>,
+}
+
+impl UserRepository {
+    pub fn new() -> Self {
+        Self { users: Vec::new() }
+    }
+
+    pub fn save(&mut self, user: User) {
+        self.users.push(user);
+    }
+
+    pub fn find_by_id(&self, id: u32) -> Option<User> {
+        self.users.iter().find(|user| user.id == id).cloned()
+    }
+
+    pub fn find_by_email(&self, email: &str) -> Option<User> {
+        self.users
+            .iter()
+            .find(|user| user.email.eq_ignore_ascii_case(email))
+            .cloned()
+    }
+}
+EOF
+
+cat > src/services/mod.rs <<'EOF'
+pub mod auth_service;
+pub mod user_service;
+EOF
+
+cat > src/services/auth_service.rs <<'EOF'
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AuthService;
+
+impl AuthService {
+    pub fn hash_password(raw: &str) -> String {
+        format!("hash::{}", raw.trim().to_lowercase())
+    }
+
+    pub fn verify_password(raw: &str, hash: &str) -> bool {
+        Self::hash_password(raw) == hash
+    }
+}
+EOF
+
+cat > src/services/user_service.rs <<'EOF'
+use crate::models::user::User;
+use crate::repositories::user_repository::UserRepository;
+use crate::services::auth_service::AuthService;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UserService;
+
+impl UserService {
+    pub fn create_user(repo: &mut UserRepository, id: u32, email: &str, raw_password: &str) -> User {
+        let password_hash = AuthService::hash_password(raw_password);
+        let user = User::new(id, email.to_string(), password_hash);
+        repo.save(user.clone());
+        user
+    }
+
+    pub fn authenticate(repo: &UserRepository, email: &str, raw_password: &str) -> bool {
+        if let Some(user) = repo.find_by_email(email) {
+            return AuthService::verify_password(raw_password, &user.password_hash);
+        }
+        false
+    }
+}
+EOF
+
+cat > tests/user_repository_test.rs <<'EOF'
+#[cfg(test)]
+mod tests {
+    use test_harness_proof::models::user::User;
+    use test_harness_proof::repositories::user_repository::UserRepository;
+
+    #[test]
+    fn finds_user_by_id() {
+        let mut repo = UserRepository::new();
+        repo.save(User::new(7, "markos@bitloops.com".to_string(), "hash::secret".to_string()));
+
+        let user = repo.find_by_id(7);
+
+        assert!(user.is_some());
+        assert_eq!(user.expect("missing user").email, "markos@bitloops.com");
+    }
+}
+EOF
+
+cat > tests/user_service_test.rs <<'EOF'
+#[cfg(test)]
+mod tests {
+    use test_harness_proof::repositories::user_repository::UserRepository;
+    use test_harness_proof::services::user_service::UserService;
+
+    #[test]
+    fn creates_and_authenticates_user() {
+        let mut repo = UserRepository::new();
+
+        let created = UserService::create_user(&mut repo, 1, "admin@bitloops.com", "Secret123");
+        let can_auth = UserService::authenticate(&repo, "admin@bitloops.com", "Secret123");
+
+        assert_eq!(created.id, 1);
+        assert!(can_auth);
+    }
+}
+EOF
+
+cat > tests/e2e_test.rs <<'EOF'
+#[path = "e2e/user_flow_test.rs"]
+mod user_flow_test;
+EOF
+
+cat > tests/e2e/user_flow_test.rs <<'EOF'
+#[cfg(test)]
+mod tests {
+    use test_harness_proof::repositories::user_repository::UserRepository;
+    use test_harness_proof::services::user_service::UserService;
+
+    #[test]
+    fn user_signup_and_login_flow() {
+        let mut repo = UserRepository::new();
+
+        UserService::create_user(&mut repo, 9, "flow@bitloops.com", "Pass123");
+
+        let reloaded = repo.find_by_id(9);
+        let authenticated = UserService::authenticate(&repo, "flow@bitloops.com", "Pass123");
+
+        assert!(reloaded.is_some());
+        assert!(authenticated);
+    }
+}
+EOF
+
 git init
 git branch -M main
 git config user.name "Codex"

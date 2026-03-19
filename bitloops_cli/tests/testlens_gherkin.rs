@@ -6,11 +6,10 @@ use cucumber::{World as _, given, then, when, writer::Stats as _};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use test_harness_support::{
-    ListedArtefact, Workspace, copy_real_typescript_fixture_subset, discovered_languages,
-    load_symbol_fqn, load_test_scenario_signatures, run_bitloops_or_panic, scenario_link_exists,
+    ListedArtefact, Workspace, discovered_languages, load_symbol_fqn,
+    load_test_scenario_signatures, run_bitloops_or_panic, scenario_link_exists,
     seed_production_artefacts, write_rust_additional_declarations_fixture,
     write_rust_hybrid_fixture, write_rust_parameterized_fixture, write_rust_static_link_fixture,
-    write_typescript_fixture_coverage_manifest, write_typescript_fixture_results_json,
     write_typescript_static_link_fixture,
 };
 
@@ -29,18 +28,6 @@ struct TestHarnessWorld {
 fn given_initialized_typescript_repository(world: &mut TestHarnessWorld, commit_sha: String) {
     let workspace = Workspace::new("gherkin-typescript-static-links");
     write_typescript_static_link_fixture(&workspace);
-
-    initialize_repository_with_production(world, workspace, commit_sha);
-}
-
-#[given(
-    expr = "an initialized copied TypeScript fixture repository with production artefacts for commit {string}"
-)]
-fn given_initialized_copied_typescript_fixture(world: &mut TestHarnessWorld, commit_sha: String) {
-    let workspace = Workspace::new("gherkin-typescript-journey");
-    copy_real_typescript_fixture_subset(&workspace);
-    write_typescript_fixture_coverage_manifest(&workspace, "coverage-manifest.json");
-    write_typescript_fixture_results_json(&workspace, "test-results.json");
 
     initialize_repository_with_production(world, workspace, commit_sha);
 }
@@ -113,38 +100,6 @@ fn when_ingest_tests(world: &mut TestHarnessWorld, commit_sha: String) {
     let output = run_bitloops_or_panic(
         world.workspace().repo_dir(),
         &["testlens", "ingest-tests", "--commit", &commit_sha],
-    );
-    world.ingest_output = Some(output);
-}
-
-#[when(expr = "I ingest coverage from the fixture manifest for commit {string}")]
-fn when_ingest_coverage_from_manifest(world: &mut TestHarnessWorld, commit_sha: String) {
-    let output = run_bitloops_or_panic(
-        world.workspace().repo_dir(),
-        &[
-            "testlens",
-            "ingest-coverage-batch",
-            "--manifest",
-            "coverage-manifest.json",
-            "--commit",
-            &commit_sha,
-        ],
-    );
-    world.ingest_output = Some(output);
-}
-
-#[when(expr = "I ingest Jest results from the fixture for commit {string}")]
-fn when_ingest_jest_results(world: &mut TestHarnessWorld, commit_sha: String) {
-    let output = run_bitloops_or_panic(
-        world.workspace().repo_dir(),
-        &[
-            "testlens",
-            "ingest-results",
-            "--jest-json",
-            "test-results.json",
-            "--commit",
-            &commit_sha,
-        ],
     );
     world.ingest_output = Some(output);
 }
@@ -421,84 +376,6 @@ fn then_query_returns_doctest_covering_test(
             .is_some_and(|value| value.starts_with("documented_increment[doctest:"))
     });
     assert!(found, "expected doctest covering test, got {query_json}");
-    world.query_json = Some(query_json);
-}
-
-#[then(
-    expr = "querying production artefact matching {string} with summary view includes coverage percentages for commit {string}"
-)]
-fn then_summary_view_includes_coverage_percentages(
-    world: &mut TestHarnessWorld,
-    artefact_pattern: String,
-    commit_sha: String,
-) {
-    let query_json = query_artefact(
-        world,
-        &commit_sha,
-        &artefact_pattern,
-        &["--view", "summary"],
-    );
-    assert!(
-        query_json["summary"]["line_coverage_pct"].is_number(),
-        "expected line coverage percentage, got {query_json}"
-    );
-    assert!(
-        query_json["summary"]["branch_coverage_pct"].is_number(),
-        "expected branch coverage percentage, got {query_json}"
-    );
-    world.query_json = Some(query_json);
-}
-
-#[then(
-    expr = "querying production artefact matching {string} with coverage view returns branch coverage for commit {string}"
-)]
-fn then_coverage_view_returns_branch_coverage(
-    world: &mut TestHarnessWorld,
-    artefact_pattern: String,
-    commit_sha: String,
-) {
-    let query_json = query_artefact(
-        world,
-        &commit_sha,
-        &artefact_pattern,
-        &["--view", "coverage"],
-    );
-    let branches = query_json["coverage"]["branches"]
-        .as_array()
-        .expect("expected branches array");
-    assert!(
-        !branches.is_empty(),
-        "expected branch coverage entries, got {query_json}"
-    );
-    world.query_json = Some(query_json);
-}
-
-#[then(
-    expr = "querying production artefact matching {string} with tests view surfaces a failing last run for commit {string}"
-)]
-fn then_tests_view_surfaces_failing_last_run(
-    world: &mut TestHarnessWorld,
-    artefact_pattern: String,
-    commit_sha: String,
-) {
-    let query_json = query_artefact(
-        world,
-        &commit_sha,
-        &artefact_pattern,
-        &["--view", "tests", "--min-strength", "0.0"],
-    );
-    let covering_tests = query_json["covering_tests"]
-        .as_array()
-        .expect("expected covering_tests array");
-    let has_failing_last_run = covering_tests.iter().any(|row| {
-        row["last_run"]["status"]
-            .as_str()
-            .is_some_and(|status| status == "fail")
-    });
-    assert!(
-        has_failing_last_run,
-        "expected at least one failing last_run, got {query_json}"
-    );
     world.query_json = Some(query_json);
 }
 
