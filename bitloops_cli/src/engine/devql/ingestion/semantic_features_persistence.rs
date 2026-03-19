@@ -188,6 +188,18 @@ async fn load_pre_stage_artefacts_for_blob(
     parse_semantic_artefact_rows(rows)
 }
 
+async fn load_pre_stage_dependencies_for_blob(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    blob_sha: &str,
+    path: &str,
+) -> Result<Vec<semantic::PreStageDependencyRow>> {
+    let rows = relational
+        .query_rows(&build_semantic_get_dependencies_sql(repo_id, blob_sha, path))
+        .await?;
+    parse_semantic_dependency_rows(rows)
+}
+
 async fn upsert_semantic_feature_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
@@ -252,6 +264,21 @@ ORDER BY coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
     )
 }
 
+fn build_semantic_get_dependencies_sql(repo_id: &str, blob_sha: &str, path: &str) -> String {
+    format!(
+        "SELECT e.from_artefact_id, LOWER(e.edge_kind) AS edge_kind, \
+COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_artefact_id, '') AS target_ref \
+FROM artefact_edges e \
+JOIN artefacts source ON source.repo_id = e.repo_id AND source.artefact_id = e.from_artefact_id \
+LEFT JOIN artefacts target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+WHERE e.repo_id = '{repo_id}' AND e.blob_sha = '{blob_sha}' AND source.path = '{path}' \
+ORDER BY e.from_artefact_id, e.edge_kind, target_ref",
+        repo_id = esc_pg(repo_id),
+        blob_sha = esc_pg(blob_sha),
+        path = esc_pg(path),
+    )
+}
+
 fn parse_semantic_artefact_rows(rows: Vec<Value>) -> Result<Vec<semantic::PreStageArtefactRow>> {
     let mut artefacts = Vec::with_capacity(rows.len());
     for row in rows {
@@ -269,6 +296,20 @@ fn parse_semantic_artefact_rows(rows: Vec<Value>) -> Result<Vec<semantic::PreSta
         artefacts.push(artefact);
     }
     Ok(artefacts)
+}
+
+fn parse_semantic_dependency_rows(
+    rows: Vec<Value>,
+) -> Result<Vec<semantic::PreStageDependencyRow>> {
+    let mut dependencies = Vec::with_capacity(rows.len());
+    for row in rows {
+        let dependency = serde_json::from_value::<semantic::PreStageDependencyRow>(row)?;
+        if dependency.target_ref.trim().is_empty() {
+            continue;
+        }
+        dependencies.push(dependency);
+    }
+    Ok(dependencies)
 }
 
 fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
@@ -409,6 +450,7 @@ mod semantic_feature_persistence_tests {
                 body: "return repo.findById(id);".to_string(),
                 docstring: Some("Fetches O'Brien by id.".to_string()),
                 parent_kind: Some("class".to_string()),
+                dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
                 content_hash: Some("hash-1".to_string()),
             },
             &semantic::NoopSemanticSummaryProvider,
@@ -439,6 +481,15 @@ mod semantic_feature_persistence_tests {
         assert!(sql.contains("blob_sha = 'blob''1'"));
         assert!(sql.contains("path = 'src/o''brien.ts'"));
         assert!(sql.contains("signature, modifiers, docstring, content_hash"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_get_dependencies_sql_with_escaped_values() {
+        let sql = build_semantic_get_dependencies_sql("repo'1", "blob'1", "src/o'brien.ts");
+        assert!(sql.contains("repo_id = 'repo''1'"));
+        assert!(sql.contains("blob_sha = 'blob''1'"));
+        assert!(sql.contains("source.path = 'src/o''brien.ts'"));
+        assert!(sql.contains("FROM artefact_edges e"));
     }
 
     #[test]
@@ -502,5 +553,18 @@ mod semantic_feature_persistence_tests {
             parsed[0].modifiers,
             vec!["public".to_string(), "async".to_string()]
         );
+    }
+
+    #[test]
+    fn semantic_feature_persistence_parses_dependency_rows() {
+        let parsed = parse_semantic_dependency_rows(vec![json!({
+            "from_artefact_id": "artefact-1",
+            "edge_kind": "calls",
+            "target_ref": "src/services/user.ts::UserRepo::findById"
+        })])
+        .expect("dependency rows should parse");
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].edge_kind, "calls");
     }
 }

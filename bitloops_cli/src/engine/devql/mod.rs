@@ -493,10 +493,19 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &normalized_path,
             )
             .await?;
-            let semantic_feature_inputs = semantic::build_semantic_feature_inputs_from_artefacts(
-                &pre_stage_artefacts,
-                &content,
-            );
+            let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
+                &relational,
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs =
+                semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                    &pre_stage_artefacts,
+                    &pre_stage_dependencies,
+                    &content,
+                );
             let semantic_feature_stats = upsert_semantic_feature_rows(
                 &relational,
                 &semantic_feature_inputs,
