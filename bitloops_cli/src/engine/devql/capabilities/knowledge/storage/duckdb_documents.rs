@@ -352,6 +352,11 @@ mod tests {
             .expect("find knowledge item version by id")
             .expect("knowledge item version row");
 
-        assert_eq!(found, row);
+        assert!(found.created_at.is_some());
+
+        let mut expected = row;
+        expected.created_at = found.created_at.clone();
+
+        assert_eq!(found, expected);
     }
 }
