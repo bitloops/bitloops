@@ -424,7 +424,7 @@ impl Drop for TempIndexPath {
 /// `deleted`: files to remove from the tree
 ///
 /// Returns the new tree hash.
-fn build_tree(
+pub(crate) fn build_tree(
     repo_root: &Path,
     parent_tree: Option<&str>,
     modified: &[String],
@@ -503,7 +503,7 @@ fn build_tree(
 ///
 /// Uses `git hash-object -w` to create blob objects, then
 /// `git update-index --cacheinfo` to register them at the desired tree paths.
-fn build_tree_with_explicit_paths(
+pub(crate) fn build_tree_with_explicit_paths(
     repo_root: &Path,
     parent_tree: Option<&str>,
     files: &[(PathBuf, String)],

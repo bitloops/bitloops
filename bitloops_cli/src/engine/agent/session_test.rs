@@ -1,5 +1,10 @@
 use super::*;
+use crate::engine::agent::claude_code::agent::ClaudeCodeAgent;
+use crate::engine::agent::codex::agent::CodexAgent;
+use crate::engine::agent::cursor::agent::CursorAgent;
 use serde_json::json;
+use std::fs;
+use std::path::Path;
 use std::time::SystemTime;
 
 #[test]
@@ -345,5 +350,102 @@ fn TestFindToolResultUUID() {
     {
         let result = session.find_tool_result_uuid("nonexistent");
         assert!(result.is_none(), "missing uuid should not be found");
+    }
+}
+
+enum SessionResolutionAgent {
+    ClaudeCode,
+    Codex,
+    Cursor,
+}
+
+impl SessionResolutionAgent {
+    fn resolve_session_file(&self, session_dir: &str, session_id: &str) -> String {
+        match self {
+            Self::ClaudeCode => ClaudeCodeAgent.resolve_session_file(session_dir, session_id),
+            Self::Codex => CodexAgent.resolve_session_file(session_dir, session_id),
+            Self::Cursor => CursorAgent.resolve_session_file(session_dir, session_id),
+        }
+    }
+}
+
+fn expected_flat_session_file(session_dir: &Path, session_id: &str) -> String {
+    session_dir
+        .join(format!("{session_id}.jsonl"))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn expected_nested_session_file(session_dir: &Path, session_id: &str) -> String {
+    session_dir
+        .join(session_id)
+        .join(format!("{session_id}.jsonl"))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn prepare_nested_session_file(session_dir: &Path, session_id: &str) {
+    let nested_dir = session_dir.join(session_id);
+    fs::create_dir_all(&nested_dir).expect("create nested session directory");
+    fs::write(
+        nested_dir.join(format!("{session_id}.jsonl")),
+        b"{\"role\":\"user\",\"content\":\"hello\"}",
+    )
+    .expect("write nested session file");
+}
+
+fn prepare_nested_session_dir(session_dir: &Path, session_id: &str) {
+    fs::create_dir_all(session_dir.join(session_id)).expect("create nested session directory");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestResolveSessionFileBehaviour() {
+    let cases = [
+        (
+            "Claude Code uses flat session files",
+            SessionResolutionAgent::ClaudeCode,
+            None,
+            expected_flat_session_file as fn(&Path, &str) -> String,
+        ),
+        (
+            "Codex uses flat session files",
+            SessionResolutionAgent::Codex,
+            None,
+            expected_flat_session_file as fn(&Path, &str) -> String,
+        ),
+        (
+            "Cursor falls back to flat session files when nested path is absent",
+            SessionResolutionAgent::Cursor,
+            None,
+            expected_flat_session_file as fn(&Path, &str) -> String,
+        ),
+        (
+            "Cursor prefers an existing nested transcript file",
+            SessionResolutionAgent::Cursor,
+            Some(prepare_nested_session_file as fn(&Path, &str)),
+            expected_nested_session_file as fn(&Path, &str) -> String,
+        ),
+        (
+            "Cursor also prefers a nested directory even before the file exists",
+            SessionResolutionAgent::Cursor,
+            Some(prepare_nested_session_dir as fn(&Path, &str)),
+            expected_nested_session_file as fn(&Path, &str) -> String,
+        ),
+    ];
+
+    for (name, agent, prepare, expected) in cases {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let session_dir = dir.path().join("sessions");
+        fs::create_dir_all(&session_dir).expect("create session directory");
+
+        let session_id = "abc123";
+        if let Some(prepare) = prepare {
+            prepare(&session_dir, session_id);
+        }
+
+        let got = agent.resolve_session_file(session_dir.to_string_lossy().as_ref(), session_id);
+        let expected = expected(&session_dir, session_id);
+        assert_eq!(got, expected, "case {name} mismatch");
     }
 }

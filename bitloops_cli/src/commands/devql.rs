@@ -6,7 +6,7 @@ use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
-const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
@@ -22,7 +22,7 @@ pub enum DevqlCommand {
     Ingest(DevqlIngestArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
-    /// Check backend connectivity for configured relational/events providers.
+    /// Check backend connectivity for Postgres and ClickHouse.
     ConnectionStatus(DevqlConnectionStatusArgs),
 }
 

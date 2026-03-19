@@ -7,9 +7,9 @@ use crate::engine::providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
     default_embedding_provider, embedding_provider_requires_api_key,
 };
-use crate::engine::semantic_features::SemanticFeatureInput;
+use crate::engine::semantic_features::{SemanticFeatureInput, render_dependency_context};
 
-const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v1";
+const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
 
 #[derive(Debug, Clone, Default)]
@@ -92,6 +92,7 @@ pub struct SymbolEmbeddingInput {
     pub signature: Option<String>,
     pub body: String,
     pub summary: String,
+    pub dependency_signals: Vec<String>,
     pub parent_kind: Option<String>,
     pub content_hash: Option<String>,
 }
@@ -125,6 +126,7 @@ pub fn build_symbol_embedding_inputs(
 ) -> Vec<SymbolEmbeddingInput> {
     inputs
         .iter()
+        .filter(|input| crate::engine::semantic_features::is_semantic_enrichment_candidate(input))
         .filter_map(|input| {
             let summary = summary_by_artefact_id
                 .get(&input.artefact_id)?
@@ -147,6 +149,7 @@ pub fn build_symbol_embedding_inputs(
                 signature: input.signature.clone(),
                 body: input.body.clone(),
                 summary,
+                dependency_signals: input.dependency_signals.clone(),
                 parent_kind: input.parent_kind.clone(),
                 content_hash: input.content_hash.clone(),
             })
@@ -161,28 +164,25 @@ pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
         .as_deref()
         .map(normalize_whitespace)
         .unwrap_or_default();
-    let parent_kind = input.parent_kind.as_deref().unwrap_or_default();
+    let dependencies = render_dependency_context(&input.dependency_signals);
 
+    // Keep the clone semantic basis focused on symbol behavior rather than location.
     format!(
         "kind: {kind}\n\
 language: {language}\n\
 language_kind: {language_kind}\n\
-path: {path}\n\
-symbol_fqn: {symbol_fqn}\n\
 name: {name}\n\
 signature: {signature}\n\
-parent_kind: {parent_kind}\n\
 summary: {summary}\n\
+dependencies: {dependencies}\n\
 body:\n{body}",
         kind = input.canonical_kind,
         language = input.language,
         language_kind = input.language_kind,
-        path = input.path,
-        symbol_fqn = input.symbol_fqn,
         name = input.name,
         signature = signature,
-        parent_kind = parent_kind,
         summary = normalize_whitespace(&input.summary),
+        dependencies = dependencies,
         body = body,
     )
 }
@@ -198,16 +198,14 @@ pub fn build_symbol_embedding_input_hash(
             "artefact_id": &input.artefact_id,
             "repo_id": &input.repo_id,
             "blob_sha": &input.blob_sha,
-            "path": &input.path,
             "language": input.language.to_ascii_lowercase(),
             "canonical_kind": input.canonical_kind.to_ascii_lowercase(),
             "language_kind": input.language_kind.to_ascii_lowercase(),
-            "symbol_fqn": &input.symbol_fqn,
             "name": &input.name,
             "signature": input.signature.as_deref().map(normalize_whitespace),
             "summary": normalize_whitespace(&input.summary),
+            "dependency_signals": &input.dependency_signals,
             "body": truncate_chars(normalize_whitespace(&input.body), MAX_EMBEDDING_BODY_CHARS),
-            "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
             "content_hash": &input.content_hash,
         })
         .to_string(),
@@ -311,13 +309,17 @@ mod tests {
             body: "return email.trim().toLowerCase();".to_string(),
             summary: "Function normalize email. Normalizes email addresses before storage."
                 .to_string(),
+            dependency_signals: vec![
+                "calls:user_repo::find_by_id".to_string(),
+                "references:user::email".to_string(),
+            ],
             parent_kind: Some("file".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
     }
 
     #[test]
-    fn symbol_embedding_inputs_include_all_summarized_kinds() {
+    fn symbol_embedding_inputs_exclude_non_semantic_candidates() {
         let inputs = vec![
             SemanticFeatureInput {
                 artefact_id: "function-1".to_string(),
@@ -331,9 +333,11 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
                 name: "normalizeEmail".to_string(),
                 signature: None,
-                body: "return email;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return email.trim().toLowerCase();".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
+                dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
                 content_hash: None,
             },
             SemanticFeatureInput {
@@ -348,9 +352,11 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::import::import@1".to_string(),
                 name: "import@1".to_string(),
                 signature: None,
+                modifiers: vec!["type-only".to_string()],
                 body: "import x from 'y';".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
+                dependency_signals: vec!["imports:y".to_string()],
                 content_hash: None,
             },
         ];
@@ -363,9 +369,8 @@ mod tests {
         ]);
 
         let rows = build_symbol_embedding_inputs(&inputs, &summaries);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artefact_id, "function-1");
-        assert_eq!(rows[1].artefact_id, "import-1");
     }
 
     #[test]
@@ -383,9 +388,11 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
                 name: "normalizeEmail".to_string(),
                 signature: None,
-                body: "return email;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return email.trim().toLowerCase();".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
+                dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
                 content_hash: None,
             },
             SemanticFeatureInput {
@@ -400,9 +407,11 @@ mod tests {
                 symbol_fqn: "src/services/user.ts::normalizeName".to_string(),
                 name: "normalizeName".to_string(),
                 signature: None,
-                body: "return name;".to_string(),
+                modifiers: vec!["export".to_string()],
+                body: "return name.trim().replace(/\\s+/g, ' ');".to_string(),
                 docstring: None,
                 parent_kind: Some("file".to_string()),
+                dependency_signals: vec!["references:user_profile::name".to_string()],
                 content_hash: None,
             },
         ];
@@ -447,8 +456,40 @@ mod tests {
     fn symbol_embedding_text_includes_summary_and_body() {
         let text = build_symbol_embedding_text(&sample_input());
         assert!(text.contains("summary: Function normalize email."));
+        assert!(text.contains("dependencies: calls:user repo::find by id"));
         assert!(text.contains("body:"));
         assert!(text.contains("return email.trim().toLowerCase();"));
+        assert!(!text.contains("path:"));
+        assert!(!text.contains("symbol_fqn:"));
+        assert!(!text.contains("parent_kind:"));
+    }
+
+    #[test]
+    fn symbol_embedding_hash_changes_when_dependencies_change() {
+        let provider = MockEmbeddingProvider;
+        let base = sample_input();
+        let mut changed = base.clone();
+        changed.dependency_signals = vec!["calls:user_repo::save".to_string()];
+
+        assert_ne!(
+            build_symbol_embedding_input_hash(&base, &provider),
+            build_symbol_embedding_input_hash(&changed, &provider)
+        );
+    }
+
+    #[test]
+    fn symbol_embedding_hash_ignores_path_and_symbol_location() {
+        let provider = MockEmbeddingProvider;
+        let base = sample_input();
+        let mut changed = base.clone();
+        changed.path = "src/renamed/user.ts".to_string();
+        changed.symbol_fqn = "src/renamed/user.ts::normalizeEmail".to_string();
+        changed.parent_kind = Some("module".to_string());
+
+        assert_eq!(
+            build_symbol_embedding_input_hash(&base, &provider),
+            build_symbol_embedding_input_hash(&changed, &provider)
+        );
     }
 
     #[test]

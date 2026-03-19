@@ -6,7 +6,7 @@ use super::adapters::GeminiCliLifecycleAdapter;
 use super::{
     LifecycleEvent, LifecycleEventType, capture_pre_prompt_state, handle_lifecycle_turn_end,
 };
-use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
+use crate::engine::agent::gemini::agent::GeminiCliAgent;
 use crate::engine::session::create_session_backend_or_local;
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::{git_command, with_cwd};

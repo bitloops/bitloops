@@ -12,6 +12,7 @@ pub struct SymbolFeaturesRow {
     pub blob_sha: String,
     pub normalized_name: String,
     pub normalized_signature: Option<String>,
+    pub modifiers: Vec<String>,
     pub identifier_tokens: Vec<String>,
     pub normalized_body_tokens: Vec<String>,
     pub parent_kind: Option<String>,
@@ -20,9 +21,10 @@ pub struct SymbolFeaturesRow {
 
 pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeaturesRow {
     let normalized_signature = input.signature.as_deref().map(normalize_signature);
+    let modifiers = normalize_modifiers(&input.modifiers);
     let identifier_tokens = build_identifier_tokens(input);
     let normalized_body_tokens = build_body_tokens(&input.body);
-    let context_tokens = build_context_tokens(input, &identifier_tokens);
+    let context_tokens = build_context_tokens(input, &identifier_tokens, &modifiers);
 
     SymbolFeaturesRow {
         artefact_id: input.artefact_id.clone(),
@@ -30,6 +32,7 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
         blob_sha: input.blob_sha.clone(),
         normalized_name: normalize_name(&input.name),
         normalized_signature,
+        modifiers,
         identifier_tokens,
         normalized_body_tokens,
         parent_kind: input
@@ -38,6 +41,18 @@ pub(super) fn build_features_row(input: &SemanticFeatureInput) -> SymbolFeatures
             .map(|value| value.to_ascii_lowercase()),
         context_tokens,
     }
+}
+
+fn normalize_modifiers(modifiers: &[String]) -> Vec<String> {
+    let mut normalized = modifiers
+        .iter()
+        .map(|modifier| modifier.trim().to_ascii_lowercase())
+        .filter(|modifier| !modifier.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized.truncate(MAX_CONTEXT_TOKENS);
+    normalized
 }
 
 fn build_identifier_tokens(input: &SemanticFeatureInput) -> Vec<String> {
@@ -50,11 +65,21 @@ fn build_identifier_tokens(input: &SemanticFeatureInput) -> Vec<String> {
     dedupe_tokens(tokens, MAX_IDENTIFIER_TOKENS)
 }
 
-fn build_context_tokens(input: &SemanticFeatureInput, identifier_tokens: &[String]) -> Vec<String> {
+fn build_context_tokens(
+    input: &SemanticFeatureInput,
+    identifier_tokens: &[String],
+    modifiers: &[String],
+) -> Vec<String> {
     let mut tokens = Vec::new();
     tokens.extend(split_identifier_tokens(&normalize_repo_path(&input.path)));
     if let Some(parent_kind) = &input.parent_kind {
         tokens.extend(split_identifier_tokens(parent_kind));
+    }
+    for modifier in modifiers {
+        tokens.extend(split_identifier_tokens(modifier));
+    }
+    for dependency_signal in &input.dependency_signals {
+        tokens.extend(split_identifier_tokens(dependency_signal));
     }
     tokens.extend(identifier_tokens.iter().cloned());
     dedupe_tokens(tokens, MAX_CONTEXT_TOKENS)
@@ -83,9 +108,11 @@ mod tests {
             signature: Some(
                 "async getById(id: string, opts: Map<string, Vec<i32>>): Promise<User>".to_string(),
             ),
+            modifiers: vec!["public".to_string(), "async".to_string()],
             body: "return db.users.findById(id);".to_string(),
             docstring: None,
             parent_kind: Some("class".to_string()),
+            dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
     }
@@ -108,6 +135,12 @@ mod tests {
         assert!(
             row.context_tokens.contains(&"services".to_string())
                 && row.context_tokens.contains(&"class".to_string())
+                && row.context_tokens.contains(&"async".to_string())
+                && row.context_tokens.contains(&"calls".to_string())
+        );
+        assert_eq!(
+            row.modifiers,
+            vec!["async".to_string(), "public".to_string()]
         );
         assert!(
             row.normalized_body_tokens.contains(&"find".to_string()),

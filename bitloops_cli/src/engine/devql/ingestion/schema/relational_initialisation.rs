@@ -2,6 +2,9 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, sqlite_schema_sql())
         .await
         .context("creating SQLite relational DevQL tables")?;
+    sqlite_exec_path_allow_create(sqlite_path, edge_model_cleanup_sqlite_sql())
+        .await
+        .context("normalising SQLite DevQL edge model values")?;
     sqlite_exec_path_allow_create(sqlite_path, checkpoint_schema_sql_sqlite())
         .await
         .context("creating SQLite checkpoint migration tables")?;
@@ -11,6 +14,9 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     init_sqlite_semantic_embeddings_schema(sqlite_path)
         .await
         .context("creating SQLite semantic embedding tables")?;
+    init_sqlite_semantic_clones_schema(sqlite_path)
+        .await
+        .context("creating SQLite semantic clone tables")?;
     Ok(())
 }
 
@@ -38,12 +44,20 @@ async fn init_postgres_schema(
         .await
         .context("updating Postgres current-state DevQL tables")?;
 
+    let edge_model_cleanup_sql = edge_model_cleanup_postgres_sql();
+    postgres_exec(pg_client, edge_model_cleanup_sql)
+        .await
+        .context("normalising Postgres DevQL edge model values")?;
+
     init_postgres_semantic_features_schema(pg_client)
         .await
         .context("creating Postgres semantic feature tables")?;
     init_postgres_semantic_embeddings_schema(pg_client)
         .await
         .context("creating Postgres semantic embedding tables")?;
+    init_postgres_semantic_clones_schema(pg_client)
+        .await
+        .context("creating Postgres semantic clone tables")?;
     let checkpoint_schema_sql = checkpoint_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await

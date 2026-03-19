@@ -252,24 +252,16 @@ impl CopilotHookVerb {
     pub fn hook_name(&self) -> &'static str {
         match self {
             Self::UserPromptSubmitted => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
             }
-            Self::SessionStart => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SESSION_START
-            }
-            Self::AgentStop => crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_AGENT_STOP,
-            Self::SessionEnd => crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SESSION_END,
-            Self::SubagentStop => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SUBAGENT_STOP
-            }
-            Self::PreToolUse => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_PRE_TOOL_USE
-            }
-            Self::PostToolUse => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_POST_TOOL_USE
-            }
+            Self::SessionStart => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_START,
+            Self::AgentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_AGENT_STOP,
+            Self::SessionEnd => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_END,
+            Self::SubagentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP,
+            Self::PreToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE,
+            Self::PostToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE,
             Self::ErrorOccurred => {
-                crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_ERROR_OCCURRED
+                crate::engine::agent::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
             }
         }
     }
@@ -313,10 +305,9 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
             crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
             | crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP,
         ) => "subagent",
-        (
-            AGENT_NAME_COPILOT,
-            crate::engine::agent::copilot_cli::lifecycle::HOOK_NAME_SUBAGENT_STOP,
-        ) => "subagent",
+        (AGENT_NAME_COPILOT, crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP) => {
+            "subagent"
+        }
         (AGENT_NAME_GEMINI, GEMINI_HOOK_BEFORE_TOOL | GEMINI_HOOK_AFTER_TOOL) => "tool",
         (AGENT_NAME_COPILOT, COPILOT_HOOK_PRE_TOOL_USE | COPILOT_HOOK_POST_TOOL_USE) => "tool",
         _ => "agent",

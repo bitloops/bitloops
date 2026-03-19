@@ -1,6 +1,6 @@
-// Inheritance edge extraction for JS/TS (extends) and Rust (supertraits).
+// Extension edge extraction for JS/TS (extends) and Rust (supertraits).
 
-fn collect_js_ts_inherits_edges_recursive(
+fn collect_js_ts_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,
@@ -36,12 +36,11 @@ fn collect_js_ts_inherits_edges_recursive(
                     for target in clause.children_by_field_name("value", &mut value_cursor) {
                         let line_no = target.start_position().row as i32 + 1;
                         if let Some(target_name) = symbol_lookup_name_from_node(target, content) {
-                            push_inherits_edge(
+                            push_extends_edge(
                                 &mut EdgeCollector { out, seen },
                                 &owner_fqn,
                                 &target_name,
                                 line_no,
-                                "extends",
                                 &SymbolLookup {
                                     local_targets: type_targets,
                                     imported_symbol_refs: Some(imported_symbol_refs),
@@ -74,12 +73,11 @@ fn collect_js_ts_inherits_edges_recursive(
                 for target in child.children_by_field_name("type", &mut type_cursor) {
                     let line_no = target.start_position().row as i32 + 1;
                     if let Some(target_name) = symbol_lookup_name_from_node(target, content) {
-                        push_inherits_edge(
+                        push_extends_edge(
                             &mut EdgeCollector { out, seen },
                             &owner_fqn,
                             &target_name,
                             line_no,
-                            "extends",
                             &SymbolLookup {
                                 local_targets: type_targets,
                                 imported_symbol_refs: Some(imported_symbol_refs),
@@ -94,7 +92,7 @@ fn collect_js_ts_inherits_edges_recursive(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_js_ts_inherits_edges_recursive(
+        collect_js_ts_extends_edges_recursive(
             child,
             content,
             type_targets,
@@ -105,7 +103,7 @@ fn collect_js_ts_inherits_edges_recursive(
     }
 }
 
-fn collect_rust_inherits_edges_recursive(
+fn collect_rust_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,
@@ -133,12 +131,11 @@ fn collect_rust_inherits_edges_recursive(
                 }
                 let line_no = target.start_position().row as i32 + 1;
                 if let Some(target_name) = symbol_lookup_name_from_node(target, content) {
-                    push_inherits_edge(
+                    push_extends_edge(
                         &mut EdgeCollector { out, seen },
                         &owner_fqn,
                         &target_name,
                         line_no,
-                        "supertrait",
                         &SymbolLookup {
                             local_targets: type_targets,
                             imported_symbol_refs: None,
@@ -151,6 +148,6 @@ fn collect_rust_inherits_edges_recursive(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_rust_inherits_edges_recursive(child, content, type_targets, seen, out);
+        collect_rust_extends_edges_recursive(child, content, type_targets, seen, out);
     }
 }

@@ -334,7 +334,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::engine::agent::gemini_cli::agent::GeminiCliAgent;
+    use crate::engine::agent::gemini::agent::GeminiCliAgent;
 
     #[test]
     #[allow(non_snake_case)]
