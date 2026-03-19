@@ -3,7 +3,11 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::engine::devql::EDGE_KIND_EXPORTS;
+
 use super::MAX_BODY_TOKENS;
+
+const MAX_COMPACT_DEPENDENCY_SEGMENT_TOKENS: usize = 4;
 
 pub(super) fn normalize_name(name: &str) -> String {
     let tokens = split_identifier_tokens(name);
@@ -58,6 +62,86 @@ pub(super) fn normalize_repo_path(path: &str) -> String {
     normalized.trim_start_matches('/').to_string()
 }
 
+pub(crate) fn build_dependency_context_signal(edge_kind: &str, target_ref: &str) -> Option<String> {
+    let edge_kind = edge_kind.trim().to_ascii_lowercase();
+    // Export edges describe module surface, not what the symbol itself depends on.
+    if edge_kind.is_empty() || edge_kind == EDGE_KIND_EXPORTS {
+        return None;
+    }
+
+    let target = compact_dependency_target(target_ref);
+    if target.is_empty() {
+        return None;
+    }
+
+    Some(format!("{edge_kind}:{target}"))
+}
+
+pub(crate) fn render_dependency_context(signals: &[String]) -> String {
+    signals
+        .iter()
+        .map(|signal| signal.replace('_', " "))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn compact_dependency_target(target_ref: &str) -> String {
+    let trimmed = target_ref.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let namespace_segments = trimmed
+        .split("::")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if namespace_segments.len() >= 2 {
+        let compact = namespace_segments[namespace_segments.len() - 2..]
+            .iter()
+            .map(|segment| {
+                compact_dependency_segment(segment, segment.contains('/') || segment.contains('\\'))
+            })
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if !compact.is_empty() {
+            return compact.join("::");
+        }
+    }
+
+    compact_dependency_segment(trimmed, trimmed.contains('/') || trimmed.contains('\\'))
+}
+
+fn compact_dependency_segment(segment: &str, path_like: bool) -> String {
+    let segment = segment.rsplit(['/', '\\']).next().unwrap_or(segment).trim();
+    if segment.is_empty() {
+        return String::new();
+    }
+
+    let mut tokens = split_identifier_tokens(segment);
+    if path_like {
+        strip_trailing_path_suffix_token(&mut tokens);
+    }
+    if tokens.is_empty() {
+        return segment.to_ascii_lowercase();
+    }
+
+    let start = tokens
+        .len()
+        .saturating_sub(MAX_COMPACT_DEPENDENCY_SEGMENT_TOKENS);
+    tokens[start..].join("_")
+}
+
+fn strip_trailing_path_suffix_token(tokens: &mut Vec<String>) {
+    let should_strip = tokens.last().is_some_and(|token| {
+        let len = token.len();
+        (1..=4).contains(&len) && token.chars().all(|ch| ch.is_ascii_lowercase())
+    });
+    if should_strip {
+        tokens.pop();
+    }
+}
+
 fn semantic_identifier_regex() -> &'static Regex {
     static IDENTIFIER_REGEX: OnceLock<Regex> = OnceLock::new();
     IDENTIFIER_REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap())
@@ -95,4 +179,36 @@ fn split_camel_case_word(input: &str) -> Vec<String> {
     }
 
     pieces
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_context_signal_compacts_path_like_targets() {
+        let signal = build_dependency_context_signal(
+            "calls",
+            "src/bounded-contexts/code.ts::ChangePathOfCodeFileCommandHandler::execute",
+        )
+        .expect("dependency signal");
+
+        assert_eq!(
+            signal,
+            "calls:change_path_of_code_file_command_handler::execute"
+        );
+    }
+
+    #[test]
+    fn dependency_context_signal_ignores_exports() {
+        assert!(build_dependency_context_signal(EDGE_KIND_EXPORTS, "src/app.ts::foo").is_none());
+    }
+
+    #[test]
+    fn dependency_context_signal_keeps_non_path_dotted_segments() {
+        let signal = build_dependency_context_signal("references", "Domain.Event::payload")
+            .expect("dependency signal");
+
+        assert_eq!(signal, "references:domain_event::payload");
+    }
 }
