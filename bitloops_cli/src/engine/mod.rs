@@ -3,6 +3,7 @@ pub mod blob;
 pub mod db;
 pub mod db_status;
 pub mod devql;
+pub mod extensions;
 pub mod git_operations;
 pub mod history;
 pub mod hooks;

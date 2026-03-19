@@ -100,19 +100,29 @@ fn js_ts_reference_target_maps(
     let mut value_targets = HashMap::new();
 
     for artefact in artefacts {
-        if matches!(
-            artefact.canonical_kind.as_deref(),
-            Some("interface") | Some("type") | Some("enum")
-        ) || artefact.language_kind == "class_declaration"
+        let projected_kind = artefact
+            .canonical_kind
+            .as_deref()
+            .and_then(CanonicalKindProjection::from_str);
+        if projected_kind.is_some_and(|kind| {
+            matches!(
+                kind,
+                CanonicalKindProjection::Interface
+                    | CanonicalKindProjection::Type
+                    | CanonicalKindProjection::Enum
+            )
+        }) || artefact.language_kind == "class_declaration"
         {
             type_targets
                 .entry(artefact.name.clone())
                 .or_insert_with(|| artefact.symbol_fqn.clone());
         }
-        if matches!(
-            artefact.canonical_kind.as_deref(),
-            Some("variable") | Some("function")
-        )
+        if projected_kind.is_some_and(|kind| {
+            matches!(
+                kind,
+                CanonicalKindProjection::Variable | CanonicalKindProjection::Function
+            )
+        })
             || artefact.language_kind == "class_declaration"
         {
             value_targets

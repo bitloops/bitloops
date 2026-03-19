@@ -8,6 +8,17 @@ use crate::domain::{
     TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 
+pub(super) fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("failed checking for sqlite table `{table_name}`"))?;
+    Ok(count > 0)
+}
+
 pub(super) fn clear_existing_production_data(conn: &Connection, commit_sha: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM test_links WHERE commit_sha = ?1",
@@ -46,11 +57,13 @@ pub(super) fn clear_existing_production_data(conn: &Connection, commit_sha: &str
         params![commit_sha],
     )
     .context("failed clearing artefacts_current for commit")?;
-    conn.execute(
-        "DELETE FROM current_file_state WHERE commit_sha = ?1",
-        params![commit_sha],
-    )
-    .context("failed clearing current_file_state for commit")?;
+    if table_exists(conn, "current_file_state")? {
+        conn.execute(
+            "DELETE FROM current_file_state WHERE commit_sha = ?1",
+            params![commit_sha],
+        )
+        .context("failed clearing current_file_state for commit")?;
+    }
     conn.execute(
         "DELETE FROM file_state WHERE commit_sha = ?1",
         params![commit_sha],

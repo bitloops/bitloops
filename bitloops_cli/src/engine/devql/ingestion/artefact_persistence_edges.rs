@@ -8,6 +8,7 @@ fn build_historical_edge_records(
     current_by_fqn: &HashMap<String, PersistedArtefactRecord>,
 ) -> Vec<PersistedEdgeRecord> {
     let mut out = Vec::new();
+    let provenance = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, blob_sha);
 
     for edge in edges {
         let Some(from_record) = current_by_fqn.get(&edge.from_symbol_fqn) else {
@@ -30,9 +31,8 @@ fn build_historical_edge_records(
 
         out.push(PersistedEdgeRecord {
             edge_id: deterministic_uuid(&format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}",
-                cfg.repo.repo_id,
-                blob_sha,
+                "{}|{}|{}|{}|{}|{}|{}",
+                provenance.artefact_identity_scope(),
                 from_record.artefact_id,
                 edge.edge_kind.as_str(),
                 to_artefact_id.clone().unwrap_or_default(),
@@ -465,6 +465,9 @@ async fn upsert_current_edge(
     rev: &FileRevision<'_>,
     record: &PersistedEdgeRecord,
 ) -> Result<()> {
+    let _temporal_scope = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, rev.blob_sha)
+        .with_source_anchor(rev.commit_sha, rev.path)
+        .temporal_identity_scope();
     let to_symbol_id_sql = sql_nullable_text(record.to_symbol_id.as_deref());
     let to_artefact_sql = sql_nullable_text(record.to_artefact_id.as_deref());
     let to_symbol_ref_sql = sql_nullable_text(record.to_symbol_ref.as_deref());
@@ -491,7 +494,7 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXC
         esc_pg(&record.edge_id),
         esc_pg(&cfg.repo.repo_id),
         esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
         temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),

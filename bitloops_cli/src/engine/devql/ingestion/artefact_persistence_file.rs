@@ -141,8 +141,8 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
     let revision_kind = row
         .get("revision_kind")
         .and_then(Value::as_str)
-        .unwrap_or("commit")
-        .to_string();
+        .and_then(TemporalRevisionKind::from_str)
+        .unwrap_or(TemporalRevisionKind::Commit);
     let revision_id = row
         .get("revision_id")
         .and_then(Value::as_str)
@@ -171,15 +171,17 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
 
 fn incoming_revision_is_newer(
     existing: Option<&CurrentFileRevisionRecord>,
-    revision_kind: &str,
+    revision_kind: TemporalRevisionKind,
     revision_id: &str,
     revision_unix: i64,
 ) -> bool {
     match existing {
         None => true,
-        Some(existing) => match (revision_kind, existing.revision_kind.as_str()) {
-            ("commit", "temporary") => true,
-            ("temporary", "commit") => revision_unix >= existing.updated_at_unix,
+        Some(existing) => match (revision_kind, existing.revision_kind) {
+            (TemporalRevisionKind::Commit, TemporalRevisionKind::Temporary) => true,
+            (TemporalRevisionKind::Temporary, TemporalRevisionKind::Commit) => {
+                revision_unix >= existing.updated_at_unix
+            }
             _ => {
                 revision_unix > existing.updated_at_unix
                     || (revision_unix == existing.updated_at_unix
@@ -220,7 +222,7 @@ async fn overwrite_current_revision_metadata_for_path(
 SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
 WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
         temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),
@@ -235,7 +237,7 @@ WHERE repo_id = '{}' AND path = '{}'",
 SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
 WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
         temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),

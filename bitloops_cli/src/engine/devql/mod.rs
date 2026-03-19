@@ -469,8 +469,8 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
-                    revision: RevisionRef {
-                        kind: "commit",
+                    revision: TemporalRevisionRef {
+                        kind: TemporalRevisionKind::Commit,
                         id: &commit_sha,
                         temp_checkpoint_id: None,
                     },
@@ -565,21 +565,11 @@ async fn promote_temporary_current_rows_for_head_commit(
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .unwrap_or_default();
-    let now_sql = sql_now(relational);
-    let committed_at_assignment = if head_unix > 0 {
-        match relational.dialect() {
-            RelationalDialect::Postgres => format!(", committed_at = to_timestamp({head_unix})"),
-            RelationalDialect::Sqlite => {
-                format!(", committed_at = datetime({head_unix}, 'unixepoch')")
-            }
-        }
-    } else {
-        String::new()
-    };
+    let updated_at_sql = revision_timestamp_sql(relational, head_unix);
 
     let sql = format!(
-        "SELECT path, blob_sha FROM current_file_state \
-WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+        "SELECT path, blob_sha FROM artefacts_current \
+	WHERE repo_id = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
         esc_pg(&cfg.repo.repo_id),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -608,28 +598,14 @@ WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:
         )
         .await?;
 
-        let sql_current = format!(
-            "UPDATE current_file_state \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}'{}, updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
-            esc_pg(&head_sha),
-            esc_pg(&head_sha),
-            esc_pg(&head_blob_sha),
-            committed_at_assignment,
-            now_sql,
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(path),
-        );
-        relational.exec(&sql_current).await?;
-
         let sql_artefacts = format!(
             "UPDATE artefacts_current \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );
@@ -637,12 +613,12 @@ WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revisio
 
         let sql_edges = format!(
             "UPDATE artefact_edges_current \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );
@@ -690,14 +666,9 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     Ok(Value::Array(rows))
 }
 
+include!("core_contracts.rs");
 include!("canonical_mapping.rs");
 include!("vocab.rs");
-// connection status checking
-include!("connection_status.rs");
-// relational storage abstraction
-include!("relational_storage.rs");
-// ingest orchestration
-include!("ingest.rs");
 // ingestion: shared types
 include!("ingestion/types.rs");
 // ingestion: repo identity & git remote parsing
@@ -766,6 +737,10 @@ mod identity_tests;
 #[cfg(test)]
 #[path = "tests/mapping_tests.rs"]
 mod mapping_tests;
+
+#[cfg(test)]
+#[path = "tests/core_contract_tests.rs"]
+mod core_contract_tests;
 
 #[cfg(test)]
 #[path = "tests/cucumber_world.rs"]

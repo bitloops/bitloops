@@ -237,73 +237,79 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 fn incoming_revision_is_newer_prefers_revision_kind_then_timestamp_then_sha() {
     let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
         CurrentFileRevisionRecord {
-            revision_kind: revision_kind.to_string(),
+            revision_kind: TemporalRevisionKind::from_str(revision_kind)
+                .expect("test revision kind should be valid"),
             revision_id: revision_id.to_string(),
             blob_sha: "blob".to_string(),
             updated_at_unix,
         }
     };
-    assert!(incoming_revision_is_newer(None, "commit", "bbb", 10));
+    assert!(incoming_revision_is_newer(
+        None,
+        TemporalRevisionKind::Commit,
+        "bbb",
+        10
+    ));
     let existing_1 = state("aaa", "commit", "aaa", 9);
     assert!(incoming_revision_is_newer(
         Some(&existing_1),
-        "commit",
+        TemporalRevisionKind::Commit,
         "bbb",
         10
     ));
     let existing_2 = state("zzz", "commit", "zzz", 11);
     assert!(!incoming_revision_is_newer(
         Some(&existing_2),
-        "commit",
+        TemporalRevisionKind::Commit,
         "bbb",
         10
     ));
     let existing_3 = state("aaa", "commit", "aaa", 10);
     assert!(incoming_revision_is_newer(
         Some(&existing_3),
-        "commit",
+        TemporalRevisionKind::Commit,
         "bbb",
         10
     ));
     let existing_4 = state("ccc", "commit", "ccc", 10);
     assert!(!incoming_revision_is_newer(
         Some(&existing_4),
-        "commit",
+        TemporalRevisionKind::Commit,
         "bbb",
         10
     ));
     let existing_5 = state("temp:9", "temporary", "temp:9", 10);
     assert!(incoming_revision_is_newer(
         Some(&existing_5),
-        "temporary",
+        TemporalRevisionKind::Temporary,
         "temp:10",
         10
     ));
     let existing_6 = state("temp:10", "temporary", "temp:10", 10);
     assert!(!incoming_revision_is_newer(
         Some(&existing_6),
-        "temporary",
+        TemporalRevisionKind::Temporary,
         "temp:9",
         10
     ));
     let existing_7 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_7),
-        "temporary",
+        TemporalRevisionKind::Temporary,
         "temp:200",
         200
     ));
     let existing_7b = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_7b),
-        "temporary",
+        TemporalRevisionKind::Temporary,
         "temp:201",
         100
     ));
     let existing_8 = state("commit-a", "temporary", "temp:88", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_8),
-        "commit",
+        TemporalRevisionKind::Commit,
         "commit-b",
         100
     ));
@@ -323,8 +329,8 @@ async fn commit_revision_replaces_temporary_current_metadata_for_unchanged_conte
         &relational,
         &FileRevision {
             commit_sha: "commit-old",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:7",
                 temp_checkpoint_id: Some(7),
             },
@@ -342,8 +348,8 @@ async fn commit_revision_replaces_temporary_current_metadata_for_unchanged_conte
         &relational,
         &FileRevision {
             commit_sha: "commit-new",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-new",
                 temp_checkpoint_id: None,
             },
@@ -386,8 +392,8 @@ async fn upsert_current_state_only_revises_changed_symbol_when_siblings_are_unch
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:1",
                 temp_checkpoint_id: Some(1),
             },
@@ -405,8 +411,8 @@ async fn upsert_current_state_only_revises_changed_symbol_when_siblings_are_unch
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:2",
                 temp_checkpoint_id: Some(2),
             },
@@ -463,8 +469,8 @@ async fn upsert_current_state_revises_shifted_sibling_when_lines_move() {
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:1",
                 temp_checkpoint_id: Some(1),
             },
@@ -491,8 +497,8 @@ async fn upsert_current_state_revises_shifted_sibling_when_lines_move() {
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:2",
                 temp_checkpoint_id: Some(2),
             },
@@ -532,8 +538,8 @@ async fn unchanged_edge_keeps_previous_revision_when_other_symbol_changes() {
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:1",
                 temp_checkpoint_id: Some(1),
             },
@@ -551,8 +557,8 @@ async fn unchanged_edge_keeps_previous_revision_when_other_symbol_changes() {
         &relational,
         &FileRevision {
             commit_sha: "commit-base",
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:2",
                 temp_checkpoint_id: Some(2),
             },
@@ -630,8 +636,8 @@ async fn refresh_current_state_deletes_stale_edge_ids_before_upserting_new_natur
         &relational,
         &FileRevision {
             commit_sha: "commit-new",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-new",
                 temp_checkpoint_id: None,
             },
@@ -699,8 +705,8 @@ async fn promote_temporary_rows_for_head_commit_updates_file_row_to_commit() {
         &relational,
         &FileRevision {
             commit_sha: &old_head,
-            revision: RevisionRef {
-                kind: "temporary",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Temporary,
                 id: "temp:1",
                 temp_checkpoint_id: Some(1),
             },

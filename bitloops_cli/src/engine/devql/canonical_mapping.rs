@@ -1,15 +1,19 @@
-fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
+fn js_ts_canonical_projection(language_kind: &str) -> Option<CanonicalKindProjection> {
     match language_kind {
-        "function_declaration" => Some("function"),
-        "method_definition" => Some("method"),
-        "interface_declaration" => Some("interface"),
-        "type_alias_declaration" => Some("type"),
-        "enum_declaration" => Some("enum"),
-        "variable_declarator" => Some("variable"),
-        "import_statement" => Some("import"),
-        "module_declaration" | "internal_module" => Some("module"),
+        "function_declaration" => Some(CanonicalKindProjection::Function),
+        "method_definition" => Some(CanonicalKindProjection::Method),
+        "interface_declaration" => Some(CanonicalKindProjection::Interface),
+        "type_alias_declaration" => Some(CanonicalKindProjection::Type),
+        "enum_declaration" => Some(CanonicalKindProjection::Enum),
+        "variable_declarator" => Some(CanonicalKindProjection::Variable),
+        "import_statement" => Some(CanonicalKindProjection::Import),
+        "module_declaration" | "internal_module" => Some(CanonicalKindProjection::Module),
         _ => None,
     }
+}
+
+fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
+    js_ts_canonical_projection(language_kind).map(CanonicalKindProjection::as_str)
 }
 
 fn js_ts_supports_language_kind(language_kind: &str) -> bool {
@@ -31,17 +35,28 @@ fn js_ts_supports_language_kind(language_kind: &str) -> bool {
     )
 }
 
-fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'static str> {
+fn rust_canonical_projection(
+    language_kind: &str,
+    inside_impl: bool,
+) -> Option<CanonicalKindProjection> {
     match language_kind {
-        "function_item" => Some(if inside_impl { "method" } else { "function" }),
-        "trait_item" => Some("interface"),
-        "type_item" => Some("type"),
-        "enum_item" => Some("enum"),
-        "use_declaration" => Some("import"),
-        "mod_item" => Some("module"),
-        "let_declaration" => Some("variable"),
+        "function_item" => Some(if inside_impl {
+            CanonicalKindProjection::Method
+        } else {
+            CanonicalKindProjection::Function
+        }),
+        "trait_item" => Some(CanonicalKindProjection::Interface),
+        "type_item" => Some(CanonicalKindProjection::Type),
+        "enum_item" => Some(CanonicalKindProjection::Enum),
+        "use_declaration" => Some(CanonicalKindProjection::Import),
+        "mod_item" => Some(CanonicalKindProjection::Module),
+        "let_declaration" => Some(CanonicalKindProjection::Variable),
         _ => None,
     }
+}
+
+fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'static str> {
+    rust_canonical_projection(language_kind, inside_impl).map(CanonicalKindProjection::as_str)
 }
 
 fn rust_supports_language_kind(language_kind: &str) -> bool {

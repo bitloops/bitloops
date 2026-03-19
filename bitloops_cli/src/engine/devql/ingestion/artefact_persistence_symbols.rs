@@ -131,6 +131,9 @@ async fn upsert_current_artefact(
     language: &str,
     record: &PersistedArtefactRecord,
 ) -> Result<()> {
+    let _temporal_scope = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, rev.blob_sha)
+        .with_source_anchor(rev.commit_sha, rev.path)
+        .temporal_identity_scope();
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
     let parent_symbol_sql = sql_nullable_text(record.parent_symbol_id.as_deref());
     let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
@@ -151,7 +154,7 @@ ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_i
         esc_pg(&record.symbol_id),
         esc_pg(&record.artefact_id),
         esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
         temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),

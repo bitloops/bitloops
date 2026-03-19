@@ -135,8 +135,8 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
-                    revision: RevisionRef {
-                        kind: "commit",
+                    revision: TemporalRevisionRef {
+                        kind: TemporalRevisionKind::Commit,
                         id: &commit_sha,
                         temp_checkpoint_id: None,
                     },

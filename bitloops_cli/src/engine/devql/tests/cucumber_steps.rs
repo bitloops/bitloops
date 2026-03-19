@@ -500,12 +500,12 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
         let tree = match parser.parse(source, None) {
             Some(tree) => tree,
             None => {
-                world.discovery_issues.push(
-                    crate::app::test_mapping::model::DiscoveryIssue {
+                world
+                    .discovery_issues
+                    .push(crate::app::test_mapping::model::DiscoveryIssue {
                         path: path.clone(),
                         message: "failed to parse source".to_string(),
-                    },
-                );
+                    });
                 continue;
             }
         };
@@ -517,21 +517,23 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
 
         for suite in &suites {
             let suite_id = format!("test_suite:{commit_sha}:{path}:{}", suite.start_line);
-            world.discovered_suites.push(crate::domain::TestSuiteRecord {
-                suite_id: suite_id.clone(),
-                repo_id: repo_id.to_string(),
-                commit_sha: commit_sha.to_string(),
-                language: "rust".to_string(),
-                path: path.clone(),
-                name: suite.name.clone(),
-                symbol_fqn: Some(suite.name.clone()),
-                start_line: suite.start_line,
-                end_line: suite.end_line,
-                start_byte: None,
-                end_byte: None,
-                signature: None,
-                discovery_source: "source".to_string(),
-            });
+            world
+                .discovered_suites
+                .push(crate::domain::TestSuiteRecord {
+                    suite_id: suite_id.clone(),
+                    repo_id: repo_id.to_string(),
+                    commit_sha: commit_sha.to_string(),
+                    language: "rust".to_string(),
+                    path: path.clone(),
+                    name: suite.name.clone(),
+                    symbol_fqn: Some(suite.name.clone()),
+                    start_line: suite.start_line,
+                    end_line: suite.end_line,
+                    start_byte: None,
+                    end_byte: None,
+                    signature: None,
+                    discovery_source: "source".to_string(),
+                });
 
             for scenario in &suite.scenarios {
                 let scenario_id = format!(
@@ -708,12 +710,12 @@ fn when_test_discovery_with_diagnostics(
         for (path, source) in &world.test_sources {
             let tree = parser.parse(source, None);
             if tree.is_none() || source.matches('{').count() != source.matches('}').count() {
-                world.discovery_issues.push(
-                    crate::app::test_mapping::model::DiscoveryIssue {
+                world
+                    .discovery_issues
+                    .push(crate::app::test_mapping::model::DiscoveryIssue {
                         path: path.clone(),
                         message: "parse error or incomplete source".to_string(),
-                    },
-                );
+                    });
             }
         }
     })
@@ -732,15 +734,16 @@ fn then_test_suites_include(
                 .parse()
                 .expect("scenario_count should be numeric");
 
-            let suite = world
-                .discovered_suites
-                .iter()
-                .find(|s| s.name == *name);
+            let suite = world.discovered_suites.iter().find(|s| s.name == *name);
 
             assert!(
                 suite.is_some(),
                 "expected suite `{name}` in discovered suites, found: {:?}",
-                world.discovered_suites.iter().map(|s| &s.name).collect::<Vec<_>>()
+                world
+                    .discovered_suites
+                    .iter()
+                    .map(|s| &s.name)
+                    .collect::<Vec<_>>()
             );
 
             let suite = suite.unwrap();
@@ -777,7 +780,11 @@ fn then_test_scenarios_include(
             assert!(
                 found,
                 "expected scenario `{name}` with discovery_source `{discovery_source}`, found: {:?}",
-                world.discovered_scenarios.iter().map(|s| (&s.name, &s.discovery_source)).collect::<Vec<_>>()
+                world
+                    .discovered_scenarios
+                    .iter()
+                    .map(|s| (&s.name, &s.discovery_source))
+                    .collect::<Vec<_>>()
             );
         }
     })
@@ -810,7 +817,11 @@ fn then_direct_links_include(
             assert!(
                 found,
                 "expected link to `{production_name}` with confidence {expected_confidence} and status `{expected_status}`, found: {:?}",
-                world.materialized_links.iter().map(|l| (&l.production_artefact_id, l.confidence, &l.linkage_status)).collect::<Vec<_>>()
+                world
+                    .materialized_links
+                    .iter()
+                    .map(|l| (&l.production_artefact_id, l.confidence, &l.linkage_status))
+                    .collect::<Vec<_>>()
             );
         }
     })
@@ -838,7 +849,8 @@ fn then_no_links_to_from(
         let test_name = &ctx.matches[2].1;
 
         let found = world.materialized_links.iter().any(|link| {
-            link.production_artefact_id.contains(production_name.as_str())
+            link.production_artefact_id
+                .contains(production_name.as_str())
                 && link.test_scenario_id.contains(test_name.as_str())
         });
 
@@ -858,7 +870,10 @@ fn then_diagnostics_include(
             let path = row.get("path").expect("path column should exist");
             let _severity = row.get("severity").expect("severity column should exist");
 
-            let found = world.discovery_issues.iter().any(|issue| issue.path == *path);
+            let found = world
+                .discovery_issues
+                .iter()
+                .any(|issue| issue.path == *path);
             assert!(
                 found,
                 "expected diagnostic for path `{path}`, found: {:?}",

@@ -169,8 +169,8 @@ async fn apply_current_state_updates(
         };
         let revision = crate::engine::devql::FileRevision {
             commit_sha: base_commit,
-            revision: crate::engine::devql::RevisionRef {
-                kind: "temporary",
+            revision: crate::engine::devql::TemporalRevisionRef {
+                kind: crate::engine::devql::TemporalRevisionKind::Temporary,
                 id: &revision_id,
                 temp_checkpoint_id: Some(row_id),
             },
