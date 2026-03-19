@@ -1,4 +1,4 @@
-// JS/TS dependency edge extraction (imports, calls, references, inherits, exports).
+// JS/TS dependency edge extraction (imports, calls, references, extends, exports).
 
 fn extract_js_ts_dependency_edges(
     content: &str,
@@ -40,13 +40,13 @@ fn extract_js_ts_dependency_edges(
             let module_ref = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: "imports".to_string(),
+                    edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(module_ref.clone()),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"import_form":"module"}),
+                    metadata: EdgeMetadata::import(ImportForm::Binding),
                 });
             }
             parse_import_clause_symbols(clause, &module_ref, &mut imported_symbol_refs);
@@ -57,13 +57,13 @@ fn extract_js_ts_dependency_edges(
             let module_ref = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: "imports".to_string(),
+                    edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(module_ref),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"import_form":"side_effect"}),
+                    metadata: EdgeMetadata::import(ImportForm::SideEffect),
                 });
             }
             continue;
@@ -87,33 +87,33 @@ fn extract_js_ts_dependency_edges(
 
             if let Some(target_fqn) = callable_name_to_fqn.get(&name) {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: "calls".to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: Some(target_fqn.clone()),
                     to_symbol_ref: None,
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form":"identifier","resolution":"local"}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Local),
                 });
             } else if let Some(import_ref) = imported_symbol_refs.get(&name) {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: "calls".to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(import_ref.clone()),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form":"identifier","resolution":"import"}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Import),
                 });
             } else {
                 edges.push(JsTsDependencyEdge {
-                    edge_kind: "calls".to_string(),
+                    edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(format!("{path}::{name}")),
                     start_line: Some(line_no),
                     end_line: Some(line_no),
-                    metadata: json!({"call_form":"identifier","resolution":"unresolved"}),
+                    metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Unresolved),
                 });
             }
         }
@@ -124,13 +124,13 @@ fn extract_js_ts_dependency_edges(
             };
             let name = name_m.as_str().to_string();
             edges.push(JsTsDependencyEdge {
-                edge_kind: "calls".to_string(),
+                edge_kind: EdgeKind::Calls,
                 from_symbol_fqn: owner.symbol_fqn.clone(),
                 to_target_symbol_fqn: None,
                 to_symbol_ref: Some(format!("{path}::member::{name}")),
                 start_line: Some(line_no),
                 end_line: Some(line_no),
-                metadata: json!({"call_form":"member","resolution":"unresolved"}),
+                metadata: EdgeMetadata::call(CallForm::Member, Resolution::Unresolved),
             });
         }
 
@@ -150,7 +150,7 @@ fn extract_js_ts_dependency_edges(
     let (type_targets, value_targets) = js_ts_reference_target_maps(artefacts);
     let export_targets = top_level_export_target_map(artefacts);
     let mut seen_references = HashSet::new();
-    let mut seen_inherits = HashSet::new();
+    let mut seen_extends = HashSet::new();
     let mut seen_exports = HashSet::new();
 
     for lang in [ts_lang, js_lang] {
@@ -175,12 +175,12 @@ fn extract_js_ts_dependency_edges(
             },
             &mut EdgeCollector { out: &mut edges, seen: &mut seen_references },
         );
-        collect_js_ts_inherits_edges_recursive(
+        collect_js_ts_extends_edges_recursive(
             root,
             content,
             &type_targets,
             &imported_symbol_refs,
-            &mut seen_inherits,
+            &mut seen_extends,
             &mut edges,
         );
         collect_js_ts_export_edges_recursive(

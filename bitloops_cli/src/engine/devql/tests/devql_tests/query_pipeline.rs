@@ -63,8 +63,8 @@ fn parse_devql_deps_stage_basic() {
     .unwrap();
 
     assert!(parsed.has_deps_stage);
-    assert_eq!(parsed.deps.kind.as_deref(), Some("calls"));
-    assert_eq!(parsed.deps.direction, "both");
+    assert_eq!(parsed.deps.kind, Some(DepsKind::Calls));
+    assert_eq!(parsed.deps.direction, DepsDirection::Both);
     assert!(!parsed.deps.include_unresolved);
     assert_eq!(parsed.limit, 25);
 }
@@ -89,7 +89,7 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
         "imports",
         "calls",
         "references",
-        "inherits",
+        "extends",
         "implements",
         "exports",
     ] {
@@ -98,8 +98,14 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
         ))
         .unwrap();
 
-        assert_eq!(parsed.deps.kind.as_deref(), Some(kind));
+        assert_eq!(parsed.deps.kind, DepsKind::from_str(kind));
     }
+
+    let legacy = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"inherits")->limit(5)"#,
+    )
+    .unwrap();
+    assert_eq!(legacy.deps.kind, Some(DepsKind::Extends));
 }
 
 #[test]
@@ -155,6 +161,25 @@ fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
     assert!(sql.contains("LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
     assert!(!sql.contains("artefact_edges_current"));
     assert!(!sql.contains("artefacts_current"));
+}
+
+#[test]
+fn build_postgres_deps_query_filters_temporary_revision_for_save_revision() {
+    let cfg = test_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"both")->limit(10)"#,
+    )
+    .unwrap();
+
+    let sql = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap();
+
+    assert!(sql.contains("FROM artefact_edges e"));
+    assert!(sql.contains("JOIN artefacts a ON a.artefact_id = e.from_artefact_id"));
+    assert!(sql.contains("e.revision_kind = 'temporary'"));
+    assert!(sql.contains("e.revision_id = 'temp:42'"));
+    assert!(sql.contains("a.revision_kind = 'temporary'"));
+    assert!(sql.contains("a.revision_id = 'temp:42'"));
+    assert!(!sql.contains("artefact_edges_current"));
 }
 
 #[tokio::test]
@@ -340,6 +365,172 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
     assert!(rows[0]["metadata"].is_object());
 }
 
+#[tokio::test]
+async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::target",
+            "artefact::target",
+            "commit-1",
+            "blob-target",
+            "src/target.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target.ts::target",
+            1,
+            3,
+            0,
+            30,
+            "[]",
+            "hash-target",
+        ],
+    )
+    .expect("insert target artefact");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::caller_a",
+            "artefact::caller_a",
+            "commit-1",
+            "blob-caller-a",
+            "src/caller-a.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller-a.ts::callerA",
+            1,
+            4,
+            0,
+            40,
+            "[]",
+            "hash-caller-a",
+        ],
+    )
+    .expect("insert caller A artefact");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::caller_b",
+            "artefact::caller_b",
+            "commit-1",
+            "blob-caller-b",
+            "src/caller-b.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller-b.ts::callerB",
+            1,
+            4,
+            0,
+            40,
+            "[]",
+            "hash-caller-b",
+        ],
+    )
+    .expect("insert caller B artefact");
+
+    conn.execute(
+        "INSERT INTO artefact_edges_current (
+            edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+            to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+            end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "edge-call-a",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "blob-caller-a",
+            "src/caller-a.ts",
+            "sym::caller_a",
+            "artefact::caller_a",
+            "sym::target",
+            "artefact::target",
+            "src/target.ts::target",
+            "calls",
+            "typescript",
+            2,
+            2,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert edge caller A -> target");
+    conn.execute(
+        "INSERT INTO artefact_edges_current (
+            edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+            to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+            end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "edge-call-b",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "blob-caller-b",
+            "src/caller-b.ts",
+            "sym::caller_b",
+            "artefact::caller_b",
+            "sym::target",
+            "artefact::target",
+            "src/target.ts::target",
+            "calls",
+            "typescript",
+            3,
+            3,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert edge caller B -> target");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(symbol_fqn:"src/target.ts::target")->deps(kind:"calls",direction:"in")->limit(10)"#,
+    )
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute inbound deps query");
+
+    assert_eq!(rows.len(), 2);
+    let mut edge_ids = rows
+        .iter()
+        .filter_map(|row| row["edge_id"].as_str())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    edge_ids.sort();
+    assert_eq!(
+        edge_ids,
+        vec!["edge-call-a".to_string(), "edge-call-b".to_string()]
+    );
+    for row in rows {
+        assert_eq!(
+            row["to_symbol_fqn"],
+            Value::String("src/target.ts::target".to_string())
+        );
+    }
+}
+
 #[test]
 fn build_postgres_deps_query_supports_symbol_fqn_filter() {
     let cfg = test_cfg();
@@ -355,13 +546,10 @@ fn build_postgres_deps_query_supports_symbol_fqn_filter() {
 
 #[test]
 fn build_postgres_deps_query_rejects_invalid_direction() {
-    let cfg = test_cfg();
-    let parsed = parse_devql_query(
+    let err = parse_devql_query(
         r#"repo("bitloops-cli")->artefacts()->deps(kind:"calls",direction:"sideways")->limit(5)"#,
     )
-    .unwrap();
-
-    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+    .unwrap_err();
     assert!(
         err.to_string()
             .contains("deps(direction:...) must be one of: out, in, both")
@@ -370,14 +558,11 @@ fn build_postgres_deps_query_rejects_invalid_direction() {
 
 #[test]
 fn build_postgres_deps_query_rejects_invalid_kind() {
-    let cfg = test_cfg();
-    let parsed =
+    let err =
         parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps(kind:"surprise")->limit(5)"#)
-            .unwrap();
-
-    let err = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap_err();
+            .unwrap_err();
     assert!(err.to_string().contains(
-        "deps(kind:...) must be one of: imports, calls, references, inherits, implements, exports"
+        "deps(kind:...) must be one of: imports, calls, references, extends, implements, exports"
     ));
 }
 
@@ -427,4 +612,3 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
             .contains("deps() cannot be combined with chatHistory()")
     );
 }
-

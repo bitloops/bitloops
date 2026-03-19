@@ -75,6 +75,9 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
+    /// Hidden internal DevQL watcher process entry point.
+    #[command(name = "__devql-watcher", hide = true)]
+    DevqlWatcher(crate::engine::devql::watch::WatcherProcessArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -132,6 +135,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         return root::run_root_default_help();
     };
 
+    if root::should_attempt_watcher_autostart(&command)
+        && let Ok(repo_root) = crate::engine::paths::repo_root()
+        && let Err(err) = crate::engine::devql::watch::ensure_watcher_running(&repo_root)
+    {
+        log::debug!("skipping DevQL watcher auto-start: {err:#}");
+    }
+
     let command_name = root::command_name(&command);
     let hidden_chain = root::hidden_chain_for_command(&command);
 
@@ -152,6 +162,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
+        Commands::DevqlWatcher(args) => {
+            crate::engine::devql::watch::run_process_command(args).await
+        }
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

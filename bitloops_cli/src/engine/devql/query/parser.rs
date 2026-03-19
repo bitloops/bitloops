@@ -25,6 +25,8 @@ struct ParsedDevqlQuery {
 enum AsOfSelector {
     Ref(String),
     Commit(String),
+    SaveCurrent,
+    SaveRevision(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -57,8 +59,8 @@ struct TelemetryFilter {
 
 #[derive(Debug, Clone)]
 struct DepsFilter {
-    kind: Option<String>,
-    direction: String,
+    kind: Option<DepsKind>,
+    direction: DepsDirection,
     include_unresolved: bool,
 }
 
@@ -66,7 +68,7 @@ impl Default for DepsFilter {
     fn default() -> Self {
         Self {
             kind: None,
-            direction: "out".to_string(),
+            direction: DepsDirection::Out,
             include_unresolved: true,
         }
     }
@@ -106,8 +108,16 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                 parsed.as_of = Some(AsOfSelector::Commit(commit.clone()));
             } else if let Some(reference) = args.get("ref") {
                 parsed.as_of = Some(AsOfSelector::Ref(reference.clone()));
+            } else if let Some(save) = args.get("save") {
+                if save.eq_ignore_ascii_case("current") {
+                    parsed.as_of = Some(AsOfSelector::SaveCurrent);
+                } else {
+                    bail!("asOf(save:...) only supports save:\"current\"")
+                }
+            } else if let Some(revision) = args.get("saveRevision") {
+                parsed.as_of = Some(AsOfSelector::SaveRevision(revision.clone()));
             } else {
-                bail!("asOf(...) requires `commit:` or `ref:`")
+                bail!("asOf(...) requires `commit:`, `ref:`, `save:`, or `saveRevision:`")
             }
             continue;
         }
@@ -178,9 +188,21 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         {
             let args = parse_named_args(inner)?;
             parsed.has_deps_stage = true;
-            parsed.deps.kind = args.get("kind").cloned();
+            if let Some(kind) = args.get("kind") {
+                parsed.deps.kind = Some(DepsKind::from_str(kind).ok_or_else(|| {
+                    anyhow!(
+                        "deps(kind:...) must be one of: {}",
+                        DepsKind::all_names().join(", ")
+                    )
+                })?);
+            }
             if let Some(direction) = args.get("direction") {
-                parsed.deps.direction = direction.clone();
+                parsed.deps.direction = DepsDirection::from_str(direction).ok_or_else(|| {
+                    anyhow!(
+                        "deps(direction:...) must be one of: {}",
+                        DepsDirection::all_names().join(", ")
+                    )
+                })?;
             }
             if let Some(include_unresolved) = args.get("include_unresolved") {
                 parsed.deps.include_unresolved = matches!(
@@ -265,31 +287,7 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 }
 
 fn validate_deps_filter(deps: &DepsFilter) -> Result<()> {
-    const ALLOWED_KINDS: &[&str] = &[
-        "imports",
-        "calls",
-        "references",
-        "inherits",
-        "implements",
-        "exports",
-    ];
-    const ALLOWED_DIRECTIONS: &[&str] = &["out", "in", "both"];
-
-    if let Some(kind) = deps.kind.as_deref() {
-        let normalized = kind.to_ascii_lowercase();
-        if !ALLOWED_KINDS.contains(&normalized.as_str()) {
-            bail!(
-                "deps(kind:...) must be one of: {}",
-                ALLOWED_KINDS.join(", ")
-            );
-        }
-    }
-
-    let direction = deps.direction.to_ascii_lowercase();
-    if !ALLOWED_DIRECTIONS.contains(&direction.as_str()) {
-        bail!("deps(direction:...) must be one of: out, in, both");
-    }
-
+    let _ = deps;
     Ok(())
 }
 

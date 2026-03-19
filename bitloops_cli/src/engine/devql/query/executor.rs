@@ -202,6 +202,15 @@ fn normalise_relational_result_row(row: Value) -> Value {
         }
     }
 
+    if let Some(edge_kind) = obj.get("edge_kind").and_then(Value::as_str)
+        && let Some(normalized) = normalise_edge_kind_value(edge_kind)
+    {
+        obj.insert("edge_kind".to_string(), Value::String(normalized.clone()));
+        if let Some(metadata) = obj.get_mut("metadata") {
+            normalise_edge_metadata(&normalized, metadata);
+        }
+    }
+
     Value::Object(obj)
 }
 

@@ -16,7 +16,7 @@ fn collect_js_ts_reference_edges_recursive(
                         &owner.symbol_fqn,
                         name,
                         line_no,
-                        "type",
+                        RefKind::Type,
                         &SymbolLookup {
                             local_targets: ctx.type_targets,
                             imported_symbol_refs: Some(ctx.imported_symbol_refs),
@@ -31,7 +31,7 @@ fn collect_js_ts_reference_edges_recursive(
                         &owner.symbol_fqn,
                         name,
                         line_no,
-                        "value",
+                        RefKind::Value,
                         &SymbolLookup {
                             local_targets: ctx.value_targets,
                             imported_symbol_refs: Some(ctx.imported_symbol_refs),
@@ -65,7 +65,7 @@ fn collect_rust_reference_edges_recursive(
                         &owner.symbol_fqn,
                         name,
                         line_no,
-                        "type",
+                        RefKind::Type,
                         &SymbolLookup {
                             local_targets: ctx.type_targets,
                             imported_symbol_refs: Some(ctx.imported_symbol_refs),
@@ -80,7 +80,7 @@ fn collect_rust_reference_edges_recursive(
                         &owner.symbol_fqn,
                         name,
                         line_no,
-                        "value",
+                        RefKind::Value,
                         &SymbolLookup {
                             local_targets: ctx.value_targets,
                             imported_symbol_refs: Some(ctx.imported_symbol_refs),

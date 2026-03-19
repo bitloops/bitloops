@@ -322,6 +322,104 @@ fn write_temporary_first_checkpoint_filenames_with_spaces() {
 }
 
 #[test]
+fn write_temporary_task_incremental_persists_metadata_and_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_commit = setup_git_repo(&dir);
+
+    let result = write_temporary_task(
+        dir.path(),
+        WriteTemporaryTaskOptions {
+            session_id: "temp-session".to_string(),
+            base_commit,
+            step_number: 3,
+            tool_use_id: "toolu_temp123".to_string(),
+            agent_id: "agent1".to_string(),
+            modified_files: vec![],
+            new_files: vec![],
+            deleted_files: vec![],
+            transcript_path: String::new(),
+            subagent_transcript_path: String::new(),
+            checkpoint_uuid: "checkpoint-temp-123".to_string(),
+            is_incremental: true,
+            incremental_sequence: 3,
+            incremental_type: "TodoWrite".to_string(),
+            incremental_data: r#"{"todo":"document dependencies"}"#.to_string(),
+            commit_message: "Incremental task checkpoint".to_string(),
+            author_name: "Test".to_string(),
+            author_email: "test@test.com".to_string(),
+        },
+    )
+    .expect("write_temporary_task should persist incremental checkpoint");
+
+    let payload_path = ".bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoints/003-toolu_temp123.json";
+    let payload_raw = run_git(
+        dir.path(),
+        &["show", &format!("{}:{payload_path}", result.commit_hash)],
+    )
+    .expect("incremental checkpoint payload should be present in checkpoint tree");
+    let payload: serde_json::Value =
+        serde_json::from_str(&payload_raw).expect("incremental payload should be valid json");
+    assert_eq!(payload["type"], "TodoWrite");
+    assert_eq!(payload["tool_use_id"], "toolu_temp123");
+    assert_eq!(payload["data"]["todo"], "document dependencies");
+    assert!(
+        payload["timestamp"].as_str().is_some(),
+        "incremental payload should include a timestamp"
+    );
+
+    let legacy_checkpoint_json = run_git(
+        dir.path(),
+        &[
+            "show",
+            &format!(
+                "{}:.bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoint.json",
+                result.commit_hash
+            ),
+        ],
+    );
+    assert!(
+        legacy_checkpoint_json.is_err(),
+        "incremental flow should not emit task checkpoint.json payload"
+    );
+
+    let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(dir.path())).unwrap();
+    sqlite.initialise_checkpoint_schema().unwrap();
+    let repo_id = crate::engine::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+
+    let row = sqlite
+        .with_connection(|conn| {
+            Ok(conn.query_row(
+                "SELECT is_incremental, incremental_sequence, incremental_type, incremental_data, tool_use_id, agent_id
+                 FROM temporary_checkpoints
+                 WHERE session_id = ?1 AND repo_id = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+                rusqlite::params!["temp-session", repo_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )?)
+        })
+        .expect("query temporary checkpoint row");
+
+    assert_eq!(row.0, 1);
+    assert_eq!(row.1, Some(3));
+    assert_eq!(row.2.as_deref(), Some("TodoWrite"));
+    assert_eq!(row.3.as_deref(), Some(r#"{"todo":"document dependencies"}"#));
+    assert_eq!(row.4.as_deref(), Some("toolu_temp123"));
+    assert_eq!(row.5.as_deref(), Some("agent1"));
+}
+
+#[test]
 fn write_committed_duplicate_session_id_updates_in_place() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -497,4 +595,3 @@ fn write_committed_duplicate_session_id_reuses_index() {
         content0.transcript
     );
 }
-

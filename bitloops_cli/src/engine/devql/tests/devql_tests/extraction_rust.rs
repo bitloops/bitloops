@@ -121,7 +121,7 @@ impl DoThing for User {
     assert_eq!(
         edge_snapshot,
         vec![
-            "imports|src/lib.rs|-|crate::math::sum|1|use|-".to_string(),
+            "imports|src/lib.rs|-|crate::math::sum|1|binding|-".to_string(),
             "implements|src/lib.rs::impl@5|-|DoThing|5|-|-".to_string(),
             "calls|src/lib.rs::impl@5::do_it|src/lib.rs::sum|-|7|-|local".to_string(),
         ]
@@ -290,7 +290,7 @@ mod api {
 }
 
 #[test]
-fn extract_rust_dependency_edges_emit_inherits_for_supertraits() {
+fn extract_rust_dependency_edges_emit_extends_for_supertraits() {
     let content = r#"trait Reader {}
 trait Writer {}
 
@@ -302,12 +302,12 @@ trait Repository: Reader + Writer {
     let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
 
     assert!(edges.iter().any(|edge| {
-        edge.edge_kind == "inherits"
+        edge.edge_kind == "extends"
             && edge.from_symbol_fqn == "src/lib.rs::Repository"
             && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::Reader")
     }));
     assert!(edges.iter().any(|edge| {
-        edge.edge_kind == "inherits"
+        edge.edge_kind == "extends"
             && edge.from_symbol_fqn == "src/lib.rs::Repository"
             && edge.to_target_symbol_fqn.as_deref() == Some("src/lib.rs::Writer")
     }));
@@ -541,4 +541,3 @@ fn factorial(n: u64) -> u64 {
         "unresolved rust call edges should be filtered out under the import+local policy"
     );
 }
-
