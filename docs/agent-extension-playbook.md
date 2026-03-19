@@ -1,8 +1,8 @@
-# Agent Adapter Phase 3 Extension Playbook
+# Agent Adapter Extension Playbook
 
 ## Purpose
 
-This playbook explains how to extend the Phase 3 adapter model with package-shaped adapters, richer runtime semantics, and host-owned policy/provenance controls.
+This playbook explains how to extend the adapter model with package-shaped adapters, richer runtime semantics, and host-owned policy/provenance controls.
 
 It is based on the current implementation in:
 
@@ -12,9 +12,9 @@ It is based on the current implementation in:
 - `bitloops_cli/src/engine/agent/policy.rs`
 - `bitloops_cli/src/engine/lifecycle/mod.rs`
 
-## Phase 3 model summary
+## Model summary
 
-Phase 3 introduces five extension surfaces:
+Five extension surfaces are introduced:
 
 1. Package-ready adapter metadata and lifecycle boundaries.
 2. Deterministic package discovery and validation diagnostics.
@@ -79,7 +79,7 @@ Keep protocol mechanics in family/profile descriptors and package concerns in pa
 
 ## Rich canonical runtime semantics
 
-Use `CanonicalContractCompatibility` and related Phase 3 types:
+Use `CanonicalContractCompatibility` and related types:
 
 - `CanonicalStreamEvent`
 - `CanonicalProgressUpdate`
