@@ -138,6 +138,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_current_state_updates(
     cfg: &crate::engine::devql::DevqlConfig,
     relational: &crate::engine::devql::RelationalStorage,
