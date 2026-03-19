@@ -91,21 +91,6 @@ ON artefact_edges (
 
 fn current_state_hardening_sql() -> &'static str {
     r#"
-CREATE TABLE IF NOT EXISTS current_file_state (
-    repo_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    committed_at DATETIME NOT NULL,
-    updated_at DATETIME DEFAULT now(),
-    PRIMARY KEY (repo_id, path)
-);
-
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS commit_sha TEXT;
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS blob_sha TEXT;
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS committed_at DATETIME;
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS updated_at DATETIME DEFAULT now();
-
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
     symbol_id TEXT NOT NULL,

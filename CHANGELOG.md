@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Added self-hosted runners
 - Manual commit checkpoint flows are now fully DB-driven and trailer-free, including temporary/committed checkpoint writes, checkpoint read paths, and `post_commit()` mapping via `commit_checkpoints`; legacy git-based checkpoint/shadow-branch storage paths and commit hook side effects have been removed.
-- Artefacts are now updated in real time whenever someone changes them and saved in the current_artefacts and current_artefact_edges tables. CLI-1391 is complete and enums are used instead of strings. 
+- Artefacts are now updated in real time whenever someone changes them and saved in the artefacts_current and artefact_edges_current tables. CLI-1391 is complete and enums are used instead of strings.
 - Implemented watch to reuse existing runtime in devql
 - Fixed devql interface to query from the correct table depending on the query.
 

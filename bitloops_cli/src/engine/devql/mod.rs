@@ -375,11 +375,16 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
+    let embedding_provider = match semantic_embeddings::build_symbol_embedding_provider(
         &embedding_provider_config(cfg),
         Some(&cfg.repo_root),
-    )?
-    .map(Arc::<dyn EmbeddingProvider>::from);
+    ) {
+        Ok(provider) => provider.map(Arc::<dyn EmbeddingProvider>::from),
+        Err(err) => {
+            log::warn!("devql ingest continuing without symbol embeddings: {err:#}");
+            None
+        }
+    };
     if init {
         match backends.events.provider {
             EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
@@ -552,21 +557,11 @@ async fn promote_temporary_current_rows_for_head_commit(
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .unwrap_or_default();
-    let now_sql = sql_now(relational);
-    let committed_at_assignment = if head_unix > 0 {
-        match relational.dialect() {
-            RelationalDialect::Postgres => format!(", committed_at = to_timestamp({head_unix})"),
-            RelationalDialect::Sqlite => {
-                format!(", committed_at = datetime({head_unix}, 'unixepoch')")
-            }
-        }
-    } else {
-        String::new()
-    };
+    let updated_at_sql = revision_timestamp_sql(relational, head_unix);
 
     let sql = format!(
-        "SELECT path, blob_sha FROM current_file_state \
-WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+        "SELECT path, blob_sha FROM artefacts_current \
+WHERE repo_id = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
         esc_pg(&cfg.repo.repo_id),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -595,28 +590,14 @@ WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:
         )
         .await?;
 
-        let sql_current = format!(
-            "UPDATE current_file_state \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}'{}, updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
-            esc_pg(&head_sha),
-            esc_pg(&head_sha),
-            esc_pg(&head_blob_sha),
-            committed_at_assignment,
-            now_sql,
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(path),
-        );
-        relational.exec(&sql_current).await?;
-
         let sql_artefacts = format!(
             "UPDATE artefacts_current \
 SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );
@@ -625,11 +606,11 @@ WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revisio
         let sql_edges = format!(
             "UPDATE artefact_edges_current \
 SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );

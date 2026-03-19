@@ -208,7 +208,11 @@ fn load_blob_sha_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Res
     .map(|value| value.trim().to_string())
 }
 
-async fn load_file_from_tree_blocking(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
+async fn load_file_from_tree_blocking(
+    repo_root: &Path,
+    tree_hash: &str,
+    path: &str,
+) -> Result<String> {
     let repo_root = repo_root.to_path_buf();
     let tree_hash = tree_hash.to_string();
     let path = path.to_string();
@@ -244,9 +248,26 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::engine::devql::file_symbol_id;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
     use rusqlite::Connection;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
+
+    fn deterministic_uuid(input: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let digest = format!("{:x}", hasher.finalize());
+        let hex = &digest[..32];
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
 
     fn seed_repo() -> TempDir {
         let dir = TempDir::new().expect("temp dir");
@@ -294,11 +315,11 @@ mod tests {
 
         let current_rows: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
-                [],
+                "SELECT COUNT(*) FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
                 |row| row.get(0),
             )
-            .expect("count current file state rows");
+            .expect("count current file rows");
         assert_eq!(current_rows, 1);
 
         let artefact_rows: i64 = conn
@@ -312,11 +333,12 @@ mod tests {
 
         let revision_row: (String, String, String, Option<i64>) = conn
             .query_row(
-                "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id FROM current_file_state WHERE path = 'src/lib.rs'",
-                [],
+                "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id \
+                 FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
-            .expect("fetch current revision row");
+            .expect("fetch current file revision row");
         assert!(
             !revision_row.0.is_empty(),
             "watch capture should retain base commit sha"
@@ -348,12 +370,90 @@ mod tests {
         let conn = Connection::open(db_path).expect("open sqlite");
         let current_rows: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
-                [],
+                "SELECT COUNT(*) FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
                 |row| row.get(0),
             )
-            .expect("count current file state rows");
+            .expect("count current file rows");
         assert_eq!(current_rows, 1);
+    }
+
+    #[test]
+    fn capture_rewrites_stale_path_metadata_even_when_blob_is_unchanged() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let sqlite = crate::engine::db::SqliteConnectionPool::connect(db_path.clone())
+            .expect("connect sqlite");
+        sqlite
+            .initialise_devql_schema()
+            .expect("initialise devql schema");
+
+        let head_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+        let working_blob_sha = git_ok(dir.path(), &["hash-object", "src/lib.rs"]);
+        let committed_unix = git_ok(dir.path(), &["show", "-s", "--format=%ct", "HEAD"])
+            .parse::<i64>()
+            .expect("parse commit unix timestamp");
+        let file_symbol = file_symbol_id("src/lib.rs");
+        let file_artefact_id = deterministic_uuid(&format!(
+            "{}|{}|{}",
+            cfg.repo.repo_id, working_blob_sha, file_symbol
+        ));
+
+        sqlite
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO artefacts_current (
+                        repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
+                        blob_sha, path, language, canonical_kind, language_kind, symbol_fqn,
+                        parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte,
+                        signature, modifiers, docstring, content_hash, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, 'temporary', 'temp:0', 0, ?5, 'src/lib.rs', 'rust', 'file', 'file', 'src/lib.rs',
+                        NULL, NULL, 1, 3, 0, 29, NULL, '[]', NULL, 'stale-hash', datetime(?6, 'unixepoch'))",
+                    rusqlite::params![
+                        cfg.repo.repo_id,
+                        file_symbol,
+                        file_artefact_id,
+                        head_sha,
+                        working_blob_sha,
+                        committed_unix,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("seed stale path metadata");
+
+        capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+            .expect("capture temporary checkpoint over unchanged blob");
+
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let current_row: (String, String) = conn
+            .query_row(
+                "SELECT commit_sha, revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read current file row");
+        assert_eq!(current_row.0, head_sha);
+        assert_ne!(current_row.1, "temp:0");
+
+        let artefact_row: (String, String) = conn
+            .query_row(
+                "SELECT commit_sha, revision_id FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                rusqlite::params![file_symbol],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read artefact current row");
+        assert_eq!(artefact_row.0, head_sha);
+        assert_eq!(artefact_row.1, current_row.1);
     }
 
     #[test]
@@ -411,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_with_handle_updates_and_deletes_current_file_state() {
+    fn capture_with_handle_updates_and_deletes_current_file_row() {
         let dir = seed_repo();
         let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
@@ -449,14 +549,14 @@ mod tests {
 
         let current_rows: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM current_file_state WHERE path = 'src/lib.rs'",
-                [],
+                "SELECT COUNT(*) FROM artefacts_current WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
                 |row| row.get(0),
             )
-            .expect("count current file state rows");
+            .expect("count current file rows");
         assert_eq!(
             current_rows, 0,
-            "deleted file should be removed from current file state"
+            "deleted file should be removed from current file row"
         );
     }
 

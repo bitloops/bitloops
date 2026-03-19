@@ -16,12 +16,13 @@ struct RevisionRef<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct CurrentFileStateRecord {
+struct CurrentFileRevisionRecord {
     commit_sha: String,
     revision_kind: String,
     revision_id: String,
+    temp_checkpoint_id: Option<i64>,
     blob_sha: String,
-    committed_at_unix: i64,
+    updated_at_unix: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -358,7 +359,7 @@ async fn upsert_current_artefact(
         .temp_checkpoint_id
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let now_sql = sql_now(relational);
+    let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
     let sql = format!(
         "INSERT INTO artefacts_current (repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
 VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}) \
@@ -386,8 +387,8 @@ ON CONFLICT (repo_id, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_i
         modifiers_sql,
         docstring_sql,
         esc_pg(&record.content_hash),
-        now_sql,
-        now_sql,
+        updated_at_sql,
+        updated_at_sql,
     );
 
     relational.exec(&sql).await
@@ -486,21 +487,32 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLU
     relational.exec(&sql).await
 }
 
-async fn load_current_file_state(
+fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
+    match relational.dialect() {
+        RelationalDialect::Postgres => "EXTRACT(EPOCH FROM updated_at)::BIGINT",
+        RelationalDialect::Sqlite => "CAST(strftime('%s', updated_at) AS INTEGER)",
+    }
+}
+
+fn revision_timestamp_sql(relational: &RelationalStorage, revision_unix: i64) -> String {
+    match relational.dialect() {
+        RelationalDialect::Postgres => format!("to_timestamp({revision_unix})"),
+        RelationalDialect::Sqlite => format!("datetime({revision_unix}, 'unixepoch')"),
+    }
+}
+
+async fn load_current_file_revision(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
-) -> Result<Option<CurrentFileStateRecord>> {
-    let committed_at_unix_expr = match relational.dialect() {
-        RelationalDialect::Postgres => "EXTRACT(EPOCH FROM committed_at)::BIGINT".to_string(),
-        RelationalDialect::Sqlite => "CAST(strftime('%s', committed_at) AS INTEGER)".to_string(),
-    };
+) -> Result<Option<CurrentFileRevisionRecord>> {
+    let updated_at_unix_expr = updated_at_unix_expr(relational);
     let sql = format!(
-        "SELECT commit_sha, revision_kind, revision_id, blob_sha, {} AS committed_at_unix \
-FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
-        committed_at_unix_expr,
+        "SELECT commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, {} AS updated_at_unix \
+FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
+        updated_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
-        esc_pg(path),
+        esc_pg(&file_symbol_id(path)),
     );
     let rows = relational.query_rows(&sql).await?;
     let Some(row) = rows.first() else {
@@ -522,42 +534,48 @@ FROM current_file_state WHERE repo_id = '{}' AND path = '{}' LIMIT 1",
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let temp_checkpoint_id = row.get("temp_checkpoint_id").and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
+    });
     let blob_sha = row
         .get("blob_sha")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let committed_at_unix = row
-        .get("committed_at_unix")
+    let updated_at_unix = row
+        .get("updated_at_unix")
         .and_then(|value| {
             value
                 .as_i64()
                 .or_else(|| value.as_str().and_then(|raw| raw.parse().ok()))
         })
         .unwrap_or_default();
-    Ok(Some(CurrentFileStateRecord {
+    Ok(Some(CurrentFileRevisionRecord {
         commit_sha,
         revision_kind,
         revision_id,
+        temp_checkpoint_id,
         blob_sha,
-        committed_at_unix,
+        updated_at_unix,
     }))
 }
 
 fn incoming_revision_is_newer(
-    existing: Option<&CurrentFileStateRecord>,
+    existing: Option<&CurrentFileRevisionRecord>,
     revision_kind: &str,
     revision_id: &str,
-    commit_unix: i64,
+    revision_unix: i64,
 ) -> bool {
     match existing {
         None => true,
         Some(existing) => match (revision_kind, existing.revision_kind.as_str()) {
             ("commit", "temporary") => true,
-            ("temporary", "commit") => false,
+            ("temporary", "commit") => revision_unix >= existing.updated_at_unix,
             _ => {
-                commit_unix > existing.committed_at_unix
-                    || (commit_unix == existing.committed_at_unix
+                revision_unix > existing.updated_at_unix
+                    || (revision_unix == existing.updated_at_unix
                         && revision_id_is_newer(revision_id, &existing.revision_id))
             }
         },
@@ -578,37 +596,49 @@ fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
     }
 }
 
-async fn upsert_current_file_state(
+async fn overwrite_current_revision_metadata_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
 ) -> Result<()> {
-    let committed_at_sql = match relational.dialect() {
-        RelationalDialect::Postgres => format!("to_timestamp({})", rev.commit_unix),
-        RelationalDialect::Sqlite => format!("datetime({}, 'unixepoch')", rev.commit_unix),
-    };
-    let now_sql = sql_now(relational);
+    let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
     let temp_checkpoint_id_sql = rev
         .revision
         .temp_checkpoint_id
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let sql = format!(
-        "INSERT INTO current_file_state (repo_id, path, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, committed_at, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', {}, {}) \
-ON CONFLICT (repo_id, path) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, committed_at = EXCLUDED.committed_at, updated_at = {}",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(rev.path),
+
+    let artefacts_sql = format!(
+        "UPDATE artefacts_current \
+SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
+WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(rev.commit_sha),
         esc_pg(rev.revision.kind),
         esc_pg(rev.revision.id),
         temp_checkpoint_id_sql,
         esc_pg(rev.blob_sha),
-        committed_at_sql,
-        now_sql,
-        now_sql,
+        updated_at_sql,
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(rev.path),
     );
-    relational.exec(&sql).await
+    relational.exec(&artefacts_sql).await?;
+
+    let edges_sql = format!(
+        "UPDATE artefact_edges_current \
+SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
+WHERE repo_id = '{}' AND path = '{}'",
+        esc_pg(rev.commit_sha),
+        esc_pg(rev.revision.kind),
+        esc_pg(rev.revision.id),
+        temp_checkpoint_id_sql,
+        esc_pg(rev.blob_sha),
+        updated_at_sql,
+        esc_pg(&cfg.repo.repo_id),
+        esc_pg(rev.path),
+    );
+    relational.exec(&edges_sql).await?;
+
+    Ok(())
 }
 
 fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
@@ -1032,7 +1062,7 @@ async fn upsert_current_edge(
         .temp_checkpoint_id
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let now_sql = sql_now(relational);
+    let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
 
     let sql = format!(
         "INSERT INTO artefact_edges_current (edge_id, repo_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
@@ -1056,8 +1086,8 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXC
         start_line_sql,
         end_line_sql,
         metadata_sql,
-        now_sql,
-        now_sql,
+        updated_at_sql,
+        updated_at_sql,
     );
     relational.exec(&sql).await
 }
@@ -1112,7 +1142,13 @@ async fn refresh_current_state_for_path(
     symbol_records: &[PersistedArtefactRecord],
     edges: Vec<JsTsDependencyEdge>,
 ) -> Result<()> {
-    let existing = load_current_file_state(cfg, relational, rev.path).await?;
+    let existing = load_current_file_revision(cfg, relational, rev.path).await?;
+    let revision_metadata_changed = existing.as_ref().is_some_and(|state| {
+        state.commit_sha != rev.commit_sha
+            || state.revision_kind != rev.revision.kind
+            || state.revision_id != rev.revision.id
+            || state.temp_checkpoint_id != rev.revision.temp_checkpoint_id
+    });
     if !incoming_revision_is_newer(
         existing.as_ref(),
         rev.revision.kind,
@@ -1126,17 +1162,12 @@ async fn refresh_current_state_for_path(
             .as_ref()
             .is_some_and(|state| state.blob_sha == rev.blob_sha)
     {
+        overwrite_current_revision_metadata_for_path(cfg, relational, rev).await?;
         return Ok(());
     }
-    let revision_metadata_changed = existing.as_ref().is_some_and(|state| {
-        state.commit_sha != rev.commit_sha
-            || state.revision_kind != rev.revision.kind
-            || state.revision_id != rev.revision.id
-    });
 
     let old_symbol_records = load_current_artefacts_for_path(cfg, relational, rev.path).await?;
     let old_symbol_ids = old_symbol_records.keys().cloned().collect::<HashSet<_>>();
-    upsert_current_file_state(cfg, relational, rev).await?;
 
     let mut all_records = Vec::with_capacity(symbol_records.len() + 1);
     all_records.push(build_file_current_record(
@@ -1304,13 +1335,6 @@ async fn delete_current_state_for_path(
         .cloned()
         .collect::<HashSet<_>>();
     delete_current_outgoing_edges_for_path(cfg, relational, path).await?;
-
-    let sql = format!(
-        "DELETE FROM current_file_state WHERE repo_id = '{}' AND path = '{}'",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(path),
-    );
-    relational.exec(&sql).await?;
 
     delete_current_artefacts_for_path_symbols(cfg, relational, path, &deleted_symbol_ids).await?;
     repair_inbound_current_edges(cfg, relational, &HashSet::new(), &deleted_symbol_ids).await?;
