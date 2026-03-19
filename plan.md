@@ -30,6 +30,9 @@
 
 ## Follow-up work
 - Keep expanding `bitloops_cli`-only acceptance coverage as the test harness evolves.
+- Keep direct backend coverage on both relational backends:
+  - SQLite via acceptance and Gherkin flows
+  - Postgres via repository-level tests that exercise schema init, test discovery writes, runtime-signal writes, and query reads
 - Keep the Ruff workspace quickstarts under `bitloops_cli/docs/test_harness/` so they do not get dropped during future refactors.
 - Keep `runbook.md` aligned with the validated `claude-code` proof flow so checkpoint-scoped DevQL behavior and link creation stay obvious.
 - Keep prototype-free boundaries clear: synthetic production seeding belongs in test-only support, while real runtime production ingest belongs to DevQL.
@@ -38,4 +41,7 @@
   - SQL write helpers in focused helper modules
   - query/list helpers and backend-specific tests in separate files
 - Keep `cargo clippy --all-targets -- -D warnings` green as the effective push gate for the migrated test-harness code, not just `cargo test`.
+- Keep Postgres DDL honest:
+  - Postgres-only schema strings should use real Postgres types such as `TIMESTAMPTZ` and `BIGINT`
+  - Postgres repository queries should not rely on SQLite-specific `DISTINCT ... ORDER BY ...` behavior
 - Prune or rewrite historical migration notes such as `compatibility-plan-1.md` when they stop being useful.

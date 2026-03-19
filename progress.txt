@@ -581,3 +581,43 @@ Validation
 Notes
 - The original backend split was correct, but the repo’s real push gate is `cargo clippy --all-targets -D warnings`, not just `cargo test`.
 - Mainline code now follows the stricter shape without blanket lint suppression; the only targeted lint allowances left are in test-only fixture seed helpers.
+
+2026-03-19
+
+Raised `bitloops_cli` coverage above the develop baseline without touching the baseline file
+
+Status: done
+
+Completed
+- Added direct Postgres test-harness repository coverage in `bitloops_cli/src/engine/test_harness/postgres/tests.rs`.
+  - The new test boots a temporary local Postgres cluster, initializes DevQL plus test-harness schemas, seeds minimal production rows, runs test-discovery/runtime-signal writes through the real repository, and verifies query/read behavior plus expected error paths.
+- Fixed several real Postgres-path issues that the previous coverage gap had hidden:
+  - Postgres schema strings were using `DATETIME`; updated Postgres-only DDL to `TIMESTAMPTZ` in:
+    - `bitloops_cli/src/engine/devql/ingestion/schema/relational_postgres_schema.rs`
+    - `bitloops_cli/src/engine/devql/ingestion/schema/relational_postgres_migrations.rs`
+    - `bitloops_cli/src/engine/devql/ingestion/semantic_features_persistence.rs`
+    - `bitloops_cli/src/engine/devql/ingestion/semantic_embeddings_persistence.rs`
+    - `bitloops_cli/src/engine/test_harness/schema.rs`
+  - Postgres test-domain integer columns now use `BIGINT` where the shared domain writes `i64`.
+  - Postgres repository reads now use explicit `i64` helpers for `INTEGER`/`BIGINT` compatibility in:
+    - `bitloops_cli/src/engine/test_harness/postgres/helpers.rs`
+    - `bitloops_cli/src/engine/test_harness/postgres/mod.rs`
+  - Fixed Postgres-specific `SELECT DISTINCT ... ORDER BY ...` query shapes in the Postgres repository so they do not depend on SQLite behavior.
+- Kept the existing migrated suites green after the Postgres fixes.
+
+Validation
+- `cargo test --manifest-path ./bitloops_cli/Cargo.toml postgres_repository_round_trips_test_harness_flow --lib`: passed
+- `cargo clippy --manifest-path ./bitloops_cli/Cargo.toml --all-targets -- -D warnings`: passed
+- `cargo test --manifest-path ./bitloops_cli/Cargo.toml --test testlens_sqlite_acceptance`: passed
+  - `2` passed
+- `cargo test --manifest-path ./bitloops_cli/Cargo.toml --test testlens_gherkin`: passed
+  - `2` features
+  - `7` scenarios
+  - `37` steps
+- `bash bitloops_cli/scripts/coverage-baseline-check.sh check`: passed
+  - baseline lines `82.17%` -> current lines `82.95%`
+  - baseline functions `75.67%` -> current functions `76.75%`
+
+Notes
+- The coverage regression was mainly caused by the newly migrated Postgres backend having effectively `0%` direct execution coverage.
+- The fix was not just “add tests”; it also exposed and corrected real Postgres compatibility bugs in schema typing, numeric decoding, and query legality.

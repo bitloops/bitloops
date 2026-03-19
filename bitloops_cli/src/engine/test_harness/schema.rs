@@ -8,13 +8,13 @@ CREATE TABLE IF NOT EXISTS test_suites (
     path TEXT NOT NULL,
     name TEXT NOT NULL,
     symbol_fqn TEXT,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    start_byte INTEGER,
-    end_byte INTEGER,
+    start_line BIGINT NOT NULL,
+    end_line BIGINT NOT NULL,
+    start_byte BIGINT,
+    end_byte BIGINT,
     signature TEXT,
     discovery_source TEXT NOT NULL,
-    created_at DATETIME DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS test_suites_commit_idx
@@ -32,13 +32,13 @@ CREATE TABLE IF NOT EXISTS test_scenarios (
     path TEXT NOT NULL,
     name TEXT NOT NULL,
     symbol_fqn TEXT,
-    start_line INTEGER NOT NULL,
-    end_line INTEGER NOT NULL,
-    start_byte INTEGER,
-    end_byte INTEGER,
+    start_line BIGINT NOT NULL,
+    end_line BIGINT NOT NULL,
+    start_byte BIGINT,
+    end_byte BIGINT,
     signature TEXT,
     discovery_source TEXT NOT NULL,
-    created_at DATETIME DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS test_scenarios_commit_idx
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS test_links (
     production_symbol_id TEXT,
     link_source TEXT NOT NULL DEFAULT 'static_analysis',
     evidence_json TEXT DEFAULT '{}',
-    created_at DATETIME DEFAULT now()
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS test_links_production_idx
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
     commit_sha TEXT NOT NULL,
     test_scenario_id TEXT NOT NULL REFERENCES test_scenarios(scenario_id) ON DELETE CASCADE,
     status TEXT NOT NULL,
-    duration_ms INTEGER,
+    duration_ms BIGINT,
     ran_at TEXT NOT NULL
 );
 
@@ -94,8 +94,8 @@ CREATE TABLE IF NOT EXISTS test_classifications (
     test_scenario_id TEXT NOT NULL REFERENCES test_scenarios(scenario_id) ON DELETE CASCADE,
     classification TEXT NOT NULL,
     classification_source TEXT NOT NULL DEFAULT 'coverage_derived',
-    fan_out INTEGER NOT NULL,
-    boundary_crossings INTEGER NOT NULL DEFAULT 0
+    fan_out BIGINT NOT NULL,
+    boundary_crossings BIGINT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS test_classifications_commit_idx
@@ -109,8 +109,8 @@ CREATE TABLE IF NOT EXISTS coverage_captures (
     format TEXT NOT NULL DEFAULT 'lcov',
     scope_kind TEXT NOT NULL DEFAULT 'workspace',
     subject_test_scenario_id TEXT REFERENCES test_scenarios(scenario_id) ON DELETE SET NULL,
-    line_truth INTEGER NOT NULL DEFAULT 1,
-    branch_truth INTEGER NOT NULL DEFAULT 0,
+    line_truth BIGINT NOT NULL DEFAULT 1,
+    branch_truth BIGINT NOT NULL DEFAULT 0,
     captured_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'complete',
     metadata_json TEXT
@@ -123,10 +123,10 @@ CREATE TABLE IF NOT EXISTS coverage_hits (
     capture_id TEXT NOT NULL REFERENCES coverage_captures(capture_id) ON DELETE CASCADE,
     production_artefact_id TEXT NOT NULL REFERENCES artefacts(artefact_id) ON DELETE CASCADE,
     file_path TEXT NOT NULL,
-    line INTEGER NOT NULL,
-    branch_id INTEGER NOT NULL DEFAULT -1,
-    covered INTEGER NOT NULL,
-    hit_count INTEGER DEFAULT 0,
+    line BIGINT NOT NULL,
+    branch_id BIGINT NOT NULL DEFAULT -1,
+    covered BIGINT NOT NULL,
+    hit_count BIGINT DEFAULT 0,
     PRIMARY KEY (capture_id, production_artefact_id, line, branch_id)
 );
 
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS test_discovery_diagnostics (
     repo_id TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
     path TEXT,
-    line INTEGER,
+    line BIGINT,
     severity TEXT NOT NULL,
     code TEXT NOT NULL,
     message TEXT NOT NULL,

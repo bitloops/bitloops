@@ -384,8 +384,8 @@ ORDER BY a.path ASC, a.start_line ASC
                 symbol_fqn: get(&row, 1, "symbol_fqn")?,
                 kind: get(&row, 2, "kind")?,
                 file_path: get(&row, 3, "file_path")?,
-                start_line: get(&row, 4, "start_line")?,
-                end_line: get(&row, 5, "end_line")?,
+                start_line: get_i64(&row, 4, "start_line")?,
+                end_line: get_i64(&row, 5, "end_line")?,
             })
         })
         .collect()
@@ -415,8 +415,8 @@ ORDER BY path ASC, start_line ASC
                 symbol_fqn: get(&row, 1, "symbol_fqn")?,
                 kind: "test_suite".to_string(),
                 file_path: get(&row, 2, "path")?,
-                start_line: get(&row, 3, "start_line")?,
-                end_line: get(&row, 4, "end_line")?,
+                start_line: get_i64(&row, 3, "start_line")?,
+                end_line: get_i64(&row, 4, "end_line")?,
             })
         })
         .collect()
@@ -446,8 +446,8 @@ ORDER BY path ASC, start_line ASC
                 symbol_fqn: get(&row, 1, "symbol_fqn")?,
                 kind: "test_scenario".to_string(),
                 file_path: get(&row, 2, "path")?,
-                start_line: get(&row, 3, "start_line")?,
-                end_line: get(&row, 4, "end_line")?,
+                start_line: get_i64(&row, 3, "start_line")?,
+                end_line: get_i64(&row, 4, "end_line")?,
             })
         })
         .collect()
@@ -458,5 +458,17 @@ where
     T: FromSqlOwned,
 {
     row.try_get(index)
+        .with_context(|| format!("missing {field}"))
+}
+
+pub(super) fn get_i64(row: &Row, index: usize, field: &str) -> Result<i64> {
+    row.try_get::<_, i64>(index)
+        .or_else(|_| row.try_get::<_, i32>(index).map(i64::from))
+        .with_context(|| format!("missing {field}"))
+}
+
+pub(super) fn get_opt_i64(row: &Row, index: usize, field: &str) -> Result<Option<i64>> {
+    row.try_get::<_, Option<i64>>(index)
+        .or_else(|_| row.try_get::<_, Option<i32>>(index).map(|value| value.map(i64::from)))
         .with_context(|| format!("missing {field}"))
 }

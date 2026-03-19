@@ -1,4 +1,6 @@
 mod helpers;
+#[cfg(test)]
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -18,10 +20,10 @@ use crate::engine::test_harness::schema::postgres_test_domain_schema_sql;
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
 use self::helpers::{
-    clear_existing_test_discovery_data, get, load_listed_production_artefacts,
-    load_listed_test_scenarios, load_listed_test_suites, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_link, upsert_test_run,
-    upsert_test_scenario, upsert_test_suite,
+    clear_existing_test_discovery_data, get, get_i64, get_opt_i64,
+    load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
+    upsert_test_classification, upsert_test_discovery_diagnostic, upsert_test_discovery_run,
+    upsert_test_link, upsert_test_run, upsert_test_scenario, upsert_test_suite,
 };
 
 pub struct PostgresTestHarnessRepository {
@@ -103,7 +105,7 @@ ORDER BY a.path ASC, a.start_line ASC
                             symbol_id: get(&row, 1, "symbol_id")?,
                             symbol_fqn: get(&row, 2, "symbol_fqn")?,
                             path: get(&row, 3, "path")?,
-                            start_line: get(&row, 4, "start_line")?,
+                            start_line: get_i64(&row, 4, "start_line")?,
                         })
                     })
                     .collect()
@@ -155,7 +157,7 @@ ORDER BY ts.path ASC, ts.start_line ASC
                 let rows = client
                     .query(
                         r#"
-SELECT DISTINCT a.artefact_id, a.start_line, a.end_line
+SELECT DISTINCT a.artefact_id, a.path, a.start_line, a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id
@@ -175,8 +177,8 @@ ORDER BY a.path ASC, a.start_line ASC
                     .map(|row| {
                         Ok((
                             get(&row, 0, "artefact_id")?,
-                            get(&row, 1, "start_line")?,
-                            get(&row, 2, "end_line")?,
+                            get_i64(&row, 2, "start_line")?,
+                            get_i64(&row, 3, "end_line")?,
                         ))
                     })
                     .collect()
@@ -445,7 +447,7 @@ impl TestHarnessQueryRepository for PostgresTestHarnessRepository {
                 let row = client
                     .query_opt(
                         r#"
-SELECT DISTINCT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id
@@ -494,8 +496,8 @@ LIMIT 1
                     symbol_fqn: get(&row, 1, "symbol_fqn")?,
                     canonical_kind: get(&row, 2, "canonical_kind")?,
                     path: get(&row, 3, "path")?,
-                    start_line: get(&row, 4, "start_line")?,
-                    end_line: get(&row, 5, "end_line")?,
+                    start_line: get_i64(&row, 4, "start_line")?,
+                    end_line: get_i64(&row, 5, "end_line")?,
                 })
             })
         })
@@ -550,7 +552,7 @@ LIMIT 1
                 let rows = client
                     .query(
                         r#"
-SELECT DISTINCT
+SELECT
   ts.scenario_id,
   ts.symbol_fqn,
   ts.signature,
@@ -586,7 +588,7 @@ ORDER BY ts.path ASC, ts.start_line ASC
                             suite_name: get(&row, 4, "suite_name")?,
                             classification: get(&row, 5, "classification")?,
                             classification_source: get(&row, 6, "classification_source")?,
-                            fan_out: get(&row, 7, "fan_out")?,
+                            fan_out: get_opt_i64(&row, 7, "fan_out")?,
                         })
                     })
                     .collect()
@@ -665,9 +667,9 @@ WHERE cc.commit_sha = $1
                     .await
                     .context("failed querying pair coverage stats")?;
 
-                Ok(CoveragePairStats {
-                    total_rows: get(&row, 0, "total_rows")?,
-                    covered_rows: get(&row, 1, "covered_rows")?,
+                    Ok(CoveragePairStats {
+                        total_rows: get(&row, 0, "total_rows")?,
+                        covered_rows: get(&row, 1, "covered_rows")?,
                 })
             })
         })
@@ -700,7 +702,7 @@ LIMIT 1
                 row.map(|row| {
                     Ok(LatestTestRunRecord {
                         status: get(&row, 0, "run_status")?,
-                        duration_ms: get(&row, 1, "duration_ms")?,
+                        duration_ms: get_opt_i64(&row, 1, "duration_ms")?,
                         commit_sha: get(&row, 2, "commit_sha")?,
                     })
                 })
@@ -738,7 +740,7 @@ ORDER BY ch.line
                 let mut line_total = 0usize;
                 let mut line_covered = 0usize;
                 for row in line_rows {
-                    let covered: i64 = get(&row, 1, "covered_any")?;
+                    let covered = get_i64(&row, 1, "covered_any")?;
                     line_total += 1;
                     if covered == 1 {
                         line_covered += 1;
@@ -769,10 +771,10 @@ ORDER BY ch.line, ch.branch_id
                 let mut branch_covered = 0usize;
                 let mut branches = Vec::new();
                 for row in branch_rows {
-                    let covered: i64 = get(&row, 2, "covered_any")?;
+                    let covered = get_i64(&row, 2, "covered_any")?;
                     let branch = CoverageBranchRecord {
-                        line: get(&row, 0, "line")?,
-                        branch_id: get(&row, 1, "branch_id")?,
+                        line: get_i64(&row, 0, "line")?,
+                        branch_id: get_i64(&row, 1, "branch_id")?,
                         covered: covered == 1,
                         covering_test_ids: vec![],
                     };

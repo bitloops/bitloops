@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings (
     dimension INTEGER NOT NULL CHECK (dimension > 0),
     embedding_input_hash TEXT NOT NULL,
     embedding vector NOT NULL,
-    generated_at DATETIME DEFAULT now()
+    generated_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
