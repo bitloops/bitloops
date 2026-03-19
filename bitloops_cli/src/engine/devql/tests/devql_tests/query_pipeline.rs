@@ -161,6 +161,11 @@ fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
     assert!(sql.contains("LEFT JOIN artefacts at ON at.artefact_id = e.to_artefact_id"));
     assert!(!sql.contains("artefact_edges_current"));
     assert!(!sql.contains("artefacts_current"));
+    assert!(!sql.contains("a.revision_kind"));
+    assert!(!sql.contains("a.revision_id"));
+    assert!(!sql.contains("e.revision_kind"));
+    assert!(!sql.contains("e.revision_id"));
+    assert!(!sql.contains("current_scope"));
 }
 
 #[test]
@@ -173,13 +178,14 @@ fn build_postgres_deps_query_filters_temporary_revision_for_save_revision() {
 
     let sql = build_postgres_deps_query(&cfg, &parsed, &cfg.repo.repo_id).unwrap();
 
-    assert!(sql.contains("FROM artefact_edges e"));
-    assert!(sql.contains("JOIN artefacts a ON a.artefact_id = e.from_artefact_id"));
+    assert!(sql.contains("FROM artefact_edges_current e"));
+    assert!(sql.contains("JOIN artefacts_current a ON a.artefact_id = e.from_artefact_id"));
     assert!(sql.contains("e.revision_kind = 'temporary'"));
     assert!(sql.contains("e.revision_id = 'temp:42'"));
     assert!(sql.contains("a.revision_kind = 'temporary'"));
     assert!(sql.contains("a.revision_id = 'temp:42'"));
-    assert!(!sql.contains("artefact_edges_current"));
+    assert!(!sql.contains("FROM artefact_edges e"));
+    assert!(!sql.contains("JOIN artefacts a ON a.artefact_id = e.from_artefact_id"));
 }
 
 #[tokio::test]
@@ -363,6 +369,385 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
         Value::String("src/target.ts".to_string())
     );
     assert!(rows[0]["metadata"].is_object());
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_reads_commit_asof_deps_from_historical_tables() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![cfg.repo.repo_id.as_str(), "commit-old", "src/caller.ts", "blob-old"],
+    )
+    .expect("insert file_state for old commit");
+    conn.execute(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![cfg.repo.repo_id.as_str(), "commit-new", "src/caller.ts", "blob-new"],
+    )
+    .expect("insert file_state for new commit");
+
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::caller-old",
+            "sym::caller-old",
+            cfg.repo.repo_id.as_str(),
+            "blob-old",
+            "src/caller.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller.ts::callerOld",
+            1,
+            5,
+            0,
+            50,
+            "[]",
+            "hash-caller-old",
+        ],
+    )
+    .expect("insert historical caller old");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::target-old",
+            "sym::target-old",
+            cfg.repo.repo_id.as_str(),
+            "blob-target-old",
+            "src/target-old.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target-old.ts::targetOld",
+            1,
+            3,
+            0,
+            30,
+            "[]",
+            "hash-target-old",
+        ],
+    )
+    .expect("insert historical target old");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::caller-new",
+            "sym::caller-new",
+            cfg.repo.repo_id.as_str(),
+            "blob-new",
+            "src/caller.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller.ts::callerNew",
+            1,
+            5,
+            0,
+            50,
+            "[]",
+            "hash-caller-new",
+        ],
+    )
+    .expect("insert historical caller new");
+    conn.execute(
+        "INSERT INTO artefacts (
+            artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+            language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte, modifiers,
+            content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            "artefact::target-new",
+            "sym::target-new",
+            cfg.repo.repo_id.as_str(),
+            "blob-target-new",
+            "src/target-new.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target-new.ts::targetNew",
+            1,
+            3,
+            0,
+            30,
+            "[]",
+            "hash-target-new",
+        ],
+    )
+    .expect("insert historical target new");
+
+    conn.execute(
+        "INSERT INTO artefact_edges (
+            edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            "edge-old",
+            cfg.repo.repo_id.as_str(),
+            "blob-old",
+            "artefact::caller-old",
+            "artefact::target-old",
+            "src/target-old.ts::targetOld",
+            "calls",
+            "typescript",
+            2,
+            2,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert historical old edge");
+    conn.execute(
+        "INSERT INTO artefact_edges (
+            edge_id, repo_id, blob_sha, from_artefact_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            "edge-new",
+            cfg.repo.repo_id.as_str(),
+            "blob-new",
+            "artefact::caller-new",
+            "artefact::target-new",
+            "src/target-new.ts::targetNew",
+            "calls",
+            "typescript",
+            3,
+            3,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert historical new edge");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->asOf(commit:"commit-old")->file("src/caller.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
+    )
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute commit asOf deps query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["edge_id"], Value::String("edge-old".to_string()));
+    assert_eq!(
+        rows[0]["from_path"],
+        Value::String("src/caller.ts".to_string())
+    );
+    assert_eq!(
+        rows[0]["to_path"],
+        Value::String("src/target-old.ts".to_string())
+    );
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_tables() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
+            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+            start_byte, end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::caller-temp",
+            "artefact::caller-temp",
+            "temp:42",
+            "temporary",
+            "temp:42",
+            "blob-temp",
+            "src/caller.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller.ts::callerTemp",
+            1,
+            5,
+            0,
+            42,
+            "[]",
+            "hash-caller-temp",
+        ],
+    )
+    .expect("insert temporary caller");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
+            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+            start_byte, end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::target-temp",
+            "artefact::target-temp",
+            "temp:42",
+            "temporary",
+            "temp:42",
+            "blob-target-temp",
+            "src/target.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target.ts::targetTemp",
+            1,
+            3,
+            0,
+            24,
+            "[]",
+            "hash-target-temp",
+        ],
+    )
+    .expect("insert temporary target");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
+            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+            start_byte, end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::caller-commit",
+            "artefact::caller-commit",
+            "commit-1",
+            "commit",
+            "commit-1",
+            "blob-commit",
+            "src/caller.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/caller.ts::callerCommit",
+            1,
+            5,
+            0,
+            42,
+            "[]",
+            "hash-caller-commit",
+        ],
+    )
+    .expect("insert committed caller");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
+            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+            start_byte, end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::target-commit",
+            "artefact::target-commit",
+            "commit-1",
+            "commit",
+            "commit-1",
+            "blob-target-commit",
+            "src/target.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/target.ts::targetCommit",
+            1,
+            3,
+            0,
+            24,
+            "[]",
+            "hash-target-commit",
+        ],
+    )
+    .expect("insert committed target");
+
+    conn.execute(
+        "INSERT INTO artefact_edges_current (
+            edge_id, repo_id, commit_sha, revision_kind, revision_id, blob_sha, path,
+            from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        rusqlite::params![
+            "edge-temp",
+            cfg.repo.repo_id.as_str(),
+            "temp:42",
+            "temporary",
+            "temp:42",
+            "blob-temp",
+            "src/caller.ts",
+            "sym::caller-temp",
+            "artefact::caller-temp",
+            "sym::target-temp",
+            "artefact::target-temp",
+            "src/target.ts::targetTemp",
+            "calls",
+            "typescript",
+            2,
+            2,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert temporary edge");
+    conn.execute(
+        "INSERT INTO artefact_edges_current (
+            edge_id, repo_id, commit_sha, revision_kind, revision_id, blob_sha, path,
+            from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref,
+            edge_kind, language, start_line, end_line, metadata
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        rusqlite::params![
+            "edge-commit",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "commit",
+            "commit-1",
+            "blob-commit",
+            "src/caller.ts",
+            "sym::caller-commit",
+            "artefact::caller-commit",
+            "sym::target-commit",
+            "artefact::target-commit",
+            "src/target.ts::targetCommit",
+            "calls",
+            "typescript",
+            4,
+            4,
+            "{\"resolution\":\"local\"}",
+        ],
+    )
+    .expect("insert committed edge");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
+    )
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute saveRevision asOf deps query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["edge_id"], Value::String("edge-temp".to_string()));
+    assert_eq!(
+        rows[0]["from_path"],
+        Value::String("src/caller.ts".to_string())
+    );
+    assert_eq!(
+        rows[0]["to_path"],
+        Value::String("src/target.ts".to_string())
+    );
 }
 
 #[tokio::test]
