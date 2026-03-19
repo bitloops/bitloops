@@ -1,3 +1,10 @@
+pub(crate) const EDGE_KIND_IMPORTS: &str = "imports";
+pub(crate) const EDGE_KIND_CALLS: &str = "calls";
+pub(crate) const EDGE_KIND_REFERENCES: &str = "references";
+pub(crate) const EDGE_KIND_EXTENDS: &str = "extends";
+pub(crate) const EDGE_KIND_IMPLEMENTS: &str = "implements";
+pub(crate) const EDGE_KIND_EXPORTS: &str = "exports";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum EdgeKind {
     Imports,
@@ -13,23 +20,23 @@ impl EdgeKind {
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::Imports => "imports",
-            Self::Calls => "calls",
-            Self::References => "references",
-            Self::Extends => "extends",
-            Self::Implements => "implements",
-            Self::Exports => "exports",
+            Self::Imports => EDGE_KIND_IMPORTS,
+            Self::Calls => EDGE_KIND_CALLS,
+            Self::References => EDGE_KIND_REFERENCES,
+            Self::Extends => EDGE_KIND_EXTENDS,
+            Self::Implements => EDGE_KIND_IMPLEMENTS,
+            Self::Exports => EDGE_KIND_EXPORTS,
         }
     }
 
     fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "imports" => Some(Self::Imports),
-            "calls" => Some(Self::Calls),
-            "references" => Some(Self::References),
-            "extends" | Self::LEGACY_INHERITS => Some(Self::Extends),
-            "implements" => Some(Self::Implements),
-            "exports" => Some(Self::Exports),
+            EDGE_KIND_IMPORTS => Some(Self::Imports),
+            EDGE_KIND_CALLS => Some(Self::Calls),
+            EDGE_KIND_REFERENCES => Some(Self::References),
+            EDGE_KIND_EXTENDS | Self::LEGACY_INHERITS => Some(Self::Extends),
+            EDGE_KIND_IMPLEMENTS => Some(Self::Implements),
+            EDGE_KIND_EXPORTS => Some(Self::Exports),
             _ => None,
         }
     }

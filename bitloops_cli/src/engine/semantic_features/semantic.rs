@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 
 use crate::engine::providers::llm::{LlmProvider, build_llm_provider};
 
-use super::common::{normalize_repo_path, split_identifier_tokens};
+use super::common::{normalize_repo_path, render_dependency_context, split_identifier_tokens};
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 pub use crate::engine::providers::llm::resolve_semantic_summary_endpoint;
@@ -106,6 +106,8 @@ fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
         body.to_string()
     };
 
+    let dependency_context = render_dependency_context(&input.dependency_signals);
+
     format!(
         "Summarize this code symbol and return only JSON.\n\n\
 JSON schema:\n\
@@ -126,6 +128,7 @@ signature: {signature}\n\
 modifiers: {modifiers}\n\
 docstring: {docstring}\n\
 parent_kind: {parent_kind}\n\
+dependencies: {dependencies}\n\
 body:\n{body}",
         language = input.language,
         kind = input.canonical_kind,
@@ -137,6 +140,7 @@ body:\n{body}",
         modifiers = input.modifiers.join(", "),
         docstring = input.docstring.as_deref().unwrap_or(""),
         parent_kind = input.parent_kind.as_deref().unwrap_or(""),
+        dependencies = dependency_context,
         body = body,
     )
 }
@@ -417,6 +421,7 @@ mod tests {
             body: "return value;".to_string(),
             docstring: None,
             parent_kind: Some("module".to_string()),
+            dependency_signals: vec!["calls:user_repo::load_by_id".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
     }
@@ -451,6 +456,7 @@ mod tests {
         let prompt = build_semantic_summary_prompt(&input);
         assert!(prompt.contains("docstring: // Normalizes email."));
         assert!(prompt.contains("modifiers: export"));
+        assert!(prompt.contains("dependencies: calls:user repo::load by id"));
         let body_section = prompt
             .split("body:\n")
             .nth(1)

@@ -78,6 +78,9 @@ fn build_context_tokens(
     for modifier in modifiers {
         tokens.extend(split_identifier_tokens(modifier));
     }
+    for dependency_signal in &input.dependency_signals {
+        tokens.extend(split_identifier_tokens(dependency_signal));
+    }
     tokens.extend(identifier_tokens.iter().cloned());
     dedupe_tokens(tokens, MAX_CONTEXT_TOKENS)
 }
@@ -109,6 +112,7 @@ mod tests {
             body: "return db.users.findById(id);".to_string(),
             docstring: None,
             parent_kind: Some("class".to_string()),
+            dependency_signals: vec!["calls:user_repo::find_by_id".to_string()],
             content_hash: Some("hash-1".to_string()),
         }
     }
@@ -132,6 +136,7 @@ mod tests {
             row.context_tokens.contains(&"services".to_string())
                 && row.context_tokens.contains(&"class".to_string())
                 && row.context_tokens.contains(&"async".to_string())
+                && row.context_tokens.contains(&"calls".to_string())
         );
         assert_eq!(
             row.modifiers,
