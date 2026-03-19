@@ -15,6 +15,7 @@ anyhow = "1"
 axum = "0.8"
 env_logger = "0.11"
 figlet-rs = "0.1"
+cucumber = "0.22.1"
 log = "0.4"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
@@ -39,9 +40,9 @@ zstd = "0.13"
 duckdb = { version = "1", features = ["bundled"] }
 object_store = { version = "0.12.4", features = ["aws", "gcp"] }
 fastembed = "5.12.1"
+time = { version = "0.3", features = ["formatting", "macros"] }
 
 [dev-dependencies]
-cucumber = "0.22.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 
