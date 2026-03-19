@@ -1,8 +1,8 @@
 mod file_discovery;
 pub(crate) mod languages;
-mod linker;
-mod materialize;
-mod model;
+pub(crate) mod linker;
+pub(crate) mod materialize;
+pub(crate) mod model;
 mod registry;
 
 #[cfg(test)]

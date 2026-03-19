@@ -612,3 +612,279 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
             .contains("deps() cannot be combined with chatHistory()")
     );
 }
+
+#[test]
+fn parse_devql_tests_stage_basic() {
+    let parsed = parse_devql_query(
+        r#"repo("r")->file("src/lib.rs")->artefacts(kind:"function")->tests()"#,
+    )
+    .unwrap();
+    assert!(parsed.has_tests_stage);
+    assert!(parsed.has_artefacts_stage);
+    assert!(parsed.tests.min_confidence.is_none());
+    assert!(parsed.tests.linkage_source.is_none());
+}
+
+#[test]
+fn parse_devql_tests_stage_with_filters() {
+    let parsed = parse_devql_query(
+        r#"repo("r")->artefacts()->tests(min_confidence:0.5,linkage_source:"static_analysis")"#,
+    )
+    .unwrap();
+    assert!(parsed.has_tests_stage);
+    assert_eq!(parsed.tests.min_confidence, Some(0.5));
+    assert_eq!(
+        parsed.tests.linkage_source.as_deref(),
+        Some("static_analysis")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_tests_without_artefacts() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->tests()->limit(1)"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("tests() requires an artefacts() stage")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_tests_with_deps() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->tests()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("tests() cannot be combined with deps()")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_tests_with_clones() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->clones()->tests()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("tests() cannot be combined with clones()")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_tests_with_chat_history() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->chatHistory()->tests()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("tests() cannot be combined with chatHistory()")
+    );
+}
+
+#[tokio::test]
+async fn execute_relational_tests_pipeline_returns_covering_tests() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+
+    // Create test harness tables (not part of the DevQL relational schema)
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS test_suites (
+            suite_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            language TEXT NOT NULL,
+            path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            symbol_fqn TEXT,
+            start_line BIGINT NOT NULL,
+            end_line BIGINT NOT NULL,
+            start_byte BIGINT,
+            end_byte BIGINT,
+            signature TEXT,
+            discovery_source TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS test_scenarios (
+            scenario_id TEXT PRIMARY KEY,
+            suite_id TEXT REFERENCES test_suites(suite_id) ON DELETE CASCADE,
+            repo_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            language TEXT NOT NULL,
+            path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            symbol_fqn TEXT,
+            start_line BIGINT NOT NULL,
+            end_line BIGINT NOT NULL,
+            start_byte BIGINT,
+            end_byte BIGINT,
+            signature TEXT,
+            discovery_source TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS test_links (
+            test_link_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            test_scenario_id TEXT NOT NULL REFERENCES test_scenarios(scenario_id) ON DELETE CASCADE,
+            production_artefact_id TEXT NOT NULL,
+            production_symbol_id TEXT,
+            link_source TEXT NOT NULL DEFAULT 'static_analysis',
+            evidence_json TEXT DEFAULT '{}',
+            confidence REAL NOT NULL DEFAULT 0.6,
+            linkage_status TEXT NOT NULL DEFAULT 'resolved',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        "#,
+    )
+    .expect("create test harness tables");
+
+    // Insert a production artefact
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::create_user",
+            "artefact::create_user",
+            "commit-1",
+            "blob-1",
+            "src/user/service.rs",
+            "rust",
+            "function",
+            "function_item",
+            "src/user/service.rs::create_user",
+            1,
+            3,
+            0,
+            42,
+            "[]",
+            "hash-1",
+        ],
+    )
+    .expect("insert production artefact");
+
+    // Insert test harness data
+    conn.execute(
+        "INSERT INTO test_suites (
+            suite_id, repo_id, commit_sha, language, path, name,
+            start_line, end_line, discovery_source
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            "suite::tests",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "rust",
+            "src/user/service_tests.rs",
+            "tests",
+            1,
+            10,
+            "source",
+        ],
+    )
+    .expect("insert test suite");
+
+    conn.execute(
+        "INSERT INTO test_scenarios (
+            scenario_id, suite_id, repo_id, commit_sha, language, path, name,
+            start_line, end_line, discovery_source
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            "scenario::test_create_user",
+            "suite::tests",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "rust",
+            "src/user/service_tests.rs",
+            "test_create_user",
+            5,
+            8,
+            "source",
+        ],
+    )
+    .expect("insert test scenario");
+
+    conn.execute(
+        "INSERT INTO test_links (
+            test_link_id, repo_id, commit_sha, test_scenario_id, production_artefact_id,
+            link_source, confidence, linkage_status
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "link::1",
+            cfg.repo.repo_id.as_str(),
+            "commit-1",
+            "scenario::test_create_user",
+            "artefact::create_user",
+            "static_analysis",
+            0.6,
+            "resolved",
+        ],
+    )
+    .expect("insert test link");
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->file("src/user/service.rs")->artefacts(kind:"function")->tests()->limit(10)"#,
+    )
+    .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute tests pipeline");
+
+    assert_eq!(rows.len(), 1);
+    let artefact = rows[0].get("artefact").expect("should have artefact");
+    assert_eq!(
+        artefact.get("artefact_id").and_then(Value::as_str),
+        Some("artefact::create_user")
+    );
+
+    let covering_tests = rows[0]
+        .get("covering_tests")
+        .and_then(Value::as_array)
+        .expect("should have covering_tests");
+    assert_eq!(covering_tests.len(), 1);
+    assert_eq!(
+        covering_tests[0]
+            .get("test_name")
+            .and_then(Value::as_str),
+        Some("test_create_user")
+    );
+
+    let summary = rows[0].get("summary").expect("should have summary");
+    assert_eq!(
+        summary
+            .get("total_covering_tests")
+            .and_then(Value::as_i64),
+        Some(1)
+    );
+}

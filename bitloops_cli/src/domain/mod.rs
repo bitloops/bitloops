@@ -244,6 +244,8 @@ pub struct TestLinkRecord {
     pub production_symbol_id: Option<String>,
     pub link_source: String,
     pub evidence_json: String,
+    pub confidence: f64,
+    pub linkage_status: String,
 }
 
 #[derive(Debug, Clone)]

@@ -259,6 +259,13 @@ ON artefact_edges_current (
 "#
 }
 
+fn test_links_upgrade_sql() -> &'static str {
+    r#"
+ALTER TABLE test_links ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6;
+ALTER TABLE test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NOT NULL DEFAULT 'resolved';
+"#
+}
+
 fn edge_model_cleanup_postgres_sql() -> &'static str {
     r#"
 UPDATE artefact_edges

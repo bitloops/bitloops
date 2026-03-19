@@ -81,6 +81,42 @@ async fn execute_devql_query(
         bail!("clones() does not yet support asOf(...) queries");
     }
 
+    if parsed.has_tests_stage && !parsed.has_artefacts_stage {
+        log_devql_validation_failure(
+            parsed,
+            "tests_requires_artefacts",
+            "tests() requires an artefacts() stage in the query",
+        );
+        bail!("tests() requires an artefacts() stage in the query");
+    }
+
+    if parsed.has_tests_stage && parsed.has_deps_stage {
+        log_devql_validation_failure(
+            parsed,
+            "tests_with_deps",
+            "tests() cannot be combined with deps() stage",
+        );
+        bail!("tests() cannot be combined with deps() stage");
+    }
+
+    if parsed.has_tests_stage && parsed.has_clones_stage {
+        log_devql_validation_failure(
+            parsed,
+            "tests_with_clones",
+            "tests() cannot be combined with clones() stage",
+        );
+        bail!("tests() cannot be combined with clones() stage");
+    }
+
+    if parsed.has_tests_stage && parsed.has_chat_history_stage {
+        log_devql_validation_failure(
+            parsed,
+            "tests_with_chat_history",
+            "tests() cannot be combined with chatHistory() stage",
+        );
+        bail!("tests() cannot be combined with chatHistory() stage");
+    }
+
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         return match events_cfg.provider {
             EventsProvider::ClickHouse => execute_clickhouse_pipeline(cfg, parsed).await,
@@ -110,6 +146,7 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
                 parsed.has_checkpoints_stage,
             ),
             crate::engine::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
+            crate::engine::logging::bool_attr("has_tests_stage", parsed.has_tests_stage),
         ],
     );
 }
@@ -292,6 +329,11 @@ async fn execute_relational_pipeline(
 
     if parsed.has_deps_stage {
         return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
+    }
+
+    if parsed.has_tests_stage {
+        return execute_relational_tests_pipeline(cfg, events_cfg, parsed, relational, &repo_id)
+            .await;
     }
 
     let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
@@ -510,6 +552,97 @@ async fn execute_relational_deps_pipeline(
         .into_iter()
         .map(normalise_relational_result_row)
         .collect::<Vec<_>>())
+}
+
+async fn execute_relational_tests_pipeline(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+    parsed: &ParsedDevqlQuery,
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<Value>> {
+    let artefacts_sql =
+        build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), repo_id)
+            .await?;
+    let artefact_rows = relational.query_rows(&artefacts_sql).await?;
+
+    let mut results = Vec::with_capacity(artefact_rows.len());
+
+    for artefact_row in artefact_rows {
+        let artefact_row = normalise_relational_result_row(artefact_row);
+        let Some(obj) = artefact_row.as_object() else {
+            continue;
+        };
+
+        let artefact_id = obj
+            .get("artefact_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if artefact_id.is_empty() {
+            continue;
+        }
+
+        let artefact_output = json!({
+            "artefact_id": artefact_id,
+            "name": obj.get("symbol_fqn").and_then(Value::as_str).unwrap_or(artefact_id),
+            "kind": obj.get("canonical_kind").and_then(Value::as_str).unwrap_or("unknown"),
+            "file_path": obj.get("path").and_then(Value::as_str).unwrap_or(""),
+            "start_line": obj.get("start_line").and_then(Value::as_i64).unwrap_or(0),
+            "end_line": obj.get("end_line").and_then(Value::as_i64).unwrap_or(0),
+        });
+
+        let mut test_conditions = vec![
+            format!(
+                "tl.production_artefact_id = '{}'",
+                esc_pg(artefact_id)
+            ),
+            format!("tl.repo_id = '{}'", esc_pg(repo_id)),
+        ];
+
+        if let Some(min_confidence) = parsed.tests.min_confidence {
+            test_conditions.push(format!("tl.confidence >= {}", min_confidence.clamp(0.0, 1.0)));
+        }
+        if let Some(linkage_source) = parsed.tests.linkage_source.as_deref() {
+            test_conditions.push(format!("tl.link_source = '{}'", esc_pg(linkage_source)));
+        }
+
+        let tests_sql = format!(
+            "SELECT ts.scenario_id AS test_id, ts.name AS test_name, \
+            su.name AS suite_name, ts.path AS file_path, \
+            tl.confidence, ts.discovery_source, \
+            tl.link_source AS linkage_source, tl.linkage_status \
+            FROM test_links tl \
+            JOIN test_scenarios ts ON ts.scenario_id = tl.test_scenario_id \
+            JOIN test_suites su ON su.suite_id = ts.suite_id \
+            WHERE {} \
+            ORDER BY tl.confidence DESC, ts.path, ts.name \
+            LIMIT {}",
+            test_conditions.join(" AND "),
+            parsed.limit.max(1),
+        );
+
+        let covering_tests: Vec<Value> = relational
+            .query_rows(&tests_sql)
+            .await
+            .unwrap_or_default();
+
+        let total_covering_tests = covering_tests.len();
+
+        let summary = json!({
+            "total_covering_tests": total_covering_tests,
+            "cross_cutting": false,
+            "data_sources": ["static_source"],
+            "diagnostic_count": 0,
+        });
+
+        results.push(json!({
+            "artefact": artefact_output,
+            "covering_tests": covering_tests,
+            "summary": summary,
+        }));
+    }
+
+    Ok(results)
 }
 
 async fn blob_shas_changed_in_events(

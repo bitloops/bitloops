@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS test_links (
     production_symbol_id TEXT,
     link_source TEXT NOT NULL DEFAULT 'static_analysis',
     evidence_json TEXT DEFAULT '{}',
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6,
+    linkage_status TEXT NOT NULL DEFAULT 'resolved',
     created_at TIMESTAMPTZ DEFAULT now()
 );
 

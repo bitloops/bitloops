@@ -122,14 +122,16 @@ pub(crate) fn materialize_source_discovery(
                         "link:{commit_sha}:{}:{}",
                         scenario_id, production_artefact.artefact_id
                     );
-                    context.links.push(build_test_link_record(
-                        &link_id,
+                    context.links.push(build_test_link_record(&TestLinkSpec {
+                        test_link_id: &link_id,
                         repo_id,
                         commit_sha,
-                        &scenario_id,
-                        &production_artefact.artefact_id,
-                        Some(&production_artefact.symbol_id),
-                    ));
+                        test_scenario_id: &scenario_id,
+                        production_artefact_id: &production_artefact.artefact_id,
+                        production_symbol_id: Some(&production_artefact.symbol_id),
+                        confidence: 0.6,
+                        linkage_status: "resolved",
+                    }));
                     context.stats.links += 1;
                 }
             }
@@ -242,14 +244,16 @@ pub(crate) fn materialize_enumerated_scenarios(
                 "link:{commit_sha}:{}:{}",
                 scenario_id, production_artefact.artefact_id
             );
-            context.links.push(build_test_link_record(
-                &link_id,
+            context.links.push(build_test_link_record(&TestLinkSpec {
+                test_link_id: &link_id,
                 repo_id,
                 commit_sha,
-                &scenario_id,
-                &production_artefact.artefact_id,
-                Some(&production_artefact.symbol_id),
-            ));
+                test_scenario_id: &scenario_id,
+                production_artefact_id: &production_artefact.artefact_id,
+                production_symbol_id: Some(&production_artefact.symbol_id),
+                confidence: 0.6,
+                linkage_status: "resolved",
+            }));
             context.stats.links += 1;
         }
     }
@@ -298,22 +302,28 @@ fn build_test_scenario_record(
     }
 }
 
-fn build_test_link_record(
-    test_link_id: &str,
-    repo_id: &str,
-    commit_sha: &str,
-    test_scenario_id: &str,
-    production_artefact_id: &str,
-    production_symbol_id: Option<&str>,
-) -> TestLinkRecord {
+struct TestLinkSpec<'a> {
+    test_link_id: &'a str,
+    repo_id: &'a str,
+    commit_sha: &'a str,
+    test_scenario_id: &'a str,
+    production_artefact_id: &'a str,
+    production_symbol_id: Option<&'a str>,
+    confidence: f64,
+    linkage_status: &'a str,
+}
+
+fn build_test_link_record(spec: &TestLinkSpec<'_>) -> TestLinkRecord {
     TestLinkRecord {
-        test_link_id: test_link_id.to_string(),
-        repo_id: repo_id.to_string(),
-        commit_sha: commit_sha.to_string(),
-        test_scenario_id: test_scenario_id.to_string(),
-        production_artefact_id: production_artefact_id.to_string(),
-        production_symbol_id: production_symbol_id.map(str::to_string),
+        test_link_id: spec.test_link_id.to_string(),
+        repo_id: spec.repo_id.to_string(),
+        commit_sha: spec.commit_sha.to_string(),
+        test_scenario_id: spec.test_scenario_id.to_string(),
+        production_artefact_id: spec.production_artefact_id.to_string(),
+        production_symbol_id: spec.production_symbol_id.map(str::to_string),
         link_source: "static_analysis".to_string(),
         evidence_json: "{}".to_string(),
+        confidence: spec.confidence,
+        linkage_status: spec.linkage_status.to_string(),
     }
 }

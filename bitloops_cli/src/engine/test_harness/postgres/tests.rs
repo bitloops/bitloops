@@ -316,6 +316,8 @@ fn stale_link() -> TestLinkRecord {
         production_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
         link_source: "static_analysis".to_string(),
         evidence_json: "{\"imports\":[\"create_user\"]}".to_string(),
+        confidence: 0.6,
+        linkage_status: "resolved".to_string(),
     }
 }
 
@@ -396,6 +398,8 @@ fn link_record() -> TestLinkRecord {
         production_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
         link_source: "static_analysis".to_string(),
         evidence_json: "{\"calls\":[\"create_user\"]}".to_string(),
+        confidence: 0.6,
+        linkage_status: "resolved".to_string(),
     }
 }
 

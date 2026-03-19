@@ -506,8 +506,8 @@ pub(super) fn upsert_test_link(conn: &Connection, link: &TestLinkRecord) -> Resu
         r#"
 INSERT INTO test_links (
   test_link_id, repo_id, commit_sha, test_scenario_id, production_artefact_id,
-  production_symbol_id, link_source, evidence_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+  production_symbol_id, link_source, evidence_json, confidence, linkage_status
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 ON CONFLICT(test_link_id) DO UPDATE SET
   repo_id = excluded.repo_id,
   commit_sha = excluded.commit_sha,
@@ -515,7 +515,9 @@ ON CONFLICT(test_link_id) DO UPDATE SET
   production_artefact_id = excluded.production_artefact_id,
   production_symbol_id = excluded.production_symbol_id,
   link_source = excluded.link_source,
-  evidence_json = excluded.evidence_json
+  evidence_json = excluded.evidence_json,
+  confidence = excluded.confidence,
+  linkage_status = excluded.linkage_status
 "#,
         params![
             link.test_link_id,
@@ -525,7 +527,9 @@ ON CONFLICT(test_link_id) DO UPDATE SET
             link.production_artefact_id,
             link.production_symbol_id,
             link.link_source,
-            link.evidence_json
+            link.evidence_json,
+            link.confidence,
+            link.linkage_status
         ],
     )
     .with_context(|| format!("failed upserting test link {}", link.test_link_id))?;

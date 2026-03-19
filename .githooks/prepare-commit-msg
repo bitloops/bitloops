@@ -1,0 +1,3 @@
+#!/bin/sh
+# Bitloops git hooks
+bitloops hooks git prepare-commit-msg "$1" "$2" 2>/dev/null || true
