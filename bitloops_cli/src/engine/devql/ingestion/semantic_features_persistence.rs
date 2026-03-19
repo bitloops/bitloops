@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     summary TEXT NOT NULL,
     confidence REAL NOT NULL,
     source_model TEXT,
-    generated_at DATETIME DEFAULT now()
+    generated_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS symbol_features (
     normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
     parent_kind TEXT,
     context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
-    generated_at DATETIME DEFAULT now()
+    generated_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx

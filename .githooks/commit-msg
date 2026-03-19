@@ -1,0 +1,4 @@
+#!/bin/sh
+# Bitloops git hooks
+# Commit-msg hook: strip trailer if no user content (allows aborting empty commits)
+bitloops hooks git commit-msg "$1" || exit 1

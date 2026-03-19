@@ -62,5 +62,11 @@ async fn init_postgres_schema(
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
         .context("creating Postgres checkpoint migration tables")?;
+
+    let test_links_upgrade_sql = test_links_upgrade_sql();
+    postgres_exec(pg_client, test_links_upgrade_sql)
+        .await
+        .context("adding confidence/linkage_status columns to test_links")?;
+
     Ok(())
 }
