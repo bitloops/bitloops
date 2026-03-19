@@ -667,9 +667,9 @@ WHERE cc.commit_sha = $1
                     .await
                     .context("failed querying pair coverage stats")?;
 
-                    Ok(CoveragePairStats {
-                        total_rows: get(&row, 0, "total_rows")?,
-                        covered_rows: get(&row, 1, "covered_rows")?,
+                Ok(CoveragePairStats {
+                    total_rows: get(&row, 0, "total_rows")?,
+                    covered_rows: get(&row, 1, "covered_rows")?,
                 })
             })
         })

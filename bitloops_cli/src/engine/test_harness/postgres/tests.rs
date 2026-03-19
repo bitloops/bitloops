@@ -9,11 +9,10 @@ use tempfile::TempDir;
 
 use super::PostgresTestHarnessRepository;
 use crate::domain::{
-    CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord,
-    CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
-    ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord, ScopeKind,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord,
+    CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
+    CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
+    ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
@@ -47,7 +46,9 @@ const CAPTURE_ID: &str = "capture:checks-email-domain";
 #[test]
 fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let Some(postgres) = TempPostgres::start()? else {
-        eprintln!("skipping Postgres test-harness coverage test; local Postgres binaries not found");
+        eprintln!(
+            "skipping Postgres test-harness coverage test; local Postgres binaries not found"
+        );
         return Ok(());
     };
     let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
@@ -67,11 +68,18 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
 
     let production_artefacts = repository.load_production_artefacts(COMMIT_SHA)?;
     assert_eq!(production_artefacts.len(), 2);
-    assert_eq!(production_artefacts[0].artefact_id, ARTEFACT_NORMALIZE_EMAIL);
+    assert_eq!(
+        production_artefacts[0].artefact_id,
+        ARTEFACT_NORMALIZE_EMAIL
+    );
     assert_eq!(production_artefacts[1].artefact_id, ARTEFACT_CREATE_USER);
 
-    let file_artefacts = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
-    assert_eq!(file_artefacts, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
+    let file_artefacts =
+        repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
+    assert_eq!(
+        file_artefacts,
+        vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]
+    );
 
     repository.replace_test_discovery(
         COMMIT_SHA,
@@ -111,7 +119,8 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let scenario_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_scenario"))?;
     assert_eq!(scenario_artefacts.len(), 1);
 
-    let queried = repository.find_artefact(COMMIT_SHA, "src/services/user_service.rs::create_user")?;
+    let queried =
+        repository.find_artefact(COMMIT_SHA, "src/services/user_service.rs::create_user")?;
     assert_eq!(queried.artefact_id, ARTEFACT_CREATE_USER);
     assert_eq!(queried.canonical_kind, "function");
 
@@ -128,8 +137,16 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let fan_out = repository.load_linked_fan_out_by_test(COMMIT_SHA)?;
     assert_eq!(fan_out.get(SCENARIO_ID), Some(&1));
     assert!(!repository.coverage_exists_for_commit(COMMIT_SHA)?);
-    assert!(repository.load_coverage_summary(COMMIT_SHA, ARTEFACT_CREATE_USER)?.is_none());
-    assert!(repository.load_latest_test_run(COMMIT_SHA, SCENARIO_ID)?.is_none());
+    assert!(
+        repository
+            .load_coverage_summary(COMMIT_SHA, ARTEFACT_CREATE_USER)?
+            .is_none()
+    );
+    assert!(
+        repository
+            .load_latest_test_run(COMMIT_SHA, SCENARIO_ID)?
+            .is_none()
+    );
 
     repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
     let latest_run = repository
@@ -142,7 +159,8 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     repository.insert_coverage_hits(&coverage_hits())?;
     assert!(repository.coverage_exists_for_commit(COMMIT_SHA)?);
 
-    let pair_stats = repository.load_coverage_pair_stats(COMMIT_SHA, SCENARIO_ID, ARTEFACT_CREATE_USER)?;
+    let pair_stats =
+        repository.load_coverage_pair_stats(COMMIT_SHA, SCENARIO_ID, ARTEFACT_CREATE_USER)?;
     assert_eq!(pair_stats.total_rows, 4);
     assert_eq!(pair_stats.covered_rows, 2);
 
@@ -177,9 +195,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
         .replace_production_artefacts(&dummy_batch())
         .expect_err("Postgres repository should reject production replacement");
     assert!(
-        unsupported
-            .to_string()
-            .contains("bitloops devql ingest"),
+        unsupported.to_string().contains("bitloops devql ingest"),
         "unexpected unsupported error: {unsupported:#}"
     );
 

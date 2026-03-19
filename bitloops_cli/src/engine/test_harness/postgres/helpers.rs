@@ -469,6 +469,9 @@ pub(super) fn get_i64(row: &Row, index: usize, field: &str) -> Result<i64> {
 
 pub(super) fn get_opt_i64(row: &Row, index: usize, field: &str) -> Result<Option<i64>> {
     row.try_get::<_, Option<i64>>(index)
-        .or_else(|_| row.try_get::<_, Option<i32>>(index).map(|value| value.map(i64::from)))
+        .or_else(|_| {
+            row.try_get::<_, Option<i32>>(index)
+                .map(|value| value.map(i64::from))
+        })
         .with_context(|| format!("missing {field}"))
 }
