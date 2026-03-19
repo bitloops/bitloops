@@ -96,8 +96,10 @@ pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker_cfg = cfg.clone();
     let worker_shutdown = shutdown.clone();
-    let mut worker =
-        tokio::task::spawn_blocking(move || run_notify_loop(&worker_cfg, opts, worker_shutdown));
+    let runtime_handle = tokio::runtime::Handle::current();
+    let mut worker = tokio::task::spawn_blocking(move || {
+        run_notify_loop(&worker_cfg, opts, worker_shutdown, runtime_handle)
+    });
     let shutdown_signal = wait_for_shutdown_signal();
     tokio::pin!(shutdown_signal);
 
@@ -141,6 +143,7 @@ fn run_notify_loop(
     cfg: &crate::engine::devql::DevqlConfig,
     opts: DevqlWatchOptions,
     shutdown: Arc<AtomicBool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> Result<()> {
     let (tx, rx) = channel();
     let mut watcher = RecommendedWatcher::new(
@@ -188,7 +191,11 @@ fn run_notify_loop(
             && start.elapsed() >= debounce
         {
             let paths = batch.iter().cloned().collect::<Vec<_>>();
-            if let Err(err) = capture::capture_temporary_checkpoint_batch(cfg, &paths) {
+            if let Err(err) = capture::capture_temporary_checkpoint_batch_with_handle(
+                cfg,
+                &paths,
+                &runtime_handle,
+            ) {
                 log::warn!("devql watcher capture failed: {err:#}");
             }
             batch.clear();

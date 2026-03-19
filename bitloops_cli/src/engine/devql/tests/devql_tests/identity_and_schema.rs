@@ -139,7 +139,6 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("modifiers JSONB NOT NULL DEFAULT '[]'::jsonb"));
     assert!(sql.contains("docstring TEXT"));
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_symbol_idx"));
-    assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
     assert!(sql.contains("revision_kind TEXT NOT NULL DEFAULT 'commit'"));
     assert!(sql.contains("revision_id TEXT NOT NULL DEFAULT ''"));
     assert!(sql.contains("temp_checkpoint_id BIGINT"));
@@ -169,7 +168,6 @@ fn artefact_edges_hardening_sql_includes_constraints_and_indexes() {
 #[test]
 fn current_state_hardening_sql_includes_current_state_constraints_and_indexes() {
     let sql = current_state_hardening_sql();
-    assert!(sql.contains("CREATE TABLE IF NOT EXISTS current_file_state"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS commit_sha TEXT"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT"));
@@ -190,16 +188,14 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 
 #[test]
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
-    let state =
-        |commit_sha: &str, revision_kind: &str, revision_id: &str, committed_at_unix: i64| {
-            CurrentFileStateRecord {
-                commit_sha: commit_sha.to_string(),
-                revision_kind: revision_kind.to_string(),
-                revision_id: revision_id.to_string(),
-                blob_sha: "blob".to_string(),
-                committed_at_unix,
-            }
-        };
+    let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
+        CurrentFileRevisionRecord {
+            revision_kind: revision_kind.to_string(),
+            revision_id: revision_id.to_string(),
+            blob_sha: "blob".to_string(),
+            updated_at_unix,
+        }
+    };
     assert!(incoming_revision_is_newer(None, "commit", "commit-b", 200));
     let existing_1 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(

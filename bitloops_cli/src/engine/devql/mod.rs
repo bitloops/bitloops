@@ -692,6 +692,12 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
 
 include!("canonical_mapping.rs");
 include!("vocab.rs");
+// connection status checking
+include!("connection_status.rs");
+// relational storage abstraction
+include!("relational_storage.rs");
+// ingest orchestration
+include!("ingest.rs");
 // ingestion: shared types
 include!("ingestion/types.rs");
 // ingestion: repo identity & git remote parsing
@@ -704,7 +710,17 @@ include!("ingestion/language.rs");
 include!("ingestion/artefact_identity.rs");
 // ingestion: checkpoint / commit / event persistence
 include!("ingestion/checkpoint.rs");
-// ingestion: file & language artefact DB upserts
+// ingestion: shared record types for artefact persistence
+include!("ingestion/artefact_persistence_types.rs");
+// ingestion: SQL dialect helpers, JSON utilities, timestamp expressions
+include!("ingestion/artefact_persistence_sql.rs");
+// ingestion: file state row, file artefact upsert, revision management
+include!("ingestion/artefact_persistence_file.rs");
+// ingestion: symbol record building, content hashing, artefact DB upserts
+include!("ingestion/artefact_persistence_symbols.rs");
+// ingestion: edge records, current state queries/mutations, row deserialization
+include!("ingestion/artefact_persistence_edges.rs");
+// ingestion: top-level orchestration (refresh/upsert/delete current state)
 include!("ingestion/artefact_persistence.rs");
 // ingestion: Stage 1 semantic persistence
 include!("ingestion/semantic_features_persistence.rs");
