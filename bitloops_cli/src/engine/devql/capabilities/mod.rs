@@ -1,19 +1,8 @@
 pub mod knowledge;
 
-use knowledge::{KnowledgeCapability, KnowledgePlugin};
+use crate::engine::devql::capability_host::CapabilityPack;
+use knowledge::KnowledgePack;
 
-pub struct DevqlCapabilityRegistry {
-    knowledge: Box<dyn KnowledgeCapability>,
-}
-
-impl DevqlCapabilityRegistry {
-    pub fn builtin() -> anyhow::Result<Self> {
-        Ok(Self {
-            knowledge: Box::new(KnowledgePlugin::builtin()?),
-        })
-    }
-
-    pub fn knowledge(&self) -> &dyn KnowledgeCapability {
-        self.knowledge.as_ref()
-    }
+pub fn builtin_packs() -> anyhow::Result<Vec<Box<dyn CapabilityPack>>> {
+    Ok(vec![Box::new(KnowledgePack::new()?)])
 }

@@ -2288,6 +2288,7 @@ fn sample_document(title: &str, body: Option<&str>) -> FetchedKnowledgeDocument 
             body_text: body.map(ToString::to_string),
             body_html: None,
             body_adf: None,
+            discussion: None,
         },
     }
 }

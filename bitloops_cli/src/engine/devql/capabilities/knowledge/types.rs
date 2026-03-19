@@ -1,19 +1,14 @@
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::engine::devql::RepoIdentity;
-use crate::store_config::{ProviderConfig, StoreBackendConfig};
-
-use super::storage::{
-    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-};
+use super::discussion::KnowledgeDiscussion;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeProvider {
     Github,
     Jira,
@@ -30,7 +25,7 @@ impl KnowledgeProvider {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeSourceKind {
     GithubIssue,
     GithubPullRequest,
@@ -49,7 +44,7 @@ impl KnowledgeSourceKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeLocator {
     GithubIssue {
         owner: String,
@@ -71,7 +66,7 @@ pub enum KnowledgeLocator {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedKnowledgeUrl {
     pub provider: KnowledgeProvider,
     pub source_kind: KnowledgeSourceKind,
@@ -81,15 +76,18 @@ pub struct ParsedKnowledgeUrl {
     pub locator: KnowledgeLocator,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct KnowledgePayloadData {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgePayloadEnvelope {
     pub raw_payload: Value,
     pub body_text: Option<String>,
     pub body_html: Option<String>,
     pub body_adf: Option<Value>,
+    pub discussion: Option<KnowledgeDiscussion>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+pub type KnowledgePayloadData = KnowledgePayloadEnvelope;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FetchedKnowledgeDocument {
     pub external_id: String,
     pub title: String,
@@ -99,15 +97,15 @@ pub struct FetchedKnowledgeDocument {
     pub updated_at: Option<String>,
     pub body_preview: Option<String>,
     pub normalized_fields: Value,
-    pub payload: KnowledgePayloadData,
+    pub payload: KnowledgePayloadEnvelope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IngestKnowledgeRequest {
     pub url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeAssociationTarget {
     Commit { sha: String },
     KnowledgeItem { knowledge_item_id: String },
@@ -135,7 +133,7 @@ impl KnowledgeAssociationTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssociateKnowledgeRequest {
     pub knowledge_item_id: String,
     pub source_knowledge_item_version_id: String,
@@ -145,7 +143,7 @@ pub struct AssociateKnowledgeRequest {
     pub command: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssociateKnowledgeResult {
     pub relation_assertion_id: String,
     pub target_type: String,
@@ -154,19 +152,19 @@ pub struct AssociateKnowledgeResult {
     pub association_method: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeItemStatus {
     Created,
     Reused,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeVersionStatus {
     Created,
     Reused,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IngestKnowledgeResult {
     pub provider: String,
     pub source_kind: String,
@@ -177,14 +175,37 @@ pub struct IngestKnowledgeResult {
     pub version_status: KnowledgeVersionStatus,
 }
 
-pub struct KnowledgeHostContext {
-    pub repo_root: PathBuf,
-    pub repo: RepoIdentity,
-    pub backends: StoreBackendConfig,
-    pub provider_config: ProviderConfig,
-    pub relational_store: SqliteKnowledgeRelationalStore,
-    pub document_store: DuckdbKnowledgeDocumentStore,
-    pub payload_store: BlobKnowledgePayloadStore,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshSourceRequest {
+    pub knowledge_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshSourceResult {
+    pub knowledge_item_id: String,
+    pub latest_document_version_id: String,
+    pub content_changed: bool,
+    pub new_version_created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListVersionsRequest {
+    pub knowledge_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentVersionSummary {
+    pub knowledge_item_version_id: String,
+    pub content_hash: String,
+    pub title: String,
+    pub updated_at: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListVersionsResult {
+    pub knowledge_item_id: String,
+    pub versions: Vec<DocumentVersionSummary>,
 }
 
 fn render_ingest_status(result: &IngestKnowledgeResult) -> &'static str {
@@ -249,4 +270,39 @@ pub fn format_knowledge_associate_result(result: &AssociateKnowledgeResult) -> S
         format!("  method: {}", result.association_method),
     ]
     .join("\n")
+}
+
+pub fn format_knowledge_refresh_result(result: &RefreshSourceResult) -> String {
+    [
+        "Knowledge refreshed".to_string(),
+        format!("  knowledge item: {}", result.knowledge_item_id),
+        format!(
+            "  latest knowledge item version: {}",
+            result.latest_document_version_id
+        ),
+        format!("  content changed: {}", result.content_changed),
+        format!("  new version created: {}", result.new_version_created),
+    ]
+    .join("\n")
+}
+
+pub fn format_knowledge_versions_result(result: &ListVersionsResult) -> String {
+    let mut lines = vec![
+        "Knowledge versions".to_string(),
+        format!("  knowledge item: {}", result.knowledge_item_id),
+        format!("  versions: {}", result.versions.len()),
+    ];
+
+    for version in &result.versions {
+        lines.push(format!(
+            "  - {} | hash={} | title={} | updated_at={} | created_at={}",
+            version.knowledge_item_version_id,
+            version.content_hash,
+            version.title,
+            version.updated_at.as_deref().unwrap_or("<none>"),
+            version.created_at.as_deref().unwrap_or("<none>"),
+        ));
+    }
+
+    lines.join("\n")
 }

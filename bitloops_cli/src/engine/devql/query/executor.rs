@@ -92,6 +92,43 @@ async fn execute_devql_query(
     execute_relational_pipeline(cfg, events_cfg, parsed, relational).await
 }
 
+async fn execute_registered_stages(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    mut rows: Vec<Value>,
+) -> Result<Vec<Value>> {
+    if parsed.registered_stages.is_empty() {
+        return Ok(rows);
+    }
+
+    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    for stage in &parsed.registered_stages {
+        let capability_id = if host.has_stage("knowledge", &stage.stage_name) {
+            "knowledge"
+        } else {
+            bail!("unsupported DevQL stage: {}()", stage.stage_name);
+        };
+
+        let response = host
+            .invoke_stage(
+                capability_id,
+                &stage.stage_name,
+                json!({
+                    "input_rows": rows,
+                    "args": stage.args,
+                    "limit": parsed.limit.max(1),
+                }),
+            )
+            .await?;
+        rows = match response.payload {
+            Value::Array(array) => array,
+            value => vec![value],
+        };
+    }
+
+    Ok(rows)
+}
+
 fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
     crate::engine::logging::warn(
         &crate::engine::logging::with_component(crate::engine::logging::background(), "devql"),

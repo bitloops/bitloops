@@ -26,11 +26,19 @@ use crate::store_config::{
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
+pub mod capability_host;
 pub mod capabilities;
 pub(crate) mod identity;
 
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
+
+pub fn build_capability_host(
+    repo_root: &Path,
+    repo: RepoIdentity,
+) -> anyhow::Result<capability_host::DevqlCapabilityHost> {
+    capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
+}
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -672,6 +680,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
         Some(RelationalStorage::connect(cfg, &backends.relational, "devql query").await?)
     };
     let mut rows = execute_devql_query(cfg, &parsed, &backends.events, relational.as_ref()).await?;
+    rows = execute_registered_stages(cfg, &parsed, rows).await?;
 
     if !parsed.select_fields.is_empty() {
         rows = project_rows(rows, &parsed.select_fields);

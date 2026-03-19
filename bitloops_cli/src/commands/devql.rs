@@ -1,13 +1,16 @@
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::engine::devql::capabilities::knowledge::{run_add_command, run_associate_command};
+use crate::engine::devql::capabilities::knowledge::{
+    run_knowledge_add_via_host, run_knowledge_associate_via_host, run_knowledge_refresh_via_host,
+    run_knowledge_versions_via_host,
+};
 use crate::engine::devql::{DevqlConfig, resolve_repo_identity, run_ingest, run_init, run_query};
 use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql knowledge add`, `bitloops devql knowledge associate";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
@@ -68,6 +71,10 @@ pub enum DevqlKnowledgeCommand {
     Add(DevqlKnowledgeAddArgs),
     /// Associate existing knowledge to a typed Bitloops target.
     Associate(DevqlKnowledgeAssociateArgs),
+    /// Refresh an existing knowledge source from provider and create a new immutable version if changed.
+    Refresh(DevqlKnowledgeRefArgs),
+    /// List immutable document versions for a knowledge item.
+    Versions(DevqlKnowledgeRefArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -86,6 +93,11 @@ pub struct DevqlKnowledgeAssociateArgs {
     pub target_ref: String,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct DevqlKnowledgeRefArgs {
+    pub knowledge_ref: String,
+}
+
 pub async fn run(args: DevqlArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(MISSING_SUBCOMMAND_MESSAGE);
@@ -101,16 +113,22 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     if let DevqlCommand::Knowledge(args) = command {
         return match args.command {
             DevqlKnowledgeCommand::Add(add) => {
-                run_add_command(&repo_root, &repo, &add.url, add.commit.as_deref()).await
+                run_knowledge_add_via_host(&repo_root, &repo, &add.url, add.commit.as_deref()).await
             }
             DevqlKnowledgeCommand::Associate(associate) => {
-                run_associate_command(
+                run_knowledge_associate_via_host(
                     &repo_root,
                     &repo,
                     &associate.source_ref,
                     &associate.target_ref,
                 )
                 .await
+            }
+            DevqlKnowledgeCommand::Refresh(refresh) => {
+                run_knowledge_refresh_via_host(&repo_root, &repo, &refresh.knowledge_ref).await
+            }
+            DevqlKnowledgeCommand::Versions(versions) => {
+                run_knowledge_versions_via_host(&repo_root, &repo, &versions.knowledge_ref).await
             }
         };
     }
