@@ -32,19 +32,6 @@ ON file_state (repo_id, blob_sha);
 CREATE INDEX IF NOT EXISTS file_state_commit_idx
 ON file_state (repo_id, commit_sha);
 
-CREATE TABLE IF NOT EXISTS current_file_state (
-    repo_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id BIGINT,
-    blob_sha TEXT NOT NULL,
-    committed_at DATETIME NOT NULL,
-    updated_at DATETIME DEFAULT now(),
-    PRIMARY KEY (repo_id, path)
-);
-
 CREATE TABLE IF NOT EXISTS artefacts (
     artefact_id TEXT PRIMARY KEY,
     symbol_id TEXT,

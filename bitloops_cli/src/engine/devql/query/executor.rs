@@ -348,13 +348,17 @@ async fn build_relational_artefacts_query(
             });
 
             if let Some(blob_sha) = git_blob {
-                where_clauses.push(format!("a.blob_sha = '{}'", esc_pg(&blob_sha)));
+                where_clauses.push(format!(
+                    "a.blob_sha = '{}' AND ({})",
+                    esc_pg(&blob_sha),
+                    sql_path_candidates_clause("a.path", &path_candidates),
+                ));
             } else {
                 where_clauses.push(format!(
-                    "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",
-                    esc_pg(repo_id),
+                     "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1) AND ({})",                    esc_pg(repo_id),
                     esc_pg(&commit_sha),
                     sql_path_candidates_clause("path", &path_candidates),
+                    sql_path_candidates_clause("a.path", &path_candidates),
                 ));
             }
         } else {
@@ -437,7 +441,9 @@ async fn build_relational_clones_query(
         source_filters.push(format!("src.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
     }
     if let Some((start, end)) = parsed.artefacts.lines {
-        source_filters.push(format!("src.start_line <= {end} AND src.end_line >= {start}"));
+        source_filters.push(format!(
+            "src.start_line <= {end} AND src.end_line >= {start}"
+        ));
     }
     if let Some(path) = parsed.file.as_deref() {
         let path_candidates = build_path_candidates(path);

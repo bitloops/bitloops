@@ -264,10 +264,10 @@ fn normalise_edge_metadata(edge_kind: &str, metadata: &mut Value) {
     obj.remove("inherit_form");
     obj.remove("relation");
 
-    if let Some(Value::String(import_form)) = obj.get_mut("import_form") {
-        if let Some(normalized) = ImportForm::from_str(import_form) {
-            *import_form = normalized.as_str().to_string();
-        }
+    if let Some(Value::String(import_form)) = obj.get_mut("import_form")
+        && let Some(normalized) = ImportForm::from_str(import_form)
+    {
+        *import_form = normalized.as_str().to_string();
     }
 
     match EdgeKind::from_str(edge_kind) {

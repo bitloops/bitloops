@@ -23,10 +23,13 @@ fn build_relational_deps_query(
     validate_deps_filter(&parsed.deps)?;
     let use_historical_tables = matches!(
         parsed.as_of,
-        Some(AsOfSelector::Commit(_))
-            | Some(AsOfSelector::Ref(_))
-            | Some(AsOfSelector::SaveRevision(_))
+        Some(AsOfSelector::Commit(_)) | Some(AsOfSelector::Ref(_))
     );
+    let historical_commit_selector = if use_historical_tables {
+        resolve_commit_selector(cfg, parsed)?
+    } else {
+        None
+    };
     let artefacts_table = if use_historical_tables {
         "artefacts"
     } else {
@@ -38,90 +41,10 @@ fn build_relational_deps_query(
         "artefact_edges_current"
     };
 
-    let mut source_filters = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
-    if use_historical_tables {
-        match parsed.as_of.as_ref() {
-            Some(AsOfSelector::SaveCurrent) => {
-                source_filters.push("a.current_scope = 'visible'".to_string());
-            }
-            Some(AsOfSelector::SaveRevision(revision_id)) => {
-                source_filters.push("a.revision_kind = 'temporary'".to_string());
-                source_filters.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
-            }
-            Some(AsOfSelector::Commit(commit_sha)) => {
-                source_filters.push("a.revision_kind = 'commit'".to_string());
-                source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit_sha)));
-            }
-            Some(AsOfSelector::Ref(reference)) => {
-                let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
-                    .with_context(|| format!("resolving git ref `{reference}`"))?;
-                source_filters.push("a.revision_kind = 'commit'".to_string());
-                source_filters.push(format!("a.revision_id = '{}'", esc_pg(commit.trim())));
-            }
-            None => {
-                source_filters.push("a.current_scope = 'committed'".to_string());
-            }
-        }
-    }
-    if let Some(kind) = parsed.artefacts.kind.as_deref() {
-        source_filters.push(format!("a.canonical_kind = '{}'", esc_pg(kind)));
-    }
-    if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
-        source_filters.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
-    }
-    if let Some((start, end)) = parsed.artefacts.lines {
-        source_filters.push(format!("a.start_line <= {end} AND a.end_line >= {start}"));
-    }
-    if let Some(path) = parsed.file.as_deref() {
-        let path_candidates = build_path_candidates(path);
-        if let Some(commit_sha) = resolve_commit_selector(cfg, parsed)? {
-            let git_blob = path_candidates.iter().find_map(|candidate| {
-                git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, candidate)
-            });
-            if let Some(blob_sha) = git_blob {
-                source_filters.push(format!("a.blob_sha = '{}'", esc_pg(&blob_sha)));
-            } else {
-                source_filters.push(format!(
-                    "a.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND revision_kind = 'commit' AND revision_id = '{}' AND ({}) LIMIT 1)",
-                    esc_pg(repo_id),
-                    esc_pg(&commit_sha),
-                    sql_path_candidates_clause("path", &path_candidates),
-                ));
-            }
-        } else {
-            source_filters.push(format!(
-                "({})",
-                sql_path_candidates_clause("a.path", &path_candidates)
-            ));
-        }
-    }
-    if let Some(glob) = parsed.files_path.as_deref() {
-        let like = glob_to_sql_like(glob);
-        source_filters.push(format!("a.path LIKE '{}'", esc_pg(&like)));
-    }
-
     let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
-    if use_historical_tables {
-        match parsed.as_of.as_ref() {
-            Some(AsOfSelector::SaveCurrent) => {
-                edge_filters.push("e.current_scope = 'visible'".to_string())
-            }
-            Some(AsOfSelector::SaveRevision(revision_id)) => {
-                edge_filters.push("e.revision_kind = 'temporary'".to_string());
-                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
-            }
-            Some(AsOfSelector::Commit(commit_sha)) => {
-                edge_filters.push("e.revision_kind = 'commit'".to_string());
-                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit_sha)));
-            }
-            Some(AsOfSelector::Ref(reference)) => {
-                let commit = run_git(&cfg.repo_root, &["rev-parse", reference])
-                    .with_context(|| format!("resolving git ref `{reference}`"))?;
-                edge_filters.push("e.revision_kind = 'commit'".to_string());
-                edge_filters.push(format!("e.revision_id = '{}'", esc_pg(commit.trim())));
-            }
-            None => edge_filters.push("e.current_scope = 'committed'".to_string()),
-        }
+    if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
+        edge_filters.push("e.revision_kind = 'temporary'".to_string());
+        edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
     }
     if let Some(kind) = parsed.deps.kind {
         edge_filters.push(format!("e.edge_kind = '{}'", esc_pg(kind.as_str())));
@@ -143,6 +66,8 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
     };
 
     let sql = if parsed.deps.direction == DepsDirection::In {
+        let target_filters =
+            build_deps_source_filters(cfg, parsed, repo_id, "at", historical_commit_selector.as_deref())?;
         format!(
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
@@ -156,15 +81,13 @@ LIMIT {}",
             artefacts_table,
             artefacts_table,
             edge_filters.join(" AND "),
-            source_filters
-                .iter()
-                .map(|f| f.replace("a.", "at."))
-                .collect::<Vec<_>>()
-                .join(" AND "),
+            target_filters.join(" AND "),
             order_clause,
             parsed.limit.max(1)
         )
     } else if parsed.deps.direction == DepsDirection::Both {
+        let source_filters =
+            build_deps_source_filters(cfg, parsed, repo_id, "a", historical_commit_selector.as_deref())?;
         format!(
             "WITH out_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
@@ -196,6 +119,8 @@ LIMIT {}",
             parsed.limit.max(1)
         )
     } else {
+        let source_filters =
+            build_deps_source_filters(cfg, parsed, repo_id, "af", historical_commit_selector.as_deref())?;
         format!(
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
@@ -209,17 +134,74 @@ LIMIT {}",
             artefacts_table,
             artefacts_table,
             edge_filters.join(" AND "),
-            source_filters
-                .iter()
-                .map(|f| f.replace("a.", "af."))
-                .collect::<Vec<_>>()
-                .join(" AND "),
+            source_filters.join(" AND "),
             order_clause,
             parsed.limit.max(1)
         )
     };
 
     Ok(sql)
+}
+
+fn build_deps_source_filters(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    repo_id: &str,
+    alias: &str,
+    historical_commit_selector: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut source_filters = vec![format!("{alias}.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
+        source_filters.push(format!("{alias}.revision_kind = 'temporary'"));
+        source_filters.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
+    }
+    if let Some(kind) = parsed.artefacts.kind.as_deref() {
+        source_filters.push(format!("{alias}.canonical_kind = '{}'", esc_pg(kind)));
+    }
+    if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
+        source_filters.push(format!("{alias}.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
+    }
+    if let Some((start, end)) = parsed.artefacts.lines {
+        source_filters.push(format!(
+            "{alias}.start_line <= {end} AND {alias}.end_line >= {start}"
+        ));
+    }
+    if let Some(path) = parsed.file.as_deref() {
+        let path_candidates = build_path_candidates(path);
+        let path_clause = sql_path_candidates_clause(&format!("{alias}.path"), &path_candidates);
+        if let Some(commit_sha) = historical_commit_selector {
+            let git_blob = path_candidates.iter().find_map(|candidate| {
+                git_blob_sha_at_commit(&cfg.repo_root, commit_sha, candidate)
+            });
+            if let Some(blob_sha) = git_blob {
+                source_filters.push(format!(
+                    "{alias}.blob_sha = '{}' AND ({path_clause})",
+                    esc_pg(&blob_sha),
+                ));
+            } else {
+                source_filters.push(format!(
+                    "{alias}.blob_sha = (SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND ({}) LIMIT 1)",
+                    esc_pg(repo_id),
+                    esc_pg(commit_sha),
+                    sql_path_candidates_clause("path", &path_candidates),
+                ));
+            }
+        } else {
+            source_filters.push(format!("({path_clause})"));
+        }
+    }
+    if let Some(glob) = parsed.files_path.as_deref() {
+        let like = glob_to_sql_like(glob);
+        source_filters.push(format!("{alias}.path LIKE '{}'", esc_pg(&like)));
+    }
+    if parsed.file.is_none() && let Some(commit_sha) = historical_commit_selector {
+        source_filters.push(format!(
+            "EXISTS (SELECT 1 FROM file_state fs WHERE fs.repo_id = '{}' AND fs.commit_sha = '{}' AND fs.blob_sha = {alias}.blob_sha)",
+            esc_pg(repo_id),
+            esc_pg(commit_sha),
+        ));
+    }
+    Ok(source_filters)
 }
 
 #[cfg(test)]
