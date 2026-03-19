@@ -1035,6 +1035,7 @@ pub(crate) fn resolve_watch_runtime_config_for_tests(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_store_embedding_config_for_tests(
     file_cfg: StoreFileConfig,
     env: &[(&str, &str)],

@@ -265,7 +265,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .expect("fetch current revision row");
-        assert!(!revision_row.0.is_empty(), "watch capture should retain base commit sha");
+        assert!(
+            !revision_row.0.is_empty(),
+            "watch capture should retain base commit sha"
+        );
         assert_eq!(revision_row.1, "temporary");
         assert!(revision_row.2.starts_with("temp:"));
         assert!(revision_row.3.is_some());
@@ -321,7 +324,10 @@ mod tests {
                 row.get(0)
             })
             .expect("count temporary checkpoints");
-        assert_eq!(temp_rows, 0, "no-content-change capture should not persist temp rows");
+        assert_eq!(
+            temp_rows, 0,
+            "no-content-change capture should not persist temp rows"
+        );
     }
 
     #[test]

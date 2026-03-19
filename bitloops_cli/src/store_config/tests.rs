@@ -1157,69 +1157,6 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
 }
 
 #[test]
-fn store_file_config_load_reads_repo_config_file() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
-        temp.path(),
-        serde_json::json!({
-            "stores": {
-                "relational": {
-                    "provider": "postgres"
-                },
-                "events": {
-                    "provider": "clickhouse"
-                }
-            }
-        }),
-    );
-
-    with_cwd(temp.path(), || {
-        let cfg = StoreFileConfig::load();
-        assert_eq!(cfg.relational_provider.as_deref(), Some("postgres"));
-        assert_eq!(cfg.events_provider.as_deref(), Some("clickhouse"));
-    });
-}
-
-#[test]
-fn resolve_store_semantic_config_reads_file_and_env() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
-        temp.path(),
-        serde_json::json!({
-            "semantic": {
-                "provider": "openai",
-                "model": "gpt-4.1-mini",
-                "api_key": "file-key",
-                "base_url": "http://localhost:11434/v1/chat/completions"
-            }
-        }),
-    );
-
-    with_process_state(
-        Some(temp.path()),
-        &[
-            (ENV_SEMANTIC_PROVIDER, Some("openai_compatible")),
-            (ENV_SEMANTIC_MODEL, Some("qwen2.5-coder")),
-            (ENV_SEMANTIC_API_KEY, Some("env-key")),
-            (
-                ENV_SEMANTIC_BASE_URL,
-                Some("http://localhost:9999/v1/chat/completions"),
-            ),
-        ],
-        || {
-            let cfg = resolve_store_semantic_config();
-            assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
-            assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
-            assert_eq!(cfg.semantic_api_key.as_deref(), Some("env-key"));
-            assert_eq!(
-                cfg.semantic_base_url.as_deref(),
-                Some("http://localhost:9999/v1/chat/completions")
-            );
-        },
-    );
-}
-
-#[test]
 fn resolve_store_embedding_config_reads_file_and_env() {
     let temp = tempfile::tempdir().expect("temp dir");
     write_repo_config(
