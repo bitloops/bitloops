@@ -37,7 +37,7 @@ pub struct KnowledgeItemRow {
     pub repo_id: String,
     pub knowledge_source_id: String,
     pub item_kind: String,
-    pub latest_document_version_id: String,
+    pub latest_knowledge_item_version_id: String,
     pub provenance_json: String,
 }
 
@@ -46,7 +46,7 @@ pub struct KnowledgeRelationAssertionRow {
     pub relation_assertion_id: String,
     pub repo_id: String,
     pub knowledge_item_id: String,
-    pub source_document_version_id: String,
+    pub source_knowledge_item_version_id: String,
     pub target_type: String,
     pub target_id: String,
     pub relation_type: String,
@@ -57,7 +57,7 @@ pub struct KnowledgeRelationAssertionRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeDocumentVersionRow {
-    pub document_version_id: String,
+    pub knowledge_item_version_id: String,
     pub knowledge_item_id: String,
     pub provider: String,
     pub source_kind: String,
@@ -130,7 +130,7 @@ impl SqliteKnowledgeRelationalStore {
     pub fn find_item(&self, repo_id: &str, source_id: &str) -> Result<Option<KnowledgeItemRow>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
-                "SELECT knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_document_version_id, provenance_json
+                "SELECT knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_knowledge_item_version_id, provenance_json
                  FROM knowledge_items
                  WHERE repo_id = ?1 AND knowledge_source_id = ?2
                  LIMIT 1",
@@ -141,7 +141,7 @@ impl SqliteKnowledgeRelationalStore {
                         repo_id: row.get(1)?,
                         knowledge_source_id: row.get(2)?,
                         item_kind: row.get(3)?,
-                        latest_document_version_id: row.get(4)?,
+                        latest_knowledge_item_version_id: row.get(4)?,
                         provenance_json: row.get(5)?,
                     })
                 },
@@ -158,7 +158,7 @@ impl SqliteKnowledgeRelationalStore {
     ) -> Result<Option<KnowledgeItemRow>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
-                "SELECT knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_document_version_id, provenance_json
+                "SELECT knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_knowledge_item_version_id, provenance_json
                  FROM knowledge_items
                  WHERE repo_id = ?1 AND knowledge_item_id = ?2
                  LIMIT 1",
@@ -169,7 +169,7 @@ impl SqliteKnowledgeRelationalStore {
                         repo_id: row.get(1)?,
                         knowledge_source_id: row.get(2)?,
                         item_kind: row.get(3)?,
-                        latest_document_version_id: row.get(4)?,
+                        latest_knowledge_item_version_id: row.get(4)?,
                         provenance_json: row.get(5)?,
                     })
                 },
@@ -201,7 +201,7 @@ impl DuckdbKnowledgeDocumentStore {
             .context("initialising DuckDB knowledge schema")
     }
 
-    pub fn has_document_version(
+    pub fn has_knowledge_item_version(
         &self,
         knowledge_item_id: &str,
         content_hash: &str,
@@ -215,24 +215,29 @@ impl DuckdbKnowledgeDocumentStore {
         })?;
         let mut stmt = conn
             .prepare(
-                "SELECT document_version_id
+                "SELECT knowledge_item_version_id
                  FROM knowledge_document_versions
                  WHERE knowledge_item_id = ? AND content_hash = ?
                  LIMIT 1",
             )
-            .context("preparing DuckDB document-version lookup")?;
+            .context("preparing DuckDB knowledge-item-version lookup")?;
         let mut rows = stmt
             .query(duckdb::params![knowledge_item_id, content_hash])
-            .context("querying DuckDB document-version lookup")?;
-        if let Some(row) = rows.next().context("reading DuckDB document-version row")? {
-            let id: String = row.get(0).context("reading DuckDB document_version_id")?;
+            .context("querying DuckDB knowledge-item-version lookup")?;
+        if let Some(row) = rows
+            .next()
+            .context("reading DuckDB knowledge-item-version row")?
+        {
+            let id: String = row
+                .get(0)
+                .context("reading DuckDB knowledge_item_version_id")?;
             Ok(Some(id))
         } else {
             Ok(None)
         }
     }
 
-    pub fn insert_document_version(&self, row: &KnowledgeDocumentVersionRow) -> Result<()> {
+    pub fn insert_knowledge_item_version(&self, row: &KnowledgeDocumentVersionRow) -> Result<()> {
         ensure_parent_dir(&self.path)?;
         let conn = duckdb::Connection::open(&self.path).with_context(|| {
             format!(
@@ -242,13 +247,13 @@ impl DuckdbKnowledgeDocumentStore {
         })?;
         conn.execute(
             "INSERT INTO knowledge_document_versions (
-                document_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                knowledge_item_version_id, knowledge_item_id, provider, source_kind, content_hash,
                 title, state, author, updated_at, body_preview, normalized_fields_json,
                 storage_backend, storage_path, payload_mime_type, payload_size_bytes,
                 provenance_json
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             duckdb::params![
-                row.document_version_id.as_str(),
+                row.knowledge_item_version_id.as_str(),
                 row.knowledge_item_id.as_str(),
                 row.provider.as_str(),
                 row.source_kind.as_str(),
@@ -266,11 +271,11 @@ impl DuckdbKnowledgeDocumentStore {
                 row.provenance_json.as_str(),
             ],
         )
-        .context("inserting DuckDB knowledge document version")?;
+        .context("inserting DuckDB knowledge item version")?;
         Ok(())
     }
 
-    pub fn delete_document_version(&self, document_version_id: &str) -> Result<()> {
+    pub fn delete_knowledge_item_version(&self, knowledge_item_version_id: &str) -> Result<()> {
         ensure_parent_dir(&self.path)?;
         let conn = duckdb::Connection::open(&self.path).with_context(|| {
             format!(
@@ -279,16 +284,16 @@ impl DuckdbKnowledgeDocumentStore {
             )
         })?;
         conn.execute(
-            "DELETE FROM knowledge_document_versions WHERE document_version_id = ?",
-            duckdb::params![document_version_id],
+            "DELETE FROM knowledge_document_versions WHERE knowledge_item_version_id = ?",
+            duckdb::params![knowledge_item_version_id],
         )
-        .context("deleting DuckDB knowledge document version")?;
+        .context("deleting DuckDB knowledge item version")?;
         Ok(())
     }
 
-    pub fn find_document_version(
+    pub fn find_knowledge_item_version(
         &self,
-        document_version_id: &str,
+        knowledge_item_version_id: &str,
     ) -> Result<Option<KnowledgeDocumentVersionRow>> {
         ensure_parent_dir(&self.path)?;
         let conn = duckdb::Connection::open(&self.path).with_context(|| {
@@ -299,21 +304,26 @@ impl DuckdbKnowledgeDocumentStore {
         })?;
         let mut stmt = conn
             .prepare(
-                "SELECT document_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                "SELECT knowledge_item_version_id, knowledge_item_id, provider, source_kind, content_hash,
                         title, state, author, updated_at, body_preview, normalized_fields_json,
                         storage_backend, storage_path, payload_mime_type, payload_size_bytes,
                         provenance_json
                  FROM knowledge_document_versions
-                 WHERE document_version_id = ?
+                 WHERE knowledge_item_version_id = ?
                  LIMIT 1",
             )
-            .context("preparing DuckDB document-version by id lookup")?;
+            .context("preparing DuckDB knowledge-item-version by id lookup")?;
         let mut rows = stmt
-            .query(duckdb::params![document_version_id])
-            .context("querying DuckDB document-version by id lookup")?;
-        if let Some(row) = rows.next().context("reading DuckDB document-version row")? {
+            .query(duckdb::params![knowledge_item_version_id])
+            .context("querying DuckDB knowledge-item-version by id lookup")?;
+        if let Some(row) = rows
+            .next()
+            .context("reading DuckDB knowledge-item-version row")?
+        {
             Ok(Some(KnowledgeDocumentVersionRow {
-                document_version_id: row.get(0).context("reading document_version_id")?,
+                knowledge_item_version_id: row
+                    .get(0)
+                    .context("reading knowledge_item_version_id")?,
                 knowledge_item_id: row.get(1).context("reading knowledge_item_id")?,
                 provider: row.get(2).context("reading provider")?,
                 source_kind: row.get(3).context("reading source_kind")?,
@@ -355,10 +365,11 @@ impl BlobKnowledgePayloadStore {
         &self,
         repo_id: &str,
         knowledge_item_id: &str,
-        document_version_id: &str,
+        knowledge_item_version_id: &str,
         bytes: &[u8],
     ) -> Result<KnowledgePayloadRef> {
-        let storage_path = knowledge_payload_key(repo_id, knowledge_item_id, document_version_id);
+        let storage_path =
+            knowledge_payload_key(repo_id, knowledge_item_id, knowledge_item_version_id);
         self.store
             .write(&storage_path, bytes)
             .context("writing knowledge payload blob")?;
@@ -386,9 +397,9 @@ impl BlobKnowledgePayloadStore {
 pub fn knowledge_payload_key(
     repo_id: &str,
     knowledge_item_id: &str,
-    document_version_id: &str,
+    knowledge_item_version_id: &str,
 ) -> String {
-    format!("knowledge/{repo_id}/{knowledge_item_id}/{document_version_id}/payload.json")
+    format!("knowledge/{repo_id}/{knowledge_item_id}/{knowledge_item_version_id}/payload.json")
 }
 
 pub fn knowledge_source_id(canonical_external_id: &str) -> String {
@@ -399,7 +410,7 @@ pub fn knowledge_item_id(repo_id: &str, knowledge_source_id: &str) -> String {
     deterministic_uuid(&format!("knowledge-item://{repo_id}/{knowledge_source_id}"))
 }
 
-pub fn document_version_id(knowledge_item_id: &str, content_hash: &str) -> String {
+pub fn knowledge_item_version_id(knowledge_item_id: &str, content_hash: &str) -> String {
     deterministic_uuid(&format!(
         "knowledge-version://{knowledge_item_id}/{content_hash}"
     ))
@@ -407,13 +418,13 @@ pub fn document_version_id(knowledge_item_id: &str, content_hash: &str) -> Strin
 
 pub fn relation_assertion_id(
     knowledge_item_id: &str,
-    source_document_version_id: &str,
+    source_knowledge_item_version_id: &str,
     target_type: &str,
     target_id: &str,
     association_method: &str,
 ) -> String {
     deterministic_uuid(&format!(
-        "knowledge-relation://{knowledge_item_id}/{source_document_version_id}/{target_type}/{target_id}/{association_method}"
+        "knowledge-relation://{knowledge_item_id}/{source_knowledge_item_version_id}/{target_type}/{target_id}/{association_method}"
     ))
 }
 
@@ -455,11 +466,11 @@ fn upsert_source(conn: &rusqlite::Connection, source: &KnowledgeSourceRow) -> Re
 fn upsert_item(conn: &rusqlite::Connection, item: &KnowledgeItemRow) -> Result<()> {
     conn.execute(
         "INSERT INTO knowledge_items (
-            knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_document_version_id,
+            knowledge_item_id, repo_id, knowledge_source_id, item_kind, latest_knowledge_item_version_id,
             provenance_json, created_at, updated_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
          ON CONFLICT(knowledge_item_id) DO UPDATE SET
-            latest_document_version_id = excluded.latest_document_version_id,
+            latest_knowledge_item_version_id = excluded.latest_knowledge_item_version_id,
             provenance_json = excluded.provenance_json,
             updated_at = datetime('now')",
         params![
@@ -467,7 +478,7 @@ fn upsert_item(conn: &rusqlite::Connection, item: &KnowledgeItemRow) -> Result<(
             item.repo_id.as_str(),
             item.knowledge_source_id.as_str(),
             item.item_kind.as_str(),
-            item.latest_document_version_id.as_str(),
+            item.latest_knowledge_item_version_id.as_str(),
             item.provenance_json.as_str(),
         ],
     )
@@ -481,7 +492,7 @@ fn insert_relation_assertion(
 ) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO knowledge_relation_assertions (
-            relation_assertion_id, repo_id, knowledge_item_id, source_document_version_id,
+            relation_assertion_id, repo_id, knowledge_item_id, source_knowledge_item_version_id,
             target_type, target_id, relation_type, association_method, confidence, provenance_json,
             created_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
@@ -489,7 +500,7 @@ fn insert_relation_assertion(
             relation.relation_assertion_id.as_str(),
             relation.repo_id.as_str(),
             relation.knowledge_item_id.as_str(),
-            relation.source_document_version_id.as_str(),
+            relation.source_knowledge_item_version_id.as_str(),
             relation.target_type.as_str(),
             relation.target_id.as_str(),
             relation.relation_type.as_str(),
@@ -605,7 +616,7 @@ mod tests {
             repo_id: "repo-1".to_string(),
             knowledge_source_id: source.knowledge_source_id.clone(),
             item_kind: "github_issue".to_string(),
-            latest_document_version_id: "version-1".to_string(),
+            latest_knowledge_item_version_id: "version-1".to_string(),
             provenance_json: source.provenance_json.clone(),
         };
         store
@@ -641,7 +652,7 @@ mod tests {
             repo_id: "repo-1".to_string(),
             knowledge_source_id: source.knowledge_source_id.clone(),
             item_kind: "github_issue".to_string(),
-            latest_document_version_id: "version-1".to_string(),
+            latest_knowledge_item_version_id: "version-1".to_string(),
             provenance_json: source.provenance_json.clone(),
         };
         store
@@ -668,7 +679,7 @@ mod tests {
             relation_assertion_id: "relation-1".to_string(),
             repo_id: "repo-1".to_string(),
             knowledge_item_id: "item-1".to_string(),
-            source_document_version_id: "version-1".to_string(),
+            source_knowledge_item_version_id: "version-1".to_string(),
             target_type: "commit".to_string(),
             target_id: "abc123".to_string(),
             relation_type: "associated_with".to_string(),
@@ -690,13 +701,13 @@ mod tests {
         store.initialise_schema().expect("initialise schema");
         assert!(
             store
-                .has_document_version("item-1", "hash-1")
+                .has_knowledge_item_version("item-1", "hash-1")
                 .expect("lookup before insert")
                 .is_none()
         );
 
         let row = KnowledgeDocumentVersionRow {
-            document_version_id: "version-1".to_string(),
+            knowledge_item_version_id: "version-1".to_string(),
             knowledge_item_id: "item-1".to_string(),
             provider: "github".to_string(),
             source_kind: "github_issue".to_string(),
@@ -715,21 +726,21 @@ mod tests {
         };
 
         store
-            .insert_document_version(&row)
-            .expect("insert document version");
+            .insert_knowledge_item_version(&row)
+            .expect("insert knowledge item version");
         assert_eq!(
             store
-                .has_document_version(&row.knowledge_item_id, &row.content_hash)
+                .has_knowledge_item_version(&row.knowledge_item_id, &row.content_hash)
                 .expect("lookup after insert"),
-            Some(row.document_version_id.clone())
+            Some(row.knowledge_item_version_id.clone())
         );
 
         store
-            .delete_document_version(&row.document_version_id)
-            .expect("delete document version");
+            .delete_knowledge_item_version(&row.knowledge_item_version_id)
+            .expect("delete knowledge item version");
         assert!(
             store
-                .has_document_version(&row.knowledge_item_id, &row.content_hash)
+                .has_knowledge_item_version(&row.knowledge_item_id, &row.content_hash)
                 .expect("lookup after delete")
                 .is_none()
         );
@@ -743,7 +754,7 @@ mod tests {
         store.initialise_schema().expect("initialise schema");
 
         let row = KnowledgeDocumentVersionRow {
-            document_version_id: "version-1".to_string(),
+            knowledge_item_version_id: "version-1".to_string(),
             knowledge_item_id: "item-1".to_string(),
             provider: "github".to_string(),
             source_kind: "github_issue".to_string(),
@@ -762,13 +773,13 @@ mod tests {
         };
 
         store
-            .insert_document_version(&row)
-            .expect("insert document version");
+            .insert_knowledge_item_version(&row)
+            .expect("insert knowledge item version");
 
         let found = store
-            .find_document_version(&row.document_version_id)
-            .expect("find document version by id")
-            .expect("document version row");
+            .find_knowledge_item_version(&row.knowledge_item_version_id)
+            .expect("find knowledge item version by id")
+            .expect("knowledge item version row");
 
         assert_eq!(found, row);
     }

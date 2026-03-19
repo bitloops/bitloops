@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     repo_id TEXT NOT NULL,
     knowledge_source_id TEXT NOT NULL,
     item_kind TEXT NOT NULL,
-    latest_document_version_id TEXT,
+    latest_knowledge_item_version_id TEXT,
     provenance_json TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS knowledge_relation_assertions (
     relation_assertion_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
     knowledge_item_id TEXT NOT NULL,
-    source_document_version_id TEXT,
+    source_knowledge_item_version_id TEXT,
     target_type TEXT NOT NULL,
     target_id TEXT NOT NULL,
     relation_type TEXT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS knowledge_relation_assertions (
 pub(crate) fn knowledge_schema_sql_duckdb() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS knowledge_document_versions (
-    document_version_id VARCHAR PRIMARY KEY,
+    knowledge_item_version_id VARCHAR PRIMARY KEY,
     knowledge_item_id VARCHAR NOT NULL,
     provider VARCHAR NOT NULL,
     source_kind VARCHAR NOT NULL,

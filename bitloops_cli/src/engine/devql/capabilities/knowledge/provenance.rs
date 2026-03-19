@@ -16,7 +16,7 @@ pub fn build_ingestion_provenance(parsed: &ParsedKnowledgeUrl) -> Value {
 
 pub fn build_association_provenance(
     command: &str,
-    source_document_version_id: &str,
+    source_knowledge_item_version_id: &str,
     target_type: &str,
     target_id: &str,
     association_method: &str,
@@ -29,6 +29,6 @@ pub fn build_association_provenance(
         "association_method": association_method,
         "target_type": target_type,
         "target_id": target_id,
-        "source_document_version_id": source_document_version_id,
+        "source_knowledge_item_version_id": source_knowledge_item_version_id,
     })
 }

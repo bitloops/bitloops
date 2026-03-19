@@ -507,7 +507,7 @@ async fn plugin_persists_repository_scoped_knowledge_and_dispatches_to_github() 
     let blob_path = knowledge_payload_key(
         &host.repo.repo_id,
         &result.knowledge_item_id,
-        &result.document_version_id,
+        &result.knowledge_item_version_id,
     );
     assert!(host.payload_store.payload_exists(&blob_path)?);
     Ok(())
@@ -651,7 +651,10 @@ async fn plugin_reuses_item_and_version_for_duplicate_content() -> Result<()> {
         .await?;
 
     assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
-    assert_eq!(first.document_version_id, second.document_version_id);
+    assert_eq!(
+        first.knowledge_item_version_id,
+        second.knowledge_item_version_id
+    );
     assert_eq!(
         second.item_status,
         super::types::KnowledgeItemStatus::Reused
@@ -695,7 +698,10 @@ async fn plugin_creates_new_version_when_payload_changes() -> Result<()> {
         .await?;
 
     assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
-    assert_ne!(first.document_version_id, second.document_version_id);
+    assert_ne!(
+        first.knowledge_item_version_id,
+        second.knowledge_item_version_id
+    );
     assert_eq!(
         second.version_status,
         super::types::KnowledgeVersionStatus::Created
@@ -760,7 +766,7 @@ async fn associate_creates_commit_relation_with_manual_attachment() -> Result<()
             &host,
             AssociateKnowledgeRequest {
                 knowledge_item_id: ingest_result.knowledge_item_id.clone(),
-                source_document_version_id: ingest_result.document_version_id.clone(),
+                source_knowledge_item_version_id: ingest_result.knowledge_item_version_id.clone(),
                 target: KnowledgeAssociationTarget::Commit {
                     sha: commit_sha.clone(),
                 },
@@ -778,8 +784,8 @@ async fn associate_creates_commit_relation_with_manual_attachment() -> Result<()
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(relation.association_method, "manual_attachment");
     assert_eq!(
-        relation.source_document_version_id,
-        ingest_result.document_version_id
+        relation.source_knowledge_item_version_id,
+        ingest_result.knowledge_item_version_id
     );
     assert_eq!(relation.target_id, commit_sha);
     assert_eq!(association_result.association_method, "manual_attachment");
@@ -809,7 +815,7 @@ async fn associate_is_idempotent_for_same_source_version_and_target() -> Result<
         .await?;
     let request = AssociateKnowledgeRequest {
         knowledge_item_id: ingest_result.knowledge_item_id.clone(),
-        source_document_version_id: ingest_result.document_version_id.clone(),
+        source_knowledge_item_version_id: ingest_result.knowledge_item_version_id.clone(),
         target: KnowledgeAssociationTarget::Commit {
             sha: commit_sha.clone(),
         },
@@ -891,8 +897,8 @@ async fn run_add_flow_orchestrates_ingest_then_associate_for_commit() -> Result<
     let association_result = association_result.expect("association result");
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(
-        relation.source_document_version_id,
-        ingest_result.document_version_id
+        relation.source_knowledge_item_version_id,
+        ingest_result.knowledge_item_version_id
     );
     assert_eq!(relation.target_id, commit_sha);
     assert_eq!(association_result.association_method, "manual_attachment");
@@ -901,7 +907,7 @@ async fn run_add_flow_orchestrates_ingest_then_associate_for_commit() -> Result<
 }
 
 #[tokio::test]
-async fn resolve_source_ref_uses_latest_document_version_for_knowledge_item() -> Result<()> {
+async fn resolve_source_ref_uses_latest_knowledge_item_version_for_knowledge_item() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
     let plugin = KnowledgePlugin::with_clients(
@@ -931,19 +937,23 @@ async fn resolve_source_ref_uses_latest_document_version_for_knowledge_item() ->
         .await?;
 
     assert_eq!(first.knowledge_item_id, second.knowledge_item_id);
-    assert_ne!(first.document_version_id, second.document_version_id);
+    assert_ne!(
+        first.knowledge_item_version_id,
+        second.knowledge_item_version_id
+    );
 
     let resolved = resolve_source_ref(&host, &format!("knowledge:{}", first.knowledge_item_id))?;
     assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
     assert_eq!(
-        resolved.source_document_version_id,
-        second.document_version_id
+        resolved.source_knowledge_item_version_id,
+        second.knowledge_item_version_id
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_version() -> Result<()> {
+async fn resolve_source_ref_uses_explicit_knowledge_item_version_for_knowledge_version()
+-> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
     let plugin = KnowledgePlugin::with_clients(
@@ -974,22 +984,22 @@ async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_version
 
     let resolved = resolve_source_ref(
         &host,
-        &format!("knowledge_version:{}", first.document_version_id),
+        &format!("knowledge_version:{}", first.knowledge_item_version_id),
     )?;
     assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
     assert_eq!(
-        resolved.source_document_version_id,
-        first.document_version_id
+        resolved.source_knowledge_item_version_id,
+        first.knowledge_item_version_id
     );
     assert_ne!(
-        resolved.source_document_version_id,
-        second.document_version_id
+        resolved.source_knowledge_item_version_id,
+        second.knowledge_item_version_id
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_item_colon_version()
+async fn resolve_source_ref_uses_explicit_knowledge_item_version_for_knowledge_item_colon_version()
 -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
@@ -1023,17 +1033,17 @@ async fn resolve_source_ref_uses_explicit_document_version_for_knowledge_item_co
         &host,
         &format!(
             "knowledge:{}:{}",
-            first.knowledge_item_id, first.document_version_id
+            first.knowledge_item_id, first.knowledge_item_version_id
         ),
     )?;
     assert_eq!(resolved.knowledge_item_id, first.knowledge_item_id);
     assert_eq!(
-        resolved.source_document_version_id,
-        first.document_version_id
+        resolved.source_knowledge_item_version_id,
+        first.knowledge_item_version_id
     );
     assert_ne!(
-        resolved.source_document_version_id,
-        second.document_version_id
+        resolved.source_knowledge_item_version_id,
+        second.knowledge_item_version_id
     );
     Ok(())
 }
@@ -1073,7 +1083,7 @@ async fn resolve_source_ref_rejects_mismatched_item_and_version() -> Result<()> 
         &host,
         &format!(
             "knowledge:{}:{}",
-            first.knowledge_item_id, second.document_version_id
+            first.knowledge_item_id, second.knowledge_item_version_id
         ),
     )
     .expect_err("mismatched item/version must fail");
@@ -1094,7 +1104,7 @@ async fn resolve_source_ref_rejects_missing_knowledge_item() -> Result<()> {
 }
 
 #[tokio::test]
-async fn resolve_source_ref_rejects_missing_document_version() -> Result<()> {
+async fn resolve_source_ref_rejects_missing_knowledge_item_version() -> Result<()> {
     let temp = TempDir::new()?;
     let host = build_test_host(&temp, provider_config("https://bitloops.atlassian.net"))?;
 
@@ -1180,8 +1190,8 @@ async fn run_associate_flow_creates_commit_relation_from_knowledge_ref() -> Resu
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(
-        relation.source_document_version_id,
-        ingest_result.document_version_id
+        relation.source_knowledge_item_version_id,
+        ingest_result.knowledge_item_version_id
     );
     assert_eq!(relation.target_id, commit_sha);
     assert_eq!(relation.association_method, "manual_attachment");
@@ -1256,15 +1266,15 @@ async fn run_associate_flow_creates_commit_relation_from_knowledge_version_ref()
     run_associate_flow(
         &plugin,
         &host,
-        &format!("knowledge_version:{}", first.document_version_id),
+        &format!("knowledge_version:{}", first.knowledge_item_version_id),
         &format!("commit:{commit_sha}"),
     )
     .await?;
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(
-        relation.source_document_version_id,
-        first.document_version_id
+        relation.source_knowledge_item_version_id,
+        first.knowledge_item_version_id
     );
     Ok(())
 }
@@ -1306,7 +1316,7 @@ async fn run_associate_flow_creates_commit_relation_from_knowledge_item_colon_ve
         &host,
         &format!(
             "knowledge:{}:{}",
-            first.knowledge_item_id, first.document_version_id
+            first.knowledge_item_id, first.knowledge_item_version_id
         ),
         &format!("commit:{commit_sha}"),
     )
@@ -1314,8 +1324,8 @@ async fn run_associate_flow_creates_commit_relation_from_knowledge_item_colon_ve
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(
-        relation.source_document_version_id,
-        first.document_version_id
+        relation.source_knowledge_item_version_id,
+        first.knowledge_item_version_id
     );
     Ok(())
 }
@@ -1524,8 +1534,8 @@ async fn run_associate_flow_creates_knowledge_to_knowledge_relation() -> Result<
     assert_eq!(relation.target_type, "knowledge_item");
     assert_eq!(relation.target_id, target.knowledge_item_id);
     assert_eq!(
-        relation.source_document_version_id,
-        source.document_version_id
+        relation.source_knowledge_item_version_id,
+        source.knowledge_item_version_id
     );
     assert_eq!(relation.association_method, "manual_attachment");
     assert_eq!(result.relation_type, "associated_with");
@@ -1575,15 +1585,15 @@ async fn run_associate_flow_knowledge_to_knowledge_with_explicit_source_version(
     run_associate_flow(
         &plugin,
         &host,
-        &format!("knowledge_version:{}", first.document_version_id),
+        &format!("knowledge_version:{}", first.knowledge_item_version_id),
         &format!("knowledge:{}", target.knowledge_item_id),
     )
     .await?;
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
     assert_eq!(
-        relation.source_document_version_id,
-        first.document_version_id
+        relation.source_knowledge_item_version_id,
+        first.knowledge_item_version_id
     );
     assert_eq!(relation.target_type, "knowledge_item");
     assert_eq!(relation.target_id, target.knowledge_item_id);
@@ -1702,7 +1712,7 @@ async fn run_associate_flow_one_knowledge_item_to_multiple_knowledge_targets() -
     let rows = sqlite_all_relation_assertions(&sqlite_path(&host))?;
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|r| r.target_type == "knowledge_item"
-        && r.source_document_version_id == source.document_version_id));
+        && r.source_knowledge_item_version_id == source.knowledge_item_version_id));
     let target_ids: Vec<&str> = rows.iter().map(|r| r.target_id.as_str()).collect();
     assert!(target_ids.contains(&target_a.knowledge_item_id.as_str()));
     assert!(target_ids.contains(&target_b.knowledge_item_id.as_str()));
@@ -1880,7 +1890,7 @@ async fn plugin_compensates_blob_and_duckdb_when_sqlite_persist_fails() -> Resul
             &host.repo.repo_id,
             &super::storage::knowledge_source_id("github://bitloops/bitloops/issues/42"),
         ),
-        &super::storage::document_version_id(
+        &super::storage::knowledge_item_version_id(
             &super::storage::knowledge_item_id(
                 &host.repo.repo_id,
                 &super::storage::knowledge_source_id("github://bitloops/bitloops/issues/42"),
@@ -1908,7 +1918,7 @@ fn format_result_renders_expected_summary() {
         source_kind: KnowledgeSourceKind::GithubIssue.as_str().to_string(),
         repo_identity: "local://local/repo".to_string(),
         knowledge_item_id: "item-1".to_string(),
-        document_version_id: "version-1".to_string(),
+        knowledge_item_version_id: "version-1".to_string(),
         item_status: super::types::KnowledgeItemStatus::Created,
         version_status: super::types::KnowledgeVersionStatus::Created,
     };
@@ -1926,7 +1936,7 @@ fn format_result_renders_association_summary() {
         source_kind: KnowledgeSourceKind::GithubIssue.as_str().to_string(),
         repo_identity: "local://local/repo".to_string(),
         knowledge_item_id: "item-1".to_string(),
-        document_version_id: "version-1".to_string(),
+        knowledge_item_version_id: "version-1".to_string(),
         item_status: super::types::KnowledgeItemStatus::Created,
         version_status: super::types::KnowledgeVersionStatus::Created,
     };
@@ -2294,7 +2304,7 @@ fn duckdb_path(host: &KnowledgeHostContext) -> PathBuf {
 }
 
 struct RelationAssertionRecord {
-    source_document_version_id: String,
+    source_knowledge_item_version_id: String,
     target_type: String,
     target_id: String,
     association_method: String,
@@ -2338,13 +2348,13 @@ fn sqlite_relation_assertion(path: &Path) -> Result<Option<RelationAssertionReco
     }
 
     conn.query_row(
-        "SELECT source_document_version_id, target_type, target_id, association_method, provenance_json
+        "SELECT source_knowledge_item_version_id, target_type, target_id, association_method, provenance_json
          FROM knowledge_relation_assertions
          LIMIT 1",
         [],
         |row: &rusqlite::Row<'_>| {
             Ok(RelationAssertionRecord {
-                source_document_version_id: row.get(0)?,
+                source_knowledge_item_version_id: row.get(0)?,
                 target_type: row.get(1)?,
                 target_id: row.get(2)?,
                 association_method: row.get(3)?,
@@ -2374,13 +2384,13 @@ fn sqlite_all_relation_assertions(path: &Path) -> Result<Vec<RelationAssertionRe
         return Ok(vec![]);
     }
     let mut stmt = conn.prepare(
-        "SELECT source_document_version_id, target_type, target_id, association_method, provenance_json
+        "SELECT source_knowledge_item_version_id, target_type, target_id, association_method, provenance_json
          FROM knowledge_relation_assertions
          ORDER BY rowid",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(RelationAssertionRecord {
-            source_document_version_id: row.get(0)?,
+            source_knowledge_item_version_id: row.get(0)?,
             target_type: row.get(1)?,
             target_id: row.get(2)?,
             association_method: row.get(3)?,
@@ -2451,8 +2461,8 @@ async fn run_associate_flow_creates_knowledge_to_checkpoint_relation() -> Result
     assert_eq!(relation.target_type, "checkpoint");
     assert_eq!(relation.target_id, "a1b2c3d4e5f6");
     assert_eq!(
-        relation.source_document_version_id,
-        source.document_version_id
+        relation.source_knowledge_item_version_id,
+        source.knowledge_item_version_id
     );
     assert_eq!(relation.association_method, "manual_attachment");
     assert_eq!(result.relation_type, "associated_with");
@@ -2482,7 +2492,7 @@ async fn run_associate_flow_knowledge_to_checkpoint_with_explicit_source_version
             },
         )
         .await?;
-    let first_version_id = first_ingest.document_version_id.clone();
+    let first_version_id = first_ingest.knowledge_item_version_id.clone();
 
     let _second_ingest = plugin
         .ingest_source(
@@ -2502,7 +2512,7 @@ async fn run_associate_flow_knowledge_to_checkpoint_with_explicit_source_version
     .await?;
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
-    assert_eq!(relation.source_document_version_id, first_version_id);
+    assert_eq!(relation.source_knowledge_item_version_id, first_version_id);
     assert_eq!(relation.target_type, "checkpoint");
     assert_eq!(result.target_id, "a1b2c3d4e5f6");
     Ok(())
@@ -2752,8 +2762,8 @@ async fn run_associate_flow_creates_knowledge_to_artefact_relation() -> Result<(
     assert_eq!(relation.target_type, "artefact");
     assert_eq!(relation.target_id, TEST_ARTEFACT_ID);
     assert_eq!(
-        relation.source_document_version_id,
-        source.document_version_id
+        relation.source_knowledge_item_version_id,
+        source.knowledge_item_version_id
     );
     assert_eq!(relation.association_method, "manual_attachment");
     assert_eq!(result.relation_type, "associated_with");
@@ -2783,7 +2793,7 @@ async fn run_associate_flow_knowledge_to_artefact_with_explicit_source_version()
             },
         )
         .await?;
-    let first_version_id = first_ingest.document_version_id.clone();
+    let first_version_id = first_ingest.knowledge_item_version_id.clone();
 
     let _second_ingest = plugin
         .ingest_source(
@@ -2803,7 +2813,7 @@ async fn run_associate_flow_knowledge_to_artefact_with_explicit_source_version()
     .await?;
 
     let relation = sqlite_relation_assertion(&sqlite_path(&host))?.expect("relation assertion");
-    assert_eq!(relation.source_document_version_id, first_version_id);
+    assert_eq!(relation.source_knowledge_item_version_id, first_version_id);
     assert_eq!(relation.target_type, "artefact");
     assert_eq!(result.target_id, TEST_ARTEFACT_ID);
     Ok(())

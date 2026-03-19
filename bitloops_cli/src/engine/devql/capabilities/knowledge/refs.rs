@@ -16,7 +16,7 @@ pub enum KnowledgeRef {
         knowledge_item_version_id: Option<String>,
     },
     KnowledgeVersion {
-        document_version_id: String,
+        knowledge_item_version_id: String,
     },
     Commit {
         rev: String,
@@ -32,7 +32,7 @@ pub enum KnowledgeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKnowledgeSourceRef {
     pub knowledge_item_id: String,
-    pub source_document_version_id: String,
+    pub source_knowledge_item_version_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,13 +55,13 @@ fn parse_knowledge_source_value(value: &str) -> Result<(String, Option<String>)>
         }
         [item, version] => {
             let knowledge_item_id = item.trim();
-            let document_version_id = version.trim();
-            if knowledge_item_id.is_empty() || document_version_id.is_empty() {
+            let knowledge_item_version_id = version.trim();
+            if knowledge_item_id.is_empty() || knowledge_item_version_id.is_empty() {
                 bail!("knowledge ref must use `knowledge:<item_id>[:<version_id>]`");
             }
             Ok((
                 knowledge_item_id.to_string(),
-                Some(document_version_id.to_string()),
+                Some(knowledge_item_version_id.to_string()),
             ))
         }
         _ => bail!(
@@ -90,7 +90,7 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
             })
         }
         "knowledge_version" => Ok(KnowledgeRef::KnowledgeVersion {
-            document_version_id: value.to_string(),
+            knowledge_item_version_id: value.to_string(),
         }),
         "commit" => Ok(KnowledgeRef::Commit {
             rev: value.to_string(),
@@ -119,62 +119,65 @@ pub fn resolve_source_ref(
                 .find_item_by_id(&host.repo.repo_id, &knowledge_item_id)?
                 .with_context(|| format!("knowledge item `{knowledge_item_id}` not found"))?;
 
-            if let Some(source_document_version_id) = knowledge_item_version_id {
+            if let Some(source_knowledge_item_version_id) = knowledge_item_version_id {
                 let version = host
                     .document_store
-                    .find_document_version(&source_document_version_id)?
+                    .find_knowledge_item_version(&source_knowledge_item_version_id)?
                     .with_context(|| {
                         format!(
-                            "knowledge document version `{source_document_version_id}` not found"
+                            "knowledge item version `{source_knowledge_item_version_id}` not found"
                         )
                     })?;
 
                 if version.knowledge_item_id != knowledge_item_id {
                     bail!(
-                        "knowledge version `{source_document_version_id}` does not belong to knowledge item `{knowledge_item_id}`"
+                        "knowledge version `{source_knowledge_item_version_id}` does not belong to knowledge item `{knowledge_item_id}`"
                     );
                 }
 
                 Ok(ResolvedKnowledgeSourceRef {
                     knowledge_item_id,
-                    source_document_version_id,
+                    source_knowledge_item_version_id,
                 })
             } else {
-                let source_document_version_id = item.latest_document_version_id.trim().to_string();
-                if source_document_version_id.is_empty() {
-                    bail!("knowledge item `{knowledge_item_id}` has no latest document version");
+                let source_knowledge_item_version_id =
+                    item.latest_knowledge_item_version_id.trim().to_string();
+                if source_knowledge_item_version_id.is_empty() {
+                    bail!(
+                        "knowledge item `{knowledge_item_id}` has no latest knowledge item version"
+                    );
                 }
 
                 Ok(ResolvedKnowledgeSourceRef {
                     knowledge_item_id,
-                    source_document_version_id,
+                    source_knowledge_item_version_id,
                 })
             }
         }
         KnowledgeRef::KnowledgeVersion {
-            document_version_id,
+            knowledge_item_version_id,
         } => {
             eprintln!(
-                "warning: `knowledge_version:<id>` is deprecated; use `knowledge:<knowledge_item_id>:<document_version_id>`"
+                "warning: `knowledge_version:<id>` is deprecated; use `knowledge:<knowledge_item_id>:<knowledge_item_version_id>`"
             );
             let version = host
                 .document_store
-                .find_document_version(&document_version_id)?
+                .find_knowledge_item_version(&knowledge_item_version_id)?
                 .with_context(|| {
-                    format!("knowledge document version `{document_version_id}` not found")
+                    format!("knowledge item version `{knowledge_item_version_id}` not found")
                 })?;
             host.relational_store
                 .find_item_by_id(&host.repo.repo_id, &version.knowledge_item_id)?
                 .with_context(|| {
                     format!(
-                        "knowledge item `{}` for document version `{document_version_id}` not found in current repo",
+                        "knowledge item `{}` for knowledge item version `{knowledge_item_version_id}` not found in current repo",
                         version.knowledge_item_id
                     )
                 })?;
 
             Ok(ResolvedKnowledgeSourceRef {
                 knowledge_item_id: version.knowledge_item_id,
-                source_document_version_id: document_version_id,
+                source_knowledge_item_version_id: knowledge_item_version_id,
             })
         }
         KnowledgeRef::Commit { .. } => {
@@ -397,7 +400,7 @@ mod tests {
         assert_eq!(
             parsed,
             KnowledgeRef::KnowledgeVersion {
-                document_version_id: "version-1".to_string()
+                knowledge_item_version_id: "version-1".to_string()
             }
         );
     }
@@ -472,7 +475,7 @@ mod tests {
         assert_eq!(
             parsed.unwrap(),
             KnowledgeRef::KnowledgeVersion {
-                document_version_id: "some-version-id".to_string()
+                knowledge_item_version_id: "some-version-id".to_string()
             }
         );
     }

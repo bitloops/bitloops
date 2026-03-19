@@ -15,7 +15,7 @@ use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target
 use super::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentVersionRow,
     KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
-    SqliteKnowledgeRelationalStore, content_hash, document_version_id, knowledge_item_id,
+    SqliteKnowledgeRelationalStore, content_hash, knowledge_item_id, knowledge_item_version_id,
     knowledge_source_id, relation_assertion_id, serialize_payload,
 };
 use super::types::{
@@ -99,7 +99,7 @@ impl KnowledgePlugin {
 
         let source_id = knowledge_source_id(&parsed.canonical_external_id);
         let item_id = knowledge_item_id(&host.repo.repo_id, &source_id);
-        let derived_document_version_id = document_version_id(&item_id, &hash);
+        let derived_knowledge_item_version_id = knowledge_item_version_id(&item_id, &hash);
         let provenance = build_ingestion_provenance(parsed);
         let provenance_json =
             serde_json::to_string(&provenance).context("serialising knowledge provenance")?;
@@ -107,21 +107,23 @@ impl KnowledgePlugin {
         let existing_item = host
             .relational_store
             .find_item(&host.repo.repo_id, &source_id)?;
-        let existing_version = host.document_store.has_document_version(&item_id, &hash)?;
+        let existing_knowledge_item_version = host
+            .document_store
+            .has_knowledge_item_version(&item_id, &hash)?;
         let item_status = if existing_item.is_some() {
             KnowledgeItemStatus::Reused
         } else {
             KnowledgeItemStatus::Created
         };
-        let version_status = if existing_version.is_some() {
+        let version_status = if existing_knowledge_item_version.is_some() {
             KnowledgeVersionStatus::Reused
         } else {
             KnowledgeVersionStatus::Created
         };
 
-        let current_document_version_id = existing_version
+        let current_knowledge_item_version_id = existing_knowledge_item_version
             .clone()
-            .unwrap_or_else(|| derived_document_version_id.clone());
+            .unwrap_or_else(|| derived_knowledge_item_version_id.clone());
 
         let source_row = KnowledgeSourceRow {
             knowledge_source_id: source_id.clone(),
@@ -136,23 +138,23 @@ impl KnowledgePlugin {
             repo_id: host.repo.repo_id.clone(),
             knowledge_source_id: source_id,
             item_kind: parsed.source_kind.as_str().to_string(),
-            latest_document_version_id: current_document_version_id.clone(),
+            latest_knowledge_item_version_id: current_knowledge_item_version_id.clone(),
             provenance_json: provenance_json.clone(),
         };
 
         let mut written_payload = None;
-        let mut inserted_document_version = None;
+        let mut inserted_knowledge_item_version = None;
 
-        if existing_version.is_none() {
+        if existing_knowledge_item_version.is_none() {
             let payload_ref = host.payload_store.write_payload(
                 &host.repo.repo_id,
                 &item_id,
-                &derived_document_version_id,
+                &derived_knowledge_item_version_id,
                 &payload_bytes,
             )?;
 
             let document_row = KnowledgeDocumentVersionRow {
-                document_version_id: derived_document_version_id.clone(),
+                knowledge_item_version_id: derived_knowledge_item_version_id.clone(),
                 knowledge_item_id: item_id.clone(),
                 provider: parsed.provider.as_str().to_string(),
                 source_kind: parsed.source_kind.as_str().to_string(),
@@ -171,23 +173,26 @@ impl KnowledgePlugin {
                 provenance_json: provenance_json.clone(),
             };
 
-            if let Err(err) = host.document_store.insert_document_version(&document_row) {
+            if let Err(err) = host
+                .document_store
+                .insert_knowledge_item_version(&document_row)
+            {
                 let _ = host.payload_store.delete_payload(&payload_ref);
                 return Err(err);
             }
 
             written_payload = Some(payload_ref);
-            inserted_document_version = Some(derived_document_version_id);
+            inserted_knowledge_item_version = Some(derived_knowledge_item_version_id);
         }
 
         if let Err(err) = host
             .relational_store
             .persist_ingestion(&source_row, &item_row)
         {
-            if let Some(document_version_id) = inserted_document_version.as_deref() {
+            if let Some(knowledge_item_version_id) = inserted_knowledge_item_version.as_deref() {
                 let _ = host
                     .document_store
-                    .delete_document_version(document_version_id);
+                    .delete_knowledge_item_version(knowledge_item_version_id);
             }
             if let Some(payload) = written_payload.as_ref() {
                 let _ = host.payload_store.delete_payload(payload);
@@ -200,7 +205,7 @@ impl KnowledgePlugin {
             source_kind: parsed.source_kind.as_str().to_string(),
             repo_identity: host.repo.identity.clone(),
             knowledge_item_id: item_id,
-            document_version_id: current_document_version_id,
+            knowledge_item_version_id: current_knowledge_item_version_id,
             item_status,
             version_status,
         })
@@ -235,7 +240,7 @@ impl KnowledgeCapability for KnowledgePlugin {
             let target_id = request.target.target_id().to_string();
             let provenance = build_association_provenance(
                 &request.command,
-                &request.source_document_version_id,
+                &request.source_knowledge_item_version_id,
                 &target_type,
                 &target_id,
                 &request.association_method,
@@ -245,14 +250,14 @@ impl KnowledgeCapability for KnowledgePlugin {
             let relation = KnowledgeRelationAssertionRow {
                 relation_assertion_id: relation_assertion_id(
                     &request.knowledge_item_id,
-                    &request.source_document_version_id,
+                    &request.source_knowledge_item_version_id,
                     &target_type,
                     &target_id,
                     &request.association_method,
                 ),
                 repo_id: host.repo.repo_id.clone(),
                 knowledge_item_id: request.knowledge_item_id,
-                source_document_version_id: request.source_document_version_id,
+                source_knowledge_item_version_id: request.source_knowledge_item_version_id,
                 target_type: target_type.clone(),
                 target_id: target_id.clone(),
                 relation_type: request.relation_type,
@@ -353,7 +358,7 @@ fn build_commit_association_request(
 ) -> AssociateKnowledgeRequest {
     AssociateKnowledgeRequest {
         knowledge_item_id: ingest_result.knowledge_item_id.clone(),
-        source_document_version_id: ingest_result.document_version_id.clone(),
+        source_knowledge_item_version_id: ingest_result.knowledge_item_version_id.clone(),
         target: KnowledgeAssociationTarget::Commit { sha },
         relation_type: "associated_with".to_string(),
         association_method: "manual_attachment".to_string(),
@@ -402,7 +407,7 @@ pub(crate) async fn run_associate_flow(
             host,
             AssociateKnowledgeRequest {
                 knowledge_item_id: resolved_source.knowledge_item_id,
-                source_document_version_id: resolved_source.source_document_version_id,
+                source_knowledge_item_version_id: resolved_source.source_knowledge_item_version_id,
                 target,
                 relation_type: "associated_with".to_string(),
                 association_method: "manual_attachment".to_string(),

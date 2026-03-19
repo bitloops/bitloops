@@ -138,7 +138,7 @@ impl KnowledgeAssociationTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssociateKnowledgeRequest {
     pub knowledge_item_id: String,
-    pub source_document_version_id: String,
+    pub source_knowledge_item_version_id: String,
     pub target: KnowledgeAssociationTarget,
     pub relation_type: String,
     pub association_method: String,
@@ -172,7 +172,7 @@ pub struct IngestKnowledgeResult {
     pub source_kind: String,
     pub repo_identity: String,
     pub knowledge_item_id: String,
-    pub document_version_id: String,
+    pub knowledge_item_version_id: String,
     pub item_status: KnowledgeItemStatus,
     pub version_status: KnowledgeVersionStatus,
 }
@@ -212,7 +212,10 @@ pub fn format_knowledge_add_result(
         format!("  source kind: {}", ingest.source_kind),
         format!("  repository: {}", ingest.repo_identity),
         format!("  knowledge item: {}", ingest.knowledge_item_id),
-        format!("  document version: {}", ingest.document_version_id),
+        format!(
+            "  knowledge item version: {}",
+            ingest.knowledge_item_version_id
+        ),
         format!("  status: {}", render_ingest_status(ingest)),
     ];
 
