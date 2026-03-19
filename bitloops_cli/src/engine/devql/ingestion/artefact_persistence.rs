@@ -18,10 +18,9 @@ async fn refresh_current_state_for_path(
     ) {
         return Ok(());
     }
-    if rev.revision.kind == "temporary"
-        && existing
-            .as_ref()
-            .is_some_and(|state| state.blob_sha == rev.blob_sha)
+    if existing
+        .as_ref()
+        .is_some_and(|state| state.blob_sha == rev.blob_sha)
     {
         overwrite_current_revision_metadata_for_path(cfg, relational, rev).await?;
         return Ok(());
