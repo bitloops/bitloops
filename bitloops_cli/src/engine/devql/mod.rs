@@ -196,9 +196,7 @@ fn capability_execution_context_for_stage(
     stage_id: &str,
 ) -> Result<CapabilityExecutionContext> {
     let host = core_extension_host()?;
-    let Some(capability_pack_id) = host.capability_packs().resolve_stage_owner(stage_id) else {
-        bail!("capability stage `{stage_id}` is not owned by any registered capability pack");
-    };
+    let capability_pack_id = host.resolve_stage_owner_for_execution(stage_id)?;
     Ok(CapabilityExecutionContext::new(
         cfg.repo_root.clone(),
         cfg.repo.repo_id.clone(),
@@ -214,10 +212,7 @@ fn capability_ingest_context_for_ingester(
     ingester_id: &str,
 ) -> Result<CapabilityIngestContext> {
     let host = core_extension_host()?;
-    let Some(capability_pack_id) = host.capability_packs().resolve_ingester_owner(ingester_id)
-    else {
-        bail!("capability ingester `{ingester_id}` is not owned by any registered capability pack");
-    };
+    let capability_pack_id = host.resolve_ingester_owner_for_ingest(ingester_id)?;
     Ok(CapabilityIngestContext::new(
         cfg.repo_root.clone(),
         cfg.repo.repo_id.clone(),

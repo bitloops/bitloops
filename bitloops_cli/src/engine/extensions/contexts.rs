@@ -73,6 +73,61 @@ impl CapabilityIngestContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityMigrationContext {
+    pub capability_pack_id: String,
+    pub migration_id: String,
+    pub order: u32,
+    pub description: String,
+}
+
+impl CapabilityMigrationContext {
+    pub fn new(
+        capability_pack_id: impl Into<String>,
+        migration_id: impl Into<String>,
+        order: u32,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            capability_pack_id: capability_pack_id.into(),
+            migration_id: migration_id.into(),
+            order,
+            description: description.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityHealthContext {
+    pub capability_pack_id: String,
+    pub runtime: String,
+    pub registered: bool,
+    pub migrated: bool,
+    pub pending_migration_count: usize,
+}
+
+impl CapabilityHealthContext {
+    pub fn new(
+        capability_pack_id: impl Into<String>,
+        runtime: impl Into<String>,
+        registered: bool,
+        migrated: bool,
+        pending_migration_count: usize,
+    ) -> Self {
+        Self {
+            capability_pack_id: capability_pack_id.into(),
+            runtime: runtime.into(),
+            registered,
+            migrated,
+            pending_migration_count,
+        }
+    }
+
+    pub fn has_pending_migrations(&self) -> bool {
+        self.pending_migration_count > 0 && !self.migrated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +160,20 @@ mod tests {
         );
         assert_eq!(ingest.capability_pack_id, "knowledge-pack");
         assert_eq!(ingest.ingester_id, "knowledge-ingester");
+
+        let migration = CapabilityMigrationContext::new(
+            "knowledge-pack",
+            "001",
+            1,
+            "initial capability schema setup",
+        );
+        assert_eq!(migration.capability_pack_id, "knowledge-pack");
+        assert_eq!(migration.migration_id, "001");
+        assert_eq!(migration.order, 1);
+
+        let health = CapabilityHealthContext::new("knowledge-pack", "local-cli", true, false, 1);
+        assert_eq!(health.capability_pack_id, "knowledge-pack");
+        assert_eq!(health.runtime, "local-cli");
+        assert!(health.has_pending_migrations());
     }
 }
