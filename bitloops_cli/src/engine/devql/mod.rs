@@ -909,9 +909,13 @@ mod core_contract_tests;
 mod cucumber_world;
 
 #[cfg(test)]
-#[path = "tests/cucumber_steps.rs"]
+#[path = "tests/cucumber_steps/mod.rs"]
 mod cucumber_steps;
 
 #[cfg(test)]
 #[path = "tests/cucumber_bdd.rs"]
 mod cucumber_bdd;
+
+#[cfg(test)]
+#[path = "tests/knowledge_support.rs"]
+mod knowledge_support;

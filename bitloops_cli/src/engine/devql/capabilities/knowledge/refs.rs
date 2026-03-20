@@ -216,13 +216,26 @@ pub fn resolve_target_ref(
             })
         }
         KnowledgeRef::Artefact { artefact_id } => {
+            let trimmed = artefact_id.trim();
+            if trimmed.is_empty() {
+                bail!("artefact id must not be empty");
+            }
+            if !is_valid_artefact_id(trimmed) {
+                bail!(
+                    "artefact id `{trimmed}` is not a valid artefact identifier \
+                     (expected lowercase UUID)"
+                );
+            }
+
             let exists = ctx
                 .knowledge_relational()
-                .artefact_exists(&ctx.repo().repo_id, &artefact_id)?;
+                .artefact_exists(&ctx.repo().repo_id, trimmed)?;
             if !exists {
-                bail!("artefact `{artefact_id}` not found");
+                bail!("artefact `{trimmed}` not found");
             }
-            Ok(ResolvedKnowledgeTargetRef::Artefact { artefact_id })
+            Ok(ResolvedKnowledgeTargetRef::Artefact {
+                artefact_id: trimmed.to_string(),
+            })
         }
         KnowledgeRef::KnowledgeItem {
             knowledge_item_version_id: Some(_),
@@ -232,6 +245,23 @@ pub fn resolve_target_ref(
             bail!("target ref `{raw}` is not supported as a target by `knowledge associate` yet")
         }
     }
+}
+
+fn is_valid_artefact_id(id: &str) -> bool {
+    let parts: Vec<&str> = id.split('-').collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    let expected_lengths = [8, 4, 4, 4, 12];
+    parts
+        .iter()
+        .zip(expected_lengths.iter())
+        .all(|(part, &len)| {
+            part.len() == len
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        })
 }
 
 pub fn resolve_commit_sha(repo_root: &Path, rev: &str) -> Result<String> {
@@ -275,6 +305,8 @@ mod tests {
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;
+
+    const TEST_ARTEFACT_ID: &str = "bbbbbbbb-1111-2222-3333-444444444444";
 
     struct EmptyConnectorRegistry {
         provider_config: ProviderConfig,
@@ -545,7 +577,7 @@ mod tests {
                 "checkpoint-short".to_string(),
                 "deadbeefcafe".to_string(),
             )]),
-            artefacts: HashMap::from([("artefact-1".to_string(), true)]),
+            artefacts: HashMap::from([(TEST_ARTEFACT_ID.to_string(), true)]),
         };
         let documents = FakeDocumentGateway {
             rows: HashMap::from([(
@@ -697,11 +729,11 @@ mod tests {
             }
         );
 
-        let artefact = resolve_target_ref(&ctx, "artefact:artefact-1")?;
+        let artefact = resolve_target_ref(&ctx, &format!("artefact:{TEST_ARTEFACT_ID}"))?;
         assert_eq!(
             artefact,
             ResolvedKnowledgeTargetRef::Artefact {
-                artefact_id: "artefact-1".to_string(),
+                artefact_id: TEST_ARTEFACT_ID.to_string(),
             }
         );
 
