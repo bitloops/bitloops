@@ -14,6 +14,7 @@ use crate::engine::db_status::{
 };
 use crate::engine::extensions::{
     CapabilityExecutionContext, CapabilityIngestContext, CoreExtensionHost, LanguagePackContext,
+    LanguagePackResolutionInput,
 };
 use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_clones;
@@ -127,18 +128,39 @@ fn normalise_optional_commit_sha(commit_sha: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn resolve_language_pack_owner_for_input(
+    language: &str,
+    file_path: Option<&str>,
+) -> Option<&'static str> {
+    core_extension_host().ok().and_then(|host| {
+        let input = file_path
+            .map(|path| LanguagePackResolutionInput::for_language(language).with_file_path(path))
+            .unwrap_or_else(|| LanguagePackResolutionInput::for_language(language));
+
+        host.language_packs()
+            .resolve(input)
+            .ok()
+            .map(|resolved| resolved.pack.id)
+            .or_else(|| {
+                host.language_packs()
+                    .owner_for_language(language)
+                    .and_then(|pack_key| host.language_packs().resolve_pack(pack_key))
+                    .map(|descriptor| descriptor.id)
+            })
+    })
+}
+
 fn resolve_language_pack_owner(language: &str) -> Option<&'static str> {
-    core_extension_host()
-        .ok()
-        .and_then(|host| host.language_packs().owner_for_language(language))
+    resolve_language_pack_owner_for_input(language, None)
 }
 
 fn language_pack_context_for_language(
     cfg: &DevqlConfig,
     commit_sha: Option<&str>,
     language: &str,
+    file_path: Option<&str>,
 ) -> Result<(LanguagePackContext, &'static str)> {
-    let Some(pack_id) = resolve_language_pack_owner(language) else {
+    let Some(pack_id) = resolve_language_pack_owner_for_input(language, file_path) else {
         bail!("language `{language}` is not owned by any registered language pack");
     };
     Ok((

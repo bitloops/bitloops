@@ -1,10 +1,57 @@
 // Top-level orchestration: refresh/upsert/delete current state and persist language artefacts.
 
+type LanguagePackArtefactExtractor = fn(&str, &str) -> Result<Vec<JsTsArtefact>>;
+type LanguagePackDependencyEdgeExtractor =
+    fn(&str, &str, &[JsTsArtefact]) -> Result<Vec<JsTsDependencyEdge>>;
+type LanguagePackFileDocstringExtractor = fn(&str) -> Option<String>;
+
+// First-party runtime adapter for built-in language packs.
+#[derive(Debug, Clone, Copy)]
+struct BuiltInLanguagePackRuntime {
+    extract_artefacts: LanguagePackArtefactExtractor,
+    extract_dependency_edges: LanguagePackDependencyEdgeExtractor,
+    extract_file_docstring: LanguagePackFileDocstringExtractor,
+}
+
+fn no_file_docstring(_: &str) -> Option<String> {
+    None
+}
+
+// Runtime registry keyed by the host-registered language-pack descriptor id.
+fn built_in_language_pack_registry() -> &'static HashMap<&'static str, BuiltInLanguagePackRuntime>
+{
+    static BUILT_IN_LANGUAGE_PACKS: OnceLock<HashMap<&'static str, BuiltInLanguagePackRuntime>> =
+        OnceLock::new();
+    BUILT_IN_LANGUAGE_PACKS.get_or_init(|| {
+        HashMap::from([
+            (
+                RUST_LANGUAGE_PACK_ID,
+                BuiltInLanguagePackRuntime {
+                    extract_artefacts: extract_rust_artefacts,
+                    extract_dependency_edges: extract_rust_dependency_edges,
+                    extract_file_docstring: extract_rust_file_docstring,
+                },
+            ),
+            (
+                TS_JS_LANGUAGE_PACK_ID,
+                BuiltInLanguagePackRuntime {
+                    extract_artefacts: extract_js_ts_artefacts,
+                    extract_dependency_edges: extract_js_ts_dependency_edges,
+                    extract_file_docstring: no_file_docstring,
+                },
+            ),
+        ])
+    })
+}
+
+fn resolve_built_in_language_pack(pack_id: &str) -> Option<BuiltInLanguagePackRuntime> {
+    built_in_language_pack_registry().get(pack_id).copied()
+}
+
 fn extract_file_docstring_for_language_pack(language: &str, content: &str) -> Option<String> {
-    match resolve_language_pack_owner(language) {
-        Some(RUST_LANGUAGE_PACK_ID) => extract_rust_file_docstring(content),
-        _ => None,
-    }
+    resolve_language_pack_owner(language)
+        .and_then(resolve_built_in_language_pack)
+        .and_then(|pack| (pack.extract_file_docstring)(content))
 }
 
 fn extract_language_pack_artefacts_and_edges(
@@ -13,27 +60,19 @@ fn extract_language_pack_artefacts_and_edges(
     language: &str,
     content: &str,
 ) -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
-    let (_context, pack_id) = language_pack_context_for_language(cfg, Some(rev.commit_sha), language)
-        .with_context(|| format!("resolving language pack owner for `{language}`"))?;
+    let (_context, pack_id) =
+        language_pack_context_for_language(cfg, Some(rev.commit_sha), language, Some(rev.path))
+            .with_context(|| format!("resolving language pack owner for `{language}`"))?;
+    let Some(pack) = resolve_built_in_language_pack(pack_id) else {
+        bail!(
+            "language `{language}` resolved to unsupported language pack `{pack_id}`"
+        );
+    };
 
-    match pack_id {
-        RUST_LANGUAGE_PACK_ID => {
-            let items = extract_rust_artefacts(content, rev.path)?;
-            let edges = extract_rust_dependency_edges(content, rev.path, &items)?;
-            let file_docstring = extract_rust_file_docstring(content);
-            Ok((items, edges, file_docstring))
-        }
-        TS_JS_LANGUAGE_PACK_ID => {
-            let items = extract_js_ts_artefacts(content, rev.path)?;
-            let edges = extract_js_ts_dependency_edges(content, rev.path, &items)?;
-            Ok((items, edges, None))
-        }
-        other_pack_id => {
-            bail!(
-                "language `{language}` resolved to unsupported language pack `{other_pack_id}`"
-            );
-        }
-    }
+    let items = (pack.extract_artefacts)(content, rev.path)?;
+    let edges = (pack.extract_dependency_edges)(content, rev.path, &items)?;
+    let file_docstring = (pack.extract_file_docstring)(content);
+    Ok((items, edges, file_docstring))
 }
 
 async fn refresh_current_state_for_path(

@@ -8,7 +8,7 @@ use super::capability::{
 };
 use super::language::{
     LanguagePackDescriptor, LanguagePackRegistrationObservation, LanguagePackRegistry,
-    LanguagePackRegistryError,
+    LanguagePackRegistryError, LanguageProfileDescriptor,
 };
 use super::lifecycle::{
     CapabilityMigrationExecution, CapabilityMigrationRunReport, CapabilityMigrationStep,
@@ -28,17 +28,50 @@ const CAPABILITY_PACK_FEATURES: &[&str] = &[
 
 const RUST_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
     id: "rust-language-pack",
+    version: "1.0.0",
+    api_version: 1,
     display_name: "Rust Language Pack",
     aliases: &["rust-pack"],
     supported_languages: &["rust"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "rust-default",
+        display_name: "Rust Default",
+        language_id: "rust",
+        dialect: None,
+        aliases: &["rust-profile"],
+        file_extensions: &["rs"],
+        supported_source_versions: &["^1.70"],
+    }],
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
 const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
     id: "ts-js-language-pack",
+    version: "1.0.0",
+    api_version: 1,
     display_name: "TypeScript/JavaScript Language Pack",
     aliases: &["typescript-pack", "javascript-pack"],
     supported_languages: &["typescript", "javascript", "tsx", "jsx"],
+    language_profiles: &[
+        LanguageProfileDescriptor {
+            id: "typescript-standard",
+            display_name: "TypeScript Standard",
+            language_id: "typescript",
+            dialect: Some("ts"),
+            aliases: &["ts"],
+            file_extensions: &["ts", "tsx", "mts", "cts"],
+            supported_source_versions: &["^5.0"],
+        },
+        LanguageProfileDescriptor {
+            id: "javascript-standard",
+            display_name: "JavaScript Standard",
+            language_id: "javascript",
+            dialect: Some("js"),
+            aliases: &["js"],
+            file_extensions: &["js", "jsx", "mjs", "cjs"],
+            supported_source_versions: &[],
+        },
+    ],
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
@@ -512,9 +545,20 @@ mod tests {
 
     const INCOMPATIBLE_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
         id: "incompatible-language-pack",
+        version: "1.0.0",
+        api_version: 1,
         display_name: "Incompatible Language Pack",
         aliases: &["incompatible-language"],
         supported_languages: &["incompatible"],
+        language_profiles: &[LanguageProfileDescriptor {
+            id: "incompatible-default",
+            display_name: "Incompatible Default",
+            language_id: "incompatible",
+            dialect: None,
+            aliases: &[],
+            file_extensions: &["inc"],
+            supported_source_versions: &[],
+        }],
         compatibility: ExtensionCompatibility::phase1_local_cli(&["missing-feature"]),
     };
 

@@ -286,6 +286,63 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
 }
 
 #[test]
+fn devql_language_pack_runtime_registry_resolves_built_in_pack_implementations() {
+    assert!(resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID).is_some());
+    assert!(resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID).is_some());
+    assert!(resolve_built_in_language_pack("unknown-pack").is_none());
+}
+
+#[test]
+fn devql_language_pack_runtime_executes_rust_and_ts_js_built_ins() {
+    let rust_pack = resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID)
+        .expect("resolve rust built-in language pack runtime");
+    let rust_content = r#"//! crate docs
+fn greet() {
+    helper();
+}
+
+fn helper() {}
+"#;
+    let rust_artefacts = (rust_pack.extract_artefacts)(rust_content, "src/lib.rs")
+        .expect("extract rust artefacts via language-pack runtime");
+    assert!(
+        rust_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "greet"),
+        "rust built-in runtime should surface function artefacts"
+    );
+    assert!(
+        (rust_pack.extract_file_docstring)(rust_content).is_some(),
+        "rust built-in runtime should expose crate-level docstrings"
+    );
+
+    let ts_pack = resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID)
+        .expect("resolve ts/js built-in language pack runtime");
+    let ts_content = r#"export function greet() {
+    return helper();
+}
+
+function helper() {
+    return 1;
+}
+"#;
+    let ts_artefacts = (ts_pack.extract_artefacts)(ts_content, "src/main.ts")
+        .expect("extract ts artefacts via language-pack runtime");
+    assert!(
+        ts_artefacts.iter().any(|artefact| artefact.name == "greet"),
+        "ts/js built-in runtime should surface function artefacts"
+    );
+    let ts_edges = (ts_pack.extract_dependency_edges)(ts_content, "src/main.ts", &ts_artefacts)
+        .expect("extract ts dependency edges via language-pack runtime");
+    assert!(
+        ts_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
+        "ts/js built-in runtime should emit call edges"
+    );
+}
+
+#[test]
 fn devql_extension_host_builds_capability_contexts_from_registered_owners() {
     let cfg = extension_runtime_cfg();
 
