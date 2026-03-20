@@ -1,5 +1,3 @@
-use super::cucumber_world::{DevqlBddWorld, EdgeExpectation};
-use super::*;
 use crate::app::test_mapping::languages::rust::scenarios::collect_rust_suites;
 use crate::app::test_mapping::linker::build_production_index;
 use crate::app::test_mapping::materialize::{MaterializationContext, materialize_source_discovery};
@@ -7,6 +5,8 @@ use crate::app::test_mapping::model::{
     DiscoveredTestFile, ReferenceCandidate, StructuralMappingStats,
 };
 use crate::domain::ProductionArtefact;
+use crate::engine::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
+use crate::engine::devql::*;
 use crate::engine::logging;
 use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::with_cwd;

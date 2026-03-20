@@ -279,9 +279,13 @@ impl KnowledgeRelationService {
                 ResolvedKnowledgeTargetRef::Commit { sha } => {
                     KnowledgeAssociationTarget::Commit { sha }
                 }
-                ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id } => {
-                    KnowledgeAssociationTarget::KnowledgeItem { knowledge_item_id }
-                }
+                ResolvedKnowledgeTargetRef::KnowledgeItem {
+                    knowledge_item_id,
+                    target_knowledge_item_version_id,
+                } => KnowledgeAssociationTarget::KnowledgeItem {
+                    knowledge_item_id,
+                    target_knowledge_item_version_id,
+                },
                 ResolvedKnowledgeTargetRef::Checkpoint { checkpoint_id } => {
                     KnowledgeAssociationTarget::Checkpoint { checkpoint_id }
                 }
@@ -312,11 +316,16 @@ impl KnowledgeRelationService {
     ) -> Result<AssociateKnowledgeResult> {
         let target_type = request.target.target_type().to_string();
         let target_id = request.target.target_id().to_string();
+        let target_knowledge_item_version_id = request
+            .target
+            .target_knowledge_item_version_id()
+            .map(str::to_string);
         let provenance = build_association_provenance(
             &request.command,
             &request.source_knowledge_item_version_id,
             &target_type,
             &target_id,
+            target_knowledge_item_version_id.as_deref(),
             &request.association_method,
         );
         let provenance_json = serde_json::to_string(&provenance)
@@ -328,6 +337,7 @@ impl KnowledgeRelationService {
                 &request.source_knowledge_item_version_id,
                 &target_type,
                 &target_id,
+                target_knowledge_item_version_id.as_deref(),
                 &request.association_method,
             ),
             repo_id: ctx.repo().repo_id.clone(),
@@ -335,6 +345,7 @@ impl KnowledgeRelationService {
             source_knowledge_item_version_id: request.source_knowledge_item_version_id,
             target_type: target_type.clone(),
             target_id: target_id.clone(),
+            target_knowledge_item_version_id,
             relation_type: request.relation_type,
             association_method: request.association_method,
             confidence: 1.0,

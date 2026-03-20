@@ -107,10 +107,19 @@ pub struct IngestKnowledgeRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnowledgeAssociationTarget {
-    Commit { sha: String },
-    KnowledgeItem { knowledge_item_id: String },
-    Checkpoint { checkpoint_id: String },
-    Artefact { artefact_id: String },
+    Commit {
+        sha: String,
+    },
+    KnowledgeItem {
+        knowledge_item_id: String,
+        target_knowledge_item_version_id: Option<String>,
+    },
+    Checkpoint {
+        checkpoint_id: String,
+    },
+    Artefact {
+        artefact_id: String,
+    },
 }
 
 impl KnowledgeAssociationTarget {
@@ -126,9 +135,21 @@ impl KnowledgeAssociationTarget {
     pub fn target_id(&self) -> &str {
         match self {
             Self::Commit { sha } => sha.as_str(),
-            Self::KnowledgeItem { knowledge_item_id } => knowledge_item_id.as_str(),
+            Self::KnowledgeItem {
+                knowledge_item_id, ..
+            } => knowledge_item_id.as_str(),
             Self::Checkpoint { checkpoint_id } => checkpoint_id.as_str(),
             Self::Artefact { artefact_id } => artefact_id.as_str(),
+        }
+    }
+
+    pub fn target_knowledge_item_version_id(&self) -> Option<&str> {
+        match self {
+            Self::KnowledgeItem {
+                target_knowledge_item_version_id,
+                ..
+            } => target_knowledge_item_version_id.as_deref(),
+            Self::Commit { .. } | Self::Checkpoint { .. } | Self::Artefact { .. } => None,
         }
     }
 }
@@ -341,9 +362,14 @@ mod tests {
 
         let knowledge = KnowledgeAssociationTarget::KnowledgeItem {
             knowledge_item_id: "item-1".to_string(),
+            target_knowledge_item_version_id: Some("version-1".to_string()),
         };
         assert_eq!(knowledge.target_type(), "knowledge_item");
         assert_eq!(knowledge.target_id(), "item-1");
+        assert_eq!(
+            knowledge.target_knowledge_item_version_id(),
+            Some("version-1")
+        );
 
         let checkpoint = KnowledgeAssociationTarget::Checkpoint {
             checkpoint_id: "deadbeef1234".to_string(),

@@ -19,9 +19,10 @@ pub fn build_association_provenance(
     source_knowledge_item_version_id: &str,
     target_type: &str,
     target_id: &str,
+    target_knowledge_item_version_id: Option<&str>,
     association_method: &str,
 ) -> Value {
-    json!({
+    let mut doc = json!({
         "capability": "knowledge",
         "plugin_type": "first_party",
         "operation": "knowledge.associate",
@@ -30,5 +31,11 @@ pub fn build_association_provenance(
         "target_type": target_type,
         "target_id": target_id,
         "source_knowledge_item_version_id": source_knowledge_item_version_id,
-    })
+    });
+
+    if let Some(version_id) = target_knowledge_item_version_id {
+        doc["target_knowledge_item_version_id"] = Value::String(version_id.to_string());
+    }
+
+    doc
 }

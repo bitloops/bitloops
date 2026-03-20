@@ -392,9 +392,13 @@ pub(crate) async fn run_associate_flow(
 
     let target = match resolved_target {
         ResolvedKnowledgeTargetRef::Commit { sha } => KnowledgeAssociationTarget::Commit { sha },
-        ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id } => {
-            KnowledgeAssociationTarget::KnowledgeItem { knowledge_item_id }
-        }
+        ResolvedKnowledgeTargetRef::KnowledgeItem {
+            knowledge_item_id,
+            target_knowledge_item_version_id,
+        } => KnowledgeAssociationTarget::KnowledgeItem {
+            knowledge_item_id,
+            target_knowledge_item_version_id,
+        },
         ResolvedKnowledgeTargetRef::Checkpoint { checkpoint_id } => {
             KnowledgeAssociationTarget::Checkpoint { checkpoint_id }
         }

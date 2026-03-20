@@ -223,6 +223,21 @@ What this does:
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
 - Prints JSON output.
 
+### Knowledge association ref semantics
+
+Knowledge association source and target refs are version-aware:
+
+- `knowledge:<item_id>` resolves to the latest version for that item.
+- `knowledge:<item_id>:<version_id>` uses the explicit version.
+
+Examples:
+
+```bash
+bitloops devql knowledge associate "knowledge:<source_item_id>" --to "knowledge:<target_item_id>"
+bitloops devql knowledge associate "knowledge:<source_item_id>:<source_version_id>" --to "knowledge:<target_item_id>"
+bitloops devql knowledge associate "knowledge:<source_item_id>" --to "knowledge:<target_item_id>:<target_version_id>"
+```
+
 ## 7) (Optional) Use dashboard with DB startup health
 
 ```bash

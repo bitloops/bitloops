@@ -20,7 +20,41 @@ impl SqliteKnowledgeRelationalStore {
     pub fn initialise_schema(&self) -> Result<()> {
         self.sqlite
             .execute_batch(knowledge_schema_sql_sqlite())
-            .context("initialising SQLite knowledge schema")
+            .context("initialising SQLite knowledge schema")?;
+        self.ensure_relation_target_version_column()
+    }
+
+    fn ensure_relation_target_version_column(&self) -> Result<()> {
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(knowledge_relation_assertions)")
+                .context("reading relation assertion table metadata")?;
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .context("querying relation assertion table metadata")?;
+
+            let mut has_target_version_column = false;
+            for column in columns {
+                if column
+                    .map_err(anyhow::Error::from)?
+                    .eq("target_knowledge_item_version_id")
+                {
+                    has_target_version_column = true;
+                    break;
+                }
+            }
+
+            if !has_target_version_column {
+                conn.execute(
+                    "ALTER TABLE knowledge_relation_assertions \
+                     ADD COLUMN target_knowledge_item_version_id TEXT",
+                    [],
+                )
+                .context("adding target_knowledge_item_version_id column to relation assertions")?;
+            }
+
+            Ok(())
+        })
     }
 
     pub fn persist_ingestion(
@@ -368,9 +402,9 @@ fn insert_relation_assertion(
     conn.execute(
         "INSERT OR IGNORE INTO knowledge_relation_assertions (
             relation_assertion_id, repo_id, knowledge_item_id, source_knowledge_item_version_id,
-            target_type, target_id, relation_type, association_method, confidence, provenance_json,
-            created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))",
+            target_type, target_id, target_knowledge_item_version_id, relation_type,
+            association_method, confidence, provenance_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))",
         params![
             relation.relation_assertion_id.as_str(),
             relation.repo_id.as_str(),
@@ -378,6 +412,7 @@ fn insert_relation_assertion(
             relation.source_knowledge_item_version_id.as_str(),
             relation.target_type.as_str(),
             relation.target_id.as_str(),
+            relation.target_knowledge_item_version_id.as_deref(),
             relation.relation_type.as_str(),
             relation.association_method.as_str(),
             relation.confidence,
@@ -481,6 +516,7 @@ mod tests {
             source_knowledge_item_version_id: "version-1".to_string(),
             target_type: "commit".to_string(),
             target_id: "abc123".to_string(),
+            target_knowledge_item_version_id: None,
             relation_type: "associated_with".to_string(),
             association_method: "manual_attachment".to_string(),
             confidence: 1.0,
