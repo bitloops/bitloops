@@ -1,3 +1,6 @@
+use crate::engine::capability_packs::builtin::semantic_clones::{
+    SEMANTIC_CLONES_CAPABILITY_PACK_ID, SEMANTIC_CLONES_QUERY_EXAMPLE_ID, SEMANTIC_CLONES_STAGE_ID,
+};
 use crate::engine::extensions::capability::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
@@ -110,8 +113,8 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
     );
     assert_eq!(
         host.capability_packs()
-            .resolve_stage_owner("semantic-clones"),
-        Some("semantic-clones-capability-pack")
+            .resolve_stage_owner(SEMANTIC_CLONES_STAGE_ID),
+        Some(SEMANTIC_CLONES_CAPABILITY_PACK_ID)
     );
     assert_eq!(
         host.capability_packs()
@@ -125,8 +128,8 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
     );
     assert_eq!(
         host.capability_packs()
-            .resolve_query_example_owner("semantic-clones-basic"),
-        Some("semantic-clones-capability-pack")
+            .resolve_query_example_owner(SEMANTIC_CLONES_QUERY_EXAMPLE_ID),
+        Some(SEMANTIC_CLONES_CAPABILITY_PACK_ID)
     );
 
     let readiness = host.readiness_snapshot();
@@ -141,7 +144,7 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
         readiness
             .capability_pack_ids
             .iter()
-            .any(|pack_id| pack_id == "semantic-clones-capability-pack")
+            .any(|pack_id| pack_id == SEMANTIC_CLONES_CAPABILITY_PACK_ID)
     );
 }
 

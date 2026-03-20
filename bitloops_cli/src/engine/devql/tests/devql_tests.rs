@@ -108,6 +108,42 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     }
 }
 
+#[tokio::test]
+async fn init_duckdb_schema_creates_checkpoint_events_table() {
+    let temp = tempdir().expect("temp dir");
+    let path = temp.path().join("events.duckdb");
+    let events_cfg = backend_cfg(None, Some(path.to_string_lossy().to_string())).events;
+
+    init_duckdb_schema(&events_cfg)
+        .await
+        .expect("initialise duckdb schema");
+
+    let conn = duckdb::Connection::open(path).expect("open duckdb");
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'checkpoint_events'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query checkpoint_events table");
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn init_clickhouse_schema_returns_error_for_unreachable_endpoint() {
+    let mut cfg = test_cfg();
+    cfg.clickhouse_url = "http://127.0.0.1:9".to_string();
+
+    let err = init_clickhouse_schema(&cfg)
+        .await
+        .expect_err("unreachable clickhouse endpoint must fail");
+
+    assert!(
+        err.to_string().contains("ClickHouse")
+            || err.to_string().contains("sending ClickHouse request")
+    );
+}
+
 fn seed_git_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     init_test_repo(

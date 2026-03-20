@@ -89,7 +89,7 @@ async fn rebuild_symbol_clone_edges(
     ensure_semantic_embeddings_schema(relational).await?;
     let candidates = load_symbol_clone_candidate_inputs(relational, repo_id).await?;
     let build_result = tokio::task::spawn_blocking(move || {
-        semantic_clones::build_symbol_clone_edges(&candidates)
+        semantic_clones_pack::build_symbol_clone_edges(&candidates)
     })
     .await
     .context("building semantic clone edges on blocking worker")?;

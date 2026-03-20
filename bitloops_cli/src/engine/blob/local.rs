@@ -53,6 +53,15 @@ impl BlobStore for LocalBlobStore {
         let path = self.resolve_path(key)?;
         Ok(path.exists())
     }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        let path = self.resolve_path(key)?;
+        if !path.exists() {
+            return Ok(());
+        }
+        fs::remove_file(&path).with_context(|| format!("deleting blob file {}", path.display()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +93,18 @@ mod tests {
             .write("../outside.txt", b"nope")
             .expect_err("must reject traversal");
         assert!(err.to_string().contains("parent path traversal"));
+    }
+
+    #[test]
+    fn local_blob_store_delete_removes_blob() {
+        let temp = TempDir::new().expect("temp dir");
+        let store = LocalBlobStore::new(temp.path()).expect("local blob store");
+
+        let key = "repo-1/cp-1/0/transcript.jsonl";
+        store.write(key, b"payload").expect("write blob");
+        assert!(store.exists(key).expect("exists before delete"));
+
+        store.delete(key).expect("delete blob");
+        assert!(!store.exists(key).expect("exists after delete"));
     }
 }

@@ -502,19 +502,3 @@ fn format_ch_array(values: &[String]) -> String {
 fn glob_to_sql_like(glob: &str) -> String {
     glob.replace("**", "%").replace('*', "%")
 }
-
-fn deterministic_uuid(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let digest = format!("{:x}", hasher.finalize());
-
-    let hex = &digest[..32];
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
-}

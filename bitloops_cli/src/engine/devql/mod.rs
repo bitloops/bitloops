@@ -6,9 +6,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
+use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones_pack;
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
@@ -31,7 +31,19 @@ use crate::store_config::{
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
+pub mod capabilities;
+pub mod capability_host;
+pub(crate) mod identity;
+
+pub(crate) use identity::deterministic_uuid;
 pub mod watch;
+
+pub fn build_capability_host(
+    repo_root: &Path,
+    repo: RepoIdentity,
+) -> anyhow::Result<capability_host::DevqlCapabilityHost> {
+    capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
+}
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -102,7 +114,7 @@ const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
-const SEMANTIC_CLONES_CAPABILITY_STAGE_ID: &str = "semantic-clones";
+const SEMANTIC_CLONES_CAPABILITY_STAGE_ID: &str = semantic_clones_pack::SEMANTIC_CLONES_STAGE_ID;
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -512,13 +524,12 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     let knowledge_context =
         capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
             .context("resolving knowledge capability ingester owner")?;
-    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
-        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
+    let summary_provider =
+        semantic_clones_pack::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
+    let embedding_provider = semantic_clones_pack::build_symbol_embedding_provider(
         &embedding_provider_config(cfg),
         Some(&cfg.repo_root),
-    )?
-    .map(Arc::<dyn EmbeddingProvider>::from);
+    )?;
     if init {
         match backends.events.provider {
             EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
@@ -634,12 +645,11 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &normalized_path,
             )
             .await?;
-            let semantic_feature_inputs =
-                semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                    &pre_stage_artefacts,
-                    &pre_stage_dependencies,
-                    &content,
-                );
+            let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
+                &pre_stage_artefacts,
+                &pre_stage_dependencies,
+                &content,
+            );
             let semantic_feature_stats = upsert_semantic_feature_rows(
                 &relational,
                 &semantic_feature_inputs,
@@ -809,6 +819,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
         Some(RelationalStorage::connect(cfg, &backends.relational, "devql query").await?)
     };
     let mut rows = execute_devql_query(cfg, &parsed, &backends.events, relational.as_ref()).await?;
+    rows = execute_registered_stages(cfg, &parsed, rows).await?;
 
     if !parsed.select_fields.is_empty() {
         rows = project_rows(rows, &parsed.select_fields);

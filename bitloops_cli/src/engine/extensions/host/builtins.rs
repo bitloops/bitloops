@@ -1,3 +1,4 @@
+use crate::engine::capability_packs::builtin::semantic_clones::semantic_clones_capability_pack_descriptor;
 use crate::engine::extensions::capability::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
@@ -63,18 +64,6 @@ pub(super) const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescr
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
-const SEMANTIC_CLONES_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
-    id: "semantic-clones-capability-pack",
-    display_name: "Semantic Clones Capability Pack",
-    version: "1.0.0",
-    api_version: 1,
-    description: "Semantic clone detection and ranking capability",
-    default_enabled: true,
-    experimental: false,
-    dependencies: &[],
-    required_host_features: CAPABILITY_PACK_FEATURES,
-};
-
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",
@@ -100,25 +89,7 @@ const TEST_HARNESS_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescr
 };
 
 pub(super) const SEMANTIC_CLONES_CAPABILITY_PACK: CapabilityPackDescriptor =
-    CapabilityPackDescriptor {
-        capability: SEMANTIC_CLONES_CAPABILITY_DESCRIPTOR,
-        aliases: &["semantic-clones-pack"],
-        stage_contributions: &[CapabilityStageContribution {
-            id: "semantic-clones",
-        }],
-        ingester_contributions: &[CapabilityIngesterContribution {
-            id: "semantic-clones-ingester",
-        }],
-        schema_module_contributions: &[CapabilitySchemaModuleContribution {
-            id: "semantic-clones-schema",
-        }],
-        query_example_contributions: &[CapabilityQueryExampleContribution {
-            id: "semantic-clones-basic",
-            query: "repo(\"bitloops\")->semanticClones()->limit(10)",
-        }],
-        compatibility: ExtensionCompatibility::phase1_local_cli(CAPABILITY_PACK_FEATURES),
-        migrations: &[],
-    };
+    semantic_clones_capability_pack_descriptor(CAPABILITY_PACK_FEATURES);
 
 pub(super) const KNOWLEDGE_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
     capability: KNOWLEDGE_CAPABILITY_DESCRIPTOR,
