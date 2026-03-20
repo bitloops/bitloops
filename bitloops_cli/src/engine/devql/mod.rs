@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones_pack;
@@ -32,7 +31,19 @@ use crate::store_config::{
 };
 use crate::terminal::db_status_table::print_db_status_table;
 
+pub mod capabilities;
+pub mod capability_host;
+pub(crate) mod identity;
+
+pub(crate) use identity::deterministic_uuid;
 pub mod watch;
+
+pub fn build_capability_host(
+    repo_root: &Path,
+    repo: RepoIdentity,
+) -> anyhow::Result<capability_host::DevqlCapabilityHost> {
+    capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
+}
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -808,6 +819,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
         Some(RelationalStorage::connect(cfg, &backends.relational, "devql query").await?)
     };
     let mut rows = execute_devql_query(cfg, &parsed, &backends.events, relational.as_ref()).await?;
+    rows = execute_registered_stages(cfg, &parsed, rows).await?;
 
     if !parsed.select_fields.is_empty() {
         rows = project_rows(rows, &parsed.select_fields);

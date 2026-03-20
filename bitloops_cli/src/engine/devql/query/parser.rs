@@ -19,8 +19,15 @@ struct ParsedDevqlQuery {
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
     has_chat_history_stage: bool,
+    registered_stages: Vec<RegisteredStageCall>,
     limit: usize,
     select_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RegisteredStageCall {
+    stage_name: String,
+    args: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +313,11 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
+        if let Some(call) = parse_registered_stage(stage)? {
+            parsed.registered_stages.push(call);
+            continue;
+        }
+
         bail!("unsupported DevQL stage: {stage}")
     }
 
@@ -397,4 +409,29 @@ fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
         bail!("invalid lines range: {lines}")
     }
     Ok((start, end))
+}
+
+fn parse_registered_stage(stage: &str) -> Result<Option<RegisteredStageCall>> {
+    let Some(open_idx) = stage.find('(') else {
+        return Ok(None);
+    };
+    if !stage.ends_with(')') || open_idx == 0 {
+        return Ok(None);
+    }
+
+    let stage_name = stage[..open_idx].trim();
+    if stage_name.is_empty()
+        || !stage_name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Ok(None);
+    }
+
+    let args_raw = &stage[open_idx + 1..stage.len() - 1];
+    let args = parse_named_args(args_raw)?;
+    Ok(Some(RegisteredStageCall {
+        stage_name: stage_name.to_string(),
+        args,
+    }))
 }

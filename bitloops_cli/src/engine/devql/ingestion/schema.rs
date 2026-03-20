@@ -7,3 +7,4 @@ include!("schema/relational_postgres_schema.rs");
 include!("schema/checkpoint_postgres_schema.rs");
 include!("schema/relational_postgres_migrations.rs");
 include!("schema/checkpoint_sqlite_schema.rs");
+include!("schema/knowledge_schema.rs");

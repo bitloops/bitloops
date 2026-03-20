@@ -348,3 +348,40 @@ fn session_chat_payload(
     cache.insert(key, resolved.clone());
     resolved
 }
+
+async fn execute_registered_stages(
+    cfg: &DevqlConfig,
+    parsed: &ParsedDevqlQuery,
+    mut rows: Vec<Value>,
+) -> Result<Vec<Value>> {
+    if parsed.registered_stages.is_empty() {
+        return Ok(rows);
+    }
+
+    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    for stage in &parsed.registered_stages {
+        let capability_id = if host.has_stage("knowledge", &stage.stage_name) {
+            "knowledge"
+        } else {
+            bail!("unsupported DevQL stage: {}()", stage.stage_name);
+        };
+
+        let response = host
+            .invoke_stage(
+                capability_id,
+                &stage.stage_name,
+                json!({
+                    "input_rows": rows,
+                    "args": stage.args,
+                    "limit": parsed.limit.max(1),
+                }),
+            )
+            .await?;
+        rows = match response.payload {
+            Value::Array(array) => array,
+            value => vec![value],
+        };
+    }
+
+    Ok(rows)
+}

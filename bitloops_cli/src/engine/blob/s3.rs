@@ -98,6 +98,15 @@ impl BlobStore for S3BlobStore {
         })
         .context("checking blob existence in S3")
     }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        let object_path = Self::parse_object_path(key)?;
+        block_on_blob(async {
+            self.store.delete(&object_path).await?;
+            Ok(())
+        })
+        .context("deleting blob from S3")
+    }
 }
 
 #[cfg(test)]
