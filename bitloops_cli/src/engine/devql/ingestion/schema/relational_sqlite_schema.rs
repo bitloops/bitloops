@@ -206,6 +206,19 @@ ON artefact_edges_current (
     COALESCE(end_line, -1),
     COALESCE(metadata, '{}')
 );
+
+CREATE TABLE IF NOT EXISTS workspace_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id    TEXT    NOT NULL,
+    tree_hash  TEXT    NOT NULL,
+    created_at TEXT    DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS workspace_revisions_repo_idx
+ON workspace_revisions (repo_id);
+
+CREATE INDEX IF NOT EXISTS workspace_revisions_tree_idx
+ON workspace_revisions (repo_id, tree_hash);
 "#
 }
 

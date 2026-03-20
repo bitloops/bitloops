@@ -68,5 +68,10 @@ async fn init_postgres_schema(
         .await
         .context("adding confidence/linkage_status columns to test_links")?;
 
+    let workspace_revisions_sql = workspace_revisions_sql();
+    postgres_exec(pg_client, workspace_revisions_sql)
+        .await
+        .context("creating workspace_revisions table")?;
+
     Ok(())
 }

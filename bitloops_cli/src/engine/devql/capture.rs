@@ -75,18 +75,16 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     )
     .context("resolving SQLite path for watcher capture")?;
     let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path.clone())?;
-    sqlite.initialise_checkpoint_schema()?;
     sqlite.initialise_devql_schema()?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for watch capture")?
         .repo_id;
 
-    let session_id = "devql-watcher".to_string();
     let latest_tree_hash = sqlite.with_connection(|conn| {
         conn.query_row(
-            "SELECT tree_hash FROM temporary_checkpoints WHERE session_id = ?1 AND repo_id = ?2 ORDER BY id DESC LIMIT 1",
-            rusqlite::params![&session_id, &repo_id],
+            "SELECT tree_hash FROM workspace_revisions WHERE repo_id = ?1 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![&repo_id],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -97,26 +95,9 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     }
 
     let row_id = sqlite.with_connection(|conn| {
-        let next_step: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(step_number), 0) + 1 FROM temporary_checkpoints WHERE session_id = ?1 AND repo_id = ?2",
-            rusqlite::params![&session_id, &repo_id],
-            |row| row.get(0),
-        )?;
-
         conn.execute(
-            "INSERT INTO temporary_checkpoints (
-                session_id, repo_id, tree_hash, step_number,
-                modified_files, new_files, deleted_files,
-                author_name, author_email, commit_message
-            ) VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, 'Bitloops', 'bitloops@localhost', 'devql watcher checkpoint')",
-            rusqlite::params![
-                session_id,
-                repo_id,
-                tree_hash,
-                next_step,
-                serde_json::to_string(&modified).unwrap_or_else(|_| "[]".to_string()),
-                serde_json::to_string(&deleted).unwrap_or_else(|_| "[]".to_string()),
-            ],
+            "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
+            rusqlite::params![repo_id, tree_hash],
         )?;
         Ok(conn.last_insert_rowid())
     })?;
@@ -307,12 +288,14 @@ mod tests {
         let db_path = crate::engine::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
-        let temp_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
-                row.get(0)
-            })
-            .expect("count temporary checkpoints");
-        assert_eq!(temp_rows, 1);
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
+        assert_eq!(workspace_rows, 1);
 
         let current_rows: i64 = conn
             .query_row(
@@ -525,14 +508,16 @@ mod tests {
             return;
         }
         let conn = Connection::open(db_path).expect("open sqlite");
-        let temp_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
-                row.get(0)
-            })
-            .expect("count temporary checkpoints");
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
         assert_eq!(
-            temp_rows, 0,
-            "no-content-change capture should not persist temp rows"
+            workspace_rows, 0,
+            "no-content-change capture should not persist workspace_revisions rows"
         );
     }
 
@@ -556,12 +541,17 @@ mod tests {
 
         let db_path = crate::engine::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
-        let temp_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
-                row.get(0)
-            })
-            .expect("count temporary checkpoints");
-        assert_eq!(temp_rows, 1, "duplicate tree hash should be deduplicated");
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
+        assert_eq!(
+            workspace_rows, 1,
+            "duplicate tree hash should be deduplicated"
+        );
     }
 
     #[test]
@@ -591,14 +581,16 @@ mod tests {
 
         let db_path = crate::engine::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
-        let temp_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
-                row.get(0)
-            })
-            .expect("count temporary checkpoints");
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
         assert_eq!(
-            temp_rows, 2,
-            "update and delete should produce two temp checkpoints"
+            workspace_rows, 2,
+            "update and delete should produce two workspace_revisions rows"
         );
 
         let current_rows: i64 = conn
@@ -643,14 +635,141 @@ mod tests {
 
         let db_path = crate::engine::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
-        let temp_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM temporary_checkpoints", [], |row| {
-                row.get(0)
-            })
-            .expect("count temporary checkpoints");
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions");
         assert_eq!(
-            temp_rows, 1,
+            workspace_rows, 1,
             "duplicate tree hash should be deduplicated for handle capture path"
+        );
+    }
+
+    #[test]
+    fn capture_workspace_revision_id_is_referenced_by_artefacts_current() {
+        // Verify that temp_checkpoint_id on artefacts_current equals the
+        // workspace_revisions.id that was inserted for that batch.
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn linked() -> i32 {\n    7\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+            .expect("capture batch");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+
+        let workspace_id: i64 = conn
+            .query_row(
+                "SELECT id FROM workspace_revisions WHERE repo_id = ?1 ORDER BY id DESC LIMIT 1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("fetch workspace_revisions id");
+
+        let temp_checkpoint_id: i64 = conn
+            .query_row(
+                "SELECT temp_checkpoint_id FROM artefacts_current \
+                 WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
+                |row| row.get(0),
+            )
+            .expect("fetch temp_checkpoint_id from artefacts_current");
+
+        assert_eq!(
+            temp_checkpoint_id, workspace_id,
+            "temp_checkpoint_id in artefacts_current must equal workspace_revisions.id"
+        );
+
+        // revision_id should be "temp:<workspace_id>"
+        let revision_id: String = conn
+            .query_row(
+                "SELECT revision_id FROM artefacts_current \
+                 WHERE path = 'src/lib.rs' AND symbol_id = ?1",
+                [file_symbol_id("src/lib.rs")],
+                |row| row.get(0),
+            )
+            .expect("fetch revision_id");
+        assert_eq!(
+            revision_id,
+            format!("temp:{workspace_id}"),
+            "revision_id must be temp:<workspace_revisions.id>"
+        );
+    }
+
+    #[test]
+    fn capture_does_not_write_to_temporary_checkpoints_table() {
+        // Ensure the watcher no longer touches the checkpoint schema at all.
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn no_checkpoint() -> i32 {\n    0\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+            .expect("capture batch");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+
+        // temporary_checkpoints should not even exist in the DevQL database —
+        // it lives in the separate checkpoint database.
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'temporary_checkpoints'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        assert!(
+            !table_exists,
+            "temporary_checkpoints must NOT exist in the DevQL relational database"
+        );
+    }
+
+    #[test]
+    fn capture_workspace_revisions_table_exists_after_first_capture() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn after_first_capture() -> i32 {\n    1\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+            .expect("capture batch");
+
+        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_revisions'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        assert!(
+            table_exists,
+            "workspace_revisions table must exist after capture"
         );
     }
 }
