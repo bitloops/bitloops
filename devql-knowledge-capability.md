@@ -56,7 +56,103 @@ bitloops init --agent codex
 bitloops devql init
 ```
 
-Also ensure your knowledge providers are configured in `.bitloops/config.json` for the URLs you want to test (GitHub, Jira, Confluence).
+### 4.1 Required repository config
+
+Create or update `<repo>/.bitloops/config.json` with:
+
+- store backends (`stores.*`),
+- knowledge provider credentials (`knowledge.providers.*`).
+
+Minimal working example:
+
+```json
+{
+  "stores": {
+    "relational": {
+      "provider": "sqlite",
+      "sqlite_path": ".bitloops/stores/relational/relational.db"
+    },
+    "event": {
+      "provider": "duckdb",
+      "duckdb_path": ".bitloops/stores/event/events.duckdb"
+    },
+    "blob": {
+      "provider": "local",
+      "local_path": ".bitloops/stores/blob"
+    }
+  },
+  "knowledge": {
+    "providers": {
+      "github": {
+        "token": "${GITHUB_TOKEN}"
+      },
+      "atlassian": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### 4.2 Provider configuration rules
+
+- GitHub URLs (`github.com/.../issues/...`, `.../pull/...`) require:
+  - `knowledge.providers.github.token`
+- Jira and Confluence URLs can use:
+  - shared Atlassian config under `knowledge.providers.atlassian`, or
+  - product-specific overrides under `knowledge.providers.jira` and `knowledge.providers.confluence`
+
+Example with Jira/Confluence overrides:
+
+```json
+{
+  "knowledge": {
+    "providers": {
+      "atlassian": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_TOKEN}"
+      },
+      "jira": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_JIRA_TOKEN}"
+      },
+      "confluence": {
+        "site_url": "https://bitloops.atlassian.net",
+        "email": "${ATLASSIAN_EMAIL}",
+        "token": "${ATLASSIAN_CONFLUENCE_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### 4.3 Environment variables used by config interpolation
+
+Set the env vars referenced above before running commands:
+
+```bash
+export GITHUB_TOKEN="..."
+export ATLASSIAN_EMAIL="name@example.com"
+export ATLASSIAN_TOKEN="..."
+export ATLASSIAN_JIRA_TOKEN="..."          # optional if jira override is used
+export ATLASSIAN_CONFLUENCE_TOKEN="..."    # optional if confluence override is used
+```
+
+### 4.4 Bootstrap sequence
+
+After config is in place:
+
+```bash
+bitloops init --agent codex
+bitloops devql connection-status
+bitloops devql init
+```
+
+Then proceed with the manual knowledge commands in this guide.
 
 ## 5. Step-by-Step Manual Testing
 
