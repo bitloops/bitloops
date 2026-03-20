@@ -81,7 +81,7 @@ Feature: Knowledge associate command for knowledge targets
     Then the operation fails with message containing "target knowledge item"
     And exactly 0 knowledge relation assertions exist
 
-  Scenario: KS-ASKNOW-06 Versioned knowledge target is rejected
+  Scenario: KS-ASKNOW-06 Versioned knowledge target is supported
     Given a Knowledge test workspace with configured providers
     And GitHub knowledge for "https://github.com/bitloops/bitloops/issues/42" returns:
       | title | Issue 42 title |
@@ -92,5 +92,8 @@ Feature: Knowledge associate command for knowledge targets
     And the developer has already added knowledge from "https://github.com/bitloops/bitloops/issues/42" as "source"
     And the developer has already added knowledge from "https://bitloops.atlassian.net/browse/CLI-1370" as "target"
     When the developer associates "knowledge:<source_item_id>" to "knowledge:<target_item_id>:<target_item_version_id>"
-    Then the operation fails with message containing "not supported as a target"
-    And exactly 0 knowledge relation assertions exist
+    Then the last operation succeeds
+    And exactly 1 knowledge relation assertions exist
+    And the relation target type is "knowledge_item"
+    And the relation target id equals "<target_item_id>"
+    And the relation source version equals "<source_item_version_id>"

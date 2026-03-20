@@ -101,6 +101,9 @@ Feature: Knowledge associate explicit source version references
     And the relation target type is "knowledge_item"
     And the relation target id equals "<target_item_id>"
     And the relation source version equals "<source_item_version_id>"
+    And the latest relation provenance has fields:
+      | key                                | value                    |
+      | target_knowledge_item_version_id   | <target_item_version_id> |
 
   Scenario: KS-EXPLVER-08 Deprecated knowledge_version source compatibility
     Given a Knowledge test workspace with configured providers

@@ -33,10 +33,19 @@ pub struct ResolvedKnowledgeSourceRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedKnowledgeTargetRef {
-    Commit { sha: String },
-    KnowledgeItem { knowledge_item_id: String },
-    Checkpoint { checkpoint_id: String },
-    Artefact { artefact_id: String },
+    Commit {
+        sha: String,
+    },
+    KnowledgeItem {
+        knowledge_item_id: String,
+        target_knowledge_item_version_id: Option<String>,
+    },
+    Checkpoint {
+        checkpoint_id: String,
+    },
+    Artefact {
+        artefact_id: String,
+    },
 }
 
 fn parse_knowledge_source_value(value: &str) -> Result<(String, Option<String>)> {
@@ -198,14 +207,38 @@ pub fn resolve_target_ref(
         }),
         KnowledgeRef::KnowledgeItem {
             knowledge_item_id,
-            knowledge_item_version_id: None,
+            knowledge_item_version_id,
         } => {
             ctx.knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| {
                     format!("target knowledge item `{knowledge_item_id}` not found")
                 })?;
-            Ok(ResolvedKnowledgeTargetRef::KnowledgeItem { knowledge_item_id })
+
+            if let Some(target_version_id) = knowledge_item_version_id {
+                let version = ctx
+                    .knowledge_documents()
+                    .find_knowledge_item_version(&target_version_id)?
+                    .with_context(|| {
+                        format!("target knowledge item version `{target_version_id}` not found")
+                    })?;
+
+                if version.knowledge_item_id != knowledge_item_id {
+                    bail!(
+                        "target knowledge version `{target_version_id}` does not belong to knowledge item `{knowledge_item_id}`"
+                    );
+                }
+
+                Ok(ResolvedKnowledgeTargetRef::KnowledgeItem {
+                    knowledge_item_id,
+                    target_knowledge_item_version_id: Some(target_version_id),
+                })
+            } else {
+                Ok(ResolvedKnowledgeTargetRef::KnowledgeItem {
+                    knowledge_item_id,
+                    target_knowledge_item_version_id: None,
+                })
+            }
         }
         KnowledgeRef::Checkpoint { checkpoint_id } => {
             let resolved = ctx
@@ -237,11 +270,7 @@ pub fn resolve_target_ref(
                 artefact_id: trimmed.to_string(),
             })
         }
-        KnowledgeRef::KnowledgeItem {
-            knowledge_item_version_id: Some(_),
-            ..
-        }
-        | KnowledgeRef::KnowledgeVersion { .. } => {
+        KnowledgeRef::KnowledgeVersion { .. } => {
             bail!("target ref `{raw}` is not supported as a target by `knowledge associate` yet")
         }
     }
@@ -580,28 +609,52 @@ mod tests {
             artefacts: HashMap::from([(TEST_ARTEFACT_ID.to_string(), true)]),
         };
         let documents = FakeDocumentGateway {
-            rows: HashMap::from([(
-                knowledge_item_version_id.clone(),
-                KnowledgeDocumentVersionRow {
-                    knowledge_item_version_id,
-                    knowledge_item_id,
-                    provider: "github".to_string(),
-                    source_kind: "github_issue".to_string(),
-                    content_hash: "hash-1".to_string(),
-                    title: "Issue 42".to_string(),
-                    state: Some("open".to_string()),
-                    author: Some("spiros".to_string()),
-                    updated_at: Some("2026-03-19T10:00:00Z".to_string()),
-                    body_preview: Some("Issue body".to_string()),
-                    normalized_fields_json: "{}".to_string(),
-                    storage_backend: "local".to_string(),
-                    storage_path: "knowledge/repo/item/version/payload.json".to_string(),
-                    payload_mime_type: "application/json".to_string(),
-                    payload_size_bytes: 10,
-                    provenance_json: "{}".to_string(),
-                    created_at: Some("2026-03-19T10:00:00Z".to_string()),
-                },
-            )]),
+            rows: HashMap::from([
+                (
+                    knowledge_item_version_id.clone(),
+                    KnowledgeDocumentVersionRow {
+                        knowledge_item_version_id,
+                        knowledge_item_id,
+                        provider: "github".to_string(),
+                        source_kind: "github_issue".to_string(),
+                        content_hash: "hash-1".to_string(),
+                        title: "Issue 42".to_string(),
+                        state: Some("open".to_string()),
+                        author: Some("spiros".to_string()),
+                        updated_at: Some("2026-03-19T10:00:00Z".to_string()),
+                        body_preview: Some("Issue body".to_string()),
+                        normalized_fields_json: "{}".to_string(),
+                        storage_backend: "local".to_string(),
+                        storage_path: "knowledge/repo/item/version/payload.json".to_string(),
+                        payload_mime_type: "application/json".to_string(),
+                        payload_size_bytes: 10,
+                        provenance_json: "{}".to_string(),
+                        created_at: Some("2026-03-19T10:00:00Z".to_string()),
+                    },
+                ),
+                (
+                    "version-2".to_string(),
+                    KnowledgeDocumentVersionRow {
+                        knowledge_item_version_id: "version-2".to_string(),
+                        knowledge_item_id: "item-2".to_string(),
+                        provider: "github".to_string(),
+                        source_kind: "github_issue".to_string(),
+                        content_hash: "hash-2".to_string(),
+                        title: "Issue 2".to_string(),
+                        state: Some("open".to_string()),
+                        author: Some("spiros".to_string()),
+                        updated_at: Some("2026-03-19T10:00:00Z".to_string()),
+                        body_preview: Some("Issue body 2".to_string()),
+                        normalized_fields_json: "{}".to_string(),
+                        storage_backend: "local".to_string(),
+                        storage_path: "knowledge/repo/item/version-2/payload.json".to_string(),
+                        payload_mime_type: "application/json".to_string(),
+                        payload_size_bytes: 10,
+                        provenance_json: "{}".to_string(),
+                        created_at: Some("2026-03-19T10:00:00Z".to_string()),
+                    },
+                ),
+            ]),
         };
 
         Ok((
@@ -718,6 +771,16 @@ mod tests {
             knowledge,
             ResolvedKnowledgeTargetRef::KnowledgeItem {
                 knowledge_item_id: "item-1".to_string(),
+                target_knowledge_item_version_id: None,
+            }
+        );
+
+        let knowledge_versioned = resolve_target_ref(&ctx, "knowledge:item-1:version-1")?;
+        assert_eq!(
+            knowledge_versioned,
+            ResolvedKnowledgeTargetRef::KnowledgeItem {
+                knowledge_item_id: "item-1".to_string(),
+                target_knowledge_item_version_id: Some("version-1".to_string()),
             }
         );
 
@@ -737,7 +800,8 @@ mod tests {
             }
         );
 
-        assert!(resolve_target_ref(&ctx, "knowledge:item-1:version-1").is_err());
+        assert!(resolve_target_ref(&ctx, "knowledge:item-1:missing-version").is_err());
+        assert!(resolve_target_ref(&ctx, "knowledge:item-1:version-2").is_err());
         assert!(resolve_target_ref(&ctx, "knowledge_version:version-1").is_err());
         assert!(resolve_target_ref(&ctx, "artefact:missing").is_err());
         assert!(resolve_target_ref(&ctx, "commit:   ").is_err());

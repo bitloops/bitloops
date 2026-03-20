@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS knowledge_relation_assertions (
     source_knowledge_item_version_id TEXT,
     target_type TEXT NOT NULL,
     target_id TEXT NOT NULL,
+    target_knowledge_item_version_id TEXT,
     relation_type TEXT NOT NULL,
     association_method TEXT NOT NULL,
     confidence REAL,

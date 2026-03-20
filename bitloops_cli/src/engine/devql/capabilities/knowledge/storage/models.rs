@@ -43,6 +43,7 @@ pub struct KnowledgeRelationAssertionRow {
     pub source_knowledge_item_version_id: String,
     pub target_type: String,
     pub target_id: String,
+    pub target_knowledge_item_version_id: Option<String>,
     pub relation_type: String,
     pub association_method: String,
     pub confidence: f64,
@@ -97,10 +98,12 @@ pub fn relation_assertion_id(
     source_knowledge_item_version_id: &str,
     target_type: &str,
     target_id: &str,
+    target_knowledge_item_version_id: Option<&str>,
     association_method: &str,
 ) -> String {
     deterministic_uuid(&format!(
-        "knowledge-relation://{knowledge_item_id}/{source_knowledge_item_version_id}/{target_type}/{target_id}/{association_method}"
+        "knowledge-relation://{knowledge_item_id}/{source_knowledge_item_version_id}/{target_type}/{target_id}/{}/{association_method}",
+        target_knowledge_item_version_id.unwrap_or("-")
     ))
 }
 
@@ -133,6 +136,37 @@ mod tests {
             knowledge_payload_key("repo-1", "item-1", "version-1"),
             "knowledge/repo-1/item-1/version-1/payload.json"
         );
+    }
+
+    #[test]
+    fn relation_assertion_id_distinguishes_target_versions() {
+        let base = relation_assertion_id(
+            "item-1",
+            "source-version-1",
+            "knowledge_item",
+            "target-item-1",
+            None,
+            "manual_attachment",
+        );
+        let v1 = relation_assertion_id(
+            "item-1",
+            "source-version-1",
+            "knowledge_item",
+            "target-item-1",
+            Some("target-version-1"),
+            "manual_attachment",
+        );
+        let v2 = relation_assertion_id(
+            "item-1",
+            "source-version-1",
+            "knowledge_item",
+            "target-item-1",
+            Some("target-version-2"),
+            "manual_attachment",
+        );
+
+        assert_ne!(base, v1);
+        assert_ne!(v1, v2);
     }
 
     #[test]
