@@ -1,5 +1,41 @@
 // Top-level orchestration: refresh/upsert/delete current state and persist language artefacts.
 
+fn extract_file_docstring_for_language_pack(language: &str, content: &str) -> Option<String> {
+    match resolve_language_pack_owner(language) {
+        Some(RUST_LANGUAGE_PACK_ID) => extract_rust_file_docstring(content),
+        _ => None,
+    }
+}
+
+fn extract_language_pack_artefacts_and_edges(
+    cfg: &DevqlConfig,
+    rev: &FileRevision<'_>,
+    language: &str,
+    content: &str,
+) -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
+    let (_context, pack_id) = language_pack_context_for_language(cfg, Some(rev.commit_sha), language)
+        .with_context(|| format!("resolving language pack owner for `{language}`"))?;
+
+    match pack_id {
+        RUST_LANGUAGE_PACK_ID => {
+            let items = extract_rust_artefacts(content, rev.path)?;
+            let edges = extract_rust_dependency_edges(content, rev.path, &items)?;
+            let file_docstring = extract_rust_file_docstring(content);
+            Ok((items, edges, file_docstring))
+        }
+        TS_JS_LANGUAGE_PACK_ID => {
+            let items = extract_js_ts_artefacts(content, rev.path)?;
+            let edges = extract_js_ts_dependency_edges(content, rev.path, &items)?;
+            Ok((items, edges, None))
+        }
+        other_pack_id => {
+            bail!(
+                "language `{language}` resolved to unsupported language pack `{other_pack_id}`"
+            );
+        }
+    }
+}
+
 async fn refresh_current_state_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -129,27 +165,7 @@ async fn upsert_current_state_for_content(
     let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(
         &file_artefact.language,
     ) {
-        let extraction =
-            || -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
-                let items = if file_artefact.language == "rust" {
-                    extract_rust_artefacts(content, rev.path)?
-                } else {
-                    extract_js_ts_artefacts(content, rev.path)?
-                };
-                let edges = if file_artefact.language == "rust" {
-                    extract_rust_dependency_edges(content, rev.path, &items)?
-                } else {
-                    extract_js_ts_dependency_edges(content, rev.path, &items)?
-                };
-                let file_docstring = if file_artefact.language == "rust" {
-                    extract_rust_file_docstring(content)
-                } else {
-                    None
-                };
-                Ok((items, edges, file_docstring))
-            };
-
-        match extraction() {
+        match extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, content) {
             Ok(value) => value,
             Err(err) => {
                 log::warn!(
@@ -159,11 +175,7 @@ async fn upsert_current_state_for_content(
                 (
                     Vec::new(),
                     Vec::new(),
-                    if file_artefact.language == "rust" {
-                        extract_rust_file_docstring(content)
-                    } else {
-                        None
-                    },
+                    extract_file_docstring_for_language_pack(&file_artefact.language, content),
                 )
             }
         }
@@ -213,21 +225,8 @@ async fn upsert_language_artefacts(
             let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
                 return Ok(());
             };
-            let items = if file_artefact.language == "rust" {
-                extract_rust_artefacts(&content, rev.path)?
-            } else {
-                extract_js_ts_artefacts(&content, rev.path)?
-            };
-            let edges = if file_artefact.language == "rust" {
-                extract_rust_dependency_edges(&content, rev.path, &items)?
-            } else {
-                extract_js_ts_dependency_edges(&content, rev.path, &items)?
-            };
-            let file_docstring = if file_artefact.language == "rust" {
-                extract_rust_file_docstring(&content)
-            } else {
-                None
-            };
+            let (items, edges, file_docstring) =
+                extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, &content)?;
             (items, edges, file_docstring, content)
         } else {
             (Vec::new(), Vec::new(), None, String::new())

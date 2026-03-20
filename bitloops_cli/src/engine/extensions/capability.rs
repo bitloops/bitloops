@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+use super::lifecycle::{CapabilityPackMigrationDescriptor, ExtensionCompatibility};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityPackDescriptor {
     pub id: &'static str,
@@ -9,6 +11,8 @@ pub struct CapabilityPackDescriptor {
     pub aliases: &'static [&'static str],
     pub stage_contributions: &'static [&'static str],
     pub ingester_contributions: &'static [&'static str],
+    pub compatibility: ExtensionCompatibility,
+    pub migrations: &'static [CapabilityPackMigrationDescriptor],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +280,11 @@ mod tests {
         aliases: &["clones"],
         stage_contributions: &["semantic-clones"],
         ingester_contributions: &["semantic-clones-ingester"],
+        compatibility: ExtensionCompatibility::phase1_local_cli(&[
+            "capability-packs",
+            "capability-migrations",
+        ]),
+        migrations: &[],
     };
 
     const KNOWLEDGE_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
@@ -284,6 +293,8 @@ mod tests {
         aliases: &["knowledge"],
         stage_contributions: &["knowledge"],
         ingester_contributions: &["knowledge-ingester"],
+        compatibility: ExtensionCompatibility::phase1_local_cli(&["capability-packs"]),
+        migrations: &[],
     };
 
     #[test]
@@ -327,6 +338,8 @@ mod tests {
                 aliases: &[],
                 stage_contributions: &["semantic-clones"],
                 ingester_contributions: &[],
+                compatibility: ExtensionCompatibility::phase1_local_cli(&["capability-packs"]),
+                migrations: &[],
             })
             .expect_err("duplicate stage ownership should fail");
 
@@ -350,6 +363,8 @@ mod tests {
                 aliases: &[],
                 stage_contributions: &["another-stage"],
                 ingester_contributions: &["knowledge-ingester"],
+                compatibility: ExtensionCompatibility::phase1_local_cli(&["capability-packs"]),
+                migrations: &[],
             })
             .expect_err("duplicate ingester ownership should fail");
 

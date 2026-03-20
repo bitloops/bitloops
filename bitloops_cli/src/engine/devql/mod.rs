@@ -12,6 +12,9 @@ use tokio_postgres::{NoTls, config::SslMode};
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
+use crate::engine::extensions::{
+    CapabilityExecutionContext, CapabilityIngestContext, CoreExtensionHost, LanguagePackContext,
+};
 use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_clones;
 use crate::engine::semantic_embeddings;
@@ -96,7 +99,94 @@ const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
 const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
 const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
+const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
+const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
+const SEMANTIC_CLONES_CAPABILITY_STAGE_ID: &str = "semantic-clones";
+const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
+const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
+
+fn core_extension_host() -> Result<&'static CoreExtensionHost> {
+    static CORE_EXTENSION_HOST: OnceLock<Result<CoreExtensionHost, String>> = OnceLock::new();
+    let host_result = CORE_EXTENSION_HOST.get_or_init(|| {
+        CoreExtensionHost::with_builtins()
+            .map_err(|err| format!("bootstrapping built-in extension packs: {err}"))
+    });
+    match host_result {
+        Ok(host) => Ok(host),
+        Err(error_message) => Err(anyhow!(
+            "initialising Core extension host for DevQL runtime: {error_message}"
+        )),
+    }
+}
+
+fn normalise_optional_commit_sha(commit_sha: Option<&str>) -> Option<String> {
+    commit_sha
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_language_pack_owner(language: &str) -> Option<&'static str> {
+    core_extension_host()
+        .ok()
+        .and_then(|host| host.language_packs().owner_for_language(language))
+}
+
+fn language_pack_context_for_language(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    language: &str,
+) -> Result<(LanguagePackContext, &'static str)> {
+    let Some(pack_id) = resolve_language_pack_owner(language) else {
+        bail!("language `{language}` is not owned by any registered language pack");
+    };
+    Ok((
+        LanguagePackContext::new(
+            cfg.repo_root.clone(),
+            cfg.repo.repo_id.clone(),
+            normalise_optional_commit_sha(commit_sha),
+        ),
+        pack_id,
+    ))
+}
+
+fn capability_execution_context_for_stage(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    stage_id: &str,
+) -> Result<CapabilityExecutionContext> {
+    let host = core_extension_host()?;
+    let Some(capability_pack_id) = host.capability_packs().resolve_stage_owner(stage_id) else {
+        bail!("capability stage `{stage_id}` is not owned by any registered capability pack");
+    };
+    Ok(CapabilityExecutionContext::new(
+        cfg.repo_root.clone(),
+        cfg.repo.repo_id.clone(),
+        normalise_optional_commit_sha(commit_sha),
+        capability_pack_id,
+        stage_id,
+    ))
+}
+
+fn capability_ingest_context_for_ingester(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    ingester_id: &str,
+) -> Result<CapabilityIngestContext> {
+    let host = core_extension_host()?;
+    let Some(capability_pack_id) = host.capability_packs().resolve_ingester_owner(ingester_id)
+    else {
+        bail!("capability ingester `{ingester_id}` is not owned by any registered capability pack");
+    };
+    Ok(CapabilityIngestContext::new(
+        cfg.repo_root.clone(),
+        cfg.repo.repo_id.clone(),
+        normalise_optional_commit_sha(commit_sha),
+        capability_pack_id,
+        ingester_id,
+    ))
+}
 
 pub async fn run_connection_status() -> Result<()> {
     let cfg = resolve_store_backend_config()?;
@@ -316,8 +406,15 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
         RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
     }?;
 
-    crate::engine::test_harness::init_schema_for_repo(&cfg.repo_root)
-        .context("initialising test-harness schema alongside DevQL relational schema")?;
+    let test_harness_context =
+        capability_ingest_context_for_ingester(cfg, None, TEST_HARNESS_CAPABILITY_INGESTER_ID)
+            .context("resolving test-harness capability ingester owner")?;
+    crate::engine::test_harness::init_schema_for_repo(&cfg.repo_root).with_context(|| {
+        format!(
+            "initialising test-harness schema for capability pack `{}`",
+            test_harness_context.capability_pack_id
+        )
+    })?;
     Ok(())
 }
 
@@ -374,9 +471,13 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
+    let knowledge_context =
+        capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
+            .context("resolving knowledge capability ingester owner")?;
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
     let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
@@ -510,7 +611,13 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &semantic_feature_inputs,
                 Arc::clone(&summary_provider),
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "running capability ingester `{}` owned by `{}`",
+                    knowledge_context.ingester_id, knowledge_context.capability_pack_id
+                )
+            })?;
             if let Some(embedding_provider) = embedding_provider.as_ref() {
                 let embedding_stats = upsert_symbol_embedding_rows(
                     &relational,
@@ -532,7 +639,17 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id).await?;
+    let semantic_clones_context =
+        capability_execution_context_for_stage(cfg, None, SEMANTIC_CLONES_CAPABILITY_STAGE_ID)
+            .context("resolving semantic-clones capability stage owner")?;
+    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id)
+        .await
+        .with_context(|| {
+            format!(
+                "running capability stage `{}` owned by `{}`",
+                semantic_clones_context.stage_id, semantic_clones_context.capability_pack_id
+            )
+        })?;
     counters.symbol_clone_edges_upserted += clone_result.edges.len();
     counters.symbol_clone_sources_scored += clone_result.sources_considered;
 

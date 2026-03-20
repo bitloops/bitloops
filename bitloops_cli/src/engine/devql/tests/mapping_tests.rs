@@ -1,5 +1,30 @@
 use super::*;
 
+fn extension_runtime_cfg() -> DevqlConfig {
+    DevqlConfig {
+        repo_root: PathBuf::from("/tmp/repo"),
+        repo: RepoIdentity {
+            provider: "github".to_string(),
+            organization: "bitloops".to_string(),
+            name: "temp2".to_string(),
+            identity: "github/bitloops/temp2".to_string(),
+            repo_id: deterministic_uuid("repo://github/bitloops/temp2"),
+        },
+        pg_dsn: None,
+        clickhouse_url: "http://localhost:8123".to_string(),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: "default".to_string(),
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
+    }
+}
+
 fn canonical_kind(artefact: &JsTsArtefact) -> Option<&str> {
     artefact.canonical_kind.as_deref()
 }
@@ -237,4 +262,59 @@ impl Repository for User {
             .as_deref()
             .is_some_and(|parent| parent.starts_with("src/lib.rs::impl@"))
     );
+}
+
+#[test]
+fn devql_extension_host_resolves_built_in_language_pack_ownership() {
+    assert_eq!(
+        resolve_language_pack_owner("rust"),
+        Some(RUST_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
+        resolve_language_pack_owner("typescript"),
+        Some(TS_JS_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
+        resolve_language_pack_owner("javascript"),
+        Some(TS_JS_LANGUAGE_PACK_ID)
+    );
+    assert!(resolve_language_pack_owner("python").is_none());
+    assert!(is_supported_symbol_language("rust"));
+    assert!(is_supported_symbol_language("typescript"));
+    assert!(is_supported_symbol_language("javascript"));
+    assert!(!is_supported_symbol_language("python"));
+}
+
+#[test]
+fn devql_extension_host_builds_capability_contexts_from_registered_owners() {
+    let cfg = extension_runtime_cfg();
+
+    let stage_context = capability_execution_context_for_stage(
+        &cfg,
+        Some("abc123"),
+        SEMANTIC_CLONES_CAPABILITY_STAGE_ID,
+    )
+    .expect("resolve semantic clones stage owner");
+    assert_eq!(
+        stage_context.capability_pack_id,
+        "semantic-clones-capability-pack"
+    );
+    assert_eq!(stage_context.stage_id, SEMANTIC_CLONES_CAPABILITY_STAGE_ID);
+    assert_eq!(stage_context.commit_sha.as_deref(), Some("abc123"));
+
+    let ingest_context = capability_ingest_context_for_ingester(
+        &cfg,
+        Some("abc123"),
+        TEST_HARNESS_CAPABILITY_INGESTER_ID,
+    )
+    .expect("resolve test-harness ingester owner");
+    assert_eq!(
+        ingest_context.capability_pack_id,
+        "test-harness-capability-pack"
+    );
+    assert_eq!(
+        ingest_context.ingester_id,
+        TEST_HARNESS_CAPABILITY_INGESTER_ID
+    );
+    assert_eq!(ingest_context.commit_sha.as_deref(), Some("abc123"));
 }

@@ -58,13 +58,9 @@ async fn upsert_file_artefact_row(
         .unwrap_or(0)
         .max(0);
     let modifiers_sql = sql_json_text_array(relational, &[]);
-    let file_docstring = if language == "rust" {
-        blob_content
-            .as_deref()
-            .and_then(extract_rust_file_docstring)
-    } else {
-        None
-    };
+    let file_docstring = blob_content
+        .as_deref()
+        .and_then(|content| extract_file_docstring_for_language_pack(&language, content));
     let docstring_sql = sql_nullable_text(file_docstring.as_deref());
 
     let sql = format!(

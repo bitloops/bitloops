@@ -2,12 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+use super::lifecycle::ExtensionCompatibility;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguagePackDescriptor {
     pub id: &'static str,
     pub display_name: &'static str,
     pub aliases: &'static [&'static str],
     pub supported_languages: &'static [&'static str],
+    pub compatibility: ExtensionCompatibility,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +246,7 @@ mod tests {
         display_name: "Rust",
         aliases: &["rust"],
         supported_languages: &["rust"],
+        compatibility: ExtensionCompatibility::phase1_local_cli(&["language-packs"]),
     };
 
     const TS_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
@@ -250,6 +254,7 @@ mod tests {
         display_name: "TypeScript/JavaScript",
         aliases: &["typescript-pack"],
         supported_languages: &["typescript", "javascript"],
+        compatibility: ExtensionCompatibility::phase1_local_cli(&["language-packs"]),
     };
 
     #[test]
@@ -287,6 +292,7 @@ mod tests {
                 display_name: "Rust duplicate",
                 aliases: &[],
                 supported_languages: &["rust-alt"],
+                compatibility: ExtensionCompatibility::phase1_local_cli(&["language-packs"]),
             })
             .expect_err("duplicate pack id should fail");
 
@@ -307,6 +313,7 @@ mod tests {
                 display_name: "Another Rust",
                 aliases: &[],
                 supported_languages: &["rust"],
+                compatibility: ExtensionCompatibility::phase1_local_cli(&["language-packs"]),
             })
             .expect_err("language ownership collision should fail");
 
