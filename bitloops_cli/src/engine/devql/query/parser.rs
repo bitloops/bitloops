@@ -11,15 +11,19 @@ struct ParsedDevqlQuery {
     checkpoints: CheckpointFilter,
     telemetry: TelemetryFilter,
     deps: DepsFilter,
-    tests: TestsFilter,
     has_artefacts_stage: bool,
     has_clones_stage: bool,
     has_deps_stage: bool,
-    has_tests_stage: bool,
-    has_coverage_stage: bool,
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
     has_chat_history_stage: bool,
+    has_test_harness_core_test_links_stage: bool,
+    has_test_harness_core_line_coverage_stage: bool,
+    has_test_harness_core_branch_coverage_stage: bool,
+    has_test_harness_core_coverage_metadata_stage: bool,
+    test_harness_core_test_links: TestHarnessCoreTestLinksFilter,
+    test_harness_core_line_coverage: TestHarnessCoreArtefactFilter,
+    test_harness_core_branch_coverage: TestHarnessCoreArtefactFilter,
     registered_stages: Vec<RegisteredStageCall>,
     limit: usize,
     select_fields: Vec<String>,
@@ -67,17 +71,23 @@ struct TelemetryFilter {
     since: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TestHarnessCoreArtefactFilter {
+    artefact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TestHarnessCoreTestLinksFilter {
+    artefact_id: Option<String>,
+    min_confidence: Option<f64>,
+    linkage_source: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct DepsFilter {
     kind: Option<DepsKind>,
     direction: DepsDirection,
     include_unresolved: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-struct TestsFilter {
-    min_confidence: Option<f64>,
-    linkage_source: Option<String>,
 }
 
 impl Default for DepsFilter {
@@ -239,29 +249,6 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
-        if stage == "tests()" {
-            parsed.has_tests_stage = true;
-            continue;
-        }
-
-        if let Some(inner) = stage
-            .strip_prefix("tests(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args = parse_named_args(inner)?;
-            parsed.has_tests_stage = true;
-            parsed.tests.min_confidence = args
-                .get("min_confidence")
-                .and_then(|v| v.parse::<f64>().ok());
-            parsed.tests.linkage_source = args.get("linkage_source").cloned();
-            continue;
-        }
-
-        if stage == "coverage()" {
-            parsed.has_coverage_stage = true;
-            continue;
-        }
-
         if let Some(inner) = stage
             .strip_prefix("checkpoints(")
             .and_then(|s| s.strip_suffix(')'))
@@ -316,6 +303,66 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                 .trim()
                 .parse::<usize>()
                 .map_err(|_| anyhow!("invalid limit value: {inner}"))?;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("__core_test_links(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_test_harness_core_test_links_stage = true;
+            parsed.test_harness_core_test_links.artefact_id = args.get("artefact_id").cloned();
+            parsed.test_harness_core_test_links.min_confidence = args
+                .get("min_confidence")
+                .map(|value| {
+                    value.parse::<f64>().map(|parsed| parsed.clamp(0.0, 1.0)).map_err(
+                        |_| anyhow!("__core_test_links(min_confidence:...) must be numeric"),
+                    )
+                })
+                .transpose()?;
+            parsed.test_harness_core_test_links.linkage_source = args.get("linkage_source").cloned();
+            continue;
+        }
+
+        if stage == "__core_test_links()" {
+            parsed.has_test_harness_core_test_links_stage = true;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("__core_line_coverage(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_test_harness_core_line_coverage_stage = true;
+            parsed.test_harness_core_line_coverage.artefact_id = args.get("artefact_id").cloned();
+            continue;
+        }
+
+        if stage == "__core_line_coverage()" {
+            parsed.has_test_harness_core_line_coverage_stage = true;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("__core_branch_coverage(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_test_harness_core_branch_coverage_stage = true;
+            parsed.test_harness_core_branch_coverage.artefact_id =
+                args.get("artefact_id").cloned();
+            continue;
+        }
+
+        if stage == "__core_branch_coverage()" {
+            parsed.has_test_harness_core_branch_coverage_stage = true;
+            continue;
+        }
+
+        if stage == "__core_coverage_metadata()" {
+            parsed.has_test_harness_core_coverage_metadata_stage = true;
             continue;
         }
 

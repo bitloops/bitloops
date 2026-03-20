@@ -1312,10 +1312,10 @@ fn parse_devql_tests_stage_basic() {
         r#"repo("r")->file("src/lib.rs")->artefacts(kind:"function")->tests()"#,
     )
     .unwrap();
-    assert!(parsed.has_tests_stage);
     assert!(parsed.has_artefacts_stage);
-    assert!(parsed.tests.min_confidence.is_none());
-    assert!(parsed.tests.linkage_source.is_none());
+    assert_eq!(parsed.registered_stages.len(), 1);
+    assert_eq!(parsed.registered_stages[0].stage_name, "tests");
+    assert!(parsed.registered_stages[0].args.is_empty());
 }
 
 #[test]
@@ -1324,12 +1324,42 @@ fn parse_devql_tests_stage_with_filters() {
         r#"repo("r")->artefacts()->tests(min_confidence:0.5,linkage_source:"static_analysis")"#,
     )
     .unwrap();
-    assert!(parsed.has_tests_stage);
-    assert_eq!(parsed.tests.min_confidence, Some(0.5));
+    assert_eq!(parsed.registered_stages.len(), 1);
+    assert_eq!(parsed.registered_stages[0].stage_name, "tests");
     assert_eq!(
-        parsed.tests.linkage_source.as_deref(),
+        parsed.registered_stages[0]
+            .args
+            .get("min_confidence")
+            .map(String::as_str),
+        Some("0.5")
+    );
+    assert_eq!(
+        parsed.registered_stages[0]
+            .args
+            .get("linkage_source")
+            .map(String::as_str),
         Some("static_analysis")
     );
+}
+
+#[test]
+fn parse_devql_internal_core_test_links_stage_with_args() {
+    let parsed = parse_devql_query(
+        r#"repo("r")->__core_test_links(artefact_id:"artefact::a_1",min_confidence:0.5,linkage_source:"static_analysis")->limit(7)"#,
+    )
+    .unwrap();
+
+    assert!(parsed.has_test_harness_core_test_links_stage);
+    assert_eq!(
+        parsed.test_harness_core_test_links.artefact_id.as_deref(),
+        Some("artefact::a_1")
+    );
+    assert_eq!(parsed.test_harness_core_test_links.min_confidence, Some(0.5));
+    assert_eq!(
+        parsed.test_harness_core_test_links.linkage_source.as_deref(),
+        Some("static_analysis")
+    );
+    assert_eq!(parsed.limit, 7);
 }
 
 #[tokio::test]
@@ -1343,6 +1373,20 @@ async fn execute_devql_query_rejects_tests_without_artefacts() {
     assert!(
         err.to_string()
             .contains("tests() requires an artefacts() stage")
+    );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_internal_core_stage_without_artefact_id() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(r#"repo("temp2")->__core_line_coverage()->limit(1)"#).unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("__core_line_coverage() requires artefact_id")
     );
 }
 
@@ -1398,7 +1442,7 @@ async fn execute_devql_query_rejects_tests_with_chat_history() {
 }
 
 #[tokio::test]
-async fn execute_devql_query_rejects_tests_with_registered_stages() {
+async fn execute_devql_query_rejects_tests_with_non_test_harness_registered_stages() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
     let parsed = parse_devql_query(
@@ -1408,17 +1452,44 @@ async fn execute_devql_query_rejects_tests_with_registered_stages() {
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("tests() cannot be combined with registered capability-pack stages"));
+    assert!(err.to_string().contains(
+        "tests() cannot currently be combined with additional registered capability-pack stages"
+    ));
 }
 
 #[tokio::test]
-async fn execute_relational_tests_pipeline_returns_covering_tests() {
-    let cfg = test_cfg();
-    let events_cfg = default_events_cfg();
+async fn execute_registered_tests_stage_returns_covering_tests() {
     let temp = tempdir().expect("tempdir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    let mut cfg = test_cfg();
+    cfg.repo_root = repo_root;
+    let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).expect("create relational parent dir");
+    }
+    let config_dir = cfg.repo_root.join(".bitloops");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "stores": {
+                "relational": {
+                    "provider": "sqlite",
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }))
+        .expect("serialise config"),
+    )
+    .expect("write config");
+    let host_sqlite_path = crate::store_config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .expect("resolve backend config")
+        .relational
+        .resolve_sqlite_db_path()
+        .expect("resolve host sqlite path");
+    assert_eq!(host_sqlite_path, sqlite_path);
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
@@ -1561,12 +1632,23 @@ async fn execute_relational_tests_pipeline_returns_covering_tests() {
         ],
     )
     .expect("insert test link");
+    let covering_rows_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM test_links WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count test links");
+    assert_eq!(covering_rows_count, 1);
 
     let parsed = parse_devql_query(
         r#"repo("temp2")->file("src/user/service.rs")->artefacts(kind:"function")->tests()->limit(10)"#,
     )
     .expect("parse query");
-    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+    let base_rows = execute_devql_query(&cfg, &parsed, &events_cfg, Some(&relational))
+        .await
+        .expect("execute base pipeline");
+    let rows = execute_registered_stages(&cfg, &parsed, base_rows)
         .await
         .expect("execute tests pipeline");
 
@@ -1604,8 +1686,9 @@ fn parse_devql_coverage_stage_basic() {
         r#"repo("r")->file("src/lib.rs")->artefacts(kind:"function")->coverage()"#,
     )
     .unwrap();
-    assert!(parsed.has_coverage_stage);
     assert!(parsed.has_artefacts_stage);
+    assert_eq!(parsed.registered_stages.len(), 1);
+    assert_eq!(parsed.registered_stages[0].stage_name, "coverage");
 }
 
 #[tokio::test]
@@ -1657,7 +1740,7 @@ async fn execute_devql_query_rejects_coverage_with_tests() {
 }
 
 #[tokio::test]
-async fn execute_devql_query_rejects_coverage_with_registered_stages() {
+async fn execute_devql_query_rejects_coverage_with_non_test_harness_registered_stages() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
     let parsed = parse_devql_query(
@@ -1667,17 +1750,44 @@ async fn execute_devql_query_rejects_coverage_with_registered_stages() {
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("coverage() cannot be combined with registered capability-pack stages"));
+    assert!(err.to_string().contains(
+        "coverage() cannot currently be combined with additional registered capability-pack stages"
+    ));
 }
 
 #[tokio::test]
-async fn execute_relational_coverage_pipeline_returns_coverage_data() {
-    let cfg = test_cfg();
-    let events_cfg = default_events_cfg();
+async fn execute_registered_coverage_stage_returns_coverage_data() {
     let temp = tempdir().expect("tempdir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    let mut cfg = test_cfg();
+    cfg.repo_root = repo_root;
+    let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).expect("create relational parent dir");
+    }
+    let config_dir = cfg.repo_root.join(".bitloops");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "stores": {
+                "relational": {
+                    "provider": "sqlite",
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }))
+        .expect("serialise config"),
+    )
+    .expect("write config");
+    let host_sqlite_path = crate::store_config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .expect("resolve backend config")
+        .relational
+        .resolve_sqlite_db_path()
+        .expect("resolve host sqlite path");
+    assert_eq!(host_sqlite_path, sqlite_path);
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
@@ -1799,12 +1909,23 @@ async fn execute_relational_coverage_pipeline_returns_coverage_data() {
         )
         .expect("insert branch coverage hit");
     }
+    let line_rows_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM coverage_hits WHERE production_artefact_id = ?1 AND branch_id = -1",
+            rusqlite::params!["artefact::create_user"],
+            |row| row.get(0),
+        )
+        .expect("count line coverage rows");
+    assert_eq!(line_rows_count, 5);
 
     let parsed = parse_devql_query(
         r#"repo("temp2")->file("src/user/service.rs")->artefacts(kind:"function")->coverage()->limit(10)"#,
     )
     .expect("parse query");
-    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+    let base_rows = execute_devql_query(&cfg, &parsed, &events_cfg, Some(&relational))
+        .await
+        .expect("execute base pipeline");
+    let rows = execute_registered_stages(&cfg, &parsed, base_rows)
         .await
         .expect("execute coverage pipeline");
 

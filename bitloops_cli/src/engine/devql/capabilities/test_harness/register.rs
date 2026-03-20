@@ -8,7 +8,10 @@ use super::ingesters::{
 };
 use super::query_examples::TEST_HARNESS_QUERY_EXAMPLES;
 use super::schema::TEST_HARNESS_SCHEMA_MODULE;
-use super::stages::{build_coverage_stage, build_tests_stage, build_tests_summary_stage};
+use super::stages::{
+    build_coverage_stage, build_coverage_stage_alias, build_tests_stage, build_tests_stage_alias,
+    build_tests_summary_stage,
+};
 
 pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_ingester(build_linkage_ingester())?;
@@ -16,8 +19,10 @@ pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Re
     registrar.register_ingester(build_classification_ingester())?;
     registrar.register_ingester(build_summaries_ingester())?;
     registrar.register_stage(build_tests_stage())?;
+    registrar.register_stage(build_tests_stage_alias())?;
     registrar.register_stage(build_tests_summary_stage())?;
     registrar.register_stage(build_coverage_stage())?;
+    registrar.register_stage(build_coverage_stage_alias())?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
     registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
     Ok(())
@@ -28,8 +33,9 @@ mod tests {
     use super::*;
     use crate::engine::devql::capabilities::test_harness::types::{
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
-        TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
-        TEST_HARNESS_SUMMARIES_INGESTER_ID, TEST_HARNESS_TESTS_STAGE_ID,
+        TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID, TEST_HARNESS_COVERAGE_STAGE_ID,
+        TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_SUMMARIES_INGESTER_ID,
+        TEST_HARNESS_TESTS_STAGE_ALIAS_ID, TEST_HARNESS_TESTS_STAGE_ID,
         TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
     use crate::engine::devql::capability_host::{
@@ -78,8 +84,10 @@ mod tests {
             registrar.stages,
             vec![
                 ("test_harness", TEST_HARNESS_TESTS_STAGE_ID),
+                ("test_harness", TEST_HARNESS_TESTS_STAGE_ALIAS_ID),
                 ("test_harness", TEST_HARNESS_TESTS_SUMMARY_STAGE_ID),
                 ("test_harness", TEST_HARNESS_COVERAGE_STAGE_ID),
+                ("test_harness", TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID),
             ]
         );
         assert_eq!(
