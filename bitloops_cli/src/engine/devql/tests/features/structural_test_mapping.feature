@@ -312,3 +312,21 @@ Feature: Structural Test Mapping
     When test discovery runs
     And linkage resolution runs
     Then no links are created
+
+  # ---- Coverage pipeline ----
+
+  @S_COV1
+  Scenario: S_COV1 DevQL coverage() query returns artefact-level coverage
+    Given a Rust test file at "src/user/service_tests.rs":
+      """
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+          #[test]
+          fn test_create_user() {
+              create_user("Alice");
+          }
+      }
+      """
+    When coverage is ingested and coverage() query executes for "create_user"
+    Then the response has coverage with line_coverage_pct

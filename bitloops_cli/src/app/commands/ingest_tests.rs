@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::app::test_mapping;
 use crate::domain::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Clone)]
 pub struct IngestTestsIssue {
@@ -22,13 +22,6 @@ pub struct IngestTestsSummary {
     pub enumerated_scenarios: usize,
     pub notes: Vec<String>,
     pub issues: Vec<IngestTestsIssue>,
-}
-
-pub fn handle(db_path: &Path, repo_dir: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(&mut repository, repo_dir, commit_sha)?;
-    print_summary(commit_sha, &summary);
-    Ok(())
 }
 
 pub fn execute(

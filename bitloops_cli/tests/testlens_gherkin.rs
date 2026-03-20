@@ -8,9 +8,10 @@ use serde_json::Value;
 use test_harness_support::{
     ListedArtefact, Workspace, discovered_languages, load_symbol_fqn,
     load_test_scenario_signatures, run_bitloops_or_panic, scenario_link_exists,
-    seed_production_artefacts, write_rust_additional_declarations_fixture,
+    seed_production_artefacts, write_line_only_lcov_fixture, write_malformed_lcov_fixture,
+    write_rust_additional_declarations_fixture, write_rust_coverage_fixture,
     write_rust_hybrid_fixture, write_rust_parameterized_fixture, write_rust_static_link_fixture,
-    write_typescript_static_link_fixture,
+    write_typescript_static_link_fixture, write_unmappable_lcov_fixture, write_valid_lcov_fixture,
 };
 
 #[derive(Debug, Default, cucumber::World)]
@@ -377,6 +378,420 @@ fn then_query_returns_doctest_covering_test(
     });
     assert!(found, "expected doctest covering test, got {query_json}");
     world.query_json = Some(query_json);
+}
+
+// ---- Coverage mapping steps ----
+
+#[given(
+    expr = "an initialized Rust coverage repository with production artefacts for commit {string}"
+)]
+fn given_coverage_repository(world: &mut TestHarnessWorld, commit_sha: String) {
+    let workspace = Workspace::new("gherkin-rust-coverage");
+    write_rust_coverage_fixture(&workspace);
+    initialize_repository_with_production(world, workspace, commit_sha);
+}
+
+#[given(
+    expr = "an initialized Rust coverage repository with production artefacts and tests for commit {string}"
+)]
+fn given_coverage_repository_with_tests(world: &mut TestHarnessWorld, commit_sha: String) {
+    let workspace = Workspace::new("gherkin-rust-coverage-with-tests");
+    write_rust_coverage_fixture(&workspace);
+    initialize_repository_with_production(world, workspace, commit_sha.clone());
+
+    // Ingest tests so covering-test queries work
+    run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &["testlens", "ingest-tests", "--commit", &commit_sha],
+    );
+}
+
+#[given(
+    expr = "an initialized Rust coverage repository with multiple artefacts for commit {string}"
+)]
+fn given_coverage_repository_with_multiple_artefacts(
+    world: &mut TestHarnessWorld,
+    commit_sha: String,
+) {
+    // The standard coverage fixture already has two methods (find_by_id, find_by_email)
+    let workspace = Workspace::new("gherkin-rust-coverage-multi");
+    write_rust_coverage_fixture(&workspace);
+    initialize_repository_with_production(world, workspace, commit_sha);
+}
+
+#[when(expr = "I ingest a valid LCOV report for commit {string}")]
+fn when_ingest_valid_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
+    write_valid_lcov_fixture(world.workspace());
+    let lcov_path = world.workspace().path("coverage.lcov");
+    let output = run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &[
+            "testlens",
+            "ingest-coverage",
+            "--lcov",
+            lcov_path.to_str().unwrap(),
+            "--commit",
+            &commit_sha,
+            "--scope",
+            "workspace",
+        ],
+    );
+    world.ingest_output = Some(output);
+}
+
+#[when(expr = "I ingest an LCOV report with line coverage but no branch data for commit {string}")]
+fn when_ingest_line_only_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
+    write_line_only_lcov_fixture(world.workspace());
+    let lcov_path = world.workspace().path("coverage.lcov");
+    let output = run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &[
+            "testlens",
+            "ingest-coverage",
+            "--lcov",
+            lcov_path.to_str().unwrap(),
+            "--commit",
+            &commit_sha,
+            "--scope",
+            "workspace",
+        ],
+    );
+    world.ingest_output = Some(output);
+}
+
+#[when(expr = "I ingest an LCOV report with unmappable file paths for commit {string}")]
+fn when_ingest_unmappable_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
+    write_unmappable_lcov_fixture(world.workspace());
+    let lcov_path = world.workspace().path("coverage.lcov");
+    let output = run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &[
+            "testlens",
+            "ingest-coverage",
+            "--lcov",
+            lcov_path.to_str().unwrap(),
+            "--commit",
+            &commit_sha,
+            "--scope",
+            "workspace",
+        ],
+    );
+    world.ingest_output = Some(output);
+}
+
+#[when(expr = "I ingest an LCOV report with malformed DA lines for commit {string}")]
+fn when_ingest_malformed_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
+    write_malformed_lcov_fixture(world.workspace());
+    let lcov_path = world.workspace().path("coverage.lcov");
+    let output = run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &[
+            "testlens",
+            "ingest-coverage",
+            "--lcov",
+            lcov_path.to_str().unwrap(),
+            "--commit",
+            &commit_sha,
+            "--scope",
+            "workspace",
+        ],
+    );
+    world.ingest_output = Some(output);
+}
+
+#[when(expr = "I ingest an LCOV report referencing a missing source file for commit {string}")]
+fn when_ingest_missing_file_lcov(world: &mut TestHarnessWorld, commit_sha: String) {
+    // Same as unmappable — references a file not in the artefact index
+    write_unmappable_lcov_fixture(world.workspace());
+    let lcov_path = world.workspace().path("coverage.lcov");
+    let output = run_bitloops_or_panic(
+        world.workspace().repo_dir(),
+        &[
+            "testlens",
+            "ingest-coverage",
+            "--lcov",
+            lcov_path.to_str().unwrap(),
+            "--commit",
+            &commit_sha,
+            "--scope",
+            "workspace",
+        ],
+    );
+    world.ingest_output = Some(output);
+}
+
+#[then(expr = "coverage captures are stored for commit {string}")]
+fn then_coverage_captures_stored(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM coverage_captures WHERE commit_sha = ?1",
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count coverage_captures");
+    assert!(count > 0, "expected at least one coverage capture");
+}
+
+#[then(expr = "coverage hits include line and branch data for commit {string}")]
+fn then_coverage_hits_include_line_and_branch(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+
+    let line_hits: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1 AND ch.branch_id = -1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count line hits");
+    assert!(line_hits > 0, "expected line coverage hits");
+
+    let branch_hits: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1 AND ch.branch_id != -1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count branch hits");
+    assert!(branch_hits > 0, "expected branch coverage hits");
+}
+
+#[then(
+    expr = "coverage hits are attributed only to lines within artefact spans for commit {string}"
+)]
+fn then_coverage_hits_within_spans(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+
+    // Every coverage hit line must be within the artefact's span
+    let out_of_span: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+JOIN artefacts_current ac ON ac.artefact_id = ch.production_artefact_id AND ac.commit_sha = cc.commit_sha
+WHERE cc.commit_sha = ?1
+  AND (ch.line < ac.start_line OR ch.line > ac.end_line)
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count out-of-span hits");
+    assert_eq!(
+        out_of_span, 0,
+        "no coverage hits should fall outside artefact spans"
+    );
+}
+
+#[then(
+    expr = "querying artefact {string} returns coverage with line and branch percentages for commit {string}"
+)]
+fn then_query_returns_coverage(
+    world: &mut TestHarnessWorld,
+    artefact_pattern: String,
+    commit_sha: String,
+) {
+    let query_json = query_artefact(
+        world,
+        &commit_sha,
+        &artefact_pattern,
+        &["--view", "coverage"],
+    );
+    let coverage = &query_json["coverage"];
+    assert!(
+        !coverage.is_null(),
+        "expected coverage in query response, got {query_json}"
+    );
+    assert!(
+        coverage["line_coverage_pct"].is_number(),
+        "expected line_coverage_pct"
+    );
+    assert!(
+        coverage["branch_coverage_pct"].is_number(),
+        "expected branch_coverage_pct"
+    );
+}
+
+#[then(expr = "querying artefact {string} returns uncovered branches for commit {string}")]
+fn then_query_returns_uncovered_branches(
+    world: &mut TestHarnessWorld,
+    artefact_pattern: String,
+    commit_sha: String,
+) {
+    let query_json = query_artefact(
+        world,
+        &commit_sha,
+        &artefact_pattern,
+        &["--view", "coverage"],
+    );
+    let branches = query_json["coverage"]["branches"]
+        .as_array()
+        .expect("expected branches array");
+    let has_uncovered = branches.iter().any(|b| b["covered"] == false);
+    assert!(
+        has_uncovered,
+        "expected at least one uncovered branch, got {query_json}"
+    );
+}
+
+#[then(expr = "coverage hits include line data but no branch data for commit {string}")]
+fn then_coverage_hits_line_only(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+
+    let line_hits: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1 AND ch.branch_id = -1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count line hits");
+    assert!(line_hits > 0, "expected line coverage hits");
+
+    let branch_hits: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1 AND ch.branch_id != -1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count branch hits");
+    assert_eq!(branch_hits, 0, "expected no branch coverage hits");
+}
+
+#[then(
+    expr = "each artefact receives only the coverage hits within its own span for commit {string}"
+)]
+fn then_each_artefact_has_own_span_hits(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+
+    // Verify that at least two artefacts have coverage hits
+    let artefact_count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(DISTINCT ch.production_artefact_id) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count distinct artefacts with hits");
+    assert!(
+        artefact_count >= 1,
+        "expected coverage hits for at least one artefact"
+    );
+
+    // Verify no hit crosses artefact boundary
+    let out_of_span: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+JOIN artefacts_current ac ON ac.artefact_id = ch.production_artefact_id AND ac.commit_sha = cc.commit_sha
+WHERE cc.commit_sha = ?1
+  AND (ch.line < ac.start_line OR ch.line > ac.end_line)
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count out-of-span hits");
+    assert_eq!(out_of_span, 0, "no hits should cross artefact boundaries");
+}
+
+#[then(expr = "coverage diagnostics include {string} entries for commit {string}")]
+fn then_coverage_diagnostics_include(
+    world: &mut TestHarnessWorld,
+    diagnostic_code: String,
+    commit_sha: String,
+) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM coverage_diagnostics WHERE commit_sha = ?1 AND code = ?2",
+            params![commit_sha, diagnostic_code],
+            |row| row.get(0),
+        )
+        .expect("count coverage_diagnostics");
+    assert!(
+        count > 0,
+        "expected at least one '{diagnostic_code}' diagnostic for commit {commit_sha}"
+    );
+}
+
+#[then(expr = "the mapped files still produce coverage hits for commit {string}")]
+fn then_mapped_files_have_hits(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+    let count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count coverage hits");
+    assert!(
+        count > 0,
+        "expected coverage hits from mapped files despite unmappable paths"
+    );
+}
+
+#[then(expr = "valid lines from the same report still produce coverage hits for commit {string}")]
+fn then_valid_lines_produce_hits(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+    let count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count coverage hits");
+    assert!(
+        count > 0,
+        "expected coverage hits from valid lines despite malformed entries"
+    );
+}
+
+#[then(
+    expr = "coverage hits from other files in the report are still persisted for commit {string}"
+)]
+fn then_other_files_persisted(world: &mut TestHarnessWorld, commit_sha: String) {
+    let conn = Connection::open(world.workspace().db_path()).expect("open sqlite db");
+    let count: i64 = conn
+        .query_row(
+            r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+            params![commit_sha],
+            |row| row.get(0),
+        )
+        .expect("count coverage hits");
+    assert!(
+        count > 0,
+        "expected coverage hits from valid files despite missing source file"
+    );
 }
 
 #[tokio::test]

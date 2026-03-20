@@ -117,6 +117,51 @@ async fn execute_devql_query(
         bail!("tests() cannot be combined with chatHistory() stage");
     }
 
+    if parsed.has_coverage_stage && !parsed.has_artefacts_stage {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_requires_artefacts",
+            "coverage() requires an artefacts() stage in the query",
+        );
+        bail!("coverage() requires an artefacts() stage in the query");
+    }
+
+    if parsed.has_coverage_stage && parsed.has_deps_stage {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_with_deps",
+            "coverage() cannot be combined with deps() stage",
+        );
+        bail!("coverage() cannot be combined with deps() stage");
+    }
+
+    if parsed.has_coverage_stage && parsed.has_clones_stage {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_with_clones",
+            "coverage() cannot be combined with clones() stage",
+        );
+        bail!("coverage() cannot be combined with clones() stage");
+    }
+
+    if parsed.has_coverage_stage && parsed.has_chat_history_stage {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_with_chat_history",
+            "coverage() cannot be combined with chatHistory() stage",
+        );
+        bail!("coverage() cannot be combined with chatHistory() stage");
+    }
+
+    if parsed.has_coverage_stage && parsed.has_tests_stage {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_with_tests",
+            "coverage() cannot be combined with tests() stage",
+        );
+        bail!("coverage() cannot be combined with tests() stage");
+    }
+
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         return match events_cfg.provider {
             EventsProvider::ClickHouse => execute_clickhouse_pipeline(cfg, parsed).await,
@@ -147,6 +192,7 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
             ),
             crate::engine::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
             crate::engine::logging::bool_attr("has_tests_stage", parsed.has_tests_stage),
+            crate::engine::logging::bool_attr("has_coverage_stage", parsed.has_coverage_stage),
         ],
     );
 }

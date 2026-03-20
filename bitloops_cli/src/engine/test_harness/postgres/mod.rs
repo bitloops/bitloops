@@ -9,11 +9,12 @@ use std::pin::Pin;
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::domain::{
-    CoverageBranchRecord, CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ProductionArtefact,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
-    TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
+    CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
+    ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
+    ResolvedTestScenarioRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    derive_test_classification,
 };
 use crate::engine::db::PostgresSyncConnection;
 use crate::engine::test_harness::schema::postgres_test_domain_schema_sql;
@@ -358,6 +359,65 @@ ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
         })
     }
 
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+
+        let diagnostics = diagnostics.to_vec();
+        self.with_client(move |client| {
+            Box::pin(async move {
+                let tx = client
+                    .transaction()
+                    .await
+                    .context("failed to start coverage diagnostics transaction")?;
+
+                for diag in diagnostics {
+                    tx.execute(
+                        r#"
+INSERT INTO coverage_diagnostics (
+  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
+  severity, code, message, metadata_json
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT(diagnostic_id) DO UPDATE SET
+  capture_id = excluded.capture_id,
+  severity = excluded.severity,
+  code = excluded.code,
+  message = excluded.message,
+  metadata_json = excluded.metadata_json
+"#,
+                        &[
+                            &diag.diagnostic_id,
+                            &diag.capture_id,
+                            &diag.repo_id,
+                            &diag.commit_sha,
+                            &diag.path,
+                            &diag.line,
+                            &diag.severity,
+                            &diag.code,
+                            &diag.message,
+                            &diag.metadata_json,
+                        ],
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed inserting coverage diagnostic {}",
+                            diag.diagnostic_id
+                        )
+                    })?;
+                }
+
+                tx.commit()
+                    .await
+                    .context("failed to commit coverage diagnostics transaction")
+            })
+        })
+    }
+
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
         let commit_sha = commit_sha.to_string();
         self.with_client(move |client| {
@@ -447,7 +507,13 @@ impl TestHarnessQueryRepository for PostgresTestHarnessRepository {
                 let row = client
                     .query_opt(
                         r#"
-SELECT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT
+  a.artefact_id,
+  a.symbol_fqn,
+  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
+  a.path,
+  a.start_line,
+  a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id

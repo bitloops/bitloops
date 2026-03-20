@@ -406,6 +406,20 @@ pub struct TestDiscoveryDiagnosticRecord {
     pub metadata_json: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CoverageDiagnosticRecord {
+    pub diagnostic_id: String,
+    pub capture_id: String,
+    pub repo_id: String,
+    pub commit_sha: String,
+    pub path: Option<String>,
+    pub line: Option<i64>,
+    pub severity: String,
+    pub code: String,
+    pub message: String,
+    pub metadata_json: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct BatchManifestEntry {
     pub format: String,

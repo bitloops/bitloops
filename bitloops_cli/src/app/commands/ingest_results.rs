@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use crate::domain::TestRunRecord;
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Deserialize)]
 struct JestJson {
@@ -38,13 +38,6 @@ struct JestAssertionResult {
 pub struct IngestResultsSummary {
     pub ingested: usize,
     pub unmatched: usize,
-}
-
-pub fn handle(db_path: &Path, jest_json_path: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(&mut repository, jest_json_path, commit_sha)?;
-    print_summary(commit_sha, &summary);
-    Ok(())
 }
 
 pub fn execute(
