@@ -3,8 +3,10 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use super::capability::{
-    CapabilityPackDescriptor, CapabilityPackRegistrationObservation, CapabilityPackRegistry,
-    CapabilityPackRegistryError,
+    CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
+    CapabilityPackRegistrationObservation, CapabilityPackRegistry, CapabilityPackRegistryError,
+    CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
+    CapabilityStageContribution,
 };
 use super::language::{
     LanguagePackDescriptor, LanguagePackRegistrationObservation, LanguagePackRegistry,
@@ -75,32 +77,94 @@ const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
-const SEMANTIC_CLONES_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
+const SEMANTIC_CLONES_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "semantic-clones-capability-pack",
     display_name: "Semantic Clones Capability Pack",
+    version: "1.0.0",
+    api_version: 1,
+    description: "Semantic clone detection and ranking capability",
+    default_enabled: true,
+    experimental: false,
+    dependencies: &[],
+    required_host_features: CAPABILITY_PACK_FEATURES,
+};
+
+const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
+    id: "knowledge-capability-pack",
+    display_name: "Knowledge Capability Pack",
+    version: "1.0.0",
+    api_version: 1,
+    description: "Knowledge retrieval and enrichment capability",
+    default_enabled: true,
+    experimental: false,
+    dependencies: &[],
+    required_host_features: CAPABILITY_PACK_FEATURES,
+};
+
+const TEST_HARNESS_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
+    id: "test-harness-capability-pack",
+    display_name: "Test Harness Capability Pack",
+    version: "1.0.0",
+    api_version: 1,
+    description: "Test harness ingestion and verification capability",
+    default_enabled: true,
+    experimental: false,
+    dependencies: &[],
+    required_host_features: CAPABILITY_PACK_FEATURES,
+};
+
+const SEMANTIC_CLONES_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
+    capability: SEMANTIC_CLONES_CAPABILITY_DESCRIPTOR,
     aliases: &["semantic-clones-pack"],
-    stage_contributions: &["semantic-clones"],
-    ingester_contributions: &["semantic-clones-ingester"],
+    stage_contributions: &[CapabilityStageContribution {
+        id: "semantic-clones",
+    }],
+    ingester_contributions: &[CapabilityIngesterContribution {
+        id: "semantic-clones-ingester",
+    }],
+    schema_module_contributions: &[CapabilitySchemaModuleContribution {
+        id: "semantic-clones-schema",
+    }],
+    query_example_contributions: &[CapabilityQueryExampleContribution {
+        id: "semantic-clones-basic",
+        query: "repo(\"bitloops\")->semanticClones()->limit(10)",
+    }],
     compatibility: ExtensionCompatibility::phase1_local_cli(CAPABILITY_PACK_FEATURES),
     migrations: &[],
 };
 
 const KNOWLEDGE_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
-    id: "knowledge-capability-pack",
-    display_name: "Knowledge Capability Pack",
+    capability: KNOWLEDGE_CAPABILITY_DESCRIPTOR,
     aliases: &["knowledge-pack"],
-    stage_contributions: &["knowledge"],
-    ingester_contributions: &["knowledge-ingester"],
+    stage_contributions: &[CapabilityStageContribution { id: "knowledge" }],
+    ingester_contributions: &[CapabilityIngesterContribution {
+        id: "knowledge-ingester",
+    }],
+    schema_module_contributions: &[CapabilitySchemaModuleContribution {
+        id: "knowledge-schema",
+    }],
+    query_example_contributions: &[CapabilityQueryExampleContribution {
+        id: "knowledge-basic",
+        query: "repo(\"bitloops\")->knowledge()->limit(10)",
+    }],
     compatibility: ExtensionCompatibility::phase1_local_cli(CAPABILITY_PACK_FEATURES),
     migrations: &[],
 };
 
 const TEST_HARNESS_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
-    id: "test-harness-capability-pack",
-    display_name: "Test Harness Capability Pack",
+    capability: TEST_HARNESS_CAPABILITY_DESCRIPTOR,
     aliases: &["test-harness-pack"],
-    stage_contributions: &["test-harness"],
-    ingester_contributions: &["test-harness-ingester"],
+    stage_contributions: &[CapabilityStageContribution { id: "test-harness" }],
+    ingester_contributions: &[CapabilityIngesterContribution {
+        id: "test-harness-ingester",
+    }],
+    schema_module_contributions: &[CapabilitySchemaModuleContribution {
+        id: "test-harness-schema",
+    }],
+    query_example_contributions: &[CapabilityQueryExampleContribution {
+        id: "test-harness-basic",
+        query: "repo(\"bitloops\")->testHarness()->limit(10)",
+    }],
     compatibility: ExtensionCompatibility::phase1_local_cli(CAPABILITY_PACK_FEATURES),
     migrations: &[],
 };
@@ -264,15 +328,15 @@ impl CoreExtensionHost {
         &mut self,
         descriptor: CapabilityPackDescriptor,
     ) -> Result<(), CoreExtensionHostError> {
-        let pack_id = descriptor.id.to_ascii_lowercase();
+        let pack_id = descriptor.id().to_ascii_lowercase();
         if let Err(error) = descriptor.compatibility.validate(
             "capability pack",
-            descriptor.id,
+            descriptor.id(),
             self.compatibility_context,
         ) {
             self.push_diagnostic(
                 "capability-pack",
-                descriptor.id,
+                descriptor.id(),
                 ExtensionDiagnosticSeverity::Error,
                 ExtensionDiagnosticKind::Compatibility,
                 "compatibility_failed",
@@ -523,11 +587,31 @@ mod tests {
     use super::*;
 
     const CAPABILITY_WITH_MIGRATIONS: CapabilityPackDescriptor = CapabilityPackDescriptor {
-        id: "migrating-pack",
-        display_name: "Migrating Pack",
+        capability: CapabilityDescriptor {
+            id: "migrating-pack",
+            display_name: "Migrating Pack",
+            version: "1.0.0",
+            api_version: 1,
+            description: "Capability pack with host-managed migrations",
+            default_enabled: true,
+            experimental: false,
+            dependencies: &[],
+            required_host_features: CAPABILITY_PACK_FEATURES,
+        },
         aliases: &["migrating"],
-        stage_contributions: &["migrating-stage"],
-        ingester_contributions: &["migrating-ingester"],
+        stage_contributions: &[CapabilityStageContribution {
+            id: "migrating-stage",
+        }],
+        ingester_contributions: &[CapabilityIngesterContribution {
+            id: "migrating-ingester",
+        }],
+        schema_module_contributions: &[CapabilitySchemaModuleContribution {
+            id: "migrating-schema",
+        }],
+        query_example_contributions: &[CapabilityQueryExampleContribution {
+            id: "migrating-example",
+            query: "repo(\"bitloops\")->migratingStage()",
+        }],
         compatibility: ExtensionCompatibility::phase1_local_cli(CAPABILITY_PACK_FEATURES),
         migrations: &[
             CapabilityPackMigrationDescriptor {
@@ -563,11 +647,24 @@ mod tests {
     };
 
     const INCOMPATIBLE_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
-        id: "incompatible-capability-pack",
-        display_name: "Incompatible Capability Pack",
+        capability: CapabilityDescriptor {
+            id: "incompatible-capability-pack",
+            display_name: "Incompatible Capability Pack",
+            version: "1.0.0",
+            api_version: 1,
+            description: "Capability pack requiring unsupported host features",
+            default_enabled: true,
+            experimental: true,
+            dependencies: &[],
+            required_host_features: &["missing-feature"],
+        },
         aliases: &["incompatible-capability"],
-        stage_contributions: &["incompatible-stage"],
+        stage_contributions: &[CapabilityStageContribution {
+            id: "incompatible-stage",
+        }],
         ingester_contributions: &[],
+        schema_module_contributions: &[],
+        query_example_contributions: &[],
         compatibility: ExtensionCompatibility::phase1_local_cli(&["missing-feature"]),
         migrations: &[],
     };
@@ -595,6 +692,16 @@ mod tests {
             host.capability_packs()
                 .resolve_ingester_owner("test-harness-ingester"),
             Some("test-harness-capability-pack")
+        );
+        assert_eq!(
+            host.capability_packs()
+                .resolve_schema_module_owner("knowledge-schema"),
+            Some("knowledge-capability-pack")
+        );
+        assert_eq!(
+            host.capability_packs()
+                .resolve_query_example_owner("semantic-clones-basic"),
+            Some("semantic-clones-capability-pack")
         );
 
         let readiness = host.readiness_snapshot();
