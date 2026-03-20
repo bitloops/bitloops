@@ -60,7 +60,7 @@ async fn upsert_file_artefact_row(
     let modifiers_sql = sql_json_text_array(relational, &[]);
     let file_docstring = blob_content
         .as_deref()
-        .and_then(|content| extract_file_docstring_for_language_pack(&language, content));
+        .and_then(|content| extract_file_docstring_for_language_pack(path, &language, content));
     let docstring_sql = sql_nullable_text(file_docstring.as_deref());
 
     let sql = format!(

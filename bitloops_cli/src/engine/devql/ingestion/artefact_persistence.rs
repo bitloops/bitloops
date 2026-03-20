@@ -4,6 +4,7 @@ type LanguagePackArtefactExtractor = fn(&str, &str) -> Result<Vec<JsTsArtefact>>
 type LanguagePackDependencyEdgeExtractor =
     fn(&str, &str, &[JsTsArtefact]) -> Result<Vec<JsTsDependencyEdge>>;
 type LanguagePackFileDocstringExtractor = fn(&str) -> Option<String>;
+type LanguagePackExtraction = (Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>);
 
 // First-party runtime adapter for built-in language packs.
 #[derive(Debug, Clone, Copy)]
@@ -48,9 +49,21 @@ fn resolve_built_in_language_pack(pack_id: &str) -> Option<BuiltInLanguagePackRu
     built_in_language_pack_registry().get(pack_id).copied()
 }
 
-fn extract_file_docstring_for_language_pack(language: &str, content: &str) -> Option<String> {
-    resolve_language_pack_owner(language)
+fn resolve_built_in_language_pack_for_source(
+    path: &str,
+    language: &str,
+) -> Option<BuiltInLanguagePackRuntime> {
+    resolve_language_pack_owner_for_input(language, Some(path))
+        .or_else(|| resolve_language_pack_owner(language))
         .and_then(resolve_built_in_language_pack)
+}
+
+fn extract_file_docstring_for_language_pack(
+    path: &str,
+    language: &str,
+    content: &str,
+) -> Option<String> {
+    resolve_built_in_language_pack_for_source(path, language)
         .and_then(|pack| (pack.extract_file_docstring)(content))
 }
 
@@ -59,10 +72,14 @@ fn extract_language_pack_artefacts_and_edges(
     rev: &FileRevision<'_>,
     language: &str,
     content: &str,
-) -> Result<(Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>)> {
-    let (_context, pack_id) =
+) -> Result<Option<LanguagePackExtraction>> {
+    let Some((_context, pack_id)) =
         language_pack_context_for_language(cfg, Some(rev.commit_sha), language, Some(rev.path))
-            .with_context(|| format!("resolving language pack owner for `{language}`"))?;
+            .with_context(|| format!("resolving language pack owner for `{language}`"))?
+    else {
+        return Ok(None);
+    };
+
     let Some(pack) = resolve_built_in_language_pack(pack_id) else {
         bail!(
             "language `{language}` resolved to unsupported language pack `{pack_id}`"
@@ -72,7 +89,7 @@ fn extract_language_pack_artefacts_and_edges(
     let items = (pack.extract_artefacts)(content, rev.path)?;
     let edges = (pack.extract_dependency_edges)(content, rev.path, &items)?;
     let file_docstring = (pack.extract_file_docstring)(content);
-    Ok((items, edges, file_docstring))
+    Ok(Some((items, edges, file_docstring)))
 }
 
 async fn refresh_current_state_for_path(
@@ -201,11 +218,11 @@ async fn upsert_current_state_for_content(
         Some(content),
     );
 
-    let (items, dependency_edges, file_docstring) = if is_supported_symbol_language(
-        &file_artefact.language,
-    ) {
-        match extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, content) {
-            Ok(value) => value,
+    let (items, dependency_edges, file_docstring) =
+        match extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, content)
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => (Vec::new(), Vec::new(), None),
             Err(err) => {
                 log::warn!(
                     "devql watcher extraction failed for `{}`; keeping file-level current state only: {err:#}",
@@ -214,13 +231,10 @@ async fn upsert_current_state_for_content(
                 (
                     Vec::new(),
                     Vec::new(),
-                    extract_file_docstring_for_language_pack(&file_artefact.language, content),
+                    extract_file_docstring_for_language_pack(rev.path, &file_artefact.language, content),
                 )
             }
-        }
-    } else {
-        (Vec::new(), Vec::new(), None)
-    };
+        };
 
     let symbol_records =
         build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items, content);
@@ -259,17 +273,16 @@ async fn upsert_language_artefacts(
     rev: &FileRevision<'_>,
     file_artefact: &FileArtefactRow,
 ) -> Result<()> {
-    let (items, dependency_edges, file_docstring, source_content) =
-        if is_supported_symbol_language(&file_artefact.language) {
-            let Some(content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
-                return Ok(());
-            };
-            let (items, edges, file_docstring) =
-                extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, &content)?;
-            (items, edges, file_docstring, content)
-        } else {
-            (Vec::new(), Vec::new(), None, String::new())
-        };
+    let Some(source_content) = git_blob_content(&cfg.repo_root, rev.blob_sha) else {
+        return Ok(());
+    };
+    let (items, dependency_edges, file_docstring) = extract_language_pack_artefacts_and_edges(
+        cfg,
+        rev,
+        &file_artefact.language,
+        &source_content,
+    )?
+    .unwrap_or_default();
 
     let symbol_records =
         build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items, &source_content);

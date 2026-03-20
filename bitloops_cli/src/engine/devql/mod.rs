@@ -133,6 +133,14 @@ fn resolve_language_pack_owner_for_input(
     file_path: Option<&str>,
 ) -> Option<&'static str> {
     core_extension_host().ok().and_then(|host| {
+        if let Some(path) = file_path
+            && let Ok(resolved) = host
+                .language_packs()
+                .resolve(LanguagePackResolutionInput::for_file_path(path))
+        {
+            return Some(resolved.pack.id);
+        }
+
         let input = file_path
             .map(|path| LanguagePackResolutionInput::for_language(language).with_file_path(path))
             .unwrap_or_else(|| LanguagePackResolutionInput::for_language(language));
@@ -154,23 +162,32 @@ fn resolve_language_pack_owner(language: &str) -> Option<&'static str> {
     resolve_language_pack_owner_for_input(language, None)
 }
 
+fn resolve_language_id_for_file_path(file_path: &str) -> Option<&'static str> {
+    core_extension_host().ok().and_then(|host| {
+        host.language_packs()
+            .resolve(LanguagePackResolutionInput::for_file_path(file_path))
+            .ok()
+            .map(|resolved| resolved.profile.language_id)
+    })
+}
+
 fn language_pack_context_for_language(
     cfg: &DevqlConfig,
     commit_sha: Option<&str>,
     language: &str,
     file_path: Option<&str>,
-) -> Result<(LanguagePackContext, &'static str)> {
+) -> Result<Option<(LanguagePackContext, &'static str)>> {
     let Some(pack_id) = resolve_language_pack_owner_for_input(language, file_path) else {
-        bail!("language `{language}` is not owned by any registered language pack");
+        return Ok(None);
     };
-    Ok((
+    Ok(Some((
         LanguagePackContext::new(
             cfg.repo_root.clone(),
             cfg.repo.repo_id.clone(),
             normalise_optional_commit_sha(commit_sha),
         ),
         pack_id,
-    ))
+    )))
 }
 
 fn capability_execution_context_for_stage(

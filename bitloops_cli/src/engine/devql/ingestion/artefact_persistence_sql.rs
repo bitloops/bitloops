@@ -37,10 +37,6 @@ fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
-fn is_supported_symbol_language(language: &str) -> bool {
-    resolve_language_pack_owner(language).is_some()
-}
-
 fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
     match relational.dialect() {
         RelationalDialect::Postgres => "EXTRACT(EPOCH FROM updated_at)::BIGINT",

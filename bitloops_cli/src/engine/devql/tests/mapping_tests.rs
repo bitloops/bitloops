@@ -279,10 +279,19 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         Some(TS_JS_LANGUAGE_PACK_ID)
     );
     assert!(resolve_language_pack_owner("python").is_none());
-    assert!(is_supported_symbol_language("rust"));
-    assert!(is_supported_symbol_language("typescript"));
-    assert!(is_supported_symbol_language("javascript"));
-    assert!(!is_supported_symbol_language("python"));
+    assert_eq!(
+        resolve_language_id_for_file_path("src/lib.rs"),
+        Some("rust")
+    );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.ts"),
+        Some("typescript")
+    );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.jsx"),
+        Some("javascript")
+    );
+    assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
 #[test]
