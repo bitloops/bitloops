@@ -1,4 +1,0 @@
-#!/bin/sh
-# Bitloops git hooks
-# Post-commit hook: condense session data if commit has Bitloops-Checkpoint trailer
-bitloops hooks git post-commit 2>/dev/null || true
