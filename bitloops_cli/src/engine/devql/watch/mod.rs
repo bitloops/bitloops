@@ -16,6 +16,11 @@ mod capture;
 const WATCHER_PID_FILE_NAME: &str = "devql-watcher.pid";
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 
+/// Bump this whenever the DevQL SQLite schema changes in a way that requires a watcher restart.
+/// The version is written alongside the PID into the pid file so that `ensure_watcher_running`
+/// can detect a mismatch and automatically kill + restart the old process.
+pub(crate) const WATCHER_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
     #[arg(long)]
@@ -51,10 +56,14 @@ pub fn watcher_pid_file(repo_root: &Path) -> PathBuf {
 
 pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
     let pid_file = watcher_pid_file(repo_root);
-    if let Some(pid) = read_pid_file(&pid_file)?
-        && process_is_running(pid)
+    if let Some(entry) = read_pid_file(&pid_file)?
+        && process_is_running(entry.pid)
     {
-        return Ok(());
+        if entry.schema_version == Some(WATCHER_SCHEMA_VERSION) {
+            return Ok(());
+        }
+        // Schema version mismatch — kill the stale watcher so the new one runs schema init.
+        kill_process(entry.pid);
     }
 
     if pid_file.exists() {
@@ -76,8 +85,11 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
         .with_context(|| format!("spawning DevQL watcher for {}", repo_root.display()))?;
 
     ensure_watcher_pid_parent_dir(&pid_file)?;
-    fs::write(&pid_file, child.id().to_string())
-        .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
+    fs::write(
+        &pid_file,
+        format!("{}\n{}", child.id(), WATCHER_SCHEMA_VERSION),
+    )
+    .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
 
     Ok(())
 }
@@ -134,7 +146,6 @@ fn initialise_local_watch_schema(repo_root: &Path) -> Result<()> {
     )
     .context("resolving SQLite path for watcher start")?;
     let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)?;
-    sqlite.initialise_checkpoint_schema()?;
     sqlite.initialise_devql_schema()?;
     Ok(())
 }
@@ -262,7 +273,14 @@ fn ensure_watcher_pid_parent_dir(pid_file: &Path) -> Result<()> {
         .with_context(|| format!("creating watcher pid directory {}", parent.display()))
 }
 
-fn read_pid_file(pid_file: &Path) -> Result<Option<u32>> {
+pub(crate) struct PidFileEntry {
+    pub(crate) pid: u32,
+    /// `None` when the pid file was written by an older build that did not include a version line.
+    /// A `None` version is treated as a mismatch, triggering a watcher restart.
+    pub(crate) schema_version: Option<u32>,
+}
+
+fn read_pid_file(pid_file: &Path) -> Result<Option<PidFileEntry>> {
     let data = match fs::read_to_string(pid_file) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -272,7 +290,35 @@ fn read_pid_file(pid_file: &Path) -> Result<Option<u32>> {
         }
     };
 
-    Ok(data.trim().parse::<u32>().ok())
+    let mut lines = data.lines();
+    let pid = match lines.next().and_then(|l| l.trim().parse::<u32>().ok()) {
+        Some(pid) => pid,
+        None => return Ok(None),
+    };
+    let schema_version = lines.next().and_then(|l| l.trim().parse::<u32>().ok());
+    Ok(Some(PidFileEntry { pid, schema_version }))
+}
+
+fn kill_process(pid: u32) {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 fn process_is_running(pid: u32) -> bool {
@@ -314,7 +360,7 @@ impl WatcherPidGuard {
     fn acquire(pid_file: PathBuf) -> Result<Self> {
         ensure_watcher_pid_parent_dir(&pid_file)?;
         let pid = std::process::id();
-        fs::write(&pid_file, pid.to_string())
+        fs::write(&pid_file, format!("{pid}\n{WATCHER_SCHEMA_VERSION}"))
             .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
         Ok(Self { pid_file, pid })
     }
@@ -324,10 +370,216 @@ impl Drop for WatcherPidGuard {
     fn drop(&mut self) {
         let current_pid = fs::read_to_string(&self.pid_file)
             .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok());
+            .and_then(|data| {
+                data.lines()
+                    .next()
+                    .and_then(|l| l.trim().parse::<u32>().ok())
+            });
         if current_pid == Some(self.pid) {
             let _ = fs::remove_file(&self.pid_file);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn write_pid_file(dir: &TempDir, content: &str) -> PathBuf {
+        let pid_file = dir.path().join("devql-watcher.pid");
+        fs::write(&pid_file, content).expect("write pid file");
+        pid_file
+    }
+
+    // ── read_pid_file ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn read_pid_file_returns_none_when_missing() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("missing.pid");
+        let result = read_pid_file(&pid_file).expect("read should not error");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_pid_file_parses_legacy_single_line_format() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "12345\n");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(entry.pid, 12345);
+        assert!(
+            entry.schema_version.is_none(),
+            "single-line file should yield no schema_version"
+        );
+    }
+
+    #[test]
+    fn read_pid_file_parses_versioned_two_line_format() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "99\n1\n");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(entry.pid, 99);
+        assert_eq!(entry.schema_version, Some(1));
+    }
+
+    #[test]
+    fn read_pid_file_returns_none_for_non_numeric_pid() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "not-a-pid\n1\n");
+        let result = read_pid_file(&pid_file).expect("read should not error");
+        assert!(
+            result.is_none(),
+            "non-numeric first line should return None"
+        );
+    }
+
+    #[test]
+    fn read_pid_file_accepts_missing_schema_version_line() {
+        // File with pid but no trailing newline or version line
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "42");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(entry.pid, 42);
+        assert!(entry.schema_version.is_none());
+    }
+
+    #[test]
+    fn read_pid_file_ignores_non_numeric_schema_version() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "77\nbad-version\n");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(entry.pid, 77);
+        assert!(
+            entry.schema_version.is_none(),
+            "non-numeric version should parse as None"
+        );
+    }
+
+    // ── WatcherPidGuard ───────────────────────────────────────────────────────
+
+    #[test]
+    fn pid_guard_writes_versioned_pid_file() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("devql-watcher.pid");
+        {
+            let _guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire guard");
+            let content = fs::read_to_string(&pid_file).expect("read pid file");
+            let mut lines = content.lines();
+            let pid_str = lines.next().expect("pid line");
+            let version_str = lines.next().expect("version line");
+            let pid: u32 = pid_str.parse().expect("pid is numeric");
+            let version: u32 = version_str.parse().expect("version is numeric");
+            assert_eq!(pid, std::process::id());
+            assert_eq!(version, WATCHER_SCHEMA_VERSION);
+        }
+        // Guard dropped — file should be cleaned up
+        assert!(
+            !pid_file.exists(),
+            "pid file should be removed when guard is dropped"
+        );
+    }
+
+    #[test]
+    fn pid_guard_does_not_remove_file_if_pid_was_overwritten() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("devql-watcher.pid");
+        let guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire guard");
+        // Overwrite with a different pid so the guard's ownership check fails
+        fs::write(&pid_file, "99999\n1\n").expect("overwrite pid file");
+        drop(guard);
+        // File should still exist because the guard saw a different pid
+        assert!(
+            pid_file.exists(),
+            "pid file should not be removed when pid has been overwritten"
+        );
+    }
+
+    // ── schema version written by ensure_watcher_running ─────────────────────
+
+    #[test]
+    fn ensure_watcher_running_pid_file_contains_current_schema_version() {
+        // We can't easily spawn a real watcher in a unit test, but we CAN verify that
+        // `WatcherPidGuard::acquire` encodes the right version, which is the same path
+        // used by the spawned watcher process.
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("devql-watcher.pid");
+        let _guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(
+            entry.schema_version,
+            Some(WATCHER_SCHEMA_VERSION),
+            "pid file written by WatcherPidGuard must carry WATCHER_SCHEMA_VERSION"
+        );
+    }
+
+    // ── schema_version mismatch detection ────────────────────────────────────
+
+    #[test]
+    fn legacy_pid_file_schema_version_is_none_triggering_restart_logic() {
+        // Simulate an old pid file with no version line.
+        // ensure_watcher_running checks `entry.schema_version == Some(WATCHER_SCHEMA_VERSION)`.
+        // A None version must NOT equal Some(WATCHER_SCHEMA_VERSION), so restart is triggered.
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, "12345\n");
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_ne!(
+            entry.schema_version,
+            Some(WATCHER_SCHEMA_VERSION),
+            "legacy pid file (no version) must not match current schema version"
+        );
+    }
+
+    #[test]
+    fn stale_schema_version_in_pid_file_does_not_match_current() {
+        // Simulate a pid file written by a binary with WATCHER_SCHEMA_VERSION = 0.
+        let dir = TempDir::new().expect("temp dir");
+        let stale_version = WATCHER_SCHEMA_VERSION.saturating_sub(1);
+        // If WATCHER_SCHEMA_VERSION is already 0 this test is a no-op by design.
+        if stale_version == WATCHER_SCHEMA_VERSION {
+            return;
+        }
+        let pid_file = write_pid_file(&dir, &format!("12345\n{stale_version}\n"));
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_ne!(
+            entry.schema_version,
+            Some(WATCHER_SCHEMA_VERSION),
+            "stale version {stale_version} must not match WATCHER_SCHEMA_VERSION {}",
+            WATCHER_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn current_schema_version_matches_watcher_constant() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = write_pid_file(&dir, &format!("1\n{WATCHER_SCHEMA_VERSION}\n"));
+        let entry = read_pid_file(&pid_file)
+            .expect("read ok")
+            .expect("entry present");
+        assert_eq!(
+            entry.schema_version,
+            Some(WATCHER_SCHEMA_VERSION),
+            "correctly versioned pid file must match WATCHER_SCHEMA_VERSION"
+        );
     }
 }
 

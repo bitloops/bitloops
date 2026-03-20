@@ -113,6 +113,113 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn sqlite_connection_pool_initialises_devql_schema_workspace_revisions_table() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        sqlite.initialise_devql_schema()?;
+
+        let exists = sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_revisions'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count == 1)
+        })?;
+        assert!(exists, "workspace_revisions table should exist after initialise_devql_schema");
+
+        // Verify indexes were also created
+        let index_count: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'workspace_revisions'",
+                [],
+                |row| row.get(0),
+            ).map_err(anyhow::Error::from)
+        })?;
+        assert!(
+            index_count >= 2,
+            "expected at least 2 indexes on workspace_revisions, found {index_count}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_revisions_table_supports_insert_and_dedup_query() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        sqlite.initialise_devql_schema()?;
+
+        // Insert two rows for different repos and one duplicate tree_hash
+        sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-b', 'hash-1')",
+                [],
+            )?;
+            Ok(())
+        })?;
+
+        let latest_a: String = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT tree_hash FROM workspace_revisions WHERE repo_id = 'repo-a' ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            ).map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(latest_a, "hash-2", "latest tree_hash for repo-a should be hash-2");
+
+        let latest_b: String = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT tree_hash FROM workspace_revisions WHERE repo_id = 'repo-b' ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            ).map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(latest_b, "hash-1", "latest tree_hash for repo-b should be hash-1");
+
+        // autoincrement ids must be monotone
+        let ids: Vec<i64> = sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare("SELECT id FROM workspace_revisions ORDER BY id ASC")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(ids, vec![1, 2, 3], "ids must be autoincremented from 1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn initialise_devql_schema_is_idempotent() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        // Calling twice should not error
+        sqlite.initialise_devql_schema()?;
+        sqlite.initialise_devql_schema()?;
+
+        let exists = sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_revisions'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count == 1)
+        })?;
+        assert!(exists, "workspace_revisions should still exist after double init");
+        Ok(())
+    }
+
+    #[test]
     fn sqlite_connection_pool_initialises_checkpoint_schema_tables() -> Result<()> {
         let temp = TempDir::new().context("creating temp dir")?;
         let sqlite_path = temp.path().join("nested").join("checkpoints.sqlite");

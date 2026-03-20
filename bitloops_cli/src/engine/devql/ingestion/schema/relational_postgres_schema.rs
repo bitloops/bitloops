@@ -226,5 +226,18 @@ ON artefact_edges_current (
     COALESCE(end_line, -1),
     md5(metadata::text)
 );
+
+CREATE TABLE IF NOT EXISTS workspace_revisions (
+    id         BIGSERIAL PRIMARY KEY,
+    repo_id    TEXT      NOT NULL,
+    tree_hash  TEXT      NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS workspace_revisions_repo_idx
+ON workspace_revisions (repo_id);
+
+CREATE INDEX IF NOT EXISTS workspace_revisions_tree_idx
+ON workspace_revisions (repo_id, tree_hash);
 "#
 }
