@@ -8,8 +8,13 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
+use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones_pack;
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
+};
+use crate::engine::extensions::{
+    CapabilityExecutionContext, CapabilityIngestContext, CoreExtensionHost, LanguagePackContext,
+    LanguagePackResolutionInput,
 };
 use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_clones;
@@ -107,7 +112,127 @@ const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
 const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
 const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
+const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
+const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
+const SEMANTIC_CLONES_CAPABILITY_STAGE_ID: &str = semantic_clones_pack::SEMANTIC_CLONES_STAGE_ID;
+const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
+const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
+
+fn core_extension_host() -> Result<&'static CoreExtensionHost> {
+    static CORE_EXTENSION_HOST: OnceLock<Result<CoreExtensionHost, String>> = OnceLock::new();
+    let host_result = CORE_EXTENSION_HOST.get_or_init(|| {
+        CoreExtensionHost::with_builtins()
+            .map_err(|err| format!("bootstrapping built-in extension packs: {err}"))
+    });
+    match host_result {
+        Ok(host) => Ok(host),
+        Err(error_message) => Err(anyhow!(
+            "initialising Core extension host for DevQL runtime: {error_message}"
+        )),
+    }
+}
+
+fn normalise_optional_commit_sha(commit_sha: Option<&str>) -> Option<String> {
+    commit_sha
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_language_pack_owner_for_input(
+    language: &str,
+    file_path: Option<&str>,
+) -> Option<&'static str> {
+    core_extension_host().ok().and_then(|host| {
+        if let Some(path) = file_path
+            && let Ok(resolved) = host
+                .language_packs()
+                .resolve(LanguagePackResolutionInput::for_file_path(path))
+        {
+            return Some(resolved.pack.id);
+        }
+
+        let input = file_path
+            .map(|path| LanguagePackResolutionInput::for_language(language).with_file_path(path))
+            .unwrap_or_else(|| LanguagePackResolutionInput::for_language(language));
+
+        host.language_packs()
+            .resolve(input)
+            .ok()
+            .map(|resolved| resolved.pack.id)
+            .or_else(|| {
+                host.language_packs()
+                    .owner_for_language(language)
+                    .and_then(|pack_key| host.language_packs().resolve_pack(pack_key))
+                    .map(|descriptor| descriptor.id)
+            })
+    })
+}
+
+fn resolve_language_pack_owner(language: &str) -> Option<&'static str> {
+    resolve_language_pack_owner_for_input(language, None)
+}
+
+fn resolve_language_id_for_file_path(file_path: &str) -> Option<&'static str> {
+    core_extension_host().ok().and_then(|host| {
+        host.language_packs()
+            .resolve(LanguagePackResolutionInput::for_file_path(file_path))
+            .ok()
+            .map(|resolved| resolved.profile.language_id)
+    })
+}
+
+fn language_pack_context_for_language(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    language: &str,
+    file_path: Option<&str>,
+) -> Result<Option<(LanguagePackContext, &'static str)>> {
+    let Some(pack_id) = resolve_language_pack_owner_for_input(language, file_path) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        LanguagePackContext::new(
+            cfg.repo_root.clone(),
+            cfg.repo.repo_id.clone(),
+            normalise_optional_commit_sha(commit_sha),
+        ),
+        pack_id,
+    )))
+}
+
+fn capability_execution_context_for_stage(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    stage_id: &str,
+) -> Result<CapabilityExecutionContext> {
+    let host = core_extension_host()?;
+    let capability_pack_id = host.resolve_stage_owner_for_execution(stage_id)?;
+    Ok(CapabilityExecutionContext::new(
+        cfg.repo_root.clone(),
+        cfg.repo.repo_id.clone(),
+        normalise_optional_commit_sha(commit_sha),
+        capability_pack_id,
+        stage_id,
+    ))
+}
+
+fn capability_ingest_context_for_ingester(
+    cfg: &DevqlConfig,
+    commit_sha: Option<&str>,
+    ingester_id: &str,
+) -> Result<CapabilityIngestContext> {
+    let host = core_extension_host()?;
+    let capability_pack_id = host.resolve_ingester_owner_for_ingest(ingester_id)?;
+    Ok(CapabilityIngestContext::new(
+        cfg.repo_root.clone(),
+        cfg.repo.repo_id.clone(),
+        normalise_optional_commit_sha(commit_sha),
+        capability_pack_id,
+        ingester_id,
+    ))
+}
 
 pub async fn run_connection_status() -> Result<()> {
     let cfg = resolve_store_backend_config()?;
@@ -325,7 +450,18 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
     match relational {
         RelationalStorage::Postgres(client) => init_postgres_schema(cfg, client).await,
         RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
-    }
+    }?;
+
+    let test_harness_context =
+        capability_ingest_context_for_ingester(cfg, None, TEST_HARNESS_CAPABILITY_INGESTER_ID)
+            .context("resolving test-harness capability ingester owner")?;
+    crate::engine::test_harness::init_schema_for_repo(&cfg.repo_root).with_context(|| {
+        format!(
+            "initialising test-harness schema for capability pack `{}`",
+            test_harness_context.capability_pack_id
+        )
+    })?;
+    Ok(())
 }
 
 fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProviderConfig {
@@ -381,16 +517,19 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
-    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
-        semantic::build_semantic_summary_provider(&semantic_provider_config(cfg))?.into();
-    let embedding_provider = semantic_embeddings::build_symbol_embedding_provider(
+    let knowledge_context =
+        capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
+            .context("resolving knowledge capability ingester owner")?;
+    let summary_provider =
+        semantic_clones_pack::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
+    let embedding_provider = semantic_clones_pack::build_symbol_embedding_provider(
         &embedding_provider_config(cfg),
         Some(&cfg.repo_root),
-    )?
-    .map(Arc::<dyn EmbeddingProvider>::from);
+    )?;
     if init {
         match backends.events.provider {
             EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
@@ -476,8 +615,8 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &relational,
                 &FileRevision {
                     commit_sha: &commit_sha,
-                    revision: RevisionRef {
-                        kind: "commit",
+                    revision: TemporalRevisionRef {
+                        kind: TemporalRevisionKind::Commit,
                         id: &commit_sha,
                         temp_checkpoint_id: None,
                     },
@@ -499,8 +638,16 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &normalized_path,
             )
             .await?;
-            let semantic_feature_inputs = semantic::build_semantic_feature_inputs_from_artefacts(
+            let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
+                &relational,
+                &cfg.repo.repo_id,
+                &blob_sha,
+                &normalized_path,
+            )
+            .await?;
+            let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
                 &pre_stage_artefacts,
+                &pre_stage_dependencies,
                 &content,
             );
             let semantic_feature_stats = upsert_semantic_feature_rows(
@@ -508,7 +655,13 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
                 &semantic_feature_inputs,
                 Arc::clone(&summary_provider),
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "running capability ingester `{}` owned by `{}`",
+                    knowledge_context.ingester_id, knowledge_context.capability_pack_id
+                )
+            })?;
             if let Some(embedding_provider) = embedding_provider.as_ref() {
                 let embedding_stats = upsert_symbol_embedding_rows(
                     &relational,
@@ -530,7 +683,17 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id).await?;
+    let semantic_clones_context =
+        capability_execution_context_for_stage(cfg, None, SEMANTIC_CLONES_CAPABILITY_STAGE_ID)
+            .context("resolving semantic-clones capability stage owner")?;
+    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id)
+        .await
+        .with_context(|| {
+            format!(
+                "running capability stage `{}` owned by `{}`",
+                semantic_clones_context.stage_id, semantic_clones_context.capability_pack_id
+            )
+        })?;
     counters.symbol_clone_edges_upserted += clone_result.edges.len();
     counters.symbol_clone_sources_scored += clone_result.sources_considered;
 
@@ -563,21 +726,11 @@ async fn promote_temporary_current_rows_for_head_commit(
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .unwrap_or_default();
-    let now_sql = sql_now(relational);
-    let committed_at_assignment = if head_unix > 0 {
-        match relational.dialect() {
-            RelationalDialect::Postgres => format!(", committed_at = to_timestamp({head_unix})"),
-            RelationalDialect::Sqlite => {
-                format!(", committed_at = datetime({head_unix}, 'unixepoch')")
-            }
-        }
-    } else {
-        String::new()
-    };
+    let updated_at_sql = revision_timestamp_sql(relational, head_unix);
 
     let sql = format!(
-        "SELECT path, blob_sha FROM current_file_state \
-WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+        "SELECT path, blob_sha FROM artefacts_current \
+	WHERE repo_id = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
         esc_pg(&cfg.repo.repo_id),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -606,28 +759,14 @@ WHERE repo_id = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:
         )
         .await?;
 
-        let sql_current = format!(
-            "UPDATE current_file_state \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}'{}, updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
-            esc_pg(&head_sha),
-            esc_pg(&head_sha),
-            esc_pg(&head_blob_sha),
-            committed_at_assignment,
-            now_sql,
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(path),
-        );
-        relational.exec(&sql_current).await?;
-
         let sql_artefacts = format!(
             "UPDATE artefacts_current \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );
@@ -635,12 +774,12 @@ WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revisio
 
         let sql_edges = format!(
             "UPDATE artefact_edges_current \
-SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%' OR commit_sha LIKE 'temp:%')",
+	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
+	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
-            now_sql,
+            updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
             esc_pg(path),
         );
@@ -689,6 +828,7 @@ async fn execute_query_json(cfg: &DevqlConfig, query: &str) -> Result<Value> {
     Ok(Value::Array(rows))
 }
 
+include!("core_contracts.rs");
 include!("canonical_mapping.rs");
 include!("vocab.rs");
 // ingestion: shared types
@@ -703,7 +843,17 @@ include!("ingestion/language.rs");
 include!("ingestion/artefact_identity.rs");
 // ingestion: checkpoint / commit / event persistence
 include!("ingestion/checkpoint.rs");
-// ingestion: file & language artefact DB upserts
+// ingestion: shared record types for artefact persistence
+include!("ingestion/artefact_persistence_types.rs");
+// ingestion: SQL dialect helpers, JSON utilities, timestamp expressions
+include!("ingestion/artefact_persistence_sql.rs");
+// ingestion: file state row, file artefact upsert, revision management
+include!("ingestion/artefact_persistence_file.rs");
+// ingestion: symbol record building, content hashing, artefact DB upserts
+include!("ingestion/artefact_persistence_symbols.rs");
+// ingestion: edge records, current state queries/mutations, row deserialization
+include!("ingestion/artefact_persistence_edges.rs");
+// ingestion: top-level orchestration (refresh/upsert/delete current state)
 include!("ingestion/artefact_persistence.rs");
 // ingestion: Stage 1 semantic persistence
 include!("ingestion/semantic_features_persistence.rs");
@@ -749,6 +899,10 @@ mod identity_tests;
 #[cfg(test)]
 #[path = "tests/mapping_tests.rs"]
 mod mapping_tests;
+
+#[cfg(test)]
+#[path = "tests/core_contract_tests.rs"]
+mod core_contract_tests;
 
 #[cfg(test)]
 #[path = "tests/cucumber_world.rs"]

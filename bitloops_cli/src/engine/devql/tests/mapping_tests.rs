@@ -1,5 +1,30 @@
 use super::*;
 
+fn extension_runtime_cfg() -> DevqlConfig {
+    DevqlConfig {
+        repo_root: PathBuf::from("/tmp/repo"),
+        repo: RepoIdentity {
+            provider: "github".to_string(),
+            organization: "bitloops".to_string(),
+            name: "temp2".to_string(),
+            identity: "github/bitloops/temp2".to_string(),
+            repo_id: deterministic_uuid("repo://github/bitloops/temp2"),
+        },
+        pg_dsn: None,
+        clickhouse_url: "http://localhost:8123".to_string(),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: "default".to_string(),
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
+    }
+}
+
 fn canonical_kind(artefact: &JsTsArtefact) -> Option<&str> {
     artefact.canonical_kind.as_deref()
 }
@@ -237,4 +262,125 @@ impl Repository for User {
             .as_deref()
             .is_some_and(|parent| parent.starts_with("src/lib.rs::impl@"))
     );
+}
+
+#[test]
+fn devql_extension_host_resolves_built_in_language_pack_ownership() {
+    assert_eq!(
+        resolve_language_pack_owner("rust"),
+        Some(RUST_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
+        resolve_language_pack_owner("typescript"),
+        Some(TS_JS_LANGUAGE_PACK_ID)
+    );
+    assert_eq!(
+        resolve_language_pack_owner("javascript"),
+        Some(TS_JS_LANGUAGE_PACK_ID)
+    );
+    assert!(resolve_language_pack_owner("python").is_none());
+    assert_eq!(
+        resolve_language_id_for_file_path("src/lib.rs"),
+        Some("rust")
+    );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.ts"),
+        Some("typescript")
+    );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.jsx"),
+        Some("javascript")
+    );
+    assert!(resolve_language_id_for_file_path("README").is_none());
+}
+
+#[test]
+fn devql_language_pack_runtime_registry_resolves_built_in_pack_implementations() {
+    assert!(resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID).is_some());
+    assert!(resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID).is_some());
+    assert!(resolve_built_in_language_pack("unknown-pack").is_none());
+}
+
+#[test]
+fn devql_language_pack_runtime_executes_rust_and_ts_js_built_ins() {
+    let rust_pack = resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID)
+        .expect("resolve rust built-in language pack runtime");
+    let rust_content = r#"//! crate docs
+fn greet() {
+    helper();
+}
+
+fn helper() {}
+"#;
+    let rust_artefacts = (rust_pack.extract_artefacts)(rust_content, "src/lib.rs")
+        .expect("extract rust artefacts via language-pack runtime");
+    assert!(
+        rust_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "greet"),
+        "rust built-in runtime should surface function artefacts"
+    );
+    assert!(
+        (rust_pack.extract_file_docstring)(rust_content).is_some(),
+        "rust built-in runtime should expose crate-level docstrings"
+    );
+
+    let ts_pack = resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID)
+        .expect("resolve ts/js built-in language pack runtime");
+    let ts_content = r#"export function greet() {
+    return helper();
+}
+
+function helper() {
+    return 1;
+}
+"#;
+    let ts_artefacts = (ts_pack.extract_artefacts)(ts_content, "src/main.ts")
+        .expect("extract ts artefacts via language-pack runtime");
+    assert!(
+        ts_artefacts.iter().any(|artefact| artefact.name == "greet"),
+        "ts/js built-in runtime should surface function artefacts"
+    );
+    let ts_edges = (ts_pack.extract_dependency_edges)(ts_content, "src/main.ts", &ts_artefacts)
+        .expect("extract ts dependency edges via language-pack runtime");
+    assert!(
+        ts_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
+        "ts/js built-in runtime should emit call edges"
+    );
+}
+
+#[test]
+fn devql_extension_host_builds_capability_contexts_from_registered_owners() {
+    let cfg = extension_runtime_cfg();
+
+    let stage_context = capability_execution_context_for_stage(
+        &cfg,
+        Some("abc123"),
+        SEMANTIC_CLONES_CAPABILITY_STAGE_ID,
+    )
+    .expect("resolve semantic clones stage owner");
+    assert_eq!(
+        stage_context.capability_pack_id,
+        "semantic-clones-capability-pack"
+    );
+    assert_eq!(stage_context.stage_id, SEMANTIC_CLONES_CAPABILITY_STAGE_ID);
+    assert_eq!(stage_context.commit_sha.as_deref(), Some("abc123"));
+
+    let ingest_context = capability_ingest_context_for_ingester(
+        &cfg,
+        Some("abc123"),
+        TEST_HARNESS_CAPABILITY_INGESTER_ID,
+    )
+    .expect("resolve test-harness ingester owner");
+    assert_eq!(
+        ingest_context.capability_pack_id,
+        "test-harness-capability-pack"
+    );
+    assert_eq!(
+        ingest_context.ingester_id,
+        TEST_HARNESS_CAPABILITY_INGESTER_ID
+    );
+    assert_eq!(ingest_context.commit_sha.as_deref(), Some("abc123"));
 }

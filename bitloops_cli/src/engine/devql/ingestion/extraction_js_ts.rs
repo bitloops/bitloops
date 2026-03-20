@@ -1,5 +1,12 @@
 // JS/TS artefact extraction via tree-sitter.
 
+struct JsTsArtefactDescriptor<'a> {
+    language_kind: &'a str,
+    name: &'a str,
+    symbol_fqn: String,
+    parent_symbol_fqn: Option<String>,
+}
+
 fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
     Ok(extract_js_ts_artefacts_treesitter(content, path)?.unwrap_or_default())
 }
@@ -192,13 +199,6 @@ fn collect_js_ts_nodes_recursive(
     for child in node.named_children(&mut cursor) {
         collect_js_ts_nodes_recursive(child, content, path, out, seen);
     }
-}
-
-struct JsTsArtefactDescriptor<'a> {
-    language_kind: &'a str,
-    name: &'a str,
-    symbol_fqn: String,
-    parent_symbol_fqn: Option<String>,
 }
 
 fn push_js_ts_artefact(

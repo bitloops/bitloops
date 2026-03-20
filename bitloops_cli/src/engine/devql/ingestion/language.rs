@@ -24,21 +24,18 @@ fn git_blob_line_count(repo_root: &Path, blob_sha: &str) -> Option<i32> {
     Some(count.max(1))
 }
 
+fn fallback_language_from_path(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "text".to_string())
+}
+
 fn detect_language(path: &str) -> String {
-    let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".ts") || lower.ends_with(".tsx") {
-        "typescript".to_string()
-    } else if lower.ends_with(".rs") {
-        "rust".to_string()
-    } else if lower.ends_with(".js") || lower.ends_with(".jsx") {
-        "javascript".to_string()
-    } else if lower.ends_with(".py") {
-        "python".to_string()
-    } else if lower.ends_with(".go") {
-        "go".to_string()
-    } else if lower.ends_with(".java") {
-        "java".to_string()
-    } else {
-        "text".to_string()
-    }
+    resolve_language_id_for_file_path(path)
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback_language_from_path(path))
 }

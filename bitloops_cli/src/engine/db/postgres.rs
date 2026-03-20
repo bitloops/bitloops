@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -57,6 +58,18 @@ impl PostgresSyncConnection {
             }
 
             Ok(())
+        })
+    }
+
+    pub fn with_client<T>(
+        &self,
+        operation: impl for<'a> FnOnce(
+            &'a mut tokio_postgres::Client,
+        ) -> Pin<Box<dyn Future<Output = Result<T>> + 'a>>,
+    ) -> Result<T> {
+        self.block_on(async {
+            let mut client = connect_postgres_client(&self.dsn).await?;
+            operation(&mut client).await
         })
     }
 

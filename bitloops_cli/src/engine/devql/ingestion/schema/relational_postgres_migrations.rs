@@ -96,15 +96,15 @@ CREATE TABLE IF NOT EXISTS current_file_state (
     path TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
-    committed_at DATETIME NOT NULL,
-    updated_at DATETIME DEFAULT now(),
+    committed_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, path)
 );
 
 ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS commit_sha TEXT;
 ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS blob_sha TEXT;
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS committed_at DATETIME;
-ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS updated_at DATETIME DEFAULT now();
+ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS committed_at TIMESTAMPTZ;
+ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     end_byte INTEGER NOT NULL,
     signature TEXT,
     content_hash TEXT,
-    updated_at DATETIME DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (repo_id, symbol_id)
 );
 
@@ -147,7 +147,7 @@ ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS signature TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS content_hash TEXT;
-ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at DATETIME DEFAULT now();
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE artefacts_current ALTER COLUMN canonical_kind DROP NOT NULL;
 UPDATE artefacts_current
 SET modifiers = '[]'::jsonb
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
     start_line INTEGER,
     end_line INTEGER,
     metadata JSONB DEFAULT '{}'::jsonb,
-    updated_at DATETIME DEFAULT now()
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS commit_sha TEXT;
@@ -198,7 +198,7 @@ ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS language TEXT;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS start_line INTEGER;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS end_line INTEGER;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
-ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS updated_at DATETIME DEFAULT now();
+ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 DO $$
 BEGIN
@@ -256,6 +256,13 @@ ON artefact_edges_current (
     COALESCE(end_line, -1),
     md5(metadata::text)
 );
+"#
+}
+
+fn test_links_upgrade_sql() -> &'static str {
+    r#"
+ALTER TABLE test_links ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6;
+ALTER TABLE test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NOT NULL DEFAULT 'resolved';
 "#
 }
 

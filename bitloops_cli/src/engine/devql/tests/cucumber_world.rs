@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::test_mapping::model::DiscoveryIssue;
+use crate::domain::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +30,14 @@ pub(super) struct DevqlBddWorld {
     pub(super) cfg: DevqlConfig,
     pub(super) log_workspace: Option<tempfile::TempDir>,
     pub(super) log_file_path: Option<PathBuf>,
+    // Test harness state
+    pub(super) production_sources: Vec<(String, String)>,
+    pub(super) test_sources: Vec<(String, String)>,
+    pub(super) discovered_suites: Vec<TestSuiteRecord>,
+    pub(super) discovered_scenarios: Vec<TestScenarioRecord>,
+    pub(super) materialized_links: Vec<TestLinkRecord>,
+    pub(super) discovery_issues: Vec<DiscoveryIssue>,
+    pub(super) tests_query_response: Option<Value>,
 }
 
 impl Default for DevqlBddWorld {
@@ -47,6 +57,13 @@ impl Default for DevqlBddWorld {
             cfg: Self::test_cfg(),
             log_workspace: None,
             log_file_path: None,
+            production_sources: Vec::new(),
+            test_sources: Vec::new(),
+            discovered_suites: Vec::new(),
+            discovered_scenarios: Vec::new(),
+            materialized_links: Vec::new(),
+            discovery_issues: Vec::new(),
+            tests_query_response: None,
         }
     }
 }
@@ -67,6 +84,13 @@ impl DevqlBddWorld {
         self.cfg = Self::test_cfg();
         self.log_workspace = None;
         self.log_file_path = None;
+        self.production_sources.clear();
+        self.test_sources.clear();
+        self.discovered_suites.clear();
+        self.discovered_scenarios.clear();
+        self.materialized_links.clear();
+        self.discovery_issues.clear();
+        self.tests_query_response = None;
     }
 
     pub(super) fn test_cfg() -> DevqlConfig {

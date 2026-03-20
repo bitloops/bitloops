@@ -3,13 +3,16 @@ use std::collections::{BTreeSet, HashSet};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v1";
+const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v2";
 const MAX_CLONE_EDGES_PER_SOURCE: usize = 20;
 const MIN_SIMILAR_IMPLEMENTATION_SCORE: f32 = 0.55;
 const MIN_SEMANTIC_SCORE: f32 = 0.40;
 const EXACT_DUPLICATE_SCORE_FLOOR: f32 = 0.99;
+const CONTEXTUAL_NEIGHBOR_MIN_SCORE: f32 = 0.55;
+const CONTEXTUAL_NEIGHBOR_MIN_SEMANTIC_SCORE: f32 = 0.55;
 const PREFERRED_LOCAL_PATTERN_SCORE_THRESHOLD: f32 = 0.72;
 const PREFERRED_LOCAL_PATTERN_MAX_CHURN_COUNT: usize = 2;
+const PREFERRED_LOCAL_PATTERN_MIN_CLONE_CONFIDENCE: f32 = 0.45;
 const PREFERRED_LOCAL_PATTERN_SCORE_BOOST: f32 = 0.05;
 const PREFERRED_LOCAL_PATTERN_SCORE_CAP: f32 = 0.98;
 
@@ -23,17 +26,19 @@ const LEXICAL_WEIGHT_CONTEXT_OVERLAP: f32 = 0.20;
 const LEXICAL_WEIGHT_SIGNATURE_SIMILARITY: f32 = 0.15;
 const LEXICAL_WEIGHT_NAME_MATCH: f32 = 0.10;
 
-const STRUCTURAL_WEIGHT_SAME_KIND: f32 = 0.35;
-const STRUCTURAL_WEIGHT_SAME_PARENT_KIND: f32 = 0.20;
-const STRUCTURAL_WEIGHT_PATH: f32 = 0.25;
+const STRUCTURAL_WEIGHT_SAME_KIND: f32 = 0.30;
+const STRUCTURAL_WEIGHT_SAME_PARENT_KIND: f32 = 0.15;
+const STRUCTURAL_WEIGHT_PATH: f32 = 0.20;
 const STRUCTURAL_WEIGHT_CALL: f32 = 0.20;
+const STRUCTURAL_WEIGHT_DEPENDENCY: f32 = 0.15;
 const STRUCTURAL_SCORE_FLOOR_SAME_KIND_WEIGHT: f32 = 0.25;
 const STRUCTURAL_SCORE_FLOOR_NAME_MATCH_WEIGHT: f32 = 0.10;
 
 const DIVERGED_NAME_MATCH_THRESHOLD: f32 = 0.75;
-const DIVERGED_PATH_SCORE_THRESHOLD: f32 = 0.60;
+const DIVERGED_SUMMARY_SIMILARITY_THRESHOLD: f32 = 0.25;
 const DIVERGED_IDENTIFIER_OVERLAP_THRESHOLD: f32 = 0.30;
-const DIVERGED_MIN_SEMANTIC_SCORE: f32 = 0.35;
+const DIVERGED_MIN_SEMANTIC_SCORE: f32 = 0.55;
+const DIVERGED_MIN_BODY_OVERLAP: f32 = 0.08;
 const DIVERGED_MAX_CALL_OVERLAP: f32 = 0.25;
 const DIVERGED_MAX_BODY_OVERLAP: f32 = 0.45;
 
@@ -41,17 +46,47 @@ const SHARED_LOGIC_MIN_LEXICAL_SCORE: f32 = 0.68;
 const SHARED_LOGIC_MIN_BODY_OVERLAP: f32 = 0.50;
 const SHARED_LOGIC_MIN_STRUCTURAL_SCORE: f32 = 0.58;
 const SHARED_LOGIC_MIN_SEMANTIC_SCORE: f32 = 0.42;
+const SHARED_LOGIC_MIN_CLONE_CONFIDENCE: f32 = 0.55;
+
+const IMPLEMENTATION_WEIGHT_BODY_OVERLAP: f32 = 0.35;
+const IMPLEMENTATION_WEIGHT_CALL_OVERLAP: f32 = 0.20;
+const IMPLEMENTATION_WEIGHT_DEPENDENCY_OVERLAP: f32 = 0.10;
+const IMPLEMENTATION_WEIGHT_IDENTIFIER_OVERLAP: f32 = 0.15;
+const IMPLEMENTATION_WEIGHT_SIGNATURE_SIMILARITY: f32 = 0.10;
+const IMPLEMENTATION_WEIGHT_SEMANTIC: f32 = 0.10;
+
+const LOCALITY_WEIGHT_SAME_FILE: f32 = 0.30;
+const LOCALITY_WEIGHT_SAME_CONTAINER: f32 = 0.25;
+const LOCALITY_WEIGHT_PATH: f32 = 0.20;
+const LOCALITY_WEIGHT_CONTEXT: f32 = 0.15;
+const LOCALITY_WEIGHT_PARENT_KIND: f32 = 0.10;
+
+const LOCALITY_DOMINANCE_MIN_SCORE: f32 = 0.75;
+const LOCALITY_DOMINANCE_MAX_IMPLEMENTATION_SCORE: f32 = 0.40;
+const LOCALITY_DOMINANCE_MIN_GAP: f32 = 0.25;
+const LOCALITY_DOMINANCE_CLONE_CONFIDENCE_CAP: f32 = 0.34;
+const CLONE_CONFIDENCE_MEDIUM_THRESHOLD: f32 = 0.45;
+const CLONE_CONFIDENCE_STRONG_THRESHOLD: f32 = 0.70;
+const PENALIZED_CANDIDATE_SCORE_BASE_WEIGHT: f32 = 0.60;
+const PENALIZED_CANDIDATE_SCORE_CLONE_CONFIDENCE_WEIGHT: f32 = 0.40;
+const PENALIZED_CANDIDATE_SCORE_CAP: f32 = 0.74;
+
+const LIMITING_SIGNAL_LOW_BODY_OVERLAP_THRESHOLD: f32 = 0.25;
+const LIMITING_SIGNAL_LOW_CALL_OVERLAP_THRESHOLD: f32 = 0.15;
+const LIMITING_SIGNAL_LOW_NAME_MATCH_THRESHOLD: f32 = 0.50;
+const LIMITING_SIGNAL_SUMMARY_GAP_THRESHOLD: f32 = 0.20;
 
 const MISSING_PARENT_KIND_SCORE: f32 = 0.40;
 const MISSING_SIGNATURE_SCORE: f32 = 0.25;
 const PARTIAL_NAME_MATCH_SCORE: f32 = 0.75;
 const SINGLE_SHARED_NAME_PREFIX_SCORE: f32 = 0.50;
-const SHARED_SIGNAL_EXPLANATION_LIMIT: usize = 8;
+const SHARED_SIGNAL_EXPLANATION_LIMIT: usize = 6;
 
 pub const RELATION_KIND_EXACT_DUPLICATE: &str = "exact_duplicate";
 pub const RELATION_KIND_SIMILAR_IMPLEMENTATION: &str = "similar_implementation";
 pub const RELATION_KIND_SHARED_LOGIC_CANDIDATE: &str = "shared_logic_candidate";
 pub const RELATION_KIND_DIVERGED_IMPLEMENTATION: &str = "diverged_implementation";
+pub const RELATION_KIND_WEAK_CLONE_CANDIDATE: &str = "weak_clone_candidate";
 pub const LABEL_PREFERRED_LOCAL_PATTERN: &str = "preferred_local_pattern";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +106,7 @@ pub struct SymbolCloneCandidateInput {
     pub context_tokens: Vec<String>,
     pub embedding: Vec<f32>,
     pub call_targets: Vec<String>,
+    pub dependency_targets: Vec<String>,
     pub churn_count: usize,
 }
 
@@ -140,9 +176,11 @@ fn build_symbol_clone_edge(
     let semantic_score = semantic_similarity(source, target);
     let lexical = lexical_signals(source, target);
     let structural = structural_signals(source, target, lexical.name_match);
-    let mut score = (CLONE_SCORE_WEIGHT_SEMANTIC * semantic_score)
+    let base_score = (CLONE_SCORE_WEIGHT_SEMANTIC * semantic_score)
         + (CLONE_SCORE_WEIGHT_LEXICAL * lexical.score)
         + (CLONE_SCORE_WEIGHT_STRUCTURAL * structural.score);
+    let derived = derived_clone_signals(source, target, semantic_score, &lexical, &structural);
+    let mut score = penalized_candidate_score(base_score, &derived);
 
     let duplicate_body_hash_match = normalized_body_hash(source) == normalized_body_hash(target)
         && !source.normalized_body_tokens.is_empty();
@@ -155,11 +193,16 @@ fn build_symbol_clone_edge(
     {
         score = score.max(EXACT_DUPLICATE_SCORE_FLOOR);
         RELATION_KIND_EXACT_DUPLICATE.to_string()
-    } else if likely_diverged_implementation(semantic_score, &lexical, &structural) {
-        RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string()
-    } else if likely_shared_logic_candidate(semantic_score, &lexical, &structural) {
+    } else if likely_shared_logic_candidate(semantic_score, &lexical, &structural, &derived) {
         RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string()
-    } else if score >= MIN_SIMILAR_IMPLEMENTATION_SCORE && semantic_score >= MIN_SEMANTIC_SCORE {
+    } else if likely_diverged_implementation(semantic_score, &lexical, &structural, &derived) {
+        RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string()
+    } else if likely_contextual_neighbor(score, semantic_score, &derived) {
+        RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string()
+    } else if score >= MIN_SIMILAR_IMPLEMENTATION_SCORE
+        && semantic_score >= MIN_SEMANTIC_SCORE
+        && derived.clone_confidence >= CLONE_CONFIDENCE_MEDIUM_THRESHOLD
+    {
         RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string()
     } else {
         return None;
@@ -168,6 +211,8 @@ fn build_symbol_clone_edge(
     let mut labels = Vec::new();
     if relation_kind != RELATION_KIND_EXACT_DUPLICATE
         && score >= PREFERRED_LOCAL_PATTERN_SCORE_THRESHOLD
+        && derived.clone_confidence >= PREFERRED_LOCAL_PATTERN_MIN_CLONE_CONFIDENCE
+        && !derived.locality_dominates
         && target.churn_count <= PREFERRED_LOCAL_PATTERN_MAX_CHURN_COUNT
         && !is_experimental_path(&target.path)
     {
@@ -179,10 +224,11 @@ fn build_symbol_clone_edge(
     let explanation = build_explanation(&ExplanationContext {
         source,
         target,
-        relation_kind: &relation_kind,
+        candidate_score: score,
         semantic_score,
         lexical: &lexical,
         structural: &structural,
+        derived: &derived,
         duplicate_body_hash_match,
         signature_shape_hash_match,
         labels: &labels,
@@ -204,379 +250,14 @@ fn build_symbol_clone_edge(
     })
 }
 
-fn semantic_similarity(
-    source: &SymbolCloneCandidateInput,
-    target: &SymbolCloneCandidateInput,
-) -> f32 {
-    if source.embedding.is_empty()
-        || target.embedding.is_empty()
-        || source.embedding.len() != target.embedding.len()
-    {
-        return 0.0;
-    }
-
-    let mut dot = 0.0_f32;
-    let mut left_norm = 0.0_f32;
-    let mut right_norm = 0.0_f32;
-    for (left, right) in source.embedding.iter().zip(target.embedding.iter()) {
-        dot += left * right;
-        left_norm += left * left;
-        right_norm += right * right;
-    }
-
-    if left_norm <= f32::EPSILON || right_norm <= f32::EPSILON {
-        return 0.0;
-    }
-
-    let cosine = dot / (left_norm.sqrt() * right_norm.sqrt());
-    ((cosine + 1.0) / 2.0).clamp(0.0, 1.0)
-}
-
-#[derive(Debug, Clone)]
-struct LexicalSignals {
-    score: f32,
-    name_match: f32,
-    signature_similarity: f32,
-    identifier_overlap: f32,
-    body_overlap: f32,
-    context_overlap: f32,
-    shared_identifier_tokens: Vec<String>,
-    shared_context_tokens: Vec<String>,
-}
-
-fn lexical_signals(
-    source: &SymbolCloneCandidateInput,
-    target: &SymbolCloneCandidateInput,
-) -> LexicalSignals {
-    let (identifier_overlap, shared_identifier_tokens) =
-        jaccard_with_shared(&source.identifier_tokens, &target.identifier_tokens);
-    let (body_overlap, _) = jaccard_with_shared(
-        &source.normalized_body_tokens,
-        &target.normalized_body_tokens,
-    );
-    let (context_overlap, shared_context_tokens) =
-        jaccard_with_shared(&source.context_tokens, &target.context_tokens);
-    let signature_similarity = signature_similarity(source, target);
-    let name_match = name_match_score(&source.normalized_name, &target.normalized_name);
-    let score = ((LEXICAL_WEIGHT_IDENTIFIER_OVERLAP * identifier_overlap)
-        + (LEXICAL_WEIGHT_BODY_OVERLAP * body_overlap)
-        + (LEXICAL_WEIGHT_CONTEXT_OVERLAP * context_overlap)
-        + (LEXICAL_WEIGHT_SIGNATURE_SIMILARITY * signature_similarity)
-        + (LEXICAL_WEIGHT_NAME_MATCH * name_match))
-        .clamp(0.0, 1.0);
-
-    LexicalSignals {
-        score,
-        name_match,
-        signature_similarity,
-        identifier_overlap,
-        body_overlap,
-        context_overlap,
-        shared_identifier_tokens,
-        shared_context_tokens,
-    }
-}
-
-#[derive(Debug, Clone)]
-struct StructuralSignals {
-    score: f32,
-    same_kind: f32,
-    same_parent_kind: f32,
-    path_score: f32,
-    call_score: f32,
-    shared_call_targets: Vec<String>,
-}
-
-struct ExplanationContext<'a> {
-    source: &'a SymbolCloneCandidateInput,
-    target: &'a SymbolCloneCandidateInput,
-    relation_kind: &'a str,
-    semantic_score: f32,
-    lexical: &'a LexicalSignals,
-    structural: &'a StructuralSignals,
-    duplicate_body_hash_match: bool,
-    signature_shape_hash_match: bool,
-    labels: &'a [String],
-}
-
-fn structural_signals(
-    source: &SymbolCloneCandidateInput,
-    target: &SymbolCloneCandidateInput,
-    name_match: f32,
-) -> StructuralSignals {
-    let same_kind = compatible_kind_score(&source.canonical_kind, &target.canonical_kind);
-    let same_parent_kind = match (&source.parent_kind, &target.parent_kind) {
-        (Some(left), Some(right)) if left.eq_ignore_ascii_case(right) => 1.0,
-        (Some(_), Some(_)) => 0.0,
-        _ => MISSING_PARENT_KIND_SCORE,
-    };
-    let path_score = path_similarity(&source.path, &target.path);
-    let (call_score, shared_call_targets) =
-        jaccard_with_shared(&source.call_targets, &target.call_targets);
-    let score = ((STRUCTURAL_WEIGHT_SAME_KIND * same_kind)
-        + (STRUCTURAL_WEIGHT_SAME_PARENT_KIND * same_parent_kind)
-        + (STRUCTURAL_WEIGHT_PATH * path_score)
-        + (STRUCTURAL_WEIGHT_CALL * call_score))
-        .clamp(0.0, 1.0)
-        .max(
-            (same_kind * STRUCTURAL_SCORE_FLOOR_SAME_KIND_WEIGHT)
-                + (name_match * STRUCTURAL_SCORE_FLOOR_NAME_MATCH_WEIGHT),
-        );
-
-    StructuralSignals {
-        score,
-        same_kind,
-        same_parent_kind,
-        path_score,
-        call_score,
-        shared_call_targets,
-    }
-}
-
-fn likely_diverged_implementation(
-    semantic_score: f32,
-    lexical: &LexicalSignals,
-    structural: &StructuralSignals,
-) -> bool {
-    (lexical.name_match >= DIVERGED_NAME_MATCH_THRESHOLD
-        || structural.path_score >= DIVERGED_PATH_SCORE_THRESHOLD)
-        && lexical.identifier_overlap >= DIVERGED_IDENTIFIER_OVERLAP_THRESHOLD
-        && semantic_score >= DIVERGED_MIN_SEMANTIC_SCORE
-        && structural.call_score <= DIVERGED_MAX_CALL_OVERLAP
-        && lexical.body_overlap <= DIVERGED_MAX_BODY_OVERLAP
-}
-
-fn likely_shared_logic_candidate(
-    semantic_score: f32,
-    lexical: &LexicalSignals,
-    structural: &StructuralSignals,
-) -> bool {
-    lexical.score >= SHARED_LOGIC_MIN_LEXICAL_SCORE
-        && lexical.body_overlap >= SHARED_LOGIC_MIN_BODY_OVERLAP
-        && structural.score >= SHARED_LOGIC_MIN_STRUCTURAL_SCORE
-        && semantic_score >= SHARED_LOGIC_MIN_SEMANTIC_SCORE
-}
-
-fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
-    let explanation = match ctx.relation_kind {
-        RELATION_KIND_EXACT_DUPLICATE => {
-            "Same normalized body tokens and normalized signature; treat as an exact duplicate."
-                .to_string()
-        }
-        RELATION_KIND_DIVERGED_IMPLEMENTATION => {
-            "Name or path ancestry stays close, but the implementation has diverged in body tokens and call targets."
-                .to_string()
-        }
-        RELATION_KIND_SHARED_LOGIC_CANDIDATE => {
-            "High lexical and structural overlap suggests repeated local logic that could be extracted."
-                .to_string()
-        }
-        _ => "Strong semantic match with overlapping identifiers, context, and compatible structure."
-            .to_string(),
-    };
-
-    json!({
-        "explanation": explanation,
-        "source_summary": ctx.source.summary,
-        "target_summary": ctx.target.summary,
-        "shared_identifier_tokens": ctx.lexical.shared_identifier_tokens,
-        "shared_context_tokens": ctx.lexical.shared_context_tokens,
-        "shared_call_targets": ctx.structural.shared_call_targets,
-        "duplicate_signals": {
-            "body_hash_match": ctx.duplicate_body_hash_match,
-            "signature_shape_match": ctx.signature_shape_hash_match,
-        },
-        "scores": {
-            "semantic": ctx.semantic_score,
-            "lexical": ctx.lexical.score,
-            "structural": ctx.structural.score,
-            "identifier_overlap": ctx.lexical.identifier_overlap,
-            "body_overlap": ctx.lexical.body_overlap,
-            "context_overlap": ctx.lexical.context_overlap,
-            "signature_similarity": ctx.lexical.signature_similarity,
-            "same_kind": ctx.structural.same_kind,
-            "same_parent_kind": ctx.structural.same_parent_kind,
-            "path_ancestry": ctx.structural.path_score,
-            "call_overlap": ctx.structural.call_score,
-        },
-        "labels": ctx.labels,
-    })
-}
-
-fn build_clone_input_hash(
-    source: &SymbolCloneCandidateInput,
-    target: &SymbolCloneCandidateInput,
-) -> String {
-    sha256_hex(
-        &json!({
-            "fingerprint_version": SYMBOL_CLONE_FINGERPRINT_VERSION,
-            "source_symbol_id": &source.symbol_id,
-            "target_symbol_id": &target.symbol_id,
-            "source_artefact_id": &source.artefact_id,
-            "target_artefact_id": &target.artefact_id,
-            "source_summary": &source.summary,
-            "target_summary": &target.summary,
-            "source_name": &source.normalized_name,
-            "target_name": &target.normalized_name,
-            "source_signature": &source.normalized_signature,
-            "target_signature": &target.normalized_signature,
-            "source_body_tokens": &source.normalized_body_tokens,
-            "target_body_tokens": &target.normalized_body_tokens,
-            "source_calls": &source.call_targets,
-            "target_calls": &target.call_targets,
-            "source_churn": source.churn_count,
-            "target_churn": target.churn_count,
-        })
-        .to_string(),
-    )
-}
-
-fn compatible_kind_score(left: &str, right: &str) -> f32 {
-    if same_clone_kind(left, right) {
-        return 1.0;
-    }
-    0.0
-}
-
-fn same_clone_kind(left: &str, right: &str) -> bool {
-    left.trim().eq_ignore_ascii_case(right.trim())
-}
-
-fn is_meaningful_clone_candidate(input: &SymbolCloneCandidateInput) -> bool {
-    if input.canonical_kind.eq_ignore_ascii_case("import") {
-        return false;
-    }
-    true
-}
-
-fn signature_similarity(
-    source: &SymbolCloneCandidateInput,
-    target: &SymbolCloneCandidateInput,
-) -> f32 {
-    match (&source.normalized_signature, &target.normalized_signature) {
-        (Some(left), Some(right)) if left == right => 1.0,
-        (Some(_), Some(_)) => MISSING_SIGNATURE_SCORE,
-        (None, None) => 1.0,
-        _ => MISSING_SIGNATURE_SCORE,
-    }
-}
-
-fn name_match_score(left: &str, right: &str) -> f32 {
-    if left.is_empty() || right.is_empty() {
-        return 0.0;
-    }
-    if left == right {
-        return 1.0;
-    }
-    if left.starts_with(right) || right.starts_with(left) {
-        return PARTIAL_NAME_MATCH_SCORE;
-    }
-
-    let left_tokens = left.split('_').collect::<Vec<_>>();
-    let right_tokens = right.split('_').collect::<Vec<_>>();
-    let shared_prefix = left_tokens
-        .iter()
-        .zip(right_tokens.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    match shared_prefix {
-        2.. => PARTIAL_NAME_MATCH_SCORE,
-        1 => SINGLE_SHARED_NAME_PREFIX_SCORE,
-        _ => 0.0,
-    }
-}
-
-fn path_similarity(left: &str, right: &str) -> f32 {
-    let left_segments = left
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let right_segments = right
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if left_segments.is_empty() || right_segments.is_empty() {
-        return 0.0;
-    }
-
-    let mut shared = 0usize;
-    for (left, right) in left_segments.iter().zip(right_segments.iter()) {
-        if left == right {
-            shared += 1;
-        } else {
-            break;
-        }
-    }
-
-    shared as f32 / left_segments.len().max(right_segments.len()) as f32
-}
-
-fn jaccard_with_shared(left: &[String], right: &[String]) -> (f32, Vec<String>) {
-    let left_set = left
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<HashSet<_>>();
-    let right_set = right
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<HashSet<_>>();
-
-    if left_set.is_empty() && right_set.is_empty() {
-        return (1.0, Vec::new());
-    }
-    if left_set.is_empty() || right_set.is_empty() {
-        return (0.0, Vec::new());
-    }
-
-    let shared = left_set
-        .intersection(&right_set)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let union_count = left_set.union(&right_set).count();
-    (
-        shared.len() as f32 / union_count as f32,
-        shared
-            .into_iter()
-            .take(SHARED_SIGNAL_EXPLANATION_LIMIT)
-            .collect(),
-    )
-}
-
-fn normalized_body_hash(input: &SymbolCloneCandidateInput) -> String {
-    sha256_hex(&input.normalized_body_tokens.join("|"))
-}
-
-fn normalized_signature_hash(input: &SymbolCloneCandidateInput) -> String {
-    sha256_hex(
-        &json!({
-            "kind": input.canonical_kind,
-            "parent_kind": input.parent_kind,
-            "normalized_signature": input.normalized_signature,
-        })
-        .to_string(),
-    )
-}
-
-fn is_experimental_path(path: &str) -> bool {
-    let normalized = path.to_ascii_lowercase();
-    normalized.contains("/experimental/")
-        || normalized.contains("/playground/")
-        || normalized.contains("/tmp/")
-        || normalized.contains("/fixtures/")
-}
-
-fn sha256_hex(input: &str) -> String {
-    let digest = Sha256::digest(input.as_bytes());
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
+// scoring: signal structs and score computation
+include!("scoring.rs");
+// classification: relation-kind predicates
+include!("classification.rs");
+// explanation: build_explanation, limiting signals, confidence band
+include!("explanation.rs");
+// utils: jaccard, hashing, token helpers, path/name similarity
+include!("utils.rs");
 
 #[cfg(test)]
 mod tests {
@@ -604,6 +285,7 @@ mod tests {
             context_tokens: vec!["services".to_string(), "orders".to_string()],
             embedding: vec![0.9, 0.1, 0.0],
             call_targets: vec!["db.fetchOrder".to_string()],
+            dependency_targets: vec!["references:order_repository::entity".to_string()],
             churn_count: 1,
         }
     }
@@ -698,5 +380,173 @@ mod tests {
             .get("labels")
             .and_then(Value::as_array);
         assert!(labels.is_some());
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_marks_contextual_neighbors_when_locality_dominates() {
+        let mut source = sample_input("source", "execute");
+        source.canonical_kind = "method".to_string();
+        source.parent_kind = Some("class_declaration".to_string());
+        source.path = "src/handlers/change-path.ts".to_string();
+        source.symbol_fqn =
+            "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::execute".to_string();
+        source.summary = "Method execute. Applies the path change workflow.".to_string();
+        source.identifier_tokens = vec![
+            "change".to_string(),
+            "path".to_string(),
+            "code".to_string(),
+            "file".to_string(),
+        ];
+        source.normalized_body_tokens = vec![
+            "load".to_string(),
+            "validate".to_string(),
+            "rename".to_string(),
+        ];
+        source.call_targets = vec!["repo.loadFile".to_string(), "domain.renamePath".to_string()];
+
+        let mut target = sample_input("target", "command");
+        target.canonical_kind = "method".to_string();
+        target.parent_kind = Some("class_declaration".to_string());
+        target.path = source.path.clone();
+        target.symbol_fqn =
+            "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::command".to_string();
+        target.summary = "Method command. Returns the command payload.".to_string();
+        target.identifier_tokens = vec![
+            "change".to_string(),
+            "path".to_string(),
+            "command".to_string(),
+            "file".to_string(),
+        ];
+        target.normalized_body_tokens = vec![
+            "return".to_string(),
+            "command".to_string(),
+            "payload".to_string(),
+        ];
+        target.call_targets = vec!["factory.buildCommand".to_string()];
+
+        let result = build_symbol_clone_edges(&[source, target]);
+        let edge = result
+            .edges
+            .iter()
+            .find(|edge| edge.target_symbol_id == "target")
+            .expect("contextual neighbor edge");
+
+        assert_eq!(edge.relation_kind, RELATION_KIND_WEAK_CLONE_CANDIDATE);
+        assert!(edge.score < 0.75);
+        assert_eq!(
+            edge.explanation_json["confidence"]["confidence_band"],
+            Value::String("weak".to_string())
+        );
+        assert!(
+            edge.explanation_json["evidence"]["bias_warning"].as_str() == Some("same_file_bias")
+        );
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_keeps_same_file_clone_confidence_when_impl_is_strong() {
+        let mut source = sample_input("source", "apply_path_change");
+        source.canonical_kind = "method".to_string();
+        source.parent_kind = Some("class_declaration".to_string());
+        source.path = "src/handlers/change-path.ts".to_string();
+        source.symbol_fqn =
+            "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::apply_path_change"
+                .to_string();
+        source.summary =
+            "Method apply path change. Applies the path change to the file.".to_string();
+        source.identifier_tokens = vec![
+            "apply".to_string(),
+            "path".to_string(),
+            "change".to_string(),
+            "file".to_string(),
+        ];
+        source.normalized_body_tokens = vec![
+            "load".to_string(),
+            "validate".to_string(),
+            "rename".to_string(),
+            "persist".to_string(),
+        ];
+        source.call_targets = vec![
+            "repo.loadFile".to_string(),
+            "domain.renamePath".to_string(),
+            "repo.persistFile".to_string(),
+        ];
+
+        let mut target = sample_input("target", "apply_path_change_for_move");
+        target.canonical_kind = "method".to_string();
+        target.parent_kind = Some("class_declaration".to_string());
+        target.path = source.path.clone();
+        target.symbol_fqn = "src/handlers/change-path.ts::ChangePathOfCodeFileCommandHandler::apply_path_change_for_move".to_string();
+        target.summary =
+            "Method apply path change for move. Applies the path change and persists it."
+                .to_string();
+        target.identifier_tokens = vec![
+            "apply".to_string(),
+            "path".to_string(),
+            "change".to_string(),
+            "move".to_string(),
+        ];
+        target.normalized_body_tokens = vec![
+            "load".to_string(),
+            "validate".to_string(),
+            "rename".to_string(),
+            "persist".to_string(),
+            "emit".to_string(),
+        ];
+        target.call_targets = vec![
+            "repo.loadFile".to_string(),
+            "domain.renamePath".to_string(),
+            "repo.persistFile".to_string(),
+        ];
+
+        let result = build_symbol_clone_edges(&[source, target]);
+        let edge = result
+            .edges
+            .iter()
+            .find(|edge| edge.target_symbol_id == "target")
+            .expect("same-file strong clone edge");
+
+        assert_ne!(edge.relation_kind, RELATION_KIND_WEAK_CLONE_CANDIDATE);
+        assert!(
+            edge.explanation_json["confidence"]["clone_confidence"]
+                .as_f64()
+                .expect("clone confidence")
+                >= CLONE_CONFIDENCE_MEDIUM_THRESHOLD as f64
+        );
+        assert!(edge.explanation_json["evidence"]["bias_warning"].is_null());
+    }
+
+    #[test]
+    fn build_symbol_clone_edges_exposes_dependency_overlap() {
+        let mut source = sample_input("source", "validate_path");
+        source.call_targets = vec!["repo.loadFile".to_string()];
+        source.dependency_targets = vec![
+            "references:path_service::path".to_string(),
+            "implements:path_validator".to_string(),
+        ];
+
+        let mut target = sample_input("target", "validate_moved_path");
+        target.call_targets = vec!["repo.loadMovedFile".to_string()];
+        target.dependency_targets = vec![
+            "references:path_service::path".to_string(),
+            "implements:path_validator".to_string(),
+        ];
+
+        let result = build_symbol_clone_edges(&[source, target]);
+        let edge = result
+            .edges
+            .iter()
+            .find(|edge| edge.target_symbol_id == "target")
+            .expect("dependency-aware clone edge");
+
+        assert!(
+            edge.explanation_json["scores"]["dependency_overlap"]
+                .as_f64()
+                .expect("dependency overlap")
+                > 0.0
+        );
+        assert_eq!(
+            edge.explanation_json["evidence"]["shared_signals"]["dependency_targets"][0],
+            Value::String("implements:path_validator".to_string())
+        );
     }
 }

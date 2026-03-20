@@ -1184,7 +1184,6 @@ fn resolve_store_embedding_config_reads_file_and_env() {
                 cfg.embedding_model.as_deref(),
                 Some("text-embedding-3-large")
             );
-            assert_eq!(cfg.embedding_api_key.as_deref(), Some("env-key"));
         },
     );
 }

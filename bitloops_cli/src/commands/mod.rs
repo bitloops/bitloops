@@ -14,6 +14,7 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub mod status;
+pub mod testlens;
 pub mod versioncheck;
 
 /// Bitloops CLI
@@ -75,6 +76,8 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
+    /// Test harness ingestion and querying over DevQL production artefacts.
+    Testlens(testlens::TestLensArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::engine::devql::watch::WatcherProcessArgs),
@@ -162,6 +165,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Explain(args) => explain::run(args).await,
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
+        Commands::Testlens(args) => testlens::run(args).await,
         Commands::DevqlWatcher(args) => {
             crate::engine::devql::watch::run_process_command(args).await
         }

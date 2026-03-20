@@ -89,7 +89,7 @@ async fn rebuild_symbol_clone_edges(
     ensure_semantic_embeddings_schema(relational).await?;
     let candidates = load_symbol_clone_candidate_inputs(relational, repo_id).await?;
     let build_result = tokio::task::spawn_blocking(move || {
-        semantic_clones::build_symbol_clone_edges(&candidates)
+        semantic_clones_pack::build_symbol_clone_edges(&candidates)
     })
     .await
     .context("building semantic clone edges on blocking worker")?;
@@ -105,6 +105,8 @@ async fn load_symbol_clone_candidate_inputs(
 ) -> Result<Vec<semantic_clones::SymbolCloneCandidateInput>> {
     let churn_by_symbol_id = load_symbol_churn_counts(relational, repo_id).await?;
     let call_targets_by_symbol_id = load_symbol_call_targets(relational, repo_id).await?;
+    let dependency_targets_by_symbol_id =
+        load_symbol_dependency_targets(relational, repo_id).await?;
     let rows = relational
         .query_rows(&build_symbol_clone_candidate_lookup_sql(repo_id))
         .await?;
@@ -171,6 +173,10 @@ async fn load_symbol_clone_candidate_inputs(
                 .get(symbol_id)
                 .cloned()
                 .unwrap_or_default(),
+            dependency_targets: dependency_targets_by_symbol_id
+                .get(symbol_id)
+                .cloned()
+                .unwrap_or_default(),
             churn_count: churn_by_symbol_id.get(symbol_id).copied().unwrap_or(0),
         });
     }
@@ -209,10 +215,12 @@ async fn load_symbol_call_targets(
     repo_id: &str,
 ) -> Result<HashMap<String, Vec<String>>> {
     let sql = format!(
-        "SELECT from_symbol_id, COALESCE(to_symbol_id, to_symbol_ref) AS target_ref \
-FROM artefact_edges_current \
-WHERE repo_id = '{}' AND edge_kind = 'calls'",
+        "SELECT e.from_symbol_id, COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_symbol_id, '') AS target_ref \
+FROM artefact_edges_current e \
+LEFT JOIN artefacts_current target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+WHERE e.repo_id = '{}' AND e.edge_kind = '{}'",
         esc_pg(repo_id),
+        esc_pg(EDGE_KIND_CALLS),
     );
     let rows = relational.query_rows(&sql).await?;
     let mut out = HashMap::<String, HashSet<String>>::new();
@@ -229,6 +237,50 @@ WHERE repo_id = '{}' AND edge_kind = 'calls'",
         out.entry(from_symbol_id.to_string())
             .or_default()
             .insert(target_ref.to_string());
+    }
+
+    Ok(out
+        .into_iter()
+        .map(|(symbol_id, targets)| {
+            let mut targets = targets.into_iter().collect::<Vec<_>>();
+            targets.sort();
+            (symbol_id, targets)
+        })
+        .collect())
+}
+
+async fn load_symbol_dependency_targets(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<HashMap<String, Vec<String>>> {
+    let sql = format!(
+        "SELECT e.from_symbol_id, LOWER(e.edge_kind) AS edge_kind, \
+COALESCE(target.symbol_fqn, target.path, e.to_symbol_ref, e.to_symbol_id, '') AS target_ref \
+FROM artefact_edges_current e \
+LEFT JOIN artefacts_current target ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id \
+WHERE e.repo_id = '{}' AND e.edge_kind <> '{}' AND e.edge_kind <> '{}'",
+        esc_pg(repo_id),
+        esc_pg(EDGE_KIND_CALLS),
+        esc_pg(EDGE_KIND_EXPORTS),
+    );
+    let rows = relational.query_rows(&sql).await?;
+    let mut out = HashMap::<String, HashSet<String>>::new();
+    for row in rows {
+        let Some(from_symbol_id) = row.get("from_symbol_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(edge_kind) = row.get("edge_kind").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(target_ref) = row.get("target_ref").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(signal) = semantic::build_dependency_context_signal(edge_kind, target_ref) else {
+            continue;
+        };
+        out.entry(from_symbol_id.to_string())
+            .or_default()
+            .insert(signal);
     }
 
     Ok(out

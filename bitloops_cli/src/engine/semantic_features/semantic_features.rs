@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use serde_json::json;
@@ -12,6 +12,7 @@ mod features;
 mod semantic;
 
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path};
+pub(crate) use self::common::{build_dependency_context_signal, render_dependency_context};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
@@ -20,11 +21,12 @@ pub use self::semantic::{
 };
 use self::semantic::{SymbolSemanticsRow, build_semantics_row, normalize_summary_text};
 
-const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v2";
+const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v3";
 const MAX_IDENTIFIER_TOKENS: usize = 64;
 const MAX_BODY_TOKENS: usize = 256;
 const MAX_CONTEXT_TOKENS: usize = 64;
 const MAX_SUMMARY_BODY_CHARS: usize = 2_000;
+const MAX_DEPENDENCY_SIGNALS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PreStageArtefactRow {
@@ -58,6 +60,13 @@ pub struct PreStageArtefactRow {
     pub content_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PreStageDependencyRow {
+    pub from_artefact_id: String,
+    pub edge_kind: String,
+    pub target_ref: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticFeatureInput {
     pub artefact_id: String,
@@ -75,6 +84,7 @@ pub struct SemanticFeatureInput {
     pub body: String,
     pub docstring: Option<String>,
     pub parent_kind: Option<String>,
+    pub dependency_signals: Vec<String>,
     pub content_hash: Option<String>,
 }
 
@@ -101,15 +111,32 @@ pub fn build_semantic_feature_inputs_from_artefacts(
     artefacts: &[PreStageArtefactRow],
     blob_content: &str,
 ) -> Vec<SemanticFeatureInput> {
+    build_semantic_feature_inputs_from_artefacts_with_dependencies(artefacts, &[], blob_content)
+}
+
+pub fn build_semantic_feature_inputs_from_artefacts_with_dependencies(
+    artefacts: &[PreStageArtefactRow],
+    dependencies: &[PreStageDependencyRow],
+    blob_content: &str,
+) -> Vec<SemanticFeatureInput> {
     let by_id = artefacts
         .iter()
         .map(|row| (row.artefact_id.clone(), row))
         .collect::<HashMap<_, _>>();
+    let dependency_signals_by_artefact_id = build_dependency_signals_by_artefact_id(dependencies);
 
     artefacts
         .iter()
         .filter_map(|row| {
-            let input = build_semantic_feature_input_from_artefact(row, blob_content, &by_id);
+            let input = build_semantic_feature_input_from_artefact(
+                row,
+                blob_content,
+                &by_id,
+                dependency_signals_by_artefact_id
+                    .get(&row.artefact_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
             is_semantic_enrichment_candidate(&input).then_some(input)
         })
         .collect()
@@ -126,6 +153,7 @@ fn build_semantic_feature_input_from_artefact(
     row: &PreStageArtefactRow,
     blob_content: &str,
     by_id: &HashMap<String, &PreStageArtefactRow>,
+    dependency_signals: Vec<String>,
 ) -> SemanticFeatureInput {
     let parent = row
         .parent_artefact_id
@@ -151,8 +179,34 @@ fn build_semantic_feature_input_from_artefact(
         body,
         docstring: row.docstring.clone(),
         parent_kind: parent.map(|parent_row| parent_row.canonical_kind.clone()),
+        dependency_signals,
         content_hash: row.content_hash.clone(),
     }
+}
+
+fn build_dependency_signals_by_artefact_id(
+    dependencies: &[PreStageDependencyRow],
+) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::<String, BTreeSet<String>>::new();
+    for dependency in dependencies {
+        let Some(signal) =
+            build_dependency_context_signal(&dependency.edge_kind, &dependency.target_ref)
+        else {
+            continue;
+        };
+        out.entry(dependency.from_artefact_id.clone())
+            .or_default()
+            .insert(signal);
+    }
+
+    out.into_iter()
+        .map(|(artefact_id, signals)| {
+            (
+                artefact_id,
+                signals.into_iter().take(MAX_DEPENDENCY_SIGNALS).collect(),
+            )
+        })
+        .collect()
 }
 
 fn derive_symbol_name(row: &PreStageArtefactRow) -> String {
@@ -249,6 +303,7 @@ pub fn build_semantic_feature_input_hash(
                 .map(normalize_summary_text)
                 .filter(|value| !value.is_empty()),
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
+            "dependency_signals": &input.dependency_signals,
             "content_hash": &input.content_hash,
         })
         .to_string(),
@@ -335,6 +390,7 @@ mod tests {
             body: "return email.trim().toLowerCase();".to_string(),
             docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
             content_hash: Some("hash-1".to_string()),
         };
         let mut changed = base.clone();
@@ -364,6 +420,7 @@ mod tests {
             body: "return email.trim().toLowerCase();".to_string(),
             docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
             content_hash: Some("hash-1".to_string()),
         };
         let mut changed = base.clone();
@@ -407,6 +464,7 @@ mod tests {
             body: "return email.trim().toLowerCase();".to_string(),
             docstring: Some("Normalize email addresses.".to_string()),
             parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
             content_hash: Some("hash-1".to_string()),
         };
 
@@ -447,5 +505,57 @@ mod tests {
 
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].artefact_id, "artefact-1");
+    }
+
+    #[test]
+    fn semantic_features_input_hash_changes_when_dependencies_change() {
+        let base = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return email.trim().toLowerCase();".to_string(),
+            docstring: Some("Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        };
+        let mut changed = base.clone();
+        changed.dependency_signals = vec!["calls:email::normalize".to_string()];
+
+        assert_ne!(
+            build_semantic_feature_input_hash(&base, &semantic::NoopSemanticSummaryProvider),
+            build_semantic_feature_input_hash(&changed, &semantic::NoopSemanticSummaryProvider)
+        );
+    }
+
+    #[test]
+    fn semantic_features_build_inputs_attach_dependency_signals() {
+        let artefacts = vec![sample_row()];
+        let dependencies = vec![PreStageDependencyRow {
+            from_artefact_id: "artefact-1".to_string(),
+            edge_kind: "calls".to_string(),
+            target_ref: "src/repos/user.repo.ts::UserRepo::findById".to_string(),
+        }];
+        let content = "export class UserService {\n  async getById(id: string) {\n    return db.users.findById(id);\n  }\n}\n";
+
+        let inputs = build_semantic_feature_inputs_from_artefacts_with_dependencies(
+            &artefacts,
+            &dependencies,
+            content,
+        );
+
+        assert_eq!(
+            inputs[0].dependency_signals,
+            vec!["calls:user_repo::find_by_id".to_string()]
+        );
     }
 }

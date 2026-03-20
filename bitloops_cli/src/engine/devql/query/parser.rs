@@ -11,9 +11,11 @@ struct ParsedDevqlQuery {
     checkpoints: CheckpointFilter,
     telemetry: TelemetryFilter,
     deps: DepsFilter,
+    tests: TestsFilter,
     has_artefacts_stage: bool,
     has_clones_stage: bool,
     has_deps_stage: bool,
+    has_tests_stage: bool,
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
     has_chat_history_stage: bool,
@@ -69,6 +71,12 @@ struct DepsFilter {
     kind: Option<DepsKind>,
     direction: DepsDirection,
     include_unresolved: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TestsFilter {
+    min_confidence: Option<f64>,
+    linkage_source: Option<String>,
 }
 
 impl Default for DepsFilter {
@@ -227,6 +235,24 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 
         if stage == "chatHistory()" {
             parsed.has_chat_history_stage = true;
+            continue;
+        }
+
+        if stage == "tests()" {
+            parsed.has_tests_stage = true;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("tests(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_tests_stage = true;
+            parsed.tests.min_confidence = args
+                .get("min_confidence")
+                .and_then(|v| v.parse::<f64>().ok());
+            parsed.tests.linkage_source = args.get("linkage_source").cloned();
             continue;
         }
 
