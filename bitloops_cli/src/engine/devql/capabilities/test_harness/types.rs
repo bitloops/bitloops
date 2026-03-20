@@ -1,0 +1,52 @@
+use serde_json::{Value, json};
+
+use crate::engine::devql::capability_host::{CapabilityConfigView, IngestResult, StageResponse};
+
+pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
+pub const TEST_HARNESS_DEPENDENCY_GATED_REASON: &str = "Test Harness capability-pack scaffold is registered, but runtime behaviour is dependency-gated until coverage adapters, test-discovery adapters, and language-aware test discovery are integrated.";
+
+pub fn resolve_test_harness_config(view: &CapabilityConfigView) -> Option<&Value> {
+    view.scoped()
+        .or_else(|| view.root().get(TEST_HARNESS_CAPABILITY_ID))
+        .or_else(|| {
+            view.root().as_object().and_then(|root| {
+                if root.contains_key("dependencies")
+                    || root.contains_key("coverage")
+                    || root.contains_key("thresholds")
+                {
+                    Some(view.root())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+pub fn dependency_gated_stage_response(
+    stage_name: &'static str,
+    limit: Option<usize>,
+) -> StageResponse {
+    StageResponse::json(json!({
+        "capability": TEST_HARNESS_CAPABILITY_ID,
+        "stage": stage_name,
+        "status": "dependency_gated",
+        "limit": limit,
+        "rows": [],
+        "reason": TEST_HARNESS_DEPENDENCY_GATED_REASON,
+    }))
+}
+
+pub fn dependency_gated_ingest_result(ingester_name: &'static str, payload: Value) -> IngestResult {
+    let human_output =
+        format!("{ingester_name} is dependency-gated: {TEST_HARNESS_DEPENDENCY_GATED_REASON}");
+    IngestResult::new(
+        json!({
+            "capability": TEST_HARNESS_CAPABILITY_ID,
+            "ingester": ingester_name,
+            "status": "dependency_gated",
+            "request": payload,
+            "reason": TEST_HARNESS_DEPENDENCY_GATED_REASON,
+        }),
+        human_output,
+    )
+}

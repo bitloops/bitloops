@@ -1,0 +1,92 @@
+use anyhow::Result;
+
+use crate::engine::devql::capability_host::CapabilityRegistrar;
+
+use super::ingesters::{
+    build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
+    build_summaries_ingester,
+};
+use super::query_examples::TEST_HARNESS_QUERY_EXAMPLES;
+use super::schema::TEST_HARNESS_SCHEMA_MODULE;
+use super::stages::{build_coverage_stage, build_tests_stage, build_tests_summary_stage};
+
+pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
+    registrar.register_ingester(build_linkage_ingester())?;
+    registrar.register_ingester(build_coverage_ingester())?;
+    registrar.register_ingester(build_classification_ingester())?;
+    registrar.register_ingester(build_summaries_ingester())?;
+    registrar.register_stage(build_tests_stage())?;
+    registrar.register_stage(build_tests_summary_stage())?;
+    registrar.register_stage(build_coverage_stage())?;
+    registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
+    registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::devql::capability_host::{
+        IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
+    };
+    use anyhow::Result;
+
+    #[derive(Default)]
+    struct CollectingRegistrar {
+        stages: Vec<(&'static str, &'static str)>,
+        ingesters: Vec<(&'static str, &'static str)>,
+        schema_modules: Vec<SchemaModule>,
+        query_examples: Vec<QueryExample>,
+    }
+
+    impl CapabilityRegistrar for CollectingRegistrar {
+        fn register_stage(&mut self, stage: StageRegistration) -> Result<()> {
+            self.stages.push((stage.capability_id, stage.stage_name));
+            Ok(())
+        }
+
+        fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
+            self.ingesters
+                .push((ingester.capability_id, ingester.ingester_name));
+            Ok(())
+        }
+
+        fn register_schema_module(&mut self, module: SchemaModule) -> Result<()> {
+            self.schema_modules.push(module);
+            Ok(())
+        }
+
+        fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()> {
+            self.query_examples.extend_from_slice(examples);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn register_test_harness_pack_registers_expected_contributions() -> Result<()> {
+        let mut registrar = CollectingRegistrar::default();
+
+        register_test_harness_pack(&mut registrar)?;
+
+        assert_eq!(
+            registrar.stages,
+            vec![
+                ("test_harness", "tests"),
+                ("test_harness", "tests.summary"),
+                ("test_harness", "coverage"),
+            ]
+        );
+        assert_eq!(
+            registrar.ingesters,
+            vec![
+                ("test_harness", "test_harness.linkage"),
+                ("test_harness", "test_harness.coverage"),
+                ("test_harness", "test_harness.classification"),
+                ("test_harness", "test_harness.summaries"),
+            ]
+        );
+        assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);
+        assert_eq!(registrar.query_examples, TEST_HARNESS_QUERY_EXAMPLES);
+        Ok(())
+    }
+}
