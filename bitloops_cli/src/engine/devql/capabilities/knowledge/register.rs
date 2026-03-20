@@ -26,3 +26,64 @@ pub fn register_knowledge_pack(
     registrar.register_query_examples(KNOWLEDGE_QUERY_EXAMPLES)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::devql::capability_host::{
+        IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
+    };
+    use anyhow::Result;
+
+    #[derive(Default)]
+    struct CollectingRegistrar {
+        stages: Vec<(&'static str, &'static str)>,
+        ingesters: Vec<(&'static str, &'static str)>,
+        schema_modules: Vec<SchemaModule>,
+        query_examples: Vec<QueryExample>,
+    }
+
+    impl CapabilityRegistrar for CollectingRegistrar {
+        fn register_stage(&mut self, stage: StageRegistration) -> Result<()> {
+            self.stages.push((stage.capability_id, stage.stage_name));
+            Ok(())
+        }
+
+        fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
+            self.ingesters
+                .push((ingester.capability_id, ingester.ingester_name));
+            Ok(())
+        }
+
+        fn register_schema_module(&mut self, module: SchemaModule) -> Result<()> {
+            self.schema_modules.push(module);
+            Ok(())
+        }
+
+        fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()> {
+            self.query_examples.extend_from_slice(examples);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn register_knowledge_pack_registers_expected_contributions() -> Result<()> {
+        let mut registrar = CollectingRegistrar::default();
+
+        register_knowledge_pack(Arc::new(KnowledgeServices::new()), &mut registrar)?;
+
+        assert_eq!(registrar.stages, vec![("knowledge", "knowledge")]);
+        assert_eq!(
+            registrar.ingesters,
+            vec![
+                ("knowledge", "knowledge.add"),
+                ("knowledge", "knowledge.associate"),
+                ("knowledge", "knowledge.refresh"),
+                ("knowledge", "knowledge.versions"),
+            ]
+        );
+        assert_eq!(registrar.schema_modules, vec![KNOWLEDGE_SCHEMA_MODULE]);
+        assert_eq!(registrar.query_examples, KNOWLEDGE_QUERY_EXAMPLES);
+        Ok(())
+    }
+}
