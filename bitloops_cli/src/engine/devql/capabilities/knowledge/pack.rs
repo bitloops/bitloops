@@ -42,3 +42,24 @@ impl CapabilityPack for KnowledgePack {
         KNOWLEDGE_HEALTH_CHECKS
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knowledge_pack_exposes_descriptor_migrations_and_health_checks() -> Result<()> {
+        let pack = KnowledgePack::new()?;
+
+        assert_eq!(pack.descriptor().id, "knowledge");
+        assert_eq!(pack.descriptor().display_name, "Knowledge");
+        assert!(!pack.migrations().is_empty());
+        assert_eq!(pack.migrations()[0].capability_id, "knowledge");
+        assert_eq!(pack.health_checks().len(), 3);
+        assert_eq!(pack.health_checks()[0].name, "knowledge.config");
+        assert_eq!(pack.health_checks()[1].name, "knowledge.storage");
+        assert_eq!(pack.health_checks()[2].name, "knowledge.connectors");
+
+        Ok(())
+    }
+}

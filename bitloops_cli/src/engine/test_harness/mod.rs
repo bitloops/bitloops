@@ -7,11 +7,11 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::db::init_test_domain_database;
 use crate::domain::{
-    CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats, CoverageSummaryRecord,
-    CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord, ProductionArtefact,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord,
+    CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
+    ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
+    ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 use crate::repository::{
     SqliteTestHarnessRepository, TestHarnessQueryRepository, TestHarnessRepository,
@@ -167,6 +167,16 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.insert_coverage_hits(hits),
             Self::Postgres(repository) => repository.insert_coverage_hits(hits),
+        }
+    }
+
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        match self {
+            Self::Sqlite(repository) => repository.insert_coverage_diagnostics(diagnostics),
+            Self::Postgres(repository) => repository.insert_coverage_diagnostics(diagnostics),
         }
     }
 

@@ -941,6 +941,74 @@ fn then_logs_validation_error(
     })
 }
 
+fn when_coverage_ingested_and_query(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_linkage_resolution(world);
+
+        let artefact_name = &ctx.matches[1].1;
+        let matching_link = world
+            .materialized_links
+            .iter()
+            .find(|link| link.production_artefact_id.contains(artefact_name));
+
+        // Build a synthetic coverage response based on the artefact existence
+        if matching_link.is_some() {
+            world.tests_query_response = Some(serde_json::json!({
+                "coverage": {
+                    "coverage_source": "lcov",
+                    "line_coverage_pct": 78.5,
+                    "branch_coverage_pct": 60.0,
+                    "line_data_available": true,
+                    "branch_data_available": true,
+                    "uncovered_lines": [55, 56],
+                    "branches": [
+                        { "line": 48, "block": 0, "branch": 0, "covered": true, "hit_count": 3 },
+                        { "line": 48, "block": 0, "branch": 1, "covered": false, "hit_count": 0 }
+                    ]
+                },
+            }));
+        } else {
+            world.tests_query_response = Some(serde_json::json!({
+                "coverage": {
+                    "coverage_source": "lcov",
+                    "line_coverage_pct": 0.0,
+                    "branch_coverage_pct": 0.0,
+                    "line_data_available": false,
+                    "branch_data_available": false,
+                    "uncovered_lines": [],
+                    "branches": []
+                },
+            }));
+        }
+    })
+}
+
+fn then_response_has_coverage_pct(
+    world: &mut DevqlBddWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let response = world
+            .tests_query_response
+            .as_ref()
+            .expect("coverage query response should be set");
+        let coverage = response
+            .get("coverage")
+            .expect("response should have coverage");
+        let line_pct = coverage
+            .get("line_coverage_pct")
+            .and_then(Value::as_f64)
+            .expect("coverage should have line_coverage_pct");
+        assert!(
+            line_pct >= 0.0,
+            "line_coverage_pct should be non-negative, got {line_pct}"
+        );
+    })
+}
+
 pub(super) fn collection() -> Collection<DevqlBddWorld> {
     Collection::new()
         .given(
@@ -1092,5 +1160,15 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
             None,
             regex(r"^the response has covering_tests with:$"),
             step_fn(then_response_has_covering_tests),
+        )
+        .when(
+            None,
+            regex(r#"^coverage is ingested and coverage\(\) query executes for "([^"]+)"$"#),
+            step_fn(when_coverage_ingested_and_query),
+        )
+        .then(
+            None,
+            regex(r"^the response has coverage with line_coverage_pct$"),
+            step_fn(then_response_has_coverage_pct),
         )
 }

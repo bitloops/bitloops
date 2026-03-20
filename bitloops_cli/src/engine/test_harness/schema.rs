@@ -135,6 +135,25 @@ CREATE TABLE IF NOT EXISTS coverage_hits (
 CREATE INDEX IF NOT EXISTS coverage_hits_production_idx
 ON coverage_hits (production_artefact_id, capture_id);
 
+CREATE TABLE IF NOT EXISTS coverage_diagnostics (
+    diagnostic_id TEXT PRIMARY KEY,
+    capture_id TEXT REFERENCES coverage_captures(capture_id) ON DELETE CASCADE,
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    path TEXT,
+    line BIGINT,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS coverage_diagnostics_commit_idx
+ON coverage_diagnostics (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS coverage_diagnostics_capture_idx
+ON coverage_diagnostics (capture_id);
+
 CREATE TABLE IF NOT EXISTS test_discovery_runs (
     discovery_run_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -185,6 +204,7 @@ mod tests {
             "test_links",
             "coverage_captures",
             "coverage_hits",
+            "coverage_diagnostics",
             "test_discovery_runs",
         ] {
             assert!(

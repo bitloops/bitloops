@@ -20,6 +20,11 @@ async fn execute_relational_pipeline(
             .await;
     }
 
+    if parsed.has_coverage_stage {
+        return execute_relational_coverage_pipeline(cfg, events_cfg, parsed, relational, &repo_id)
+            .await;
+    }
+
     let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
         .await?;
     let rows = relational
@@ -328,6 +333,207 @@ async fn execute_relational_tests_pipeline(
         results.push(json!({
             "artefact": artefact_output,
             "covering_tests": covering_tests,
+            "summary": summary,
+        }));
+    }
+
+    Ok(results)
+}
+
+async fn execute_relational_coverage_pipeline(
+    cfg: &DevqlConfig,
+    events_cfg: &EventsBackendConfig,
+    parsed: &ParsedDevqlQuery,
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<Value>> {
+    let artefacts_sql =
+        build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), repo_id)
+            .await?;
+    let artefact_rows = relational.query_rows(&artefacts_sql).await?;
+
+    let commit_sha = resolve_commit_selector(cfg, parsed)?;
+
+    // Fetch coverage source metadata
+    let meta_sql = if let Some(ref sha) = commit_sha {
+        format!(
+            "SELECT cc.format, cc.branch_truth FROM coverage_captures cc \
+             WHERE cc.repo_id = '{}' AND cc.commit_sha = '{}' LIMIT 1",
+            esc_pg(repo_id),
+            esc_pg(sha),
+        )
+    } else {
+        format!(
+            "SELECT cc.format, cc.branch_truth FROM coverage_captures cc \
+             WHERE cc.repo_id = '{}' LIMIT 1",
+            esc_pg(repo_id),
+        )
+    };
+    let meta_rows = relational.query_rows(&meta_sql).await.unwrap_or_default();
+    let coverage_source = meta_rows
+        .first()
+        .and_then(|r| r.get("format"))
+        .and_then(Value::as_str)
+        .unwrap_or("lcov")
+        .to_string();
+    let branch_truth = meta_rows
+        .first()
+        .and_then(|r| r.get("branch_truth"))
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0);
+
+    let mut results = Vec::with_capacity(artefact_rows.len());
+
+    for artefact_row in artefact_rows {
+        let artefact_row = normalise_relational_result_row(artefact_row);
+        let Some(obj) = artefact_row.as_object() else {
+            continue;
+        };
+
+        let artefact_id = obj
+            .get("artefact_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if artefact_id.is_empty() {
+            continue;
+        }
+
+        let artefact_output = json!({
+            "artefact_id": artefact_id,
+            "name": obj.get("symbol_fqn").and_then(Value::as_str).unwrap_or(artefact_id),
+            "kind": obj.get("canonical_kind").and_then(Value::as_str).unwrap_or("unknown"),
+            "file_path": obj.get("path").and_then(Value::as_str).unwrap_or(""),
+            "start_line": obj.get("start_line").and_then(Value::as_i64).unwrap_or(0),
+            "end_line": obj.get("end_line").and_then(Value::as_i64).unwrap_or(0),
+        });
+
+        let commit_filter = if let Some(ref sha) = commit_sha {
+            format!("AND cc.commit_sha = '{}'", esc_pg(sha))
+        } else {
+            String::new()
+        };
+
+        // Line coverage: branch_id = -1
+        let line_sql = format!(
+            "SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any \
+             FROM coverage_hits ch \
+             JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
+             WHERE cc.repo_id = '{}' {} \
+               AND ch.production_artefact_id = '{}' \
+               AND ch.branch_id = -1 \
+             GROUP BY ch.line \
+             ORDER BY ch.line",
+            esc_pg(repo_id),
+            commit_filter,
+            esc_pg(artefact_id),
+        );
+
+        let line_rows = relational.query_rows(&line_sql).await.unwrap_or_default();
+
+        let total_lines = line_rows.len();
+        let mut uncovered_lines = Vec::new();
+        let mut covered_line_count = 0usize;
+        for row in &line_rows {
+            let line = row
+                .get("line")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            let covered = row
+                .get("covered_any")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            if covered == 1 {
+                covered_line_count += 1;
+            } else {
+                uncovered_lines.push(line);
+            }
+        }
+        let line_coverage_pct = if total_lines > 0 {
+            (covered_line_count as f64 / total_lines as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Branch coverage: branch_id != -1
+        let branch_sql = format!(
+            "SELECT ch.line, ch.branch_id, \
+                    MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any, \
+                    MAX(ch.hit_count) AS hit_count \
+             FROM coverage_hits ch \
+             JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
+             WHERE cc.repo_id = '{}' {} \
+               AND ch.production_artefact_id = '{}' \
+               AND ch.branch_id != -1 \
+             GROUP BY ch.line, ch.branch_id \
+             ORDER BY ch.line, ch.branch_id",
+            esc_pg(repo_id),
+            commit_filter,
+            esc_pg(artefact_id),
+        );
+
+        let branch_rows = relational.query_rows(&branch_sql).await.unwrap_or_default();
+
+        let total_branches = branch_rows.len();
+        let mut branches = Vec::new();
+        let mut uncovered_branch_count = 0usize;
+        for row in &branch_rows {
+            let line = row
+                .get("line")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            let branch_id = row
+                .get("branch_id")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            let covered = row
+                .get("covered_any")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            let hit_count = row
+                .get("hit_count")
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0);
+            let is_covered = covered == 1;
+            if !is_covered {
+                uncovered_branch_count += 1;
+            }
+            branches.push(json!({
+                "line": line,
+                "block": 0,
+                "branch": branch_id,
+                "covered": is_covered,
+                "hit_count": hit_count,
+            }));
+        }
+        let branch_coverage_pct = if total_branches > 0 {
+            let covered_branches = total_branches - uncovered_branch_count;
+            (covered_branches as f64 / total_branches as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let line_data_available = !line_rows.is_empty();
+        let branch_data_available = branch_truth == 1 || !branch_rows.is_empty();
+
+        let coverage = json!({
+            "coverage_source": coverage_source,
+            "line_coverage_pct": line_coverage_pct,
+            "branch_coverage_pct": branch_coverage_pct,
+            "line_data_available": line_data_available,
+            "branch_data_available": branch_data_available,
+            "uncovered_lines": uncovered_lines,
+            "branches": branches,
+        });
+
+        let summary = json!({
+            "uncovered_line_count": uncovered_lines.len(),
+            "uncovered_branch_count": uncovered_branch_count,
+            "diagnostic_count": 0,
+        });
+
+        results.push(json!({
+            "artefact": artefact_output,
+            "coverage": coverage,
             "summary": summary,
         }));
     }

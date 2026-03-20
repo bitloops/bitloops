@@ -16,6 +16,7 @@ struct ParsedDevqlQuery {
     has_clones_stage: bool,
     has_deps_stage: bool,
     has_tests_stage: bool,
+    has_coverage_stage: bool,
     has_checkpoints_stage: bool,
     has_telemetry_stage: bool,
     has_chat_history_stage: bool,
@@ -253,6 +254,11 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                 .get("min_confidence")
                 .and_then(|v| v.parse::<f64>().ok());
             parsed.tests.linkage_source = args.get("linkage_source").cloned();
+            continue;
+        }
+
+        if stage == "coverage()" {
+            parsed.has_coverage_stage = true;
             continue;
         }
 

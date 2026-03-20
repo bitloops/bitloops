@@ -7,18 +7,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::domain::{BatchManifestEntry, CoverageFormat, ScopeKind};
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Clone)]
 pub struct IngestCoverageBatchSummary {
     pub entries: usize,
-}
-
-pub fn handle(db_path: &Path, manifest_path: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(&mut repository, manifest_path, commit_sha)?;
-    print_summary(commit_sha, &summary);
-    Ok(())
 }
 
 pub fn execute(

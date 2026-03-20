@@ -33,6 +33,7 @@ const BLOB_USER: &str = "blob-user";
 const ARTEFACT_FILE_USER: &str = "artefact:file:user_service";
 const ARTEFACT_CREATE_USER: &str = "artefact:function:create_user";
 const ARTEFACT_NORMALIZE_EMAIL: &str = "artefact:function:normalize_email";
+const ARTEFACT_STRUCT_USER: &str = "artefact:struct:user";
 const SYMBOL_FILE_USER: &str = "symbol:file:user_service";
 const SYMBOL_CREATE_USER: &str = "symbol:function:create_user";
 const SUITE_ID: &str = "suite:user-service";
@@ -111,9 +112,12 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert_eq!(scenarios[0].test_name, "checks_email_domain");
 
     let all_artefacts = repository.list_artefacts(COMMIT_SHA, None)?;
-    assert_eq!(all_artefacts.len(), 6);
+    assert_eq!(all_artefacts.len(), 7);
     let function_artefacts = repository.list_artefacts(COMMIT_SHA, Some("function"))?;
     assert_eq!(function_artefacts.len(), 2);
+    let struct_artefacts = repository.list_artefacts(COMMIT_SHA, Some("struct"))?;
+    assert_eq!(struct_artefacts.len(), 1);
+    assert_eq!(struct_artefacts[0].artefact_id, ARTEFACT_STRUCT_USER);
     let suite_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_suite"))?;
     assert_eq!(suite_artefacts.len(), 1);
     let scenario_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_scenario"))?;
@@ -123,6 +127,9 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
         repository.find_artefact(COMMIT_SHA, "src/services/user_service.rs::create_user")?;
     assert_eq!(queried.artefact_id, ARTEFACT_CREATE_USER);
     assert_eq!(queried.canonical_kind, "function");
+    let struct_queried = repository.find_artefact(COMMIT_SHA, "User")?;
+    assert_eq!(struct_queried.artefact_id, ARTEFACT_STRUCT_USER);
+    assert_eq!(struct_queried.canonical_kind, "struct");
 
     let missing_artefact_error = repository
         .find_artefact(COMMIT_SHA, "missing::symbol")
@@ -236,6 +243,7 @@ INSERT INTO artefacts (
 ) VALUES
   ('artefact:file:user_service', 'symbol:file:user_service', 'repo-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, 'hash-file-user'),
   ('artefact:file:email', 'symbol:file:email', 'repo-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, 'hash-file-email'),
+  ('artefact:struct:user', 'symbol:struct:user', 'repo-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, 'hash-user-struct'),
   ('artefact:function:create_user', 'symbol:function:create_user', 'repo-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, 'hash-create-user'),
   ('artefact:function:normalize_email', 'symbol:function:normalize_email', 'repo-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
 
@@ -246,6 +254,7 @@ INSERT INTO artefacts_current (
 ) VALUES
   ('repo-postgres-test-harness', 'symbol:file:user_service', 'artefact:file:user_service', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, 'hash-file-user'),
   ('repo-postgres-test-harness', 'symbol:file:email', 'artefact:file:email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, 'hash-file-email'),
+  ('repo-postgres-test-harness', 'symbol:struct:user', 'artefact:struct:user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'symbol:file:user_service', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, 'hash-user-struct'),
   ('repo-postgres-test-harness', 'symbol:function:create_user', 'artefact:function:create_user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'symbol:file:user_service', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, 'hash-create-user'),
   ('repo-postgres-test-harness', 'symbol:function:normalize_email', 'artefact:function:normalize_email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'symbol:file:email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
 "#,

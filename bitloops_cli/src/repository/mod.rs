@@ -7,11 +7,11 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::domain::{
-    CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats, CoverageSummaryRecord,
-    CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord, ProductionArtefact,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord,
+    CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
+    ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
+    ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 
 pub mod sqlite;
@@ -39,6 +39,10 @@ pub trait TestHarnessRepository {
     fn replace_test_runs(&mut self, commit_sha: &str, runs: &[TestRunRecord]) -> Result<()>;
     fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;
     fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()>;
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()>;
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize>;
 }
 

@@ -14,9 +14,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::open_existing_database;
 use crate::domain::{
-    CoverageBranchRecord, CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
+    CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
+    ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
     TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
 };
@@ -346,6 +346,59 @@ ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
         Ok(())
     }
 
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start coverage diagnostics transaction")?;
+
+        for diag in diagnostics {
+            tx.execute(
+                r#"
+INSERT INTO coverage_diagnostics (
+  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
+  severity, code, message, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+ON CONFLICT(diagnostic_id) DO UPDATE SET
+  capture_id = excluded.capture_id,
+  severity = excluded.severity,
+  code = excluded.code,
+  message = excluded.message,
+  metadata_json = excluded.metadata_json
+"#,
+                params![
+                    diag.diagnostic_id,
+                    diag.capture_id,
+                    diag.repo_id,
+                    diag.commit_sha,
+                    diag.path,
+                    diag.line,
+                    diag.severity,
+                    diag.code,
+                    diag.message,
+                    diag.metadata_json,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed inserting coverage diagnostic {}",
+                    diag.diagnostic_id
+                )
+            })?;
+        }
+
+        tx.commit()
+            .context("failed to commit coverage diagnostics transaction")?;
+        Ok(())
+    }
+
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
         self.conn
             .execute(
@@ -432,7 +485,13 @@ impl TestHarnessQueryRepository for SqliteTestHarnessRepository {
             .conn
             .prepare(
                 r#"
-SELECT DISTINCT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT DISTINCT
+  a.artefact_id,
+  a.symbol_fqn,
+  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
+  a.path,
+  a.start_line,
+  a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id

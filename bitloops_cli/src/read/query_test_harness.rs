@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::domain::{CoverageSummaryRecord, QueriedArtefactRecord};
 use crate::read::query_view::QueryViewArg;
-use crate::repository::{TestHarnessQueryRepository, open_sqlite_repository};
+use crate::repository::TestHarnessQueryRepository;
 
 const DEFAULT_MIN_STRENGTH: f64 = 0.3;
 const WELL_TESTED_MIN_BRANCH_COVERAGE_PCT: f64 = 50.0;
@@ -126,34 +126,6 @@ struct ListArtefactOutput {
     file_path: String,
     start_line: i64,
     end_line: i64,
-}
-
-pub fn query_artefact_harness(
-    db_path: &Path,
-    artefact_query: &str,
-    commit_sha: &str,
-    classification_filter: Option<&str>,
-    view: QueryViewArg,
-    min_strength: Option<f64>,
-) -> Result<()> {
-    let repository = open_sqlite_repository(db_path)?;
-    let json = render_query_artefact_harness(
-        &repository,
-        artefact_query,
-        commit_sha,
-        classification_filter,
-        view,
-        min_strength,
-    )?;
-    println!("{json}");
-    Ok(())
-}
-
-pub fn list_artefacts(db_path: &Path, commit_sha: &str, kind: Option<&str>) -> Result<()> {
-    let repository = open_sqlite_repository(db_path)?;
-    let json = render_list_artefacts(&repository, commit_sha, kind)?;
-    println!("{json}");
-    Ok(())
 }
 
 pub fn render_query_artefact_harness<R: TestHarnessQueryRepository>(
