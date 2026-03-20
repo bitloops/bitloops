@@ -2,7 +2,7 @@ use crate::engine::devql::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
 };
 
-use super::super::types::dependency_gated_stage_response;
+use super::super::types::{TEST_HARNESS_TESTS_SUMMARY_STAGE_ID, dependency_gated_stage_response};
 
 pub struct TestsSummaryStageHandler;
 
@@ -14,7 +14,7 @@ impl StageHandler for TestsSummaryStageHandler {
     ) -> BoxFuture<'a, anyhow::Result<StageResponse>> {
         Box::pin(async move {
             Ok(dependency_gated_stage_response(
-                "tests.summary",
+                TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
                 request.limit(),
             ))
         })

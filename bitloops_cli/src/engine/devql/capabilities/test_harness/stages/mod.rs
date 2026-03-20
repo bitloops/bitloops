@@ -4,6 +4,10 @@ mod tests_summary;
 
 use crate::engine::devql::capability_host::StageRegistration;
 
+use super::types::{
+    TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_TESTS_STAGE_ID,
+    TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+};
 pub use coverage::CoverageStageHandler;
 pub use tests::TestsStageHandler;
 pub use tests_summary::TestsSummaryStageHandler;
@@ -11,7 +15,7 @@ pub use tests_summary::TestsSummaryStageHandler;
 pub fn build_tests_stage() -> StageRegistration {
     StageRegistration::new(
         "test_harness",
-        "tests",
+        TEST_HARNESS_TESTS_STAGE_ID,
         std::sync::Arc::new(TestsStageHandler),
     )
 }
@@ -19,7 +23,7 @@ pub fn build_tests_stage() -> StageRegistration {
 pub fn build_tests_summary_stage() -> StageRegistration {
     StageRegistration::new(
         "test_harness",
-        "tests.summary",
+        TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
         std::sync::Arc::new(TestsSummaryStageHandler),
     )
 }
@@ -27,7 +31,7 @@ pub fn build_tests_summary_stage() -> StageRegistration {
 pub fn build_coverage_stage() -> StageRegistration {
     StageRegistration::new(
         "test_harness",
-        "coverage",
+        TEST_HARNESS_COVERAGE_STAGE_ID,
         std::sync::Arc::new(CoverageStageHandler),
     )
 }

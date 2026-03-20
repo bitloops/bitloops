@@ -1398,6 +1398,22 @@ async fn execute_devql_query_rejects_tests_with_chat_history() {
 }
 
 #[tokio::test]
+async fn execute_devql_query_rejects_tests_with_registered_stages() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->tests()->knowledge()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("tests() cannot be combined with registered capability-pack stages"));
+}
+
+#[tokio::test]
 async fn execute_relational_tests_pipeline_returns_covering_tests() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
@@ -1638,6 +1654,22 @@ async fn execute_devql_query_rejects_coverage_with_tests() {
         err.to_string()
             .contains("coverage() cannot be combined with tests()")
     );
+}
+
+#[tokio::test]
+async fn execute_devql_query_rejects_coverage_with_registered_stages() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function")->coverage()->knowledge()->limit(1)"#,
+    )
+    .unwrap();
+    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("coverage() cannot be combined with registered capability-pack stages"));
 }
 
 #[tokio::test]

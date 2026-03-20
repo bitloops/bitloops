@@ -2,7 +2,9 @@ use crate::engine::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
 
-use super::super::types::dependency_gated_ingest_result;
+use super::super::types::{
+    TEST_HARNESS_CLASSIFICATION_INGESTER_ID, dependency_gated_ingest_result,
+};
 
 pub struct ClassificationIngester;
 
@@ -14,7 +16,7 @@ impl IngesterHandler for ClassificationIngester {
     ) -> BoxFuture<'a, anyhow::Result<IngestResult>> {
         Box::pin(async move {
             Ok(dependency_gated_ingest_result(
-                "test_harness.classification",
+                TEST_HARNESS_CLASSIFICATION_INGESTER_ID,
                 request.payload,
             ))
         })

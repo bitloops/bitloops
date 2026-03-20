@@ -315,3 +315,22 @@ async fn session_chat_payload_returns_none_when_checkpoint_is_missing() {
 
     assert!(payload.is_none());
 }
+
+#[tokio::test]
+async fn execute_registered_stages_routes_to_test_harness_pack() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    let cfg = executor_test_cfg_for_repo_root(repo_root);
+    let parsed =
+        parse_devql_query(r#"repo("bitloops")->test_harness_tests()->limit(3)"#).expect("parse");
+
+    let rows = execute_registered_stages(&cfg, &parsed, vec![json!({ "artefact_id": "a-1" })])
+        .await
+        .expect("execute registered stages");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("capability"), Some(&json!("test_harness")));
+    assert_eq!(rows[0].get("stage"), Some(&json!("test_harness_tests")));
+    assert_eq!(rows[0].get("status"), Some(&json!("dependency_gated")));
+}

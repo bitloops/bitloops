@@ -3,6 +3,13 @@ use serde_json::{Value, json};
 use crate::engine::devql::capability_host::{CapabilityConfigView, IngestResult, StageResponse};
 
 pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
+pub const TEST_HARNESS_TESTS_STAGE_ID: &str = "test_harness_tests";
+pub const TEST_HARNESS_TESTS_SUMMARY_STAGE_ID: &str = "test_harness_tests_summary";
+pub const TEST_HARNESS_COVERAGE_STAGE_ID: &str = "test_harness_coverage";
+pub const TEST_HARNESS_LINKAGE_INGESTER_ID: &str = "test_harness.linkage";
+pub const TEST_HARNESS_COVERAGE_INGESTER_ID: &str = "test_harness.coverage";
+pub const TEST_HARNESS_CLASSIFICATION_INGESTER_ID: &str = "test_harness.classification";
+pub const TEST_HARNESS_SUMMARIES_INGESTER_ID: &str = "test_harness.summaries";
 pub const TEST_HARNESS_DEPENDENCY_GATED_REASON: &str = "Test Harness capability-pack scaffold is registered, but runtime behaviour is dependency-gated until coverage adapters, test-discovery adapters, and language-aware test discovery are integrated.";
 
 pub fn resolve_test_harness_config(view: &CapabilityConfigView) -> Option<&Value> {

@@ -117,6 +117,17 @@ async fn execute_devql_query(
         bail!("tests() cannot be combined with chatHistory() stage");
     }
 
+    if parsed.has_tests_stage && !parsed.registered_stages.is_empty() {
+        log_devql_validation_failure(
+            parsed,
+            "tests_with_registered_stage",
+            "tests() cannot be combined with registered capability-pack stages while built-in tests() remains the active execution path",
+        );
+        bail!(
+            "tests() cannot be combined with registered capability-pack stages while built-in tests() remains the active execution path"
+        );
+    }
+
     if parsed.has_coverage_stage && !parsed.has_artefacts_stage {
         log_devql_validation_failure(
             parsed,
@@ -151,6 +162,17 @@ async fn execute_devql_query(
             "coverage() cannot be combined with chatHistory() stage",
         );
         bail!("coverage() cannot be combined with chatHistory() stage");
+    }
+
+    if parsed.has_coverage_stage && !parsed.registered_stages.is_empty() {
+        log_devql_validation_failure(
+            parsed,
+            "coverage_with_registered_stage",
+            "coverage() cannot be combined with registered capability-pack stages while built-in coverage() remains the active execution path",
+        );
+        bail!(
+            "coverage() cannot be combined with registered capability-pack stages while built-in coverage() remains the active execution path"
+        );
     }
 
     if parsed.has_coverage_stage && parsed.has_tests_stage {
@@ -193,6 +215,10 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
             crate::engine::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
             crate::engine::logging::bool_attr("has_tests_stage", parsed.has_tests_stage),
             crate::engine::logging::bool_attr("has_coverage_stage", parsed.has_coverage_stage),
+            crate::engine::logging::bool_attr(
+                "has_registered_stages",
+                !parsed.registered_stages.is_empty(),
+            ),
         ],
     );
 }

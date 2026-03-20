@@ -26,6 +26,12 @@ pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::devql::capabilities::test_harness::types::{
+        TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
+        TEST_HARNESS_COVERAGE_STAGE_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
+        TEST_HARNESS_SUMMARIES_INGESTER_ID, TEST_HARNESS_TESTS_STAGE_ID,
+        TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+    };
     use crate::engine::devql::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
     };
@@ -71,18 +77,18 @@ mod tests {
         assert_eq!(
             registrar.stages,
             vec![
-                ("test_harness", "tests"),
-                ("test_harness", "tests.summary"),
-                ("test_harness", "coverage"),
+                ("test_harness", TEST_HARNESS_TESTS_STAGE_ID),
+                ("test_harness", TEST_HARNESS_TESTS_SUMMARY_STAGE_ID),
+                ("test_harness", TEST_HARNESS_COVERAGE_STAGE_ID),
             ]
         );
         assert_eq!(
             registrar.ingesters,
             vec![
-                ("test_harness", "test_harness.linkage"),
-                ("test_harness", "test_harness.coverage"),
-                ("test_harness", "test_harness.classification"),
-                ("test_harness", "test_harness.summaries"),
+                ("test_harness", TEST_HARNESS_LINKAGE_INGESTER_ID),
+                ("test_harness", TEST_HARNESS_COVERAGE_INGESTER_ID),
+                ("test_harness", TEST_HARNESS_CLASSIFICATION_INGESTER_ID),
+                ("test_harness", TEST_HARNESS_SUMMARIES_INGESTER_ID),
             ]
         );
         assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);
