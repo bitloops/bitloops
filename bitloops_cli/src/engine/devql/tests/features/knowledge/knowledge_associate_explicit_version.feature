@@ -30,6 +30,9 @@ Feature: Knowledge associate explicit source version references
     And exactly 1 knowledge relation assertions exist
     And the relation target type is "knowledge_item"
     And the relation source version equals "<source_first_version_id>"
+    And the latest relation provenance has fields:
+      | key                                | value                    |
+      | target_knowledge_item_version_id   | <target_item_version_id> |
 
   Scenario: KS-EXPLVER-03 Explicit source version to checkpoint target
     Given a Knowledge test workspace with configured providers

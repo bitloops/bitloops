@@ -209,7 +209,8 @@ pub fn resolve_target_ref(
             knowledge_item_id,
             knowledge_item_version_id,
         } => {
-            ctx.knowledge_relational()
+            let item = ctx
+                .knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| {
                     format!("target knowledge item `{knowledge_item_id}` not found")
@@ -234,9 +235,16 @@ pub fn resolve_target_ref(
                     target_knowledge_item_version_id: Some(target_version_id),
                 })
             } else {
+                let target_knowledge_item_version_id =
+                    item.latest_knowledge_item_version_id.trim().to_string();
+                if target_knowledge_item_version_id.is_empty() {
+                    bail!(
+                        "target knowledge item `{knowledge_item_id}` has no latest knowledge item version"
+                    );
+                }
                 Ok(ResolvedKnowledgeTargetRef::KnowledgeItem {
                     knowledge_item_id,
-                    target_knowledge_item_version_id: None,
+                    target_knowledge_item_version_id: Some(target_knowledge_item_version_id),
                 })
             }
         }
@@ -771,7 +779,7 @@ mod tests {
             knowledge,
             ResolvedKnowledgeTargetRef::KnowledgeItem {
                 knowledge_item_id: "item-1".to_string(),
-                target_knowledge_item_version_id: None,
+                target_knowledge_item_version_id: Some("version-1".to_string()),
             }
         );
 
@@ -805,6 +813,49 @@ mod tests {
         assert!(resolve_target_ref(&ctx, "knowledge_version:version-1").is_err());
         assert!(resolve_target_ref(&ctx, "artefact:missing").is_err());
         assert!(resolve_target_ref(&ctx, "commit:   ").is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_target_ref_uses_latest_version_for_unversioned_target() -> Result<()> {
+        let temp = TempDir::new()?;
+        let (mut ctx, _) = build_context(&temp)?;
+        let item = ctx
+            .relational
+            .item
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing test item"))?;
+        item.latest_knowledge_item_version_id = "  version-1  ".to_string();
+
+        let resolved = resolve_target_ref(&ctx, "knowledge:item-1")?;
+        assert_eq!(
+            resolved,
+            ResolvedKnowledgeTargetRef::KnowledgeItem {
+                knowledge_item_id: "item-1".to_string(),
+                target_knowledge_item_version_id: Some("version-1".to_string()),
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_target_ref_rejects_target_without_latest_version() -> Result<()> {
+        let temp = TempDir::new()?;
+        let (mut ctx, _) = build_context(&temp)?;
+        let item = ctx
+            .relational
+            .item
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing test item"))?;
+        item.latest_knowledge_item_version_id = "   ".to_string();
+
+        let err = resolve_target_ref(&ctx, "knowledge:item-1")
+            .expect_err("missing latest target version must fail");
+        assert!(err
+            .to_string()
+            .contains("has no latest knowledge item version"));
 
         Ok(())
     }
