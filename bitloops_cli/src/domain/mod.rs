@@ -279,6 +279,17 @@ pub struct TestClassificationRecord {
     pub boundary_crossings: i64,
 }
 
+/// Row counts for test-harness tables scoped to a single commit (diagnostics / summaries ingester).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TestHarnessCommitCounts {
+    pub test_suites: u64,
+    pub test_scenarios: u64,
+    pub test_links: u64,
+    pub test_classifications: u64,
+    pub coverage_captures: u64,
+    pub coverage_hits: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
     Workspace,

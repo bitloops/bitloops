@@ -1,4 +1,3 @@
-use crate::engine::capability_packs::builtin::semantic_clones::semantic_clones_capability_pack_descriptor;
 use crate::engine::extensions::capability::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
@@ -87,9 +86,6 @@ const TEST_HARNESS_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescr
     dependencies: &[],
     required_host_features: CAPABILITY_PACK_FEATURES,
 };
-
-pub(super) const SEMANTIC_CLONES_CAPABILITY_PACK: CapabilityPackDescriptor =
-    semantic_clones_capability_pack_descriptor(CAPABILITY_PACK_FEATURES);
 
 pub(super) const KNOWLEDGE_CAPABILITY_PACK: CapabilityPackDescriptor = CapabilityPackDescriptor {
     capability: KNOWLEDGE_CAPABILITY_DESCRIPTOR,

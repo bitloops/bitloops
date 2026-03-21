@@ -2,7 +2,9 @@ use anyhow::Result;
 
 use crate::engine::devql::capabilities::knowledge::storage::KnowledgeDocumentVersionRow;
 
-pub trait KnowledgeDocumentGateway: Send + Sync {
+/// Host document (columnar) store port. Default implementation backs Knowledge pack payloads on
+/// the events DuckDB path; access remains through this gateway, not ad hoc DuckDB usage from packs.
+pub trait DocumentStoreGateway: Send + Sync {
     fn initialise_schema(&self) -> Result<()>;
     fn has_knowledge_item_version(
         &self,

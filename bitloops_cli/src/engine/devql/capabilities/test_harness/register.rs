@@ -1,6 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 
 use crate::engine::devql::capability_host::CapabilityRegistrar;
+use crate::engine::test_harness::BitloopsTestHarnessRepository;
 
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
@@ -13,11 +16,14 @@ use super::stages::{
     build_tests_summary_stage,
 };
 
-pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
-    registrar.register_ingester(build_linkage_ingester())?;
-    registrar.register_ingester(build_coverage_ingester())?;
-    registrar.register_ingester(build_classification_ingester())?;
-    registrar.register_ingester(build_summaries_ingester())?;
+pub fn register_test_harness_pack(
+    registrar: &mut dyn CapabilityRegistrar,
+    test_harness: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
+) -> Result<()> {
+    registrar.register_ingester(build_linkage_ingester(test_harness.clone()))?;
+    registrar.register_ingester(build_coverage_ingester(test_harness.clone()))?;
+    registrar.register_ingester(build_classification_ingester(test_harness.clone()))?;
+    registrar.register_ingester(build_summaries_ingester(test_harness))?;
     registrar.register_stage(build_tests_stage())?;
     registrar.register_stage(build_tests_stage_alias())?;
     registrar.register_stage(build_tests_summary_stage())?;
@@ -63,6 +69,20 @@ mod tests {
             Ok(())
         }
 
+        fn register_knowledge_stage(
+            &mut self,
+            _stage: crate::engine::devql::capability_host::KnowledgeStageRegistration,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn register_knowledge_ingester(
+            &mut self,
+            _ingester: crate::engine::devql::capability_host::KnowledgeIngesterRegistration,
+        ) -> Result<()> {
+            Ok(())
+        }
+
         fn register_schema_module(&mut self, module: SchemaModule) -> Result<()> {
             self.schema_modules.push(module);
             Ok(())
@@ -78,7 +98,7 @@ mod tests {
     fn register_test_harness_pack_registers_expected_contributions() -> Result<()> {
         let mut registrar = CollectingRegistrar::default();
 
-        register_test_harness_pack(&mut registrar)?;
+        register_test_harness_pack(&mut registrar, None)?;
 
         assert_eq!(
             registrar.stages,

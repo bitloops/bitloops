@@ -7,6 +7,11 @@ use rusqlite::Connection;
 pub mod schema;
 pub mod seed;
 
+/// SQLite DDL for the full test-domain schema (test discovery, coverage, classifications, etc.).
+pub fn test_domain_schema_sql() -> &'static str {
+    TEST_DOMAIN_SCHEMA_SQL
+}
+
 const TEST_DOMAIN_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS test_suites (
     suite_id TEXT PRIMARY KEY,
@@ -238,7 +243,7 @@ pub fn init_test_domain_database(db_path: &Path) -> Result<()> {
 
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .context("failed to enable foreign keys")?;
-    conn.execute_batch(TEST_DOMAIN_SCHEMA_SQL)
+    conn.execute_batch(test_domain_schema_sql())
         .context("failed to create test-domain schema")?;
 
     println!("test-domain schema initialized at {}", db_path.display());

@@ -18,7 +18,8 @@ use crate::domain::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    derive_test_classification,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
@@ -826,5 +827,52 @@ ORDER BY ch.line, ch.branch_id
             branch_covered,
             branches,
         }))
+    }
+
+    fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts> {
+        fn count(conn: &Connection, sql: &str, commit_sha: &str) -> Result<u64> {
+            let n: i64 = conn
+                .query_row(sql, params![commit_sha], |row| row.get(0))
+                .context("test harness commit count query")?;
+            Ok(n.max(0) as u64)
+        }
+
+        let conn = &self.conn;
+        Ok(TestHarnessCommitCounts {
+            test_suites: count(
+                conn,
+                "SELECT COUNT(*) FROM test_suites WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_scenarios: count(
+                conn,
+                "SELECT COUNT(*) FROM test_scenarios WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_links: count(
+                conn,
+                "SELECT COUNT(*) FROM test_links WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_classifications: count(
+                conn,
+                "SELECT COUNT(*) FROM test_classifications WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            coverage_captures: count(
+                conn,
+                "SELECT COUNT(*) FROM coverage_captures WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            coverage_hits: count(
+                conn,
+                r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+                commit_sha,
+            )?,
+        })
     }
 }

@@ -52,17 +52,21 @@ fn validate_registered_stage_composition(
         .dependencies
         .iter()
         .any(|dependency| dependency.capability_id == capability_id);
-    if !dependency_declared {
-        bail!(
-            "capability `{}` cannot invoke stage {}() from capability `{}` because `{}` is not declared in dependencies",
-            composition.caller_capability_id,
-            stage_name,
-            capability_id,
-            capability_id
-        );
+    let grant_ok = host.cross_pack_access().allows_registered_stage_invocation(
+        composition.caller_capability_id.as_str(),
+        capability_id,
+    );
+    if dependency_declared || grant_ok {
+        return Ok(());
     }
 
-    Ok(())
+    bail!(
+        "capability `{}` cannot invoke stage {}() owned by capability `{}`: no descriptor dependency and no `host.cross_pack_access` grant for resource `{}`",
+        composition.caller_capability_id,
+        stage_name,
+        capability_id,
+        crate::engine::devql::capability_host::CrossPackAccessPolicy::RESOURCE_DEVQL_REGISTERED_STAGE
+    );
 }
 
 fn build_registered_stage_query_context(

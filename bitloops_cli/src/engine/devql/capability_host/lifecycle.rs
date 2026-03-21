@@ -68,7 +68,7 @@ mod tests {
         CapabilityMigrationContext,
     };
     use crate::engine::devql::capability_host::gateways::{
-        ConnectorRegistry, KnowledgeDocumentGateway, KnowledgeRelationalGateway, StoreHealthGateway,
+        ConnectorRegistry, DocumentStoreGateway, RelationalGateway, StoreHealthGateway,
     };
     use crate::engine::devql::capability_host::health::{
         CapabilityHealthCheck, CapabilityHealthResult,
@@ -76,7 +76,8 @@ mod tests {
     use crate::engine::devql::capability_host::migrations::CapabilityMigration;
     use crate::engine::devql::capability_host::registrar::{
         BoxFuture, CapabilityPack, CapabilityRegistrar, IngesterHandler, IngesterRegistration,
-        QueryExample, SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
+        KnowledgeIngesterRegistration, KnowledgeStageRegistration, QueryExample, SchemaModule,
+        StageHandler, StageRegistration, StageRequest, StageResponse,
     };
     use crate::engine::devql::capability_host::runtime_contexts::LocalStoreHealthGateway;
     use crate::engine::paths;
@@ -139,6 +140,19 @@ mod tests {
         }
 
         fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
+            self.ingesters.push(ingester.ingester_name);
+            Ok(())
+        }
+
+        fn register_knowledge_stage(&mut self, stage: KnowledgeStageRegistration) -> Result<()> {
+            self.stages.push(stage.stage_name);
+            Ok(())
+        }
+
+        fn register_knowledge_ingester(
+            &mut self,
+            ingester: KnowledgeIngesterRegistration,
+        ) -> Result<()> {
             self.ingesters.push(ingester.ingester_name);
             Ok(())
         }
@@ -268,12 +282,16 @@ mod tests {
             &self.repo_root
         }
 
-        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalGateway {
+        fn relational(&self) -> &dyn RelationalGateway {
             &self.relational
         }
 
-        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentGateway {
+        fn documents(&self) -> &dyn DocumentStoreGateway {
             &self.documents
+        }
+
+        fn apply_devql_sqlite_ddl(&self, _sql: &str) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -402,8 +420,8 @@ mod tests {
     fn run_migrations_executes_in_order() {
         fn first(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
             let log_path = ctx.repo_root().join("migrations.log");
-            ctx.knowledge_relational().initialise_schema()?;
-            ctx.knowledge_documents().initialise_schema()?;
+            ctx.relational().initialise_schema()?;
+            ctx.documents().initialise_schema()?;
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)

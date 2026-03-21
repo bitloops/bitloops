@@ -11,8 +11,9 @@ use crate::domain::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
     ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
+use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 use crate::repository::{
     SqliteTestHarnessRepository, TestHarnessQueryRepository, TestHarnessRepository,
 };
@@ -192,6 +193,39 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
     }
 }
 
+impl TestHarnessCoverageGateway for BitloopsTestHarnessRepository {
+    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
+        TestHarnessRepository::load_repo_id_for_commit(self, commit_sha)
+    }
+
+    fn load_artefacts_for_file_lines(
+        &self,
+        commit_sha: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        TestHarnessRepository::load_artefacts_for_file_lines(self, commit_sha, file_path)
+    }
+
+    fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()> {
+        TestHarnessRepository::insert_coverage_capture(self, capture)
+    }
+
+    fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()> {
+        TestHarnessRepository::insert_coverage_hits(self, hits)
+    }
+
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        TestHarnessRepository::insert_coverage_diagnostics(self, diagnostics)
+    }
+
+    fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
+        TestHarnessRepository::rebuild_classifications_from_coverage(self, commit_sha)
+    }
+}
+
 impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn find_artefact(
         &self,
@@ -286,6 +320,13 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.load_coverage_summary(commit_sha, artefact_id),
             Self::Postgres(repository) => repository.load_coverage_summary(commit_sha, artefact_id),
+        }
+    }
+
+    fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts> {
+        match self {
+            Self::Sqlite(repository) => repository.load_test_harness_commit_counts(commit_sha),
+            Self::Postgres(repository) => repository.load_test_harness_commit_counts(commit_sha),
         }
     }
 }

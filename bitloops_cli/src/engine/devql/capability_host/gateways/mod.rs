@@ -1,6 +1,7 @@
 pub mod blob_payloads;
-pub mod knowledge_documents;
-pub mod knowledge_relational;
+pub mod documents;
+pub mod relational;
+pub mod test_harness;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -9,8 +10,9 @@ pub use crate::engine::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
 pub use blob_payloads::BlobPayloadGateway;
-pub use knowledge_documents::KnowledgeDocumentGateway;
-pub use knowledge_relational::KnowledgeRelationalGateway;
+pub use documents::DocumentStoreGateway;
+pub use relational::RelationalGateway;
+pub use test_harness::TestHarnessCoverageGateway;
 
 pub trait CanonicalGraphGateway: Send + Sync {}
 

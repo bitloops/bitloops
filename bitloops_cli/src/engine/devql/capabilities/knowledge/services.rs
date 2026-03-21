@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capability_host::{
-    CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
+    KnowledgeExecutionContext, KnowledgeIngestContext, StageRequest,
 };
 
 use super::provenance::{build_association_provenance, build_ingestion_provenance};
@@ -49,7 +49,7 @@ impl KnowledgeIngestionService {
     pub fn ingest_source<'a>(
         &'a self,
         request: IngestKnowledgeRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<IngestKnowledgeResult>> {
         Box::pin(async move {
             let parsed = parse_knowledge_url(&request.url)?;
@@ -63,18 +63,18 @@ impl KnowledgeIngestionService {
     pub fn refresh_source<'a>(
         &'a self,
         request: RefreshSourceRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<RefreshSourceResult>> {
         Box::pin(async move {
             let resolved = resolve_source_ref(ctx, &request.knowledge_ref)?;
             let item = ctx
-                .knowledge_relational()
+                .relational()
                 .find_item_by_id(&ctx.repo().repo_id, &resolved.knowledge_item_id)?
                 .ok_or_else(|| {
                     anyhow!("knowledge item `{}` not found", resolved.knowledge_item_id)
                 })?;
             let source = ctx
-                .knowledge_relational()
+                .relational()
                 .find_source_by_id(&item.knowledge_source_id)?
                 .ok_or_else(|| {
                     anyhow!(
@@ -109,7 +109,7 @@ impl KnowledgeIngestionService {
 
     fn materialize_document(
         &self,
-        ctx: &mut dyn CapabilityIngestContext,
+        ctx: &mut dyn KnowledgeIngestContext,
         parsed: &super::types::ParsedKnowledgeUrl,
         fetched: FetchedKnowledgeDocument,
     ) -> Result<IngestKnowledgeResult> {
@@ -126,10 +126,10 @@ impl KnowledgeIngestionService {
             serde_json::to_string(&provenance).context("serialising knowledge provenance")?;
 
         let existing_item = ctx
-            .knowledge_relational()
+            .relational()
             .find_item(&ctx.repo().repo_id, &source_id)?;
         let existing_knowledge_item_version = ctx
-            .knowledge_documents()
+            .documents()
             .has_knowledge_item_version(&item_id, &hash)?;
         let item_status = if existing_item.is_some() {
             KnowledgeItemStatus::Reused
@@ -195,10 +195,7 @@ impl KnowledgeIngestionService {
                 created_at: None,
             };
 
-            if let Err(err) = ctx
-                .knowledge_documents()
-                .insert_knowledge_item_version(&document_row)
-            {
+            if let Err(err) = ctx.documents().insert_knowledge_item_version(&document_row) {
                 let _ = ctx.blob_payloads().delete_payload(&payload_ref);
                 return Err(err);
             }
@@ -207,13 +204,10 @@ impl KnowledgeIngestionService {
             inserted_knowledge_item_version = Some(derived_knowledge_item_version_id);
         }
 
-        if let Err(err) = ctx
-            .knowledge_relational()
-            .persist_ingestion(&source_row, &item_row)
-        {
+        if let Err(err) = ctx.relational().persist_ingestion(&source_row, &item_row) {
             if let Some(knowledge_item_version_id) = inserted_knowledge_item_version.as_deref() {
                 let _ = ctx
-                    .knowledge_documents()
+                    .documents()
                     .delete_knowledge_item_version(knowledge_item_version_id);
             }
             if let Some(payload) = written_payload.as_ref() {
@@ -239,7 +233,7 @@ pub struct KnowledgeRelationService;
 impl KnowledgeRelationService {
     pub fn associate_to_commit<'a>(
         &'a self,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
         ingest_result: &'a IngestKnowledgeResult,
         commit: &'a str,
     ) -> super::types::BoxFuture<'a, Result<AssociateKnowledgeResult>> {
@@ -267,7 +261,7 @@ impl KnowledgeRelationService {
 
     pub fn associate_by_refs<'a>(
         &'a self,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
         source_ref: &'a str,
         target_ref: &'a str,
     ) -> super::types::BoxFuture<'a, Result<AssociateKnowledgeResult>> {
@@ -311,7 +305,7 @@ impl KnowledgeRelationService {
 
     pub fn associate(
         &self,
-        ctx: &mut dyn CapabilityIngestContext,
+        ctx: &mut dyn KnowledgeIngestContext,
         request: AssociateKnowledgeRequest,
     ) -> Result<AssociateKnowledgeResult> {
         let target_type = request.target.target_type().to_string();
@@ -352,8 +346,7 @@ impl KnowledgeRelationService {
             provenance_json,
         };
 
-        ctx.knowledge_relational()
-            .insert_relation_assertion(&relation)?;
+        ctx.relational().insert_relation_assertion(&relation)?;
 
         Ok(AssociateKnowledgeResult {
             relation_assertion_id: relation.relation_assertion_id,
@@ -372,17 +365,15 @@ impl KnowledgeRetrievalService {
         &self,
         repo: &RepoIdentity,
         request: &StageRequest,
-        ctx: &mut dyn CapabilityExecutionContext,
+        ctx: &mut dyn KnowledgeExecutionContext,
     ) -> Result<Vec<Value>> {
         let limit = request.limit().unwrap_or(100).max(1);
-        let items = ctx
-            .knowledge_relational()
-            .list_items_for_repo(&repo.repo_id, limit)?;
+        let items = ctx.relational().list_items_for_repo(&repo.repo_id, limit)?;
 
         let mut rows = Vec::with_capacity(items.len());
         for item in items {
             let Some(version) = ctx
-                .knowledge_documents()
+                .documents()
                 .find_knowledge_item_version(&item.latest_knowledge_item_version_id)?
             else {
                 continue;
@@ -407,12 +398,12 @@ impl KnowledgeRetrievalService {
     pub fn list_versions<'a>(
         &'a self,
         request: ListVersionsRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<ListVersionsResult>> {
         Box::pin(async move {
             let resolved = resolve_source_ref(ctx, &request.knowledge_ref)?;
             let versions = ctx
-                .knowledge_documents()
+                .documents()
                 .list_versions_for_item(&resolved.knowledge_item_id)?
                 .into_iter()
                 .map(|row| DocumentVersionSummary {
@@ -454,11 +445,12 @@ mod tests {
     use crate::engine::devql::capabilities::knowledge::url::parse_knowledge_url;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::{
-        BlobPayloadGateway, CanonicalGraphGateway, KnowledgeDocumentGateway,
-        KnowledgeRelationalGateway, ProvenanceBuilder,
+        BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
+        RelationalGateway,
     };
     use crate::engine::devql::capability_host::{
-        CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
+        CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
+        KnowledgeIngestContext, StageRequest,
     };
     use crate::store_config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
@@ -559,16 +551,18 @@ mod tests {
             self.repo_root.as_path()
         }
 
-        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalGateway {
+        fn graph(&self) -> &dyn CanonicalGraphGateway {
+            &self.graph
+        }
+    }
+
+    impl KnowledgeExecutionContext for TestRuntimeContext {
+        fn relational(&self) -> &dyn RelationalGateway {
             &self.relational
         }
 
-        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentGateway {
+        fn documents(&self) -> &dyn DocumentStoreGateway {
             &self.documents
-        }
-
-        fn graph(&self) -> &dyn CanonicalGraphGateway {
-            &self.graph
         }
     }
 
@@ -588,14 +582,6 @@ mod tests {
             ))
         }
 
-        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalGateway {
-            &self.relational
-        }
-
-        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentGateway {
-            &self.documents
-        }
-
         fn blob_payloads(&self) -> &dyn BlobPayloadGateway {
             &self.blobs
         }
@@ -610,6 +596,16 @@ mod tests {
 
         fn provenance(&self) -> &dyn ProvenanceBuilder {
             &self.provenance
+        }
+    }
+
+    impl KnowledgeIngestContext for TestRuntimeContext {
+        fn relational(&self) -> &dyn RelationalGateway {
+            &self.relational
+        }
+
+        fn documents(&self) -> &dyn DocumentStoreGateway {
+            &self.documents
         }
     }
 

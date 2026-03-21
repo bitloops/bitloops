@@ -1,6 +1,3 @@
-use crate::engine::capability_packs::builtin::semantic_clones::{
-    SEMANTIC_CLONES_CAPABILITY_PACK_ID, SEMANTIC_CLONES_QUERY_EXAMPLE_ID, SEMANTIC_CLONES_STAGE_ID,
-};
 use crate::engine::extensions::capability::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
@@ -113,11 +110,6 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
     );
     assert_eq!(
         host.capability_packs()
-            .resolve_stage_owner(SEMANTIC_CLONES_STAGE_ID),
-        Some(SEMANTIC_CLONES_CAPABILITY_PACK_ID)
-    );
-    assert_eq!(
-        host.capability_packs()
             .resolve_ingester_owner("test-harness-ingester"),
         Some("test-harness-capability-pack")
     );
@@ -126,12 +118,6 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
             .resolve_schema_module_owner("knowledge-schema"),
         Some("knowledge-capability-pack")
     );
-    assert_eq!(
-        host.capability_packs()
-            .resolve_query_example_owner(SEMANTIC_CLONES_QUERY_EXAMPLE_ID),
-        Some(SEMANTIC_CLONES_CAPABILITY_PACK_ID)
-    );
-
     let readiness = host.readiness_snapshot();
     assert!(readiness.is_ready(), "built-in host should report ready");
     assert!(
@@ -139,12 +125,6 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
             .language_pack_ids
             .iter()
             .any(|pack_id| pack_id == "rust-language-pack")
-    );
-    assert!(
-        readiness
-            .capability_pack_ids
-            .iter()
-            .any(|pack_id| pack_id == SEMANTIC_CLONES_CAPABILITY_PACK_ID)
     );
 }
 

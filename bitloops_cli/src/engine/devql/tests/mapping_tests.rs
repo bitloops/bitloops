@@ -355,19 +355,6 @@ function helper() {
 fn devql_extension_host_builds_capability_contexts_from_registered_owners() {
     let cfg = extension_runtime_cfg();
 
-    let stage_context = capability_execution_context_for_stage(
-        &cfg,
-        Some("abc123"),
-        SEMANTIC_CLONES_CAPABILITY_STAGE_ID,
-    )
-    .expect("resolve semantic clones stage owner");
-    assert_eq!(
-        stage_context.capability_pack_id,
-        "semantic-clones-capability-pack"
-    );
-    assert_eq!(stage_context.stage_id, SEMANTIC_CLONES_CAPABILITY_STAGE_ID);
-    assert_eq!(stage_context.commit_sha.as_deref(), Some("abc123"));
-
     let ingest_context = capability_ingest_context_for_ingester(
         &cfg,
         Some("abc123"),

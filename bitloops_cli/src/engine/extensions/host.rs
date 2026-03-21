@@ -20,8 +20,8 @@ pub use error::CoreExtensionHostError;
 pub use readiness_snapshot::CoreExtensionHostReadinessSnapshot;
 
 use builtins::{
-    KNOWLEDGE_CAPABILITY_PACK, RUST_LANGUAGE_PACK, SEMANTIC_CLONES_CAPABILITY_PACK,
-    TEST_HARNESS_CAPABILITY_PACK, TS_JS_LANGUAGE_PACK,
+    KNOWLEDGE_CAPABILITY_PACK, RUST_LANGUAGE_PACK, TEST_HARNESS_CAPABILITY_PACK,
+    TS_JS_LANGUAGE_PACK,
 };
 
 #[derive(Debug, Clone)]

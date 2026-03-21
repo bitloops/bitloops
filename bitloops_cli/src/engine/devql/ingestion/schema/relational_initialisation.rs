@@ -14,9 +14,6 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     init_sqlite_semantic_embeddings_schema(sqlite_path)
         .await
         .context("creating SQLite semantic embedding tables")?;
-    init_sqlite_semantic_clones_schema(sqlite_path)
-        .await
-        .context("creating SQLite semantic clone tables")?;
     Ok(())
 }
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+use crate::engine::devql::RelationalStorage;
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities;
 
@@ -13,28 +14,46 @@ use super::descriptor::CapabilityDescriptor;
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::lifecycle;
 use super::migrations::CapabilityMigration;
+use super::policy::{CrossPackAccessPolicy, HostInvocationPolicy, with_timeout};
 use super::registrar::{
     CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult, IngesterHandler,
-    IngesterRegistration, QueryExample, SchemaModule, StageHandler, StageRegistration,
+    IngesterRegistration, KnowledgeIngester, KnowledgeIngesterRegistration, KnowledgeStage,
+    KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler, StageRegistration,
     StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
 
+#[derive(Clone)]
+enum RegisteredStage {
+    Core(Arc<dyn StageHandler>),
+    Knowledge(Arc<dyn KnowledgeStage>),
+}
+
+#[derive(Clone)]
+enum RegisteredIngester {
+    Core(Arc<dyn IngesterHandler>),
+    Knowledge(Arc<dyn KnowledgeIngester>),
+}
+
 pub struct DevqlCapabilityHost {
     runtime: LocalCapabilityRuntimeResources,
     descriptors: HashMap<String, &'static CapabilityDescriptor>,
-    stages: HashMap<(String, String), Arc<dyn StageHandler>>,
-    ingesters: HashMap<(String, String), Arc<dyn IngesterHandler>>,
+    stages: HashMap<(String, String), RegisteredStage>,
+    ingesters: HashMap<(String, String), RegisteredIngester>,
     schema_modules: Vec<SchemaModule>,
     query_examples: Vec<&'static [QueryExample]>,
     migrations: Vec<CapabilityMigration>,
     health_checks: HashMap<String, Vec<CapabilityHealthCheck>>,
     migrations_applied: bool,
+    invocation_policy: HostInvocationPolicy,
+    cross_pack_access: CrossPackAccessPolicy,
 }
 
 impl DevqlCapabilityHost {
     pub fn new(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
         let runtime = LocalCapabilityRuntimeResources::new(&repo_root, repo)?;
+        let invocation_policy = HostInvocationPolicy::from_config_root(&runtime.config_root);
+        let cross_pack_access = CrossPackAccessPolicy::from_config_root(&runtime.config_root);
         Ok(Self {
             runtime,
             descriptors: HashMap::new(),
@@ -45,12 +64,14 @@ impl DevqlCapabilityHost {
             migrations: Vec::new(),
             health_checks: HashMap::new(),
             migrations_applied: false,
+            invocation_policy,
+            cross_pack_access,
         })
     }
 
     pub fn builtin(repo_root: impl Into<PathBuf>, repo: RepoIdentity) -> Result<Self> {
         let mut host = Self::new(repo_root.into(), repo)?;
-        let packs = capabilities::builtin_packs()?;
+        let packs = capabilities::builtin_packs(host.repo_root())?;
         host.register_builtin_packs(packs)?;
         Ok(host)
     }
@@ -65,6 +86,14 @@ impl DevqlCapabilityHost {
 
     pub fn config_view(&self, capability_id: &str) -> CapabilityConfigView {
         CapabilityConfigView::new(capability_id.to_string(), self.runtime.config_root.clone())
+    }
+
+    pub fn invocation_policy(&self) -> &HostInvocationPolicy {
+        &self.invocation_policy
+    }
+
+    pub fn cross_pack_access(&self) -> &CrossPackAccessPolicy {
+        &self.cross_pack_access
     }
 
     pub fn register_pack(&mut self, pack: &dyn CapabilityPack) -> Result<()> {
@@ -109,19 +138,48 @@ impl DevqlCapabilityHost {
         ingester_name: &str,
         payload: Value,
     ) -> Result<IngestResult> {
+        self.invoke_ingester_with_relational(capability_id, ingester_name, payload, None)
+            .await
+    }
+
+    pub async fn invoke_ingester_with_relational(
+        &mut self,
+        capability_id: &str,
+        ingester_name: &str,
+        payload: Value,
+        devql_relational: Option<&RelationalStorage>,
+    ) -> Result<IngestResult> {
         self.ensure_migrations_applied()?;
 
-        let handler = self
-            .ingesters
-            .get(&(capability_id.to_string(), ingester_name.to_string()))
-            .cloned();
+        let key = (capability_id.to_string(), ingester_name.to_string());
+        let handler = self.ingesters.get(&key).cloned();
         let Some(handler) = handler else {
             bail!("ingester `{ingester_name}` is not registered for capability `{capability_id}`");
         };
 
         let request = IngestRequest::new(payload);
-        let mut runtime = self.runtime.runtime();
-        handler.ingest(request, &mut runtime).await
+        let mut runtime = self
+            .runtime
+            .runtime_with_relational(devql_relational, Some(capability_id));
+        let limit = self.invocation_policy.ingester_timeout;
+        match handler {
+            RegisteredIngester::Core(h) => {
+                with_timeout(
+                    "capability ingester",
+                    limit,
+                    h.ingest(request, &mut runtime),
+                )
+                .await
+            }
+            RegisteredIngester::Knowledge(h) => {
+                with_timeout(
+                    "capability ingester",
+                    limit,
+                    h.ingest(request, &mut runtime),
+                )
+                .await
+            }
+        }
     }
 
     pub async fn invoke_stage(
@@ -132,17 +190,23 @@ impl DevqlCapabilityHost {
     ) -> Result<StageResponse> {
         self.ensure_migrations_applied()?;
 
-        let handler = self
-            .stages
-            .get(&(capability_id.to_string(), stage_name.to_string()))
-            .cloned();
+        let key = (capability_id.to_string(), stage_name.to_string());
+        let handler = self.stages.get(&key).cloned();
         let Some(handler) = handler else {
             bail!("stage `{stage_name}` is not registered for capability `{capability_id}`");
         };
 
         let request = StageRequest::new(payload);
         let mut runtime = self.runtime.runtime();
-        handler.execute(request, &mut runtime).await
+        let limit = self.invocation_policy.stage_timeout;
+        match handler {
+            RegisteredStage::Core(h) => {
+                with_timeout("capability stage", limit, h.execute(request, &mut runtime)).await
+            }
+            RegisteredStage::Knowledge(h) => {
+                with_timeout("capability stage", limit, h.execute(request, &mut runtime)).await
+            }
+        }
     }
 
     pub fn run_health_checks(&self, capability_id: &str) -> Vec<(String, CapabilityHealthResult)> {
@@ -161,6 +225,14 @@ impl DevqlCapabilityHost {
     }
 
     fn ensure_migrations_applied(&mut self) -> Result<()> {
+        if self.migrations_applied {
+            return Ok(());
+        }
+        self.ensure_migrations_applied_sync()
+    }
+
+    /// Run registered pack migrations synchronously (e.g. during `devql init` before async ingest).
+    pub fn ensure_migrations_applied_sync(&mut self) -> Result<()> {
         if self.migrations_applied {
             return Ok(());
         }
@@ -184,7 +256,8 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
                 stage.capability_id
             );
         }
-        self.stages.insert(key, stage.handler);
+        self.stages
+            .insert(key, RegisteredStage::Core(stage.handler));
         Ok(())
     }
 
@@ -200,7 +273,45 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
                 ingester.capability_id
             );
         }
-        self.ingesters.insert(key, ingester.handler);
+        self.ingesters
+            .insert(key, RegisteredIngester::Core(ingester.handler));
+        Ok(())
+    }
+
+    fn register_knowledge_stage(&mut self, stage: KnowledgeStageRegistration) -> Result<()> {
+        let key = (
+            stage.capability_id.to_string(),
+            stage.stage_name.to_string(),
+        );
+        if self.stages.contains_key(&key) {
+            bail!(
+                "stage `{}` is already registered for capability `{}`",
+                stage.stage_name,
+                stage.capability_id
+            );
+        }
+        self.stages
+            .insert(key, RegisteredStage::Knowledge(stage.handler));
+        Ok(())
+    }
+
+    fn register_knowledge_ingester(
+        &mut self,
+        ingester: KnowledgeIngesterRegistration,
+    ) -> Result<()> {
+        let key = (
+            ingester.capability_id.to_string(),
+            ingester.ingester_name.to_string(),
+        );
+        if self.ingesters.contains_key(&key) {
+            bail!(
+                "ingester `{}` is already registered for capability `{}`",
+                ingester.ingester_name,
+                ingester.capability_id
+            );
+        }
+        self.ingesters
+            .insert(key, RegisteredIngester::Knowledge(ingester.handler));
         Ok(())
     }
 

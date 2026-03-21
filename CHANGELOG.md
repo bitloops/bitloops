@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- DevQL capability host: documented core↔pack boundaries ([`docs/devql-core-pack-boundaries.md`](docs/devql-core-pack-boundaries.md)); configurable `host.invocation` timeouts for stages, ingesters, and composition subqueries; optional `host.cross_pack_access` read grants for registered-stage composition alongside descriptor dependencies; `devql_relational_scoped` for ingester-bound DevQL relational access.
 - DevQL now fully indexes code artefacts (functions, methods, classes, interfaces, structs, enums, traits, modules) for Rust and JS/TS, capturing rich metadata: fully-qualified symbol names, parent hierarchy, byte-precise location, signature, modifiers (async/static/visibility), and docstrings.
 - DevQL tracks dependency edges between artefacts (exports, inheritance, references, calls) for both Rust and JS/TS, enabling cross-symbol graph queries.
 - DevQL maintains both a **current snapshot** and full **historical record** of artefacts and edges, allowing point-in-time queries over the evolution of a codebase.
@@ -24,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- DevQL Test Harness pack: **`builtin_packs(repo_root)`** opens an optional relational handle shared by all test-harness ingesters; **`test_harness.linkage`** / **`classification`** / **`summaries`** mirror the coverage pattern (store unavailable → **`test_harness_relational_store_unavailable`**). Linkage runs **`ingest_tests::execute`**; classification runs **`rebuild_classifications_from_coverage`**; summaries returns **`load_test_harness_commit_counts`** (+ coverage presence). **`bitloops testlens ingest-tests`** / **`ingest-coverage`** / **`ingest-coverage-batch`** invoke the host ingesters.
+- DevQL capability host: split **core** vs **knowledge** execution/ingest contexts (`KnowledgeExecutionContext`, `KnowledgeIngestContext`); knowledge stages/ingesters register via `register_knowledge_stage` / `register_knowledge_ingester` and traits `KnowledgeStage` / `KnowledgeIngester` so non-knowledge packs no longer have `relational()` / `documents()` on the base context traits.
 - Added self-hosted runners
 - Manual commit checkpoint flows are now fully DB-driven and trailer-free (`CLI-1357`), including temporary/committed checkpoint writes, checkpoint read paths, and `post_commit()` mapping via `commit_checkpoints`; legacy git-based checkpoint/shadow-branch storage paths and commit hook side effects have been removed.
 - Artefacts are now updated in real time whenever someone changes them and saved in the artefacts_current and artefact_edges_current tables. CLI-1391 is complete and enums are used instead of strings.

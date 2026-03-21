@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use crate::domain::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
 };
-use crate::repository::TestHarnessRepository;
+use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 
 #[derive(Debug, Clone)]
 pub struct IngestCoverageSummary {
@@ -36,7 +36,7 @@ struct LcovBranchCoverage {
 }
 
 pub fn execute(
-    repository: &mut impl TestHarnessRepository,
+    store: &mut dyn TestHarnessCoverageGateway,
     coverage_path: &Path,
     commit_sha: &str,
     scope_kind: ScopeKind,
@@ -44,7 +44,7 @@ pub fn execute(
     test_artefact_id: Option<&str>,
     format: CoverageFormat,
 ) -> Result<IngestCoverageSummary> {
-    let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
+    let repo_id = store.load_repo_id_for_commit(commit_sha)?;
 
     let capture_id = format!(
         "capture:{commit_sha}:{}:{}",
@@ -72,10 +72,10 @@ pub fn execute(
 
     let (hits, diagnostics) = match format {
         CoverageFormat::Lcov => {
-            ingest_lcov(repository, coverage_path, commit_sha, &repo_id, &capture_id)?
+            ingest_lcov(store, coverage_path, commit_sha, &repo_id, &capture_id)?
         }
         CoverageFormat::LlvmJson => crate::app::commands::parse_llvm_json::ingest_llvm_json(
-            repository,
+            store,
             coverage_path,
             commit_sha,
             &repo_id,
@@ -83,11 +83,11 @@ pub fn execute(
         )?,
     };
 
-    repository.insert_coverage_capture(&capture)?;
-    repository.insert_coverage_hits(&hits)?;
-    repository.insert_coverage_diagnostics(&diagnostics)?;
+    store.insert_coverage_capture(&capture)?;
+    store.insert_coverage_hits(&hits)?;
+    store.insert_coverage_diagnostics(&diagnostics)?;
 
-    let classifications = repository.rebuild_classifications_from_coverage(commit_sha)?;
+    let classifications = store.rebuild_classifications_from_coverage(commit_sha)?;
 
     Ok(IngestCoverageSummary {
         format,
@@ -98,8 +98,8 @@ pub fn execute(
     })
 }
 
-pub fn print_summary(commit_sha: &str, summary: &IngestCoverageSummary) {
-    println!(
+pub fn format_summary(commit_sha: &str, summary: &IngestCoverageSummary) -> String {
+    format!(
         "ingested {} coverage for commit {} (scope: {}, hits: {}, classifications: {}, diagnostics: {})",
         summary.format,
         commit_sha,
@@ -107,11 +107,15 @@ pub fn print_summary(commit_sha: &str, summary: &IngestCoverageSummary) {
         summary.hits,
         summary.classifications,
         summary.diagnostics
-    );
+    )
+}
+
+pub fn print_summary(commit_sha: &str, summary: &IngestCoverageSummary) {
+    println!("{}", format_summary(commit_sha, summary));
 }
 
 fn ingest_lcov(
-    repository: &impl TestHarnessRepository,
+    store: &dyn TestHarnessCoverageGateway,
     lcov_path: &Path,
     commit_sha: &str,
     repo_id: &str,
@@ -124,7 +128,7 @@ fn ingest_lcov(
     let mut diag_idx = diagnostics.len();
 
     for file in &report {
-        let artefacts = repository.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
+        let artefacts = store.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
         if artefacts.is_empty() {
             diagnostics.push(CoverageDiagnosticRecord {
                 diagnostic_id: format!("diag:{capture_id}:unmapped:{diag_idx}"),

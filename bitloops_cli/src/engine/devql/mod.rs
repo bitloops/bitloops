@@ -12,9 +12,11 @@ use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
+use crate::engine::devql::capabilities::semantic_clones::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+};
 use crate::engine::extensions::{
-    CapabilityExecutionContext, CapabilityIngestContext, CoreExtensionHost, LanguagePackContext,
-    LanguagePackResolutionInput,
+    CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
 use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_clones;
@@ -114,7 +116,6 @@ const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
-const SEMANTIC_CLONES_CAPABILITY_STAGE_ID: &str = semantic_clones_pack::SEMANTIC_CLONES_STAGE_ID;
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -200,22 +201,6 @@ fn language_pack_context_for_language(
         ),
         pack_id,
     )))
-}
-
-fn capability_execution_context_for_stage(
-    cfg: &DevqlConfig,
-    commit_sha: Option<&str>,
-    stage_id: &str,
-) -> Result<CapabilityExecutionContext> {
-    let host = core_extension_host()?;
-    let capability_pack_id = host.resolve_stage_owner_for_execution(stage_id)?;
-    Ok(CapabilityExecutionContext::new(
-        cfg.repo_root.clone(),
-        cfg.repo.repo_id.clone(),
-        normalise_optional_commit_sha(commit_sha),
-        capability_pack_id,
-        stage_id,
-    ))
 }
 
 fn capability_ingest_context_for_ingester(
@@ -398,7 +383,7 @@ enum RelationalDialect {
 }
 
 #[derive(Debug)]
-enum RelationalStorage {
+pub enum RelationalStorage {
     Postgres(tokio_postgres::Client),
     Sqlite { path: PathBuf },
 }
@@ -451,6 +436,11 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
         RelationalStorage::Postgres(client) => init_postgres_schema(cfg, client).await,
         RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
     }?;
+
+    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    capability_host
+        .ensure_migrations_applied_sync()
+        .context("running built-in DevQL capability pack migrations")?;
 
     let test_harness_context =
         capability_ingest_context_for_ingester(cfg, None, TEST_HARNESS_CAPABILITY_INGESTER_ID)
@@ -683,19 +673,26 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-    let semantic_clones_context =
-        capability_execution_context_for_stage(cfg, None, SEMANTIC_CLONES_CAPABILITY_STAGE_ID)
-            .context("resolving semantic-clones capability stage owner")?;
-    let clone_result = rebuild_symbol_clone_edges(&relational, &cfg.repo.repo_id)
+    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let clone_ingest = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+            json!({}),
+            Some(&relational),
+        )
         .await
         .with_context(|| {
             format!(
-                "running capability stage `{}` owned by `{}`",
-                semantic_clones_context.stage_id, semantic_clones_context.capability_pack_id
+                "running capability ingester `{SEMANTIC_CLONES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
             )
         })?;
-    counters.symbol_clone_edges_upserted += clone_result.edges.len();
-    counters.symbol_clone_sources_scored += clone_result.sources_considered;
+    counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
+        .as_u64()
+        .unwrap_or_default() as usize;
+    counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
+        .as_u64()
+        .unwrap_or_default() as usize;
 
     println!(
         "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",

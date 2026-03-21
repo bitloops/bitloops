@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::engine::devql::capability_host::{CapabilityMigration, CapabilityMigrationContext};
 
 fn run_initial_knowledge_migration(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
-    ctx.knowledge_relational().initialise_schema()?;
-    ctx.knowledge_documents().initialise_schema()?;
+    ctx.relational().initialise_schema()?;
+    ctx.documents().initialise_schema()?;
     Ok(())
 }
 

@@ -2,14 +2,14 @@ mod knowledge;
 
 use std::sync::Arc;
 
-use crate::engine::devql::capability_host::StageRegistration;
+use crate::engine::devql::capability_host::KnowledgeStageRegistration;
 
 use super::services::KnowledgeServices;
 
 pub use knowledge::KnowledgeStageHandler;
 
-pub fn build_knowledge_stage(services: Arc<KnowledgeServices>) -> StageRegistration {
-    StageRegistration::new(
+pub fn build_knowledge_stage(services: Arc<KnowledgeServices>) -> KnowledgeStageRegistration {
+    KnowledgeStageRegistration::new(
         "knowledge",
         "knowledge",
         Arc::new(KnowledgeStageHandler::new(services)),

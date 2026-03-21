@@ -102,8 +102,8 @@ pub fn execute(
     })
 }
 
-pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
-    println!(
+pub fn format_summary(commit_sha: &str, summary: &IngestTestsSummary) -> String {
+    let mut out = format!(
         "ingest-tests complete for commit {} (files: {}, suites: {}, scenarios: {}, links: {}, enumeration: {}, enumerated_scenarios: {})",
         commit_sha,
         summary.files,
@@ -114,9 +114,17 @@ pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
         summary.enumerated_scenarios,
     );
     for note in &summary.notes {
-        println!("ingest-tests note: {note}");
+        out.push_str(&format!("\ningest-tests note: {note}"));
     }
     for issue in &summary.issues {
-        println!("ingest-tests issue: {} ({})", issue.message, issue.path);
+        out.push_str(&format!(
+            "\ningest-tests issue: {} ({})",
+            issue.message, issue.path
+        ));
     }
+    out
+}
+
+pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
+    println!("{}", format_summary(commit_sha, summary));
 }

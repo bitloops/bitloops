@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Result, bail};
 use serde_json::Value;
 
@@ -6,6 +8,7 @@ use crate::engine::devql::{
 };
 
 use super::contexts::CapabilityExecutionContext;
+use super::policy::with_timeout;
 use super::registrar::StageRequest;
 
 pub const DEFAULT_DEVQL_SUBQUERY_MAX_DEPTH: usize = 3;
@@ -14,6 +17,7 @@ pub const DEFAULT_DEVQL_SUBQUERY_MAX_DEPTH: usize = 3;
 pub struct DevqlSubqueryOptions {
     pub caller_capability_id: &'static str,
     pub max_depth: usize,
+    pub subquery_timeout: Duration,
 }
 
 impl DevqlSubqueryOptions {
@@ -21,11 +25,17 @@ impl DevqlSubqueryOptions {
         Self {
             caller_capability_id,
             max_depth: DEFAULT_DEVQL_SUBQUERY_MAX_DEPTH,
+            subquery_timeout: Duration::from_secs(60),
         }
     }
 
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_depth = max_depth.max(1);
+        self
+    }
+
+    pub fn with_subquery_timeout(mut self, subquery_timeout: Duration) -> Self {
+        self.subquery_timeout = subquery_timeout;
         self
     }
 }
@@ -67,7 +77,8 @@ pub async fn execute_devql_subquery(
         depth: next_depth,
         max_depth,
     };
-    execute_query_json_with_composition(&cfg, query, Some(composition)).await
+    let fut = execute_query_json_with_composition(&cfg, query, Some(composition));
+    with_timeout("DevQL subquery", options.subquery_timeout, fut).await
 }
 
 fn inherited_composition_context(request: &StageRequest) -> Option<InheritedCompositionContext> {

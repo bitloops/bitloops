@@ -404,9 +404,8 @@ async fn execute_registered_stages_with_composition_rejects_undeclared_cross_pac
     .expect_err("undeclared cross-pack invocation must fail");
 
     assert!(
-        err.to_string().contains(
-            "capability `test_harness` cannot invoke stage knowledge() from capability `knowledge`"
-        ),
+        err.to_string().contains("no descriptor dependency")
+            && err.to_string().contains("cross_pack_access"),
         "unexpected error: {err}"
     );
 }

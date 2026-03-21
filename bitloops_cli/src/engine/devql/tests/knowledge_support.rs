@@ -26,11 +26,11 @@ use crate::engine::devql::capabilities::knowledge::{
 };
 use crate::engine::devql::capability_host::CapabilityConfigView;
 use crate::engine::devql::capability_host::contexts::{
-    CapabilityExecutionContext, CapabilityIngestContext,
+    CapabilityExecutionContext, CapabilityIngestContext, KnowledgeIngestContext,
 };
 use crate::engine::devql::capability_host::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, KnowledgeDocumentGateway,
-    KnowledgeRelationalGateway, ProvenanceBuilder,
+    BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
+    RelationalGateway,
 };
 use crate::store_config::{
     AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
@@ -41,7 +41,7 @@ use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
 #[derive(Debug, Clone)]
 enum StubOutcome {
-    Record(ExternalKnowledgeRecord),
+    Record(Box<ExternalKnowledgeRecord>),
     Error(String),
 }
 
@@ -98,7 +98,7 @@ impl KnowledgeConnectorAdapter for StubKnowledgeAdapter {
             };
 
             match outcome {
-                StubOutcome::Record(record) => Ok(record),
+                StubOutcome::Record(record) => Ok(*record),
                 StubOutcome::Error(message) => Err(anyhow!(message)),
             }
         })
@@ -183,14 +183,6 @@ impl CapabilityExecutionContext for TestRuntimeContext {
         self.repo_root.as_path()
     }
 
-    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalGateway {
-        &self.relational
-    }
-
-    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentGateway {
-        &self.documents
-    }
-
     fn graph(&self) -> &dyn CanonicalGraphGateway {
         &self.graph
     }
@@ -212,14 +204,6 @@ impl CapabilityIngestContext for TestRuntimeContext {
         ))
     }
 
-    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalGateway {
-        &self.relational
-    }
-
-    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentGateway {
-        &self.documents
-    }
-
     fn blob_payloads(&self) -> &dyn BlobPayloadGateway {
         &self.blobs
     }
@@ -234,6 +218,16 @@ impl CapabilityIngestContext for TestRuntimeContext {
 
     fn provenance(&self) -> &dyn ProvenanceBuilder {
         &self.provenance
+    }
+}
+
+impl KnowledgeIngestContext for TestRuntimeContext {
+    fn relational(&self) -> &dyn RelationalGateway {
+        &self.relational
+    }
+
+    fn documents(&self) -> &dyn DocumentStoreGateway {
+        &self.documents
     }
 }
 
@@ -429,7 +423,10 @@ impl KnowledgeBddHarness {
             body,
             updated_at.unwrap_or("2026-03-20T10:00:00Z"),
         );
-        self.enqueue_outcome(parsed.canonical_external_id, StubOutcome::Record(record));
+        self.enqueue_outcome(
+            parsed.canonical_external_id,
+            StubOutcome::Record(Box::new(record)),
+        );
         Ok(())
     }
 
@@ -447,7 +444,7 @@ impl KnowledgeBddHarness {
             let record = build_record(&parsed, title, body, &updated_at);
             self.enqueue_outcome(
                 parsed.canonical_external_id.clone(),
-                StubOutcome::Record(record),
+                StubOutcome::Record(Box::new(record)),
             );
         }
         Ok(())

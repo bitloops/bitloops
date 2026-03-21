@@ -1,62 +1,6 @@
-fn semantic_clones_postgres_schema_sql() -> &'static str {
-    r#"
-CREATE TABLE IF NOT EXISTS symbol_clone_edges (
-    repo_id TEXT NOT NULL,
-    source_symbol_id TEXT NOT NULL,
-    source_artefact_id TEXT NOT NULL,
-    target_symbol_id TEXT NOT NULL,
-    target_artefact_id TEXT NOT NULL,
-    relation_kind TEXT NOT NULL,
-    score REAL NOT NULL,
-    semantic_score REAL NOT NULL,
-    lexical_score REAL NOT NULL,
-    structural_score REAL NOT NULL,
-    clone_input_hash TEXT NOT NULL,
-    explanation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    generated_at DATETIME DEFAULT now(),
-    PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)
-);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_source_idx
-ON symbol_clone_edges (repo_id, source_artefact_id);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_target_idx
-ON symbol_clone_edges (repo_id, target_artefact_id);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_relation_idx
-ON symbol_clone_edges (repo_id, relation_kind);
-"#
-}
-
-fn semantic_clones_sqlite_schema_sql() -> &'static str {
-    r#"
-CREATE TABLE IF NOT EXISTS symbol_clone_edges (
-    repo_id TEXT NOT NULL,
-    source_symbol_id TEXT NOT NULL,
-    source_artefact_id TEXT NOT NULL,
-    target_symbol_id TEXT NOT NULL,
-    target_artefact_id TEXT NOT NULL,
-    relation_kind TEXT NOT NULL,
-    score REAL NOT NULL,
-    semantic_score REAL NOT NULL,
-    lexical_score REAL NOT NULL,
-    structural_score REAL NOT NULL,
-    clone_input_hash TEXT NOT NULL,
-    explanation_json TEXT NOT NULL DEFAULT '{}',
-    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)
-);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_source_idx
-ON symbol_clone_edges (repo_id, source_artefact_id);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_target_idx
-ON symbol_clone_edges (repo_id, target_artefact_id);
-
-CREATE INDEX IF NOT EXISTS symbol_clone_edges_relation_idx
-ON symbol_clone_edges (repo_id, relation_kind);
-"#
-}
+use crate::engine::devql::capabilities::semantic_clones::schema::{
+    semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
+};
 
 async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_clones_sqlite_schema_sql())
@@ -81,7 +25,7 @@ async fn ensure_semantic_clones_schema(relational: &RelationalStorage) -> Result
     }
 }
 
-async fn rebuild_symbol_clone_edges(
+pub(crate) async fn rebuild_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<semantic_clones::SymbolCloneBuildResult> {
@@ -393,8 +337,8 @@ mod semantic_clone_persistence_tests {
 
     #[test]
     fn semantic_clone_schema_includes_clone_edge_table() {
-        let pg = semantic_clones_postgres_schema_sql();
-        let sqlite = semantic_clones_sqlite_schema_sql();
+        let pg = super::semantic_clones_postgres_schema_sql();
+        let sqlite = super::semantic_clones_sqlite_schema_sql();
 
         assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
         assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));

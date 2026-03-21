@@ -11,7 +11,7 @@ use crate::domain::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
     ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 
 pub mod sqlite;
@@ -80,6 +80,8 @@ pub trait TestHarnessQueryRepository {
         commit_sha: &str,
         artefact_id: &str,
     ) -> Result<Option<CoverageSummaryRecord>>;
+
+    fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts>;
 }
 
 pub use sqlite::SqliteTestHarnessRepository;

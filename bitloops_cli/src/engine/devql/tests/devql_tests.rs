@@ -99,13 +99,25 @@ fn create_duckdb_db(path: &Path) {
         .expect("validate duckdb db file");
 }
 
+fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
+    use crate::engine::devql::capabilities::semantic_clones::schema::semantic_clones_sqlite_schema_sql;
+    let conn = rusqlite::Connection::open(path).expect("open sqlite for clone DDL");
+    conn.execute_batch(semantic_clones_sqlite_schema_sql())
+        .expect("apply symbol_clone_edges DDL");
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
         .expect("initialise sqlite relational schema");
-    RelationalStorage::Sqlite {
-        path: path.to_path_buf(),
-    }
+    let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking({
+        let path = path_buf.clone();
+        move || apply_symbol_clone_edges_sqlite_schema(&path)
+    })
+    .await
+    .expect("join blocking clone DDL");
+    RelationalStorage::Sqlite { path: path_buf }
 }
 
 #[tokio::test]

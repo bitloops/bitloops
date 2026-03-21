@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::engine::devql::capability_host::{CapabilityConfigView, IngestResult, StageResponse};
+use crate::engine::devql::capability_host::{CapabilityConfigView, StageResponse};
 
 pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
 pub const TEST_HARNESS_TESTS_STAGE_ID: &str = "tests";
@@ -47,19 +47,4 @@ pub fn dependency_gated_stage_response(
         "rows": [],
         "reason": TEST_HARNESS_DEPENDENCY_GATED_REASON,
     }))
-}
-
-pub fn dependency_gated_ingest_result(ingester_name: &'static str, payload: Value) -> IngestResult {
-    let human_output =
-        format!("{ingester_name} is dependency-gated: {TEST_HARNESS_DEPENDENCY_GATED_REASON}");
-    IngestResult::new(
-        json!({
-            "capability": TEST_HARNESS_CAPABILITY_ID,
-            "ingester": ingester_name,
-            "status": "dependency_gated",
-            "request": payload,
-            "reason": TEST_HARNESS_DEPENDENCY_GATED_REASON,
-        }),
-        human_output,
-    )
 }

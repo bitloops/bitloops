@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 
 use crate::engine::db::SqliteConnectionPool;
-use crate::engine::devql::capability_host::gateways::KnowledgeRelationalGateway;
+use crate::engine::devql::capability_host::gateways::RelationalGateway;
 use crate::engine::devql::knowledge_schema_sql_sqlite;
 use crate::engine::trailers::is_valid_checkpoint_id;
 
@@ -283,7 +283,7 @@ impl SqliteKnowledgeRelationalStore {
     }
 }
 
-impl KnowledgeRelationalGateway for SqliteKnowledgeRelationalStore {
+impl RelationalGateway for SqliteKnowledgeRelationalStore {
     fn initialise_schema(&self) -> Result<()> {
         SqliteKnowledgeRelationalStore::initialise_schema(self)
     }

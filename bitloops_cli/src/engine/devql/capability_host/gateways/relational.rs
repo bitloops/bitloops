@@ -4,7 +4,9 @@ use crate::engine::devql::capabilities::knowledge::storage::{
     KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
 };
 
-pub trait KnowledgeRelationalGateway: Send + Sync {
+/// Host relational port for capability packs. The default implementation backs the Knowledge pack
+/// schema on the DevQL relational SQLite file; other packs use pack-scoped tables and migrations.
+pub trait RelationalGateway: Send + Sync {
     fn initialise_schema(&self) -> Result<()>;
     fn persist_ingestion(&self, source: &KnowledgeSourceRow, item: &KnowledgeItemRow)
     -> Result<()>;
