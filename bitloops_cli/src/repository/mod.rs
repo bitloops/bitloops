@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::domain::{
+use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,

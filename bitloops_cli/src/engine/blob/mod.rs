@@ -15,7 +15,7 @@ use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
 use crate::engine::db::SqliteConnectionPool;
-use crate::store_config::{
+use crate::config::{
     BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
 };
 

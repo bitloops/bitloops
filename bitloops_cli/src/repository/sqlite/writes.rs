@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
-use crate::domain::{
+use crate::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord,
     CurrentProductionEdgeRecord, FileStateRecord, ProductionArtefactRecord, ProductionEdgeRecord,
     RepositoryRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,

@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 use crate::commands::{clean, doctor, enable, reset, resume, versioncheck};
-use crate::engine::settings::{self, BitloopsSettings};
+use crate::config::settings::{self, BitloopsSettings};
 
 pub const ROOT_NAME: &str = "bitloops";
 pub const ROOT_SHORT_ABOUT: &str = "Bitloops CLI";
@@ -274,20 +274,20 @@ pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str)
     }
 
     let argv = env::args().collect::<Vec<_>>();
-    let command_info = crate::engine::telemetry::CommandInfo {
+    let command_info = crate::telemetry::analytics::CommandInfo {
         command_path: command_name.to_string(),
         hidden: is_hidden,
-        flag_names: crate::engine::telemetry::collect_flag_names_from_argv(&argv),
+        flag_names: crate::telemetry::analytics::collect_flag_names_from_argv(&argv),
     };
 
-    let dispatch_context = crate::engine::telemetry::load_dispatch_context().or_else(|| {
+    let dispatch_context = crate::telemetry::analytics::load_dispatch_context().or_else(|| {
         env::current_dir()
             .ok()
             .and_then(|cwd| enable::find_repo_root(&cwd).ok())
             .and_then(|repo_root| {
                 build_telemetry_event(hidden_chain, &repo_root, command_name, build_version())
             })
-            .map(|event| crate::engine::telemetry::TelemetryDispatchContext {
+            .map(|event| crate::telemetry::analytics::TelemetryDispatchContext {
                 strategy: event.strategy,
                 agent: event.agent,
                 is_bitloops_enabled: event.is_enabled,
@@ -296,7 +296,7 @@ pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str)
     });
 
     if let Some(ctx) = dispatch_context {
-        crate::engine::telemetry::track_command_detached(
+        crate::telemetry::analytics::track_command_detached(
             Some(&command_info),
             &ctx.strategy,
             &ctx.agent,
@@ -374,9 +374,9 @@ pub(crate) fn join_agent_names(agents: &[String]) -> String {
 }
 
 pub fn run_send_analytics_command(
-    args: &crate::engine::telemetry::SendAnalyticsArgs,
+    args: &crate::telemetry::analytics::SendAnalyticsArgs,
 ) -> Result<()> {
-    crate::engine::telemetry::send_event(&args.payload);
+    crate::telemetry::analytics::send_event(&args.payload);
     Ok(())
 }
 

@@ -10,7 +10,7 @@ use clap::Args;
 use crate::engine::agent::AgentAdapterRegistry;
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::session::create_session_backend_or_local;
-use crate::engine::settings::{
+use crate::config::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
     settings_local_path, settings_path,
 };

@@ -3,7 +3,7 @@ pub mod sqlite;
 
 use anyhow::{Context, Result};
 
-use crate::store_config::StoreBackendConfig;
+use crate::config::StoreBackendConfig;
 
 pub use postgres::PostgresSyncConnection;
 pub use sqlite::SqliteConnectionPool;
@@ -52,7 +52,7 @@ impl CheckpointDbConnections {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store_config::{StoreFileConfig, resolve_store_backend_config_for_tests};
+    use crate::config::{StoreFileConfig, resolve_store_backend_config_for_tests};
     use anyhow::Result;
     use tempfile::TempDir;
 

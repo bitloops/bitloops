@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::resolve::{
     resolve_blob_local_path, resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path,
 };
-use super::utils::current_repo_root_or_cwd;
+use super::store_config_utils::current_repo_root_or_cwd;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelationalProvider {

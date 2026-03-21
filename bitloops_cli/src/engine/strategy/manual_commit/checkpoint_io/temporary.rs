@@ -18,10 +18,10 @@ struct TemporaryCheckpointRecord {
 }
 
 fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
-    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+    let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for temporary checkpoints")?;
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        return crate::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        return crate::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .context("resolving configured SQLite path for temporary checkpoints");
     }
 

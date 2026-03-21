@@ -1,6 +1,8 @@
 use super::*;
+use super::store_config_utils::{expand_home_prefix_with, user_home_dir};
 use crate::test_support::process_state::{enter_process_state, with_cwd, with_process_state};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn write_repo_config(repo_root: &Path, value: serde_json::Value) {
     let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::domain::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveredTestSuite {

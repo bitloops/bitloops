@@ -40,8 +40,8 @@ pub struct DevqlWatchOptions {
     pub poll_fallback_ms: u64,
 }
 
-impl From<crate::store_config::WatchRuntimeConfig> for DevqlWatchOptions {
-    fn from(value: crate::store_config::WatchRuntimeConfig) -> Self {
+impl From<crate::config::WatchRuntimeConfig> for DevqlWatchOptions {
+    fn from(value: crate::config::WatchRuntimeConfig) -> Self {
         Self {
             debounce_ms: value.watch_debounce_ms,
             poll_fallback_ms: value.watch_poll_fallback_ms,
@@ -99,7 +99,7 @@ pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
     let repo_root = resolve_repo_root(args.repo_root)?;
     let repo = crate::engine::devql::resolve_repo_identity(&repo_root)?;
     let cfg = crate::engine::devql::DevqlConfig::from_env(repo_root.clone(), repo)?;
-    let watch_cfg = crate::store_config::resolve_watch_runtime_config_for_repo(&repo_root);
+    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
     let opts = DevqlWatchOptions::from(watch_cfg);
     let pid_file = watcher_pid_file(&repo_root);
 
@@ -139,9 +139,9 @@ fn resolve_repo_root(explicit_repo_root: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn initialise_local_watch_schema(repo_root: &Path) -> Result<()> {
-    let backend_cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving store config for watcher start")?;
-    let sqlite_path = crate::store_config::resolve_sqlite_db_path_for_repo(
+    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
         repo_root,
         backend_cfg.relational.sqlite_path.as_deref(),
     )

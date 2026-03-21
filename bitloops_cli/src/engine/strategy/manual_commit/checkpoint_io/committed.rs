@@ -6,7 +6,7 @@ struct CheckpointStorageContext {
 }
 
 fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorageContext> {
-    let cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+    let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for committed checkpoints")?;
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
     let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)

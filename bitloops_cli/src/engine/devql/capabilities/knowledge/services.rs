@@ -460,7 +460,7 @@ mod tests {
         CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
         KnowledgeIngestContext, StageRequest,
     };
-    use crate::store_config::{
+    use crate::config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };

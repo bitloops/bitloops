@@ -5,7 +5,7 @@ use crate::app::test_mapping::model::ProductionIndex;
 use crate::app::test_mapping::model::{
     DiscoveredTestFile, EnumeratedTestScenario, ScenarioDiscoverySource, StructuralMappingStats,
 };
-use crate::domain::{ProductionArtefact, TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{ProductionArtefact, TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
 
 pub(crate) struct MaterializationContext<'a> {
     pub(crate) repo_id: &'a str,

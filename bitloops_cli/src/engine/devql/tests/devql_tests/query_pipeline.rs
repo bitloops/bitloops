@@ -1484,7 +1484,7 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
         .expect("serialise config"),
     )
     .expect("write config");
-    let host_sqlite_path = crate::store_config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let host_sqlite_path = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
         .expect("resolve backend config")
         .relational
         .resolve_sqlite_db_path()
@@ -1782,7 +1782,7 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         .expect("serialise config"),
     )
     .expect("write config");
-    let host_sqlite_path = crate::store_config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let host_sqlite_path = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
         .expect("resolve backend config")
         .relational
         .resolve_sqlite_db_path()

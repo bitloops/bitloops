@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::engine::devql::capabilities::knowledge::{
     FetchedKnowledgeDocument, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
-use crate::store_config::ProviderConfig;
+use crate::config::ProviderConfig;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

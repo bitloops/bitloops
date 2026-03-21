@@ -65,7 +65,7 @@ mod tests {
     use super::{ResetConfig, run_reset_cmd};
     use crate::engine::db::SqliteConnectionPool;
     use crate::engine::session::state::SessionState;
-    use crate::store_config::{
+    use crate::config::{
         resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
     };
     use crate::test_support::process_state::git_command;

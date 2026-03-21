@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::engine::settings;
+use crate::config::settings;
 
 use super::agent_selection::can_prompt_interactively;
 

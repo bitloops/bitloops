@@ -55,7 +55,7 @@ pub struct SendAnalyticsArgs {
 
 pub fn load_dispatch_context() -> Option<TelemetryDispatchContext> {
     let repo_root = crate::utils::paths::repo_root().ok()?;
-    let settings = crate::engine::settings::load_settings(&repo_root).ok()?;
+    let settings = crate::config::settings::load_settings(&repo_root).ok()?;
 
     if settings.telemetry != Some(true) {
         return None;
@@ -479,4 +479,4 @@ fn is_leap(year: u64) -> bool {
 }
 
 #[cfg(test)]
-mod detached_test;
+mod analytics_test;

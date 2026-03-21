@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use tempfile::TempDir;
 
 use super::PostgresTestHarnessRepository;
-use crate::domain::{
+use crate::models::{
     CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
     CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
     ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestDiscoveryDiagnosticRecord,

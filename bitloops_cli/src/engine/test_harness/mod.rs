@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 
 use crate::db::init_test_domain_database;
-use crate::domain::{
+use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
@@ -17,7 +17,7 @@ use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 use crate::repository::{
     SqliteTestHarnessRepository, TestHarnessQueryRepository, TestHarnessRepository,
 };
-use crate::store_config::{RelationalProvider, resolve_store_backend_config_for_repo};
+use crate::config::{RelationalProvider, resolve_store_backend_config_for_repo};
 
 pub use postgres::PostgresTestHarnessRepository;
 

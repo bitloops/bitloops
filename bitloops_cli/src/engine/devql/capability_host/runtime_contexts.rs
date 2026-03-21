@@ -10,7 +10,7 @@ use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
 };
-use crate::store_config::{
+use crate::config::{
     ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
     resolve_store_backend_config_for_repo,
 };

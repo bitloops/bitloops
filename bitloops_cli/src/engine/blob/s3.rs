@@ -6,7 +6,7 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectStorePath;
 
 use crate::engine::blob::{BlobStore, block_on_blob, normalize_blob_key};
-use crate::store_config::BlobStorageConfig;
+use crate::config::BlobStorageConfig;
 
 #[derive(Debug, Clone)]
 pub struct S3BlobStore {
@@ -112,7 +112,7 @@ impl BlobStore for S3BlobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store_config::BlobStorageProvider;
+    use crate::config::BlobStorageProvider;
 
     fn base_config() -> BlobStorageConfig {
         BlobStorageConfig {

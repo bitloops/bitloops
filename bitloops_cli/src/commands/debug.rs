@@ -8,7 +8,7 @@ use clap::{Args, CommandFactory, Subcommand};
 
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::find_most_recent_session;
-use crate::engine::settings;
+use crate::config::settings;
 use crate::engine::transcript::parse::parse_from_file_at_line;
 use crate::engine::transcript::utils::extract_modified_files;
 use crate::utils::paths;
@@ -74,7 +74,7 @@ fn run_auto_commit(args: &DebugAutoCommitArgs) -> Result<()> {
 
     writeln!(out, "Strategy: {strategy_name}")?;
     writeln!(out, "Auto-commit strategy: {is_auto_commit}")?;
-    match crate::engine::git_operations::is_on_default_branch() {
+    match crate::git::is_on_default_branch() {
         Ok((_is_default, branch)) if !branch.is_empty() => writeln!(out, "Branch: {branch}\n")?,
         Ok(_) => writeln!(out, "Branch: (detached)\n")?,
         Err(err) => writeln!(out, "Branch: (unable to determine: {err})\n")?,

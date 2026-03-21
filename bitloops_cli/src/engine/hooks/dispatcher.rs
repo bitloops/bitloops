@@ -21,12 +21,12 @@ use crate::engine::lifecycle::adapters::{
     COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
     route_hook_command_to_lifecycle,
 };
-use crate::engine::logging;
+use crate::telemetry::logging;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
-use crate::engine::settings;
+use crate::config::settings;
 use crate::engine::strategy::Strategy;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::registry::{self, StrategyRegistry};

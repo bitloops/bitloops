@@ -85,7 +85,7 @@ pub enum Commands {
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
     #[command(name = "__send_analytics", hide = true)]
-    SendAnalytics(crate::engine::telemetry::SendAnalyticsArgs),
+    SendAnalytics(crate::telemetry::analytics::SendAnalyticsArgs),
     /// Hidden shell completion generator command.
     #[command(name = "completion", hide = true)]
     Completion(root::CompletionArgs),

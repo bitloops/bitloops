@@ -6,7 +6,7 @@ use super::telemetry::{
 };
 use super::*;
 use crate::commands::{Cli, Commands};
-use crate::engine::settings;
+use crate::config::settings;
 use crate::test_support::process_state::{with_cwd, with_env_var, with_process_state};
 use crate::utils::paths;
 

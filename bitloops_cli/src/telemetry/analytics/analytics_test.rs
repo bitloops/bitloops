@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::settings::{self, BitloopsSettings};
+use crate::config::settings::{self, BitloopsSettings};
 use crate::test_support::process_state::{
     GIT_ENV_KEYS, git_command, with_env_var, with_process_state,
 };

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::store_config::{
+use crate::config::{
     BlobStorageProvider, EventsProvider, RelationalProvider, resolve_blob_local_path_for_repo,
     resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
     resolve_store_backend_config_for_repo,

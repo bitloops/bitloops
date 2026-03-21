@@ -214,7 +214,7 @@ impl ManualCommitStrategy {
         // Non-blocking: failure logs a warning and continues without a summary.
         let summary: Option<serde_json::Value> = {
             let settings =
-                crate::engine::settings::load_settings(&self.repo_root).unwrap_or_default();
+                crate::config::settings::load_settings(&self.repo_root).unwrap_or_default();
             if settings.is_summarize_enabled() && !transcript_content.is_empty() {
                 let summarize_agent = match state.agent_type.as_str() {
                     s if s == AGENT_TYPE_GEMINI => crate::engine::summarize::AgentType::Gemini,

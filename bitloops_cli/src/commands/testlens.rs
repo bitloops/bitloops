@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::app::commands::{ingest_coverage_batch, ingest_results};
-use crate::domain::{CoverageFormat, ScopeKind};
+use crate::models::{CoverageFormat, ScopeKind};
 use crate::engine::devql::capabilities::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };

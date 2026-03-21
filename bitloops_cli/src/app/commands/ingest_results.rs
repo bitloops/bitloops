@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 
-use crate::domain::TestRunRecord;
+use crate::models::TestRunRecord;
 use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +109,7 @@ pub fn print_summary(commit_sha: &str, summary: &IngestResultsSummary) {
 }
 
 fn build_scenario_map(
-    scenarios: Vec<crate::domain::ResolvedTestScenarioRecord>,
+    scenarios: Vec<crate::models::ResolvedTestScenarioRecord>,
 ) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for scenario in scenarios {

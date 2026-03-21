@@ -117,10 +117,10 @@ fn session_backend(repo: &Path) -> Box<dyn SessionBackend> {
 }
 
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops_cli::store_config::resolve_store_backend_config_for_repo(repo_root)
+    let cfg = bitloops_cli::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        bitloops_cli::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
         bitloops_cli::utils::paths::default_relational_db_path(repo_root)

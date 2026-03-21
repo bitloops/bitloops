@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
-use crate::domain::ListedArtefactRecord;
+use crate::models::ListedArtefactRecord;
 
 pub(super) fn load_listed_production_artefacts(
     conn: &Connection,

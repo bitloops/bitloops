@@ -22,7 +22,7 @@ use crate::app::test_mapping::model::{
     StructuralMappingOutput, StructuralMappingStats, TestDiscoveryBatch,
 };
 use crate::app::test_mapping::registry::StructuralMappingRegistry;
-use crate::domain::ProductionArtefact;
+use crate::models::ProductionArtefact;
 
 pub(crate) fn execute(
     repo_id: &str,

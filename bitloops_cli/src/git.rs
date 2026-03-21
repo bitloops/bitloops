@@ -360,5 +360,5 @@ fn stderr_or_stdout(output: &Output) -> String {
 }
 
 #[cfg(test)]
-#[path = "git_operations_tests.rs"]
+#[path = "git_tests.rs"]
 mod tests;

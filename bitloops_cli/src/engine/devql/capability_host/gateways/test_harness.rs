@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::domain::{CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord};
+use crate::models::{CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord};
 
 /// Relational test-harness writes (and reads needed for coverage ingest) scoped to the Test
 /// Harness pack. Implemented by `BitloopsTestHarnessRepository` from the host runtime.

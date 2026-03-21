@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 
 use crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl;
-use crate::store_config::ProviderConfig;
+use crate::config::ProviderConfig;
 
 use super::confluence::ConfluenceKnowledgeAdapter;
 use super::github::GitHubKnowledgeAdapter;

@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::open_existing_database;
-use crate::domain::{
+use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
@@ -175,7 +175,7 @@ ORDER BY a.path ASC, a.start_line ASC
 
     fn replace_production_artefacts(
         &mut self,
-        batch: &crate::domain::ProductionIngestionBatch,
+        batch: &crate::models::ProductionIngestionBatch,
     ) -> Result<()> {
         let tx = self
             .conn

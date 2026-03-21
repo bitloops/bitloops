@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use crate::engine::devql::capabilities::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
-use crate::store_config::AtlassianProviderConfig;
+use crate::config::AtlassianProviderConfig;
 
 use super::types::{
     BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
@@ -167,7 +167,7 @@ pub(crate) fn build_confluence_document(
 }
 
 fn confluence_config(
-    provider_config: &crate::store_config::ProviderConfig,
+    provider_config: &crate::config::ProviderConfig,
 ) -> Option<&AtlassianProviderConfig> {
     provider_config
         .confluence

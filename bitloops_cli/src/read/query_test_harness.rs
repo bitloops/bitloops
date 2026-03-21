@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::domain::{CoverageSummaryRecord, QueriedArtefactRecord};
+use crate::models::{CoverageSummaryRecord, QueriedArtefactRecord};
 use crate::read::query_view::QueryViewArg;
 use crate::repository::TestHarnessQueryRepository;
 
@@ -502,7 +502,7 @@ mod tests {
         WELL_TESTED_MIN_BRANCH_COVERAGE_PCT, apply_min_strength_filter, compute_confidence,
         compute_strength, derive_verification_level, effective_min_strength, validate_min_strength,
     };
-    use crate::domain::CoverageSummaryRecord;
+    use crate::models::CoverageSummaryRecord;
     use crate::read::query_view::QueryViewArg;
 
     #[test]

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::app::test_mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, ProductionIndex, ReferenceCandidate,
 };
-use crate::domain::ProductionArtefact;
+use crate::models::ProductionArtefact;
 
 pub(crate) fn build_production_index(production: &[ProductionArtefact]) -> ProductionIndex {
     let mut index = ProductionIndex::default();

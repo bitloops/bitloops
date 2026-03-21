@@ -32,7 +32,7 @@ use crate::engine::devql::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
     RelationalGateway,
 };
-use crate::store_config::{
+use crate::config::{
     AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
     EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig,
@@ -628,7 +628,7 @@ fn test_backends(base: &Path) -> StoreBackendConfig {
 
 fn default_provider_config(base_url: &str) -> ProviderConfig {
     ProviderConfig {
-        github: Some(crate::store_config::GithubProviderConfig {
+        github: Some(crate::config::GithubProviderConfig {
             token: "gh-token".to_string(),
         }),
         atlassian: Some(AtlassianProviderConfig {

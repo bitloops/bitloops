@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tokio_postgres::{GenericClient, Row, types::FromSqlOwned};
 
-use crate::domain::{
+use crate::models::{
     ListedArtefactRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
     TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };

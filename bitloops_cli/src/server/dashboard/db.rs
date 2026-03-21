@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
 use tokio_postgres::NoTls;
 
-use crate::store_config::{
+use crate::config::{
     EventsProvider, RelationalProvider, StoreBackendConfig, resolve_store_backend_config,
 };
 

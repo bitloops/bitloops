@@ -4,10 +4,10 @@ use crate::app::test_mapping::materialize::{MaterializationContext, materialize_
 use crate::app::test_mapping::model::{
     DiscoveredTestFile, ReferenceCandidate, StructuralMappingStats,
 };
-use crate::domain::ProductionArtefact;
+use crate::models::ProductionArtefact;
 use crate::engine::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::engine::devql::*;
-use crate::engine::logging;
+use crate::telemetry::logging;
 use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::with_cwd;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
@@ -519,7 +519,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
             let suite_id = format!("test_suite:{commit_sha}:{path}:{}", suite.start_line);
             world
                 .discovered_suites
-                .push(crate::domain::TestSuiteRecord {
+                .push(crate::models::TestSuiteRecord {
                     suite_id: suite_id.clone(),
                     repo_id: repo_id.to_string(),
                     commit_sha: commit_sha.to_string(),
@@ -542,7 +542,7 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
                 );
                 world
                     .discovered_scenarios
-                    .push(crate::domain::TestScenarioRecord {
+                    .push(crate::models::TestScenarioRecord {
                         scenario_id,
                         suite_id: suite_id.clone(),
                         repo_id: repo_id.to_string(),

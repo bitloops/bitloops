@@ -1,14 +1,12 @@
-//! Shared backend config parsing and path resolution.
+//! Configuration: store backend parsing, path resolution, and project settings.
 //! Used by both the CLI and the dashboard server so supported keys and defaults stay in sync.
-
-#[cfg(test)]
-use std::path::{Path, PathBuf};
 
 mod constants;
 mod file_config;
 mod resolve;
+pub mod settings;
 mod types;
-mod utils;
+mod store_config_utils;
 
 pub use constants::{BITLOOPS_CONFIG_RELATIVE_PATH, BITLOOPS_CONFIG_TOML_RELATIVE_PATH};
 pub use resolve::{
@@ -37,8 +35,6 @@ pub(crate) use resolve::{
     resolve_store_embedding_config_for_tests, resolve_store_semantic_config_for_tests,
     resolve_watch_runtime_config_for_tests,
 };
-#[cfg(test)]
-use utils::{expand_home_prefix_with, user_home_dir};
 
 #[cfg(test)]
-mod tests;
+mod store_config_tests;

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::commands::ingest_coverage;
-use crate::domain::{CoverageFormat, ScopeKind};
+use crate::models::{CoverageFormat, ScopeKind};
 use crate::engine::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };

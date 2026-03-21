@@ -12,7 +12,7 @@ use super::types::{
     RelationalBackendConfig, RelationalProvider, StoreBackendConfig, StoreEmbeddingConfig,
     StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
-use super::utils::{
+use super::store_config_utils::{
     current_repo_root_or_cwd_result, load_repo_config_value, normalize_blob_path,
     normalize_sqlite_path, parse_blob_storage_provider, parse_events_provider,
     parse_relational_provider, read_non_empty_env, resolve_configured_path,

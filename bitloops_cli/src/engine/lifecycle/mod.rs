@@ -437,7 +437,7 @@ pub fn handle_lifecycle_turn_end(
         }
     }
 
-    if crate::engine::git_operations::is_empty_repository()? {
+    if crate::git::is_empty_repository()? {
         return Err(anyhow!("empty repository"));
     }
 
@@ -561,8 +561,8 @@ pub fn handle_lifecycle_turn_end(
         &summary,
     )?;
 
-    let author = crate::engine::git_operations::get_git_author().unwrap_or(
-        crate::engine::git_operations::GitAuthor {
+    let author = crate::git::get_git_author().unwrap_or(
+        crate::git::GitAuthor {
             name: "Unknown".to_string(),
             email: "unknown@local".to_string(),
         },

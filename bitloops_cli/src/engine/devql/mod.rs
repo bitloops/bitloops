@@ -26,7 +26,7 @@ use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_session_content, run_git,
 };
-use crate::store_config::{
+use crate::config::{
     EventsBackendConfig, EventsProvider, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
     resolve_store_embedding_config, resolve_store_semantic_config,

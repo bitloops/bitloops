@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::test_mapping::model::DiscoveryIssue;
-use crate::domain::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
 use crate::engine::devql::capabilities::knowledge::{
     AssociateKnowledgeResult, IngestKnowledgeResult,
 };

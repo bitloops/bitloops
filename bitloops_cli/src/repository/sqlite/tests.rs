@@ -3,7 +3,7 @@ use tempfile::TempDir;
 
 use super::SqliteTestHarnessRepository;
 use crate::db::init_database;
-use crate::domain::{
+use crate::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
 };

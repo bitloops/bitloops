@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::domain::{CoverageDiagnosticRecord, CoverageHitRecord};
+use crate::models::{CoverageDiagnosticRecord, CoverageHitRecord};
 use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 
 #[derive(Debug, Deserialize)]

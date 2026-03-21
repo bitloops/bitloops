@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::engine::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 use crate::engine::devql::capability_host::gateways::BlobPayloadGateway;
-use crate::store_config::StoreBackendConfig;
+use crate::config::StoreBackendConfig;
 
 use super::models::{KnowledgePayloadRef, knowledge_payload_key};
 
@@ -86,7 +86,7 @@ impl BlobPayloadGateway for BlobKnowledgePayloadStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store_config::{
+    use crate::config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };

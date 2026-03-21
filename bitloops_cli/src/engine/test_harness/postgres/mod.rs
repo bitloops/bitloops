@@ -8,7 +8,7 @@ use std::pin::Pin;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::domain::{
+use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
@@ -573,7 +573,7 @@ LIMIT 1
         &self,
         commit_sha: &str,
         kind: Option<&str>,
-    ) -> Result<Vec<crate::domain::ListedArtefactRecord>> {
+    ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
         let commit_sha = commit_sha.to_string();
         let kind = kind.map(str::to_string);
         self.with_client(move |client| {

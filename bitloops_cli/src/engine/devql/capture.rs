@@ -67,9 +67,9 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         return Ok(());
     }
 
-    let backend_cfg = crate::store_config::resolve_store_backend_config_for_repo(repo_root)
+    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving store config for watcher capture")?;
-    let sqlite_path = crate::store_config::resolve_sqlite_db_path_for_repo(
+    let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
         repo_root,
         backend_cfg.relational.sqlite_path.as_deref(),
     )

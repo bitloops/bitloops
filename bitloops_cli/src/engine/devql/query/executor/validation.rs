@@ -253,30 +253,30 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
     let has_internal_test_harness_core_stage = has_internal_test_harness_core_stage(parsed);
-    crate::engine::logging::warn(
-        &crate::engine::logging::with_component(crate::engine::logging::background(), "devql"),
+    crate::telemetry::logging::warn(
+        &crate::telemetry::logging::with_component(crate::telemetry::logging::background(), "devql"),
         "devql query validation failed",
         &[
-            crate::engine::logging::string_attr("rule", rule),
-            crate::engine::logging::string_attr("reason", reason),
-            crate::engine::logging::bool_attr("has_deps_stage", parsed.has_deps_stage),
-            crate::engine::logging::bool_attr("has_clones_stage", parsed.has_clones_stage),
-            crate::engine::logging::bool_attr(
+            crate::telemetry::logging::string_attr("rule", rule),
+            crate::telemetry::logging::string_attr("reason", reason),
+            crate::telemetry::logging::bool_attr("has_deps_stage", parsed.has_deps_stage),
+            crate::telemetry::logging::bool_attr("has_clones_stage", parsed.has_clones_stage),
+            crate::telemetry::logging::bool_attr(
                 "has_chat_history_stage",
                 parsed.has_chat_history_stage,
             ),
-            crate::engine::logging::bool_attr(
+            crate::telemetry::logging::bool_attr(
                 "has_checkpoints_stage",
                 parsed.has_checkpoints_stage,
             ),
-            crate::engine::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
-            crate::engine::logging::bool_attr("has_tests_stage", has_tests_stage),
-            crate::engine::logging::bool_attr("has_coverage_stage", has_coverage_stage),
-            crate::engine::logging::bool_attr(
+            crate::telemetry::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
+            crate::telemetry::logging::bool_attr("has_tests_stage", has_tests_stage),
+            crate::telemetry::logging::bool_attr("has_coverage_stage", has_coverage_stage),
+            crate::telemetry::logging::bool_attr(
                 "has_internal_test_harness_core_stage",
                 has_internal_test_harness_core_stage,
             ),
-            crate::engine::logging::bool_attr(
+            crate::telemetry::logging::bool_attr(
                 "has_registered_stages",
                 !parsed.registered_stages.is_empty(),
             ),

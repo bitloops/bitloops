@@ -19,11 +19,11 @@ use crate::engine::agent::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE,
     AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
-use crate::engine::git_operations;
+use crate::git;
 use crate::engine::history::devql_prefetch;
 #[cfg(test)]
-use crate::engine::logging;
-use crate::engine::settings;
+use crate::telemetry::logging;
+use crate::config::settings;
 use crate::engine::transcript::commit_message;
 use crate::engine::transcript::utils::get_transcript_position;
 use crate::utils::paths;
@@ -614,7 +614,7 @@ pub fn handle_post_todo_with_profile(
     };
 
     // Skip on default branch to avoid polluting main/master history.
-    let (skip, branch_name) = git_operations::should_skip_on_default_branch();
+    let (skip, branch_name) = git::should_skip_on_default_branch();
     if skip {
         eprintln!("Bitloops: skipping incremental checkpoint on branch '{branch_name}'");
         return Ok(());

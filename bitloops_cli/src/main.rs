@@ -2,11 +2,13 @@ use clap::Parser;
 
 pub use bitloops_cli::app;
 pub use bitloops_cli::db;
-pub use bitloops_cli::domain;
+pub use bitloops_cli::models;
 pub use bitloops_cli::engine;
+pub use bitloops_cli::git;
 pub use bitloops_cli::read;
 pub use bitloops_cli::repository;
-pub use bitloops_cli::store_config;
+pub use bitloops_cli::config;
+pub use bitloops_cli::telemetry;
 pub use bitloops_cli::utils;
 mod branding;
 mod commands;
@@ -38,7 +40,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::store_config::{
+    use super::config::{
         DashboardFileConfig, ProviderConfig, dashboard_use_bitloops_local, resolve_provider_config,
         resolve_store_backend_config,
     };

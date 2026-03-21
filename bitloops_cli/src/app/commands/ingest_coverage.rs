@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::domain::{
+use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
 };
 use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;

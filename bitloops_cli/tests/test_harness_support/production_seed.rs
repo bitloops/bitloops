@@ -14,7 +14,7 @@ use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 use walkdir::WalkDir;
 
-use bitloops_cli::domain::{
+use bitloops_cli::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
 };

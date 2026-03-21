@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::app::test_mapping;
-use crate::domain::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
+use crate::models::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
 use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Clone)]

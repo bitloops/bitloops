@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::engine::blob::{BlobStore, normalize_blob_key};
-use crate::store_config::BlobStorageConfig;
+use crate::config::BlobStorageConfig;
 
 #[derive(Debug, Clone)]
 pub struct LocalBlobStore {
