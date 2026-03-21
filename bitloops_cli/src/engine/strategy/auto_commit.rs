@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use crate::engine::agent::canonical_agent_key;
+use crate::adapters::agents::canonical_agent_key;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::SessionState;
 use crate::engine::trailers::{

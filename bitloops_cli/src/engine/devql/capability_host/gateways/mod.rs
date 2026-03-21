@@ -6,7 +6,7 @@ pub mod test_harness;
 use anyhow::Result;
 use serde_json::Value;
 
-pub use crate::engine::adapters::connectors::{
+pub use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
 pub use blob_payloads::BlobPayloadGateway;

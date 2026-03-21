@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::agent::AGENT_TYPE_CLAUDE_CODE;
+use crate::adapters::agents::AGENT_TYPE_CLAUDE_CODE;
 use crate::storage::SqliteConnectionPool;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::create_session_backend_or_local;

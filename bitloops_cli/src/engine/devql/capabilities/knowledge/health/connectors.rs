@@ -40,10 +40,10 @@ pub fn check_knowledge_connectors(ctx: &dyn CapabilityHealthContext) -> Capabili
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProviderConfig;
-    use crate::engine::adapters::connectors::{
+    use crate::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
+    use crate::config::ProviderConfig;
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;

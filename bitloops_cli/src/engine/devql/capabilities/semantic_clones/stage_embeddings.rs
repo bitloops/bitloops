@@ -7,10 +7,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::adapters::model_providers::embeddings::EmbeddingProvider;
 use crate::engine::devql::{
     RelationalStorage, esc_pg, postgres_exec, sql_string_list_pg, sqlite_exec_path_allow_create,
 };
-use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_embeddings;
 use crate::engine::semantic_features as semantic;
 

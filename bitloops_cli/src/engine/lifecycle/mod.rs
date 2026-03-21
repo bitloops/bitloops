@@ -6,11 +6,11 @@ use std::io::Read;
 use std::path::Path;
 use uuid::Uuid;
 
-use crate::engine::agent::canonical::{
+use crate::adapters::agents::canonical::{
     CanonicalContractCompatibility, CanonicalInvocationRequest, CanonicalProgressUpdate,
     CanonicalResumableSession,
 };
-use crate::engine::agent::{
+use crate::adapters::agents::{
     AgentAdapterCapability, AgentAdapterRegistry, TranscriptPositionProvider,
 };
 use crate::engine::session::create_session_backend_or_local;
@@ -93,12 +93,12 @@ pub trait LifecycleAgentAdapter: Send + Sync {
     fn format_resume_command(&self, _session_id: &str) -> String;
 
     /// When present, used by handle_lifecycle_turn_end to extract prompts, summary, and modified files.
-    fn as_transcript_analyzer(&self) -> Option<&dyn crate::engine::agent::TranscriptAnalyzer> {
+    fn as_transcript_analyzer(&self) -> Option<&dyn crate::adapters::agents::TranscriptAnalyzer> {
         None
     }
 
     /// When present, used by handle_lifecycle_turn_end to include token usage in the saved step.
-    fn as_token_calculator(&self) -> Option<&dyn crate::engine::agent::TokenCalculator> {
+    fn as_token_calculator(&self) -> Option<&dyn crate::adapters::agents::TokenCalculator> {
         None
     }
 }
@@ -487,14 +487,16 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     // Use transcript we already read (same bytes we copied to metadata); parse with Gemini or raw JSON
-    if let Ok(t) = crate::engine::agent::gemini::transcript::parse_transcript(&transcript_data) {
+    if let Ok(t) = crate::adapters::agents::gemini::transcript::parse_transcript(&transcript_data) {
         let from_transcript =
-            crate::engine::agent::gemini::transcript::extract_all_user_prompts_from_transcript(&t);
+            crate::adapters::agents::gemini::transcript::extract_all_user_prompts_from_transcript(
+                &t,
+            );
         if !from_transcript.is_empty() {
             all_prompts = from_transcript;
         }
         for msg in t.messages.iter().rev() {
-            if msg.r#type == crate::engine::agent::gemini::transcript::MESSAGE_TYPE_GEMINI
+            if msg.r#type == crate::adapters::agents::gemini::transcript::MESSAGE_TYPE_GEMINI
                 && !msg.content.is_empty()
             {
                 summary = msg.content.clone();
@@ -529,7 +531,7 @@ pub fn handle_lifecycle_turn_end(
         }
     }
     if summary.is_empty()
-        && let Ok(s) = crate::engine::agent::gemini::transcript::extract_last_assistant_message(
+        && let Ok(s) = crate::adapters::agents::gemini::transcript::extract_last_assistant_message(
             &transcript_data,
         )
     {

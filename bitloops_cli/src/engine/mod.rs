@@ -1,5 +1,3 @@
-pub mod adapters;
-pub mod agent;
 pub mod capability_packs;
 pub mod db_status;
 pub mod devql;
@@ -7,7 +5,6 @@ pub mod extensions;
 pub mod history;
 pub mod hooks;
 pub mod lifecycle;
-pub mod providers;
 pub mod semantic_clones;
 pub mod semantic_embeddings;
 pub mod semantic_features;

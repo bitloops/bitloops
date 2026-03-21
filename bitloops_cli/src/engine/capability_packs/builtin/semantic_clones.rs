@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::adapters::model_providers::embeddings::EmbeddingProvider;
 use crate::engine::extensions::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
     CapabilityStageContribution, ExtensionCompatibility,
 };
-use crate::engine::providers::embeddings::EmbeddingProvider;
 use crate::engine::semantic_clones;
 use crate::engine::semantic_embeddings::{self, EmbeddingProviderConfig};
 use crate::engine::semantic_features::{

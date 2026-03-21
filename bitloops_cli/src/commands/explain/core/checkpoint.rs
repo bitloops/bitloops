@@ -166,7 +166,7 @@ fn token_usage_metadata_has_values(
 /// Converts the `"agent"` string stored in committed metadata to an `AgentType`.
 /// Uses canonical agent keys ("claude-code", "codex", "gemini", "opencode", "cursor").
 fn agent_type_from_str(s: &str) -> AgentType {
-    use crate::engine::agent::{
+    use crate::adapters::agents::{
         AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE,
     };
     match s {

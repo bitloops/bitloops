@@ -325,10 +325,10 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
-    use crate::config::ProviderConfig;
-    use crate::engine::adapters::connectors::{
+    use crate::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
+    use crate::config::ProviderConfig;
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::storage::{
         KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgePayloadRef,

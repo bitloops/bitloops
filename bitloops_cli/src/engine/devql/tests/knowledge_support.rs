@@ -8,13 +8,13 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use crate::adapters::connectors::{
+    ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
+};
 use crate::config::{
     AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
     EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig,
-};
-use crate::engine::adapters::connectors::{
-    ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities::knowledge::services::KnowledgeServices;
@@ -72,8 +72,7 @@ impl KnowledgeConnectorAdapter for StubKnowledgeAdapter {
         &'a self,
         parsed: &'a crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
         _ctx: &'a dyn ConnectorContext,
-    ) -> crate::engine::adapters::connectors::types::BoxFuture<'a, Result<ExternalKnowledgeRecord>>
-    {
+    ) -> crate::adapters::connectors::types::BoxFuture<'a, Result<ExternalKnowledgeRecord>> {
         Box::pin(async move {
             if !self.can_handle(parsed) {
                 bail!(

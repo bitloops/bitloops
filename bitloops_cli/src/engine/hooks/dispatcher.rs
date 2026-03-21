@@ -7,16 +7,16 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use crate::config::settings;
-use crate::engine::agent::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
-use crate::engine::agent::cursor::types::{
+use crate::adapters::agents::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
+use crate::adapters::agents::cursor::types::{
     CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
     CursorSessionInfoRaw,
 };
-use crate::engine::agent::{
+use crate::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
     AGENT_NAME_GEMINI,
 };
+use crate::config::settings;
 use crate::engine::lifecycle::adapters::{
     CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, COPILOT_HOOK_POST_TOOL_USE,
     COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
@@ -33,13 +33,13 @@ use crate::telemetry::logging;
 use crate::utils::paths;
 
 use super::git;
-use crate::engine::agent::claude_code::hooks_cmd::{
+use crate::adapters::agents::claude_code::hooks_cmd::{
     PostTaskInput, PostTodoInput, SessionInfoInput, TaskHookInput, UserPromptSubmitInput,
     handle_post_task, handle_post_todo, handle_pre_task, handle_session_end, handle_session_start,
     handle_stop, handle_user_prompt_submit_with_strategy,
 };
-use crate::engine::agent::codex::hooks_cmd::{handle_session_start_codex, handle_stop_codex};
-use crate::engine::agent::cursor::hooks_cmd::{
+use crate::adapters::agents::codex::hooks_cmd::{handle_session_start_codex, handle_stop_codex};
+use crate::adapters::agents::cursor::hooks_cmd::{
     handle_before_submit_prompt_cursor, handle_session_end_cursor, handle_session_start_cursor,
     handle_stop_cursor,
 };
@@ -208,8 +208,10 @@ impl ClaudeCodeHookVerb {
 impl CodexHookVerb {
     pub fn hook_name(&self) -> &'static str {
         match self {
-            Self::SessionStart => crate::engine::agent::codex::lifecycle::HOOK_NAME_SESSION_START,
-            Self::Stop => crate::engine::agent::codex::lifecycle::HOOK_NAME_STOP,
+            Self::SessionStart => {
+                crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START
+            }
+            Self::Stop => crate::adapters::agents::codex::lifecycle::HOOK_NAME_STOP,
         }
     }
 }
@@ -252,16 +254,22 @@ impl CopilotHookVerb {
     pub fn hook_name(&self) -> &'static str {
         match self {
             Self::UserPromptSubmitted => {
-                crate::engine::agent::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
+                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_USER_PROMPT_SUBMITTED
             }
-            Self::SessionStart => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_START,
-            Self::AgentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_AGENT_STOP,
-            Self::SessionEnd => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SESSION_END,
-            Self::SubagentStop => crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP,
-            Self::PreToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE,
-            Self::PostToolUse => crate::engine::agent::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE,
+            Self::SessionStart => {
+                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_START
+            }
+            Self::AgentStop => crate::adapters::agents::copilot::lifecycle::HOOK_NAME_AGENT_STOP,
+            Self::SessionEnd => crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SESSION_END,
+            Self::SubagentStop => {
+                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP
+            }
+            Self::PreToolUse => crate::adapters::agents::copilot::lifecycle::HOOK_NAME_PRE_TOOL_USE,
+            Self::PostToolUse => {
+                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_POST_TOOL_USE
+            }
             Self::ErrorOccurred => {
-                crate::engine::agent::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
+                crate::adapters::agents::copilot::lifecycle::HOOK_NAME_ERROR_OCCURRED
             }
         }
     }
@@ -302,12 +310,13 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
         ) => "subagent",
         (
             AGENT_NAME_CURSOR,
-            crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
-            | crate::engine::agent::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP,
+            crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_START
+            | crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_STOP,
         ) => "subagent",
-        (AGENT_NAME_COPILOT, crate::engine::agent::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP) => {
-            "subagent"
-        }
+        (
+            AGENT_NAME_COPILOT,
+            crate::adapters::agents::copilot::lifecycle::HOOK_NAME_SUBAGENT_STOP,
+        ) => "subagent",
         (AGENT_NAME_GEMINI, GEMINI_HOOK_BEFORE_TOOL | GEMINI_HOOK_AFTER_TOOL) => "tool",
         (AGENT_NAME_COPILOT, COPILOT_HOOK_PRE_TOOL_USE | COPILOT_HOOK_POST_TOOL_USE) => "tool",
         _ => "agent",
@@ -598,7 +607,7 @@ pub(crate) fn dispatch_cursor_hook(
             )?;
             let input = SessionInfoInput {
                 session_id: session_id.clone(),
-                transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
+                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
                     &session_id,
                     raw.transcript_path.as_deref(),
                 ),
@@ -614,7 +623,7 @@ pub(crate) fn dispatch_cursor_hook(
             )?;
             let input = UserPromptSubmitInput {
                 session_id: session_id.clone(),
-                transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
+                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
                     &session_id,
                     raw.transcript_path.as_deref(),
                 ),
@@ -638,7 +647,7 @@ pub(crate) fn dispatch_cursor_hook(
 
             let input = UserPromptSubmitInput {
                 session_id: session_id.clone(),
-                transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
+                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
                     &session_id,
                     raw.transcript_path.as_deref(),
                 ),
@@ -670,7 +679,7 @@ pub(crate) fn dispatch_cursor_hook(
 
             let input = SessionInfoInput {
                 session_id: session_id.clone(),
-                transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
+                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
                     &session_id,
                     raw.transcript_path.as_deref(),
                 ),
@@ -686,7 +695,7 @@ pub(crate) fn dispatch_cursor_hook(
             )?;
             let input = SessionInfoInput {
                 session_id: session_id.clone(),
-                transcript_path: crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
+                transcript_path: crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
                     &session_id,
                     raw.transcript_path.as_deref(),
                 ),
@@ -700,10 +709,11 @@ pub(crate) fn dispatch_cursor_hook(
                 &raw.conversation_id,
                 crate::engine::lifecycle::SessionIdPolicy::PreserveEmpty,
             )?;
-            let transcript_path = crate::engine::agent::cursor::lifecycle::resolve_transcript_ref(
-                &session_id,
-                raw.transcript_path.as_deref(),
-            );
+            let transcript_path =
+                crate::adapters::agents::cursor::lifecycle::resolve_transcript_ref(
+                    &session_id,
+                    raw.transcript_path.as_deref(),
+                );
 
             let pre_prompt = backend.load_pre_prompt(&session_id)?;
             let session = backend.load_session(&session_id)?;

@@ -2,10 +2,10 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::engine::agent::AgentAdapterRegistry;
-use crate::engine::agent::copilot::agent::CopilotCliAgent;
-use crate::engine::agent::gemini::agent::GeminiCliAgent;
-use crate::engine::agent::{TokenCalculator, TranscriptAnalyzer};
+use crate::adapters::agents::AgentAdapterRegistry;
+use crate::adapters::agents::copilot::agent::CopilotCliAgent;
+use crate::adapters::agents::gemini::agent::GeminiCliAgent;
+use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
 
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event,
@@ -63,7 +63,7 @@ pub struct ClaudeCodeLifecycleAdapter;
 
 impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_CLAUDE_CODE
+        crate::adapters::agents::AGENT_NAME_CLAUDE_CODE
     }
 
     fn parse_hook_event(
@@ -159,7 +159,7 @@ pub struct GeminiCliLifecycleAdapter;
 
 impl LifecycleAgentAdapter for GeminiCliLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_GEMINI
+        crate::adapters::agents::AGENT_NAME_GEMINI
     }
 
     fn parse_hook_event(
@@ -167,7 +167,7 @@ impl LifecycleAgentAdapter for GeminiCliLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::gemini::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::adapters::agents::gemini::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -204,7 +204,7 @@ pub struct OpenCodeLifecycleAdapter;
 
 impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_OPEN_CODE
+        crate::adapters::agents::AGENT_NAME_OPEN_CODE
     }
 
     fn parse_hook_event(
@@ -289,7 +289,7 @@ pub struct CopilotCliLifecycleAdapter;
 
 impl LifecycleAgentAdapter for CopilotCliLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_COPILOT
+        crate::adapters::agents::AGENT_NAME_COPILOT
     }
 
     fn parse_hook_event(
@@ -297,7 +297,7 @@ impl LifecycleAgentAdapter for CopilotCliLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::copilot::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::adapters::agents::copilot::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -331,7 +331,7 @@ pub struct CursorLifecycleAdapter;
 
 impl LifecycleAgentAdapter for CursorLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_CURSOR
+        crate::adapters::agents::AGENT_NAME_CURSOR
     }
 
     fn parse_hook_event(
@@ -339,7 +339,7 @@ impl LifecycleAgentAdapter for CursorLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::cursor::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::adapters::agents::cursor::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -364,7 +364,7 @@ pub struct CodexLifecycleAdapter;
 
 impl LifecycleAgentAdapter for CodexLifecycleAdapter {
     fn agent_name(&self) -> &'static str {
-        crate::engine::agent::AGENT_NAME_CODEX
+        crate::adapters::agents::AGENT_NAME_CODEX
     }
 
     fn parse_hook_event(
@@ -372,7 +372,7 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
         hook_name: &str,
         stdin: &mut dyn std::io::Read,
     ) -> Result<Option<LifecycleEvent>> {
-        crate::engine::agent::codex::lifecycle::parse_hook_event(hook_name, stdin)
+        crate::adapters::agents::codex::lifecycle::parse_hook_event(hook_name, stdin)
     }
 
     fn hook_names(&self) -> Vec<&'static str> {
@@ -400,18 +400,20 @@ pub fn route_hook_command_to_lifecycle(
     let correlation_id = resolved.trace.correlation_id;
 
     let adapter: Box<dyn LifecycleAgentAdapter> = match (family, profile) {
-        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CLAUDE_CODE) => {
+        ("jsonl-cli", crate::adapters::agents::AGENT_NAME_CLAUDE_CODE) => {
             Box::new(ClaudeCodeLifecycleAdapter)
         }
-        ("json-event", crate::engine::agent::AGENT_NAME_COPILOT) => {
+        ("json-event", crate::adapters::agents::AGENT_NAME_COPILOT) => {
             Box::new(CopilotCliLifecycleAdapter)
         }
-        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CODEX) => Box::new(CodexLifecycleAdapter),
-        ("jsonl-cli", crate::engine::agent::AGENT_NAME_CURSOR) => Box::new(CursorLifecycleAdapter),
-        ("json-event", crate::engine::agent::AGENT_TYPE_GEMINI) => {
+        ("jsonl-cli", crate::adapters::agents::AGENT_NAME_CODEX) => Box::new(CodexLifecycleAdapter),
+        ("jsonl-cli", crate::adapters::agents::AGENT_NAME_CURSOR) => {
+            Box::new(CursorLifecycleAdapter)
+        }
+        ("json-event", crate::adapters::agents::AGENT_TYPE_GEMINI) => {
             Box::new(GeminiCliLifecycleAdapter)
         }
-        ("jsonl-cli", crate::engine::agent::AGENT_NAME_OPEN_CODE) => {
+        ("jsonl-cli", crate::adapters::agents::AGENT_NAME_OPEN_CODE) => {
             Box::new(OpenCodeLifecycleAdapter)
         }
         _ => return Err(anyhow!("unsupported lifecycle agent: {agent_name}")),

@@ -15,11 +15,11 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::config::settings;
-use crate::engine::agent::{
+use crate::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE,
     AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
+use crate::config::settings;
 use crate::engine::history::devql_prefetch;
 use crate::engine::transcript::commit_message;
 use crate::engine::transcript::utils::get_transcript_position;
@@ -29,9 +29,9 @@ use crate::telemetry::logging;
 use crate::utils::paths;
 use crate::utils::strings;
 
-use crate::engine::agent::claude_code::git_hooks;
-use crate::engine::agent::claude_code::hooks as claude_hooks;
-use crate::engine::agent::claude_code::transcript as claude_transcript;
+use crate::adapters::agents::claude_code::git_hooks;
+use crate::adapters::agents::claude_code::hooks as claude_hooks;
+use crate::adapters::agents::claude_code::transcript as claude_transcript;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::phase::{
     Event, NoOpActionHandler, TransitionContext, apply_transition, transition_with_context,

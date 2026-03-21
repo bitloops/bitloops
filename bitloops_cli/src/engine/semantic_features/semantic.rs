@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow};
 
-use crate::engine::providers::llm::{LlmProvider, build_llm_provider};
+use crate::adapters::model_providers::llm::{LlmProvider, build_llm_provider};
 
 use super::common::{normalize_repo_path, render_dependency_context, split_identifier_tokens};
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
-pub use crate::engine::providers::llm::resolve_semantic_summary_endpoint;
+pub use crate::adapters::model_providers::llm::resolve_semantic_summary_endpoint;
 
 const MINIMUM_SUMMARY_LENGTH: usize = 12;
 const MAXIMUM_SUMMARY_LENGTH: usize = 200;

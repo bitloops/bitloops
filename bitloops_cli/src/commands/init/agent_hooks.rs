@@ -2,9 +2,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::engine::agent::{AGENT_NAME_CLAUDE_CODE, AgentAdapterRegistry};
+use crate::adapters::agents::{AGENT_NAME_CLAUDE_CODE, AgentAdapterRegistry};
 #[cfg(test)]
-use crate::engine::agent::{AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_GEMINI};
+use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_GEMINI};
 
 pub(super) const AGENT_CLAUDE_CODE: &str = AGENT_NAME_CLAUDE_CODE;
 #[cfg(test)]

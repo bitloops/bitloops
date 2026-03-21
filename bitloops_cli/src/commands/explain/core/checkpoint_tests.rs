@@ -59,7 +59,7 @@ fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
 #[test]
 fn agent_type_from_str_maps_codex_to_codex() {
     assert_eq!(
-        agent_type_from_str(crate::engine::agent::AGENT_TYPE_CODEX),
+        agent_type_from_str(crate::adapters::agents::AGENT_TYPE_CODEX),
         AgentType::Codex
     );
 }
@@ -72,7 +72,7 @@ fn metadata_from_json_sets_codex_agent_type() {
         "files_touched": ["src/main.rs"],
         "checkpoints_count": 1,
         "checkpoint_transcript_start": 0,
-        "agent": crate::engine::agent::AGENT_TYPE_CODEX,
+        "agent": crate::adapters::agents::AGENT_TYPE_CODEX,
     });
 
     let parsed = metadata_from_json(&meta, "cp-1");

@@ -23,7 +23,7 @@ use super::{
     handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::engine::agent::canonical::{
+use crate::adapters::agents::canonical::{
     CanonicalContractCompatibility, CanonicalResumableSessionState,
 };
 

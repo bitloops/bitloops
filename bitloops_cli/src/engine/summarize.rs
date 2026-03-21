@@ -673,7 +673,7 @@ pub fn scope_transcript_for_checkpoint(
     agent_type: AgentType,
 ) -> Vec<u8> {
     match agent_type {
-        AgentType::Gemini => crate::engine::agent::gemini::transcript::slice_from_message(
+        AgentType::Gemini => crate::adapters::agents::gemini::transcript::slice_from_message(
             full_transcript,
             start_offset,
         )

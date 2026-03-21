@@ -40,7 +40,7 @@ impl ManualCommitStrategy {
         if !agent_type.trim().is_empty()
             && (state.agent_type.trim().is_empty()
                 || state.agent_type
-                    == canonicalize_agent_type(crate::engine::agent::AGENT_TYPE_UNKNOWN))
+                    == canonicalize_agent_type(crate::adapters::agents::AGENT_TYPE_UNKNOWN))
         {
             state.agent_type = canonicalize_agent_type(agent_type);
         }

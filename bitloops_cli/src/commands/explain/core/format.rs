@@ -329,7 +329,7 @@ pub fn scope_transcript_for_checkpoint(
 ) -> Vec<u8> {
     match agent_type {
         // Gemini stores transcripts as a single JSON blob; offset is a message index.
-        AgentType::Gemini => crate::engine::agent::gemini::transcript::slice_from_message(
+        AgentType::Gemini => crate::adapters::agents::gemini::transcript::slice_from_message(
             full_transcript,
             start_offset,
         )

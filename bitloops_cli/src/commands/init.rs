@@ -4,9 +4,9 @@ use std::io::{self, Write};
 use anyhow::Result;
 use clap::Args;
 
+use crate::adapters::agents::{AgentAdapterRegistry, AgentReadinessStatus};
 use crate::commands::enable::find_repo_root;
 use crate::config::settings;
-use crate::engine::agent::{AgentAdapterRegistry, AgentReadinessStatus};
 
 mod agent_hooks;
 mod agent_selection;

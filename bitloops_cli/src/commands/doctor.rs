@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+use crate::adapters::agents::agent_display_name;
 use crate::config::settings;
-use crate::engine::agent::agent_display_name;
 use crate::engine::session::phase::SessionPhase as RuntimeSessionPhase;
 use crate::engine::session::state::SessionState as RuntimeSessionState;
 use crate::engine::session::{SessionBackend, create_session_backend_or_local};

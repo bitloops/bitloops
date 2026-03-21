@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::agent::{
+use crate::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
 use crate::engine::hooks::dispatcher::{

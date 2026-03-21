@@ -457,7 +457,7 @@ fn calculate_stop_token_usage(
     transcript_path: &str,
     session_id: &str,
     transcript_offset: i64,
-) -> Option<crate::engine::agent::TokenUsage> {
+) -> Option<crate::adapters::agents::TokenUsage> {
     if transcript_path.is_empty() {
         return None;
     }

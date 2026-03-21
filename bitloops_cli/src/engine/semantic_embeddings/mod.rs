@@ -3,7 +3,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-use crate::engine::providers::embeddings::{
+use crate::adapters::model_providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
     default_embedding_provider, embedding_provider_requires_api_key,
 };
@@ -225,7 +225,7 @@ pub fn build_symbol_embedding_row(
 ) -> Result<SymbolEmbeddingRow> {
     let embedding = provider.embed(
         &build_symbol_embedding_text(input),
-        crate::engine::providers::embeddings::EmbeddingInputType::Document,
+        crate::adapters::model_providers::embeddings::EmbeddingInputType::Document,
     )?;
     if embedding.is_empty() {
         bail!("embedding provider returned an empty vector");
@@ -267,7 +267,7 @@ fn sha256_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
+    use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
 
     struct MockEmbeddingProvider;
 
@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(provider.provider_name(), "voyage");
         assert_eq!(
             provider.model_name(),
-            crate::engine::providers::embeddings::default_embedding_model("voyage")
+            crate::adapters::model_providers::embeddings::default_embedding_model("voyage")
                 .expect("voyage default model")
         );
         assert_eq!(provider.output_dimension(), Some(1024));
@@ -524,11 +524,11 @@ mod tests {
 
         assert_eq!(provider.as_deref(), Some("local"));
         assert_eq!(
-            crate::engine::providers::embeddings::default_embedding_provider(),
+            crate::adapters::model_providers::embeddings::default_embedding_provider(),
             "local"
         );
         assert_eq!(
-            crate::engine::providers::embeddings::default_embedding_model("local")
+            crate::adapters::model_providers::embeddings::default_embedding_model("local")
                 .expect("local default model")
                 .to_string(),
             "jinaai/jina-embeddings-v2-base-code"
@@ -544,11 +544,11 @@ mod tests {
                 embedding_api_key: None,
             })
             .as_deref(),
-            Some(crate::engine::providers::embeddings::default_embedding_provider())
+            Some(crate::adapters::model_providers::embeddings::default_embedding_provider())
         );
         assert_eq!(
-            crate::engine::providers::embeddings::default_embedding_model(
-                crate::engine::providers::embeddings::default_embedding_provider()
+            crate::adapters::model_providers::embeddings::default_embedding_model(
+                crate::adapters::model_providers::embeddings::default_embedding_provider()
             ),
             Some("jinaai/jina-embeddings-v2-base-code")
         );

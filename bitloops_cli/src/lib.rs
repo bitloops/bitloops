@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod app;
 pub mod branding;
 pub mod commands;

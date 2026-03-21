@@ -442,12 +442,12 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
+    use crate::adapters::connectors::{
+        ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
+    };
     use crate::config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
-    };
-    use crate::engine::adapters::connectors::{
-        ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::storage::{
@@ -484,10 +484,8 @@ mod tests {
             &'a self,
             _parsed: &'a super::super::types::ParsedKnowledgeUrl,
             _ctx: &'a dyn ConnectorContext,
-        ) -> crate::engine::adapters::connectors::types::BoxFuture<
-            'a,
-            Result<ExternalKnowledgeRecord>,
-        > {
+        ) -> crate::adapters::connectors::types::BoxFuture<'a, Result<ExternalKnowledgeRecord>>
+        {
             Box::pin(async move {
                 let mut records = self.records.lock().expect("stub records mutex");
                 let Some(record) = records.pop_front() else {

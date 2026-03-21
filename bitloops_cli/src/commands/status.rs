@@ -1,4 +1,4 @@
-use crate::engine::agent::agent_display_name;
+use crate::adapters::agents::agent_display_name;
 use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;

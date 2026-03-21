@@ -13,7 +13,7 @@ mod redact_test;
 
 use std::path::Path;
 
-use crate::engine::agent::TokenUsage;
+use crate::adapters::agents::TokenUsage;
 use crate::engine::session::state::SessionState;
 use anyhow::Result;
 

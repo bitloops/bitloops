@@ -1,6 +1,6 @@
 //! Session state structs persisted to `.git/bitloops-sessions/<id>.json`.
 
-use crate::engine::agent::TokenUsage;
+use crate::adapters::agents::TokenUsage;
 use serde::{Deserialize, Serialize};
 
 use super::phase::SessionPhase;

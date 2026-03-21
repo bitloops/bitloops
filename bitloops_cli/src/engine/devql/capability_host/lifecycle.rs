@@ -314,7 +314,7 @@ mod tests {
         _temp: TempDir,
         repo_root: PathBuf,
         repo: RepoIdentity,
-        connectors: crate::engine::adapters::connectors::BuiltinConnectorRegistry,
+        connectors: crate::adapters::connectors::BuiltinConnectorRegistry,
         stores: LocalStoreHealthGateway,
     }
 
@@ -500,7 +500,7 @@ mod tests {
             _temp: temp,
             repo_root,
             repo: make_repo_identity(),
-            connectors: crate::engine::adapters::connectors::BuiltinConnectorRegistry::new(
+            connectors: crate::adapters::connectors::BuiltinConnectorRegistry::new(
                 ProviderConfig::default(),
             )
             .expect("connector registry"),
