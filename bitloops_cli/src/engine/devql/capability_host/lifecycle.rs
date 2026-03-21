@@ -71,7 +71,6 @@ pub fn run_health_checks(
 mod tests {
     use super::*;
     use crate::config::ProviderConfig;
-    use crate::engine::db::SqliteConnectionPool;
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::storage::{
         DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
@@ -94,6 +93,7 @@ mod tests {
         StageHandler, StageRegistration, StageRequest, StageResponse,
     };
     use crate::engine::devql::capability_host::runtime_contexts::LocalStoreHealthGateway;
+    use crate::storage::SqliteConnectionPool;
     use crate::utils::paths;
     use anyhow::Result;
     use serde_json::json;

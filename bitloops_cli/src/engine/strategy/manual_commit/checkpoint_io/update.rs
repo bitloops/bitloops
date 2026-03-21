@@ -28,7 +28,7 @@ fn update_committed_db_and_blobs(repo_root: &Path, opts: &UpdateCommittedOptions
             &storage,
             &opts.checkpoint_id,
             session_index,
-            crate::engine::blob::BlobType::Transcript,
+            crate::storage::blob::BlobType::Transcript,
             &redacted,
         )?;
         storage.sqlite.with_connection(|conn| {
@@ -52,7 +52,7 @@ fn update_committed_db_and_blobs(repo_root: &Path, opts: &UpdateCommittedOptions
             &storage,
             &opts.checkpoint_id,
             session_index,
-            crate::engine::blob::BlobType::Prompts,
+            crate::storage::blob::BlobType::Prompts,
             payload.as_bytes(),
         )?;
         updated_any = true;
@@ -66,7 +66,7 @@ fn update_committed_db_and_blobs(repo_root: &Path, opts: &UpdateCommittedOptions
             &storage,
             &opts.checkpoint_id,
             session_index,
-            crate::engine::blob::BlobType::Context,
+            crate::storage::blob::BlobType::Context,
             &payload,
         )?;
         updated_any = true;

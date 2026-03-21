@@ -34,7 +34,7 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
 #[allow(dead_code)]
 pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     let sqlite_path = paths::default_relational_db_path(repo_root);
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
         .expect("create relational sqlite file");
     sqlite
         .initialise_checkpoint_schema()

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 
-use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::capability_host::gateways::RelationalGateway;
 use crate::engine::devql::knowledge_schema_sql_sqlite;
 use crate::engine::trailers::is_valid_checkpoint_id;
+use crate::storage::SqliteConnectionPool;
 
 use super::models::{KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow};
 
@@ -426,7 +426,7 @@ fn insert_relation_assertion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::db::SqliteConnectionPool;
+    use crate::storage::SqliteConnectionPool;
     use tempfile::TempDir;
 
     #[test]

@@ -27,7 +27,7 @@ use tower::util::ServiceExt;
 fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
@@ -80,7 +80,7 @@ struct SeedCheckpointStorage<'a> {
 fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointStorage<'_>) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
@@ -141,15 +141,15 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
     for session in seed.sessions {
         let blob_payloads = [
             (
-                crate::engine::blob::BlobType::Transcript,
+                crate::storage::blob::BlobType::Transcript,
                 session.transcript,
             ),
-            (crate::engine::blob::BlobType::Prompts, session.prompts),
-            (crate::engine::blob::BlobType::Context, session.context),
+            (crate::storage::blob::BlobType::Prompts, session.prompts),
+            (crate::storage::blob::BlobType::Context, session.context),
         ];
 
         for (blob_type, payload) in blob_payloads {
-            let key = crate::engine::blob::build_blob_key(
+            let key = crate::storage::blob::build_blob_key(
                 repo_id.as_str(),
                 seed.checkpoint_id,
                 session.session_index,
@@ -160,7 +160,7 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
                 fs::create_dir_all(parent).expect("create seeded blob parent");
             }
             fs::write(&path, payload.as_bytes()).expect("write seeded blob");
-            let reference = crate::engine::blob::CheckpointBlobReference::new(
+            let reference = crate::storage::blob::CheckpointBlobReference::new(
                 seed.checkpoint_id,
                 session.session_index,
                 blob_type,
@@ -169,7 +169,7 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
                 "",
                 payload.len() as i64,
             );
-            crate::engine::blob::upsert_checkpoint_blob_reference(&sqlite, &reference)
+            crate::storage::blob::upsert_checkpoint_blob_reference(&sqlite, &reference)
                 .expect("upsert checkpoint blob reference");
         }
     }

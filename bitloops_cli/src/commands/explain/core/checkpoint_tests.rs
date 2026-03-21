@@ -27,7 +27,7 @@ fn insert_commit_checkpoint_mapping(
     checkpoint_id: &str,
 ) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
         .expect("open checkpoint sqlite");
     sqlite
         .initialise_checkpoint_schema()

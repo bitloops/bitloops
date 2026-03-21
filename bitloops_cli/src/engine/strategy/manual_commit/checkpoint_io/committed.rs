@@ -1,6 +1,6 @@
 struct CheckpointStorageContext {
-    sqlite: crate::engine::db::SqliteConnectionPool,
-    blob_store: Box<dyn crate::engine::blob::BlobStore>,
+    sqlite: crate::storage::SqliteConnectionPool,
+    blob_store: Box<dyn crate::storage::blob::BlobStore>,
     blob_backend: String,
     repo_id: String,
 }
@@ -9,14 +9,14 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for committed checkpoints")?;
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening committed checkpoint SQLite database")?;
     sqlite
         .initialise_checkpoint_schema()
         .context("initialising committed checkpoint schema")?;
 
     let resolved_blob_store =
-        crate::engine::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
+        crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
             .context("initialising blob storage for committed checkpoints")?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
@@ -32,7 +32,7 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
 }
 
 fn find_checkpoint_session_index(
-    sqlite: &crate::engine::db::SqliteConnectionPool,
+    sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
     session_id: &str,
 ) -> Result<Option<i64>> {
@@ -54,7 +54,7 @@ fn find_checkpoint_session_index(
 }
 
 fn latest_checkpoint_session_index(
-    sqlite: &crate::engine::db::SqliteConnectionPool,
+    sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
 ) -> Result<Option<i64>> {
     use rusqlite::OptionalExtension;
@@ -75,7 +75,7 @@ fn latest_checkpoint_session_index(
 }
 
 fn resolve_checkpoint_session_index_for_write(
-    sqlite: &crate::engine::db::SqliteConnectionPool,
+    sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
     session_id: &str,
 ) -> Result<i64> {
@@ -86,7 +86,7 @@ fn resolve_checkpoint_session_index_for_write(
 }
 
 fn aggregate_checkpoint_metadata_from_db(
-    sqlite: &crate::engine::db::SqliteConnectionPool,
+    sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
 ) -> Result<(u32, Vec<String>, Option<TokenUsageMetadata>)> {
     let (checkpoints_total, files_touched, token_usage) = sqlite.with_connection(|conn| {
@@ -134,17 +134,17 @@ fn upsert_checkpoint_blob(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     session_index: i64,
-    blob_type: crate::engine::blob::BlobType,
+    blob_type: crate::storage::blob::BlobType,
     payload: &[u8],
 ) -> Result<String> {
-    let key = crate::engine::blob::build_blob_key(&storage.repo_id, checkpoint_id, session_index, blob_type);
+    let key = crate::storage::blob::build_blob_key(&storage.repo_id, checkpoint_id, session_index, blob_type);
     storage
         .blob_store
         .write(&key, payload)
         .with_context(|| format!("writing {} blob for checkpoint {checkpoint_id}", blob_type.as_str()))?;
 
     let content_hash = format!("sha256:{}", sha256_hex(payload));
-    let reference = crate::engine::blob::CheckpointBlobReference::new(
+    let reference = crate::storage::blob::CheckpointBlobReference::new(
         checkpoint_id,
         session_index,
         blob_type,
@@ -153,7 +153,7 @@ fn upsert_checkpoint_blob(
         content_hash.clone(),
         payload.len() as i64,
     );
-    crate::engine::blob::upsert_checkpoint_blob_reference(&storage.sqlite, &reference)
+    crate::storage::blob::upsert_checkpoint_blob_reference(&storage.sqlite, &reference)
         .context("upserting checkpoint blob reference row")?;
     Ok(content_hash)
 }
@@ -331,21 +331,21 @@ fn persist_committed_checkpoint_db_and_blobs(
         &storage,
         &opts.checkpoint_id,
         session_index,
-        crate::engine::blob::BlobType::Transcript,
+        crate::storage::blob::BlobType::Transcript,
         redacted_transcript,
     )?;
     let _ = upsert_checkpoint_blob(
         &storage,
         &opts.checkpoint_id,
         session_index,
-        crate::engine::blob::BlobType::Prompts,
+        crate::storage::blob::BlobType::Prompts,
         redacted_prompts.as_bytes(),
     )?;
     let _ = upsert_checkpoint_blob(
         &storage,
         &opts.checkpoint_id,
         session_index,
-        crate::engine::blob::BlobType::Context,
+        crate::storage::blob::BlobType::Context,
         redacted_context,
     )?;
 

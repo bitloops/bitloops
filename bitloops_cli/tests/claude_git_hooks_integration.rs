@@ -129,7 +129,7 @@ fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
 
 fn ensure_relational_store_file(repo_root: &Path) {
     let sqlite =
-        bitloops_cli::engine::db::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+        bitloops_cli::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
             .expect("create relational sqlite file");
     sqlite
         .initialise_checkpoint_schema()

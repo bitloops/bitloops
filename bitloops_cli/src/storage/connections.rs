@@ -1,12 +1,9 @@
-pub mod postgres;
-pub mod sqlite;
-
 use anyhow::{Context, Result};
 
 use crate::config::StoreBackendConfig;
 
-pub use postgres::PostgresSyncConnection;
-pub use sqlite::SqliteConnectionPool;
+use super::postgres::PostgresSyncConnection;
+use super::sqlite::SqliteConnectionPool;
 
 #[derive(Debug, Clone)]
 pub struct CheckpointDbConnections {

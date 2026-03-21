@@ -224,8 +224,8 @@ fn is_valid_cleanup_id(id: &str) -> bool {
 mod tests {
     use super::{CleanupItem, CleanupType, run_clean, run_clean_with_items};
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
-    use crate::engine::db::SqliteConnectionPool;
     use crate::engine::session::state::SessionState;
+    use crate::storage::SqliteConnectionPool;
     use crate::test_support::process_state::{git_command, with_process_state};
     use std::io::Cursor;
     use std::path::Path;

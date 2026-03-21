@@ -2,12 +2,12 @@ use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 use super::SqliteTestHarnessRepository;
-use crate::db::init_database;
 use crate::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
+use crate::storage::init::init_database;
 
 struct SampleBatch<'a> {
     repo_id: &'a str,

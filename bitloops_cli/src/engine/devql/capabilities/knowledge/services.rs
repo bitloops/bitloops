@@ -449,7 +449,6 @@ mod tests {
     use crate::engine::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
-    use crate::engine::db::SqliteConnectionPool;
     use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capabilities::knowledge::storage::{
         BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
@@ -464,6 +463,7 @@ mod tests {
         CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
         KnowledgeIngestContext, StageRequest,
     };
+    use crate::storage::SqliteConnectionPool;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;

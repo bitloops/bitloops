@@ -8,12 +8,12 @@ use crate::config::{
     resolve_store_backend_config_for_repo,
 };
 use crate::engine::adapters::connectors::BuiltinConnectorRegistry;
-use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::RelationalStorage;
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
 };
+use crate::storage::SqliteConnectionPool;
 
 use super::config_view::CapabilityConfigView;
 use super::contexts::{

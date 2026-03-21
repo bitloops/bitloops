@@ -5,7 +5,7 @@ use crate::engine::devql::capability_host::{
 };
 
 fn run_test_harness_domain_schema(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
-    ctx.apply_devql_sqlite_ddl(crate::db::test_domain_schema_sql())
+    ctx.apply_devql_sqlite_ddl(crate::storage::init::test_domain_schema_sql())
 }
 
 pub static TEST_HARNESS_MIGRATIONS: &[CapabilityMigration] = &[CapabilityMigration {

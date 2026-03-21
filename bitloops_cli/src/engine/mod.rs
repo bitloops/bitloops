@@ -1,8 +1,6 @@
 pub mod adapters;
 pub mod agent;
-pub mod blob;
 pub mod capability_packs;
-pub mod db;
 pub mod db_status;
 pub mod devql;
 pub mod extensions;

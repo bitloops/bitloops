@@ -43,7 +43,7 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
         let sqlite_path =
             resolve_sqlite_db_path_for_repo(repo_root, cfg.relational.sqlite_path.as_deref())
                 .context("resolving SQLite path for `bitloops init`")?;
-        let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path.clone())
+        let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())
             .with_context(|| format!("creating SQLite database at {}", sqlite_path.display()))?;
         sqlite
             .initialise_checkpoint_schema()

@@ -33,7 +33,7 @@ fn insert_temporary_checkpoint_record(
     record: &TemporaryCheckpointRecord,
 ) -> Result<()> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path)
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening temporary checkpoint SQLite database")?;
     sqlite
         .initialise_checkpoint_schema()
@@ -95,7 +95,7 @@ fn latest_temporary_checkpoint_tree_hash(repo_root: &Path, session_id: &str) -> 
     use rusqlite::OptionalExtension;
 
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root).ok()?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path).ok()?;
     sqlite.initialise_checkpoint_schema().ok()?;
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
         .ok()?

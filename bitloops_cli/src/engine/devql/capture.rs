@@ -74,7 +74,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         backend_cfg.relational.sqlite_path.as_deref(),
     )
     .context("resolving SQLite path for watcher capture")?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path.clone())?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.clone())?;
     sqlite.initialise_devql_schema()?;
 
     let repo_id = crate::engine::devql::resolve_repo_identity(repo_root)
@@ -375,8 +375,8 @@ mod tests {
         let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
         let db_path = crate::utils::paths::default_relational_db_path(dir.path());
-        let sqlite = crate::engine::db::SqliteConnectionPool::connect(db_path.clone())
-            .expect("connect sqlite");
+        let sqlite =
+            crate::storage::SqliteConnectionPool::connect(db_path.clone()).expect("connect sqlite");
         sqlite
             .initialise_devql_schema()
             .expect("initialise devql schema");

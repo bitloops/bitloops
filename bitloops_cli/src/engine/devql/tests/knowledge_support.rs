@@ -16,7 +16,6 @@ use crate::config::{
 use crate::engine::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
-use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities::knowledge::services::KnowledgeServices;
 use crate::engine::devql::capabilities::knowledge::url::parse_knowledge_url;
@@ -37,6 +36,7 @@ use crate::engine::devql::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
     RelationalGateway,
 };
+use crate::storage::SqliteConnectionPool;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
 #[derive(Debug, Clone)]

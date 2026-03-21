@@ -32,9 +32,9 @@ fn read_checkpoint_blob_text(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     session_index: i64,
-    blob_type: crate::engine::blob::BlobType,
+    blob_type: crate::storage::blob::BlobType,
 ) -> String {
-    let reference = crate::engine::blob::load_checkpoint_blob_reference(
+    let reference = crate::storage::blob::load_checkpoint_blob_reference(
         &storage.sqlite,
         checkpoint_id,
         session_index,
@@ -176,11 +176,11 @@ fn to_committed_info_from_db(
         info.agent = last.clone();
     }
 
-    if let Some(first_ref) = crate::engine::blob::load_checkpoint_blob_reference(
+    if let Some(first_ref) = crate::storage::blob::load_checkpoint_blob_reference(
         &storage.sqlite,
         &summary.checkpoint_id,
         0,
-        crate::engine::blob::BlobType::Prompts.as_str(),
+        crate::storage::blob::BlobType::Prompts.as_str(),
     )? && let Ok(prompt_bytes) = storage.blob_store.read(&first_ref.storage_path)
     {
         info.first_prompt_preview = first_prompt_preview(&String::from_utf8_lossy(&prompt_bytes));
@@ -293,19 +293,19 @@ fn read_session_content_from_db(
         storage,
         checkpoint_id,
         session_index as i64,
-        crate::engine::blob::BlobType::Transcript,
+        crate::storage::blob::BlobType::Transcript,
     );
     let prompts = read_checkpoint_blob_text(
         storage,
         checkpoint_id,
         session_index as i64,
-        crate::engine::blob::BlobType::Prompts,
+        crate::storage::blob::BlobType::Prompts,
     );
     let context = read_checkpoint_blob_text(
         storage,
         checkpoint_id,
         session_index as i64,
-        crate::engine::blob::BlobType::Context,
+        crate::storage::blob::BlobType::Context,
     );
 
     Ok(Some(SessionContentView {

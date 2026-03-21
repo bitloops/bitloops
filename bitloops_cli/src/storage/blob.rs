@@ -17,7 +17,7 @@ use tokio::runtime::{Builder, Runtime};
 use crate::config::{
     BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
 };
-use crate::engine::db::SqliteConnectionPool;
+use crate::storage::SqliteConnectionPool;
 
 thread_local! {
     static BLOB_SYNC_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
@@ -284,7 +284,7 @@ fn with_blob_runtime<T>(operation: impl FnOnce(&Runtime) -> Result<T>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::db::SqliteConnectionPool;
+    use crate::storage::SqliteConnectionPool;
     use tempfile::TempDir;
 
     fn test_blob_config(provider: BlobStorageProvider, local_path: String) -> BlobStorageConfig {

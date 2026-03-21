@@ -146,7 +146,7 @@ fn initialise_local_watch_schema(repo_root: &Path) -> Result<()> {
         backend_cfg.relational.sqlite_path.as_deref(),
     )
     .context("resolving SQLite path for watcher start")?;
-    let sqlite = crate::engine::db::SqliteConnectionPool::connect(sqlite_path)?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)?;
     sqlite.initialise_devql_schema()?;
     Ok(())
 }

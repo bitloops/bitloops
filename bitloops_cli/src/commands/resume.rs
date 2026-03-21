@@ -179,7 +179,7 @@ mod tests {
         resume_from_current_branch, run_resume,
     };
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
-    use crate::engine::db::SqliteConnectionPool;
+    use crate::storage::SqliteConnectionPool;
     use std::fs;
     use std::path::Path;
     use std::process::Command;

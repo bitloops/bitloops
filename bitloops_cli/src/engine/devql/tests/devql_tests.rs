@@ -171,7 +171,7 @@ fn seed_git_repo() -> TempDir {
 fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoint_id: &str) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");

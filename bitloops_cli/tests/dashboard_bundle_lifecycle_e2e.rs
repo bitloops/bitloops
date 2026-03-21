@@ -49,7 +49,7 @@ fn ensure_dashboard_store_files(repo_root: &Path) {
         } else {
             bitloops_cli::utils::paths::default_relational_db_path(repo_root)
         };
-        let sqlite = bitloops_cli::engine::db::SqliteConnectionPool::connect(sqlite_path)
+        let sqlite = bitloops_cli::storage::SqliteConnectionPool::connect(sqlite_path)
             .expect("create relational sqlite file");
         sqlite
             .initialise_checkpoint_schema()

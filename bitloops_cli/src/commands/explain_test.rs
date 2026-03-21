@@ -70,7 +70,7 @@ fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
 fn ensure_relational_store_file(repo_root: &std::path::Path) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
@@ -83,7 +83,7 @@ fn insert_commit_checkpoint_mapping(
 ) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
@@ -103,7 +103,7 @@ fn insert_commit_checkpoint_mapping(
 fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &str) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
-        crate::engine::db::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");

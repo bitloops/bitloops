@@ -8,7 +8,6 @@ use std::pin::Pin;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::engine::db::PostgresSyncConnection;
 use crate::engine::test_harness::schema::postgres_test_domain_schema_sql;
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
@@ -19,6 +18,7 @@ use crate::models::{
     TestScenarioRecord, TestSuiteRecord, derive_test_classification,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
+use crate::storage::PostgresSyncConnection;
 
 use self::helpers::{
     clear_existing_test_discovery_data, get, get_i64, get_opt_i64,

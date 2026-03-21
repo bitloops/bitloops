@@ -64,8 +64,8 @@ fn cleanup_session_states(repo_root: &Path, target_session_id: Option<&str>) -> 
 mod tests {
     use super::{ResetConfig, run_reset_cmd};
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
-    use crate::engine::db::SqliteConnectionPool;
     use crate::engine::session::state::SessionState;
+    use crate::storage::SqliteConnectionPool;
     use crate::test_support::process_state::git_command;
     use std::path::Path;
     use tempfile::TempDir;
