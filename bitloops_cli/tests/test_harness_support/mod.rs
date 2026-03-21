@@ -604,6 +604,72 @@ mod tests {
     );
 }
 
+/// LCOV covering both find_by_id and find_by_email with line + branch data.
+pub fn write_valid_lcov_fixture(workspace: &Workspace) {
+    workspace.write_file(
+        "coverage.lcov",
+        r#"
+SF:src/lib.rs
+DA:4,1
+DA:5,1
+DA:6,1
+DA:8,0
+DA:9,0
+DA:10,0
+BRDA:5,0,0,1
+BRDA:5,0,1,0
+end_of_record
+"#,
+    );
+}
+
+/// LCOV with line data only (no BRDA lines).
+pub fn write_line_only_lcov_fixture(workspace: &Workspace) {
+    workspace.write_file(
+        "coverage.lcov",
+        r#"
+SF:src/lib.rs
+DA:4,1
+DA:5,1
+DA:6,1
+end_of_record
+"#,
+    );
+}
+
+/// LCOV with one valid file and one unmappable path.
+pub fn write_unmappable_lcov_fixture(workspace: &Workspace) {
+    workspace.write_file(
+        "coverage.lcov",
+        r#"
+SF:src/lib.rs
+DA:4,1
+DA:5,1
+end_of_record
+SF:src/does_not_exist.rs
+DA:1,1
+DA:2,1
+end_of_record
+"#,
+    );
+}
+
+/// LCOV with malformed DA lines mixed with valid ones.
+pub fn write_malformed_lcov_fixture(workspace: &Workspace) {
+    workspace.write_file(
+        "coverage.lcov",
+        r#"
+SF:src/lib.rs
+DA:4,1
+DA:bad_line
+DA:5,1
+DA:,
+BRDA:5,0,0,1
+end_of_record
+"#,
+    );
+}
+
 fn init_git_repo(repo_dir: &Path) {
     let status = Command::new("git")
         .args(["init", "-q"])

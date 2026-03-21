@@ -14,14 +14,20 @@ pub(super) fn load_listed_production_artefacts(
         let mut stmt = conn
             .prepare(
                 r#"
-SELECT DISTINCT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT DISTINCT
+  a.artefact_id,
+  a.symbol_fqn,
+  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
+  a.path,
+  a.start_line,
+  a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id
  AND a.blob_sha = fs.blob_sha
  AND a.path = fs.path
 WHERE fs.commit_sha = ?1
-  AND a.canonical_kind = ?2
+  AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) = LOWER(?2)
 ORDER BY a.path ASC, a.start_line ASC
 "#,
             )
@@ -45,7 +51,13 @@ ORDER BY a.path ASC, a.start_line ASC
         let mut stmt = conn
             .prepare(
                 r#"
-SELECT DISTINCT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT DISTINCT
+  a.artefact_id,
+  a.symbol_fqn,
+  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
+  a.path,
+  a.start_line,
+  a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id

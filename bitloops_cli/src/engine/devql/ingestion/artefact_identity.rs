@@ -67,7 +67,8 @@ fn file_symbol_id(path: &str) -> String {
 }
 
 fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
-    deterministic_uuid(&format!("{repo_id}|{blob_sha}|{symbol_id}"))
+    let provenance = CanonicalProvenanceRef::for_blob(repo_id, blob_sha);
+    deterministic_uuid(&format!("{}|{symbol_id}", provenance.artefact_identity_scope()))
 }
 
 #[cfg(test)]

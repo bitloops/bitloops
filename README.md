@@ -110,6 +110,24 @@ to AI-assisted development.
 - **Local observability:** A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
 
+### Manual external knowledge
+
+Bitloops can also ingest repository-scoped external knowledge by URL:
+
+```bash
+bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
+bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
+```
+
+Supported sources:
+
+- GitHub issues
+- GitHub pull requests
+- Jira issues
+- Confluence pages
+
+For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
+
 ## Installation
 
 ### Native Install (Recommended)

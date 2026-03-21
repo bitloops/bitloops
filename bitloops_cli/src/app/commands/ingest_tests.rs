@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::app::test_mapping;
 use crate::domain::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Clone)]
 pub struct IngestTestsIssue {
@@ -22,13 +22,6 @@ pub struct IngestTestsSummary {
     pub enumerated_scenarios: usize,
     pub notes: Vec<String>,
     pub issues: Vec<IngestTestsIssue>,
-}
-
-pub fn handle(db_path: &Path, repo_dir: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(&mut repository, repo_dir, commit_sha)?;
-    print_summary(commit_sha, &summary);
-    Ok(())
 }
 
 pub fn execute(
@@ -109,8 +102,8 @@ pub fn execute(
     })
 }
 
-pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
-    println!(
+pub fn format_summary(commit_sha: &str, summary: &IngestTestsSummary) -> String {
+    let mut out = format!(
         "ingest-tests complete for commit {} (files: {}, suites: {}, scenarios: {}, links: {}, enumeration: {}, enumerated_scenarios: {})",
         commit_sha,
         summary.files,
@@ -121,9 +114,17 @@ pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
         summary.enumerated_scenarios,
     );
     for note in &summary.notes {
-        println!("ingest-tests note: {note}");
+        out.push_str(&format!("\ningest-tests note: {note}"));
     }
     for issue in &summary.issues {
-        println!("ingest-tests issue: {} ({})", issue.message, issue.path);
+        out.push_str(&format!(
+            "\ningest-tests issue: {} ({})",
+            issue.message, issue.path
+        ));
     }
+    out
+}
+
+pub fn print_summary(commit_sha: &str, summary: &IngestTestsSummary) {
+    println!("{}", format_summary(commit_sha, summary));
 }

@@ -179,11 +179,14 @@ fn TestRootCommand_CustomHelpCommand_TreeOutputSkipsHiddenCommands() {
 #[test]
 #[allow(non_snake_case)]
 fn TestRootCommand_CustomHelpCommand_FallbackToRootOnUnknownTarget() {
-    let help = render_custom_help(&["not-a-real-command"], false);
-    assert!(
-        help.contains("Bitloops CLI"),
-        "unknown help target should fallback to root command help"
-    );
+    // Stabilize help text: clap can embed ANSI in long help when NO_COLOR is unset.
+    with_env_vars(&[("NO_COLOR", Some("1"))], || {
+        let help = render_custom_help(&["not-a-real-command"], false);
+        assert!(
+            help.contains("Bitloops CLI"),
+            "unknown help target should fallback to root command help"
+        );
+    });
 }
 
 #[test]

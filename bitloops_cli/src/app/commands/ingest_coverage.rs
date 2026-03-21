@@ -7,8 +7,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::domain::{CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind};
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::domain::{
+    CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
+};
+use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 
 #[derive(Debug, Clone)]
 pub struct IngestCoverageSummary {
@@ -16,17 +18,7 @@ pub struct IngestCoverageSummary {
     pub scope_kind: ScopeKind,
     pub hits: usize,
     pub classifications: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct IngestCoverageRequest<'a> {
-    pub lcov_path: Option<&'a Path>,
-    pub input_path: Option<&'a Path>,
-    pub commit_sha: &'a str,
-    pub scope_str: &'a str,
-    pub tool: &'a str,
-    pub test_artefact_id: Option<&'a str>,
-    pub format_str: Option<&'a str>,
+    pub diagnostics: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -43,52 +35,8 @@ struct LcovBranchCoverage {
     hit_count: i64,
 }
 
-pub fn handle(db_path: &Path, request: IngestCoverageRequest<'_>) -> Result<()> {
-    let scope_kind = request.scope_str.parse::<ScopeKind>().map_err(|_| {
-        anyhow::anyhow!(
-            "invalid scope: {} (expected workspace, package, test-scenario, or doctest)",
-            request.scope_str
-        )
-    })?;
-
-    // Determine the coverage file path
-    let coverage_path = request
-        .lcov_path
-        .or(request.input_path)
-        .ok_or_else(|| anyhow::anyhow!("either --lcov or --input must be provided"))?;
-
-    // Determine format from explicit flag, file extension, or default
-    let format = resolve_format(request.format_str, coverage_path)?;
-
-    // Validate constraints
-    if scope_kind == ScopeKind::TestScenario {
-        if request.test_artefact_id.is_none() {
-            anyhow::bail!("--test-artefact-id is required when scope is test-scenario");
-        }
-        if format == CoverageFormat::Lcov {
-            anyhow::bail!(
-                "LCOV format is not supported for scope=test-scenario (too lossy for per-test attribution); use --format llvm-json"
-            );
-        }
-    }
-
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(
-        &mut repository,
-        coverage_path,
-        request.commit_sha,
-        scope_kind,
-        request.tool,
-        request.test_artefact_id,
-        format,
-    )?;
-
-    print_summary(request.commit_sha, &summary);
-    Ok(())
-}
-
 pub fn execute(
-    repository: &mut impl TestHarnessRepository,
+    store: &mut dyn TestHarnessCoverageGateway,
     coverage_path: &Path,
     commit_sha: &str,
     scope_kind: ScopeKind,
@@ -96,7 +44,7 @@ pub fn execute(
     test_artefact_id: Option<&str>,
     format: CoverageFormat,
 ) -> Result<IngestCoverageSummary> {
-    let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
+    let repo_id = store.load_repo_id_for_commit(commit_sha)?;
 
     let capture_id = format!(
         "capture:{commit_sha}:{}:{}",
@@ -122,48 +70,82 @@ pub fn execute(
         metadata_json: None,
     };
 
-    let hits = match format {
-        CoverageFormat::Lcov => ingest_lcov(repository, coverage_path, commit_sha, &capture_id)?,
+    let (hits, diagnostics) = match format {
+        CoverageFormat::Lcov => {
+            ingest_lcov(store, coverage_path, commit_sha, &repo_id, &capture_id)?
+        }
         CoverageFormat::LlvmJson => crate::app::commands::parse_llvm_json::ingest_llvm_json(
-            repository,
+            store,
             coverage_path,
             commit_sha,
+            &repo_id,
             &capture_id,
         )?,
     };
 
-    repository.insert_coverage_capture(&capture)?;
-    repository.insert_coverage_hits(&hits)?;
+    store.insert_coverage_capture(&capture)?;
+    store.insert_coverage_hits(&hits)?;
+    store.insert_coverage_diagnostics(&diagnostics)?;
 
-    let classifications = repository.rebuild_classifications_from_coverage(commit_sha)?;
+    let classifications = store.rebuild_classifications_from_coverage(commit_sha)?;
 
     Ok(IngestCoverageSummary {
         format,
         scope_kind,
         hits: hits.len(),
         classifications,
+        diagnostics: diagnostics.len(),
     })
 }
 
+pub fn format_summary(commit_sha: &str, summary: &IngestCoverageSummary) -> String {
+    format!(
+        "ingested {} coverage for commit {} (scope: {}, hits: {}, classifications: {}, diagnostics: {})",
+        summary.format,
+        commit_sha,
+        summary.scope_kind,
+        summary.hits,
+        summary.classifications,
+        summary.diagnostics
+    )
+}
+
 pub fn print_summary(commit_sha: &str, summary: &IngestCoverageSummary) {
-    println!(
-        "ingested {} coverage for commit {} (scope: {}, hits: {}, classifications: {})",
-        summary.format, commit_sha, summary.scope_kind, summary.hits, summary.classifications
-    );
+    println!("{}", format_summary(commit_sha, summary));
 }
 
 fn ingest_lcov(
-    repository: &impl TestHarnessRepository,
+    store: &dyn TestHarnessCoverageGateway,
     lcov_path: &Path,
     commit_sha: &str,
+    repo_id: &str,
     capture_id: &str,
-) -> Result<Vec<CoverageHitRecord>> {
-    let report = parse_lcov_report(lcov_path)?;
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
+    let (report, parse_diagnostics) =
+        parse_lcov_report(lcov_path, capture_id, repo_id, commit_sha)?;
     let mut hits = Vec::new();
+    let mut diagnostics = parse_diagnostics;
+    let mut diag_idx = diagnostics.len();
 
     for file in &report {
-        let artefacts = repository.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
+        let artefacts = store.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
         if artefacts.is_empty() {
+            diagnostics.push(CoverageDiagnosticRecord {
+                diagnostic_id: format!("diag:{capture_id}:unmapped:{diag_idx}"),
+                capture_id: capture_id.to_string(),
+                repo_id: repo_id.to_string(),
+                commit_sha: commit_sha.to_string(),
+                path: Some(file.source_file.clone()),
+                line: None,
+                severity: "warning".to_string(),
+                code: "unmapped_file".to_string(),
+                message: format!(
+                    "coverage file '{}' has no matching production artefacts",
+                    file.source_file
+                ),
+                metadata_json: None,
+            });
+            diag_idx += 1;
             continue;
         }
 
@@ -200,22 +182,7 @@ fn ingest_lcov(
         }
     }
 
-    Ok(hits)
-}
-
-fn resolve_format(format_str: Option<&str>, path: &Path) -> Result<CoverageFormat> {
-    if let Some(fmt) = format_str {
-        return fmt
-            .parse::<CoverageFormat>()
-            .map_err(|_| anyhow::anyhow!("unknown format: {fmt} (expected lcov or llvm-json)"));
-    }
-
-    // Auto-detect from extension
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    match ext {
-        "json" => Ok(CoverageFormat::LlvmJson),
-        _ => Ok(CoverageFormat::Lcov),
-    }
+    Ok((hits, diagnostics))
 }
 
 fn chrono_now() -> String {
@@ -227,14 +194,39 @@ fn chrono_now() -> String {
     format!("{}", duration.as_secs())
 }
 
-fn parse_lcov_report(lcov_path: &Path) -> Result<Vec<LcovFileCoverage>> {
+fn parse_lcov_report(
+    lcov_path: &Path,
+    capture_id: &str,
+    repo_id: &str,
+    commit_sha: &str,
+) -> Result<(Vec<LcovFileCoverage>, Vec<CoverageDiagnosticRecord>)> {
     let raw = fs::read_to_string(lcov_path)
         .with_context(|| format!("failed to read LCOV file {}", lcov_path.display()))?;
 
     let mut files = Vec::new();
+    let mut diagnostics = Vec::new();
     let mut current: Option<LcovFileCoverage> = None;
+    let mut diag_idx: usize = 0;
 
-    for line in raw.lines() {
+    let make_diag =
+        |diag_idx: &mut usize, line_num: usize, source_file: Option<&str>, message: String| {
+            let diag = CoverageDiagnosticRecord {
+                diagnostic_id: format!("diag:{capture_id}:parse:{}", *diag_idx),
+                capture_id: capture_id.to_string(),
+                repo_id: repo_id.to_string(),
+                commit_sha: commit_sha.to_string(),
+                path: source_file.map(|s| s.to_string()),
+                line: Some(line_num as i64),
+                severity: "warning".to_string(),
+                code: "malformed_line".to_string(),
+                message,
+                metadata_json: None,
+            };
+            *diag_idx += 1;
+            diag
+        };
+
+    for (line_num, line) in raw.lines().enumerate() {
         let trimmed = line.trim();
 
         if let Some(path) = trimmed.strip_prefix("SF:") {
@@ -262,16 +254,24 @@ fn parse_lcov_report(lcov_path: &Path) -> Result<Vec<LcovFileCoverage>> {
 
         if let Some(da) = trimmed.strip_prefix("DA:") {
             let mut parts = da.splitn(3, ',');
-            let Some(line_no_raw) = parts.next() else {
+            let (Some(line_no_raw), Some(hit_count_raw)) = (parts.next(), parts.next()) else {
+                diagnostics.push(make_diag(
+                    &mut diag_idx,
+                    line_num + 1,
+                    Some(&active.source_file),
+                    format!("malformed DA line: '{trimmed}'"),
+                ));
                 continue;
             };
-            let Some(hit_count_raw) = parts.next() else {
-                continue;
-            };
-            let Ok(line_no) = line_no_raw.parse::<i64>() else {
-                continue;
-            };
-            let Ok(hit_count) = hit_count_raw.parse::<i64>() else {
+            let (Ok(line_no), Ok(hit_count)) =
+                (line_no_raw.parse::<i64>(), hit_count_raw.parse::<i64>())
+            else {
+                diagnostics.push(make_diag(
+                    &mut diag_idx,
+                    line_num + 1,
+                    Some(&active.source_file),
+                    format!("unparseable DA values: '{trimmed}'"),
+                ));
                 continue;
             };
             active.line_hits.insert(line_no, hit_count);
@@ -281,16 +281,26 @@ fn parse_lcov_report(lcov_path: &Path) -> Result<Vec<LcovFileCoverage>> {
         if let Some(brda) = trimmed.strip_prefix("BRDA:") {
             let parts: Vec<&str> = brda.split(',').collect();
             if parts.len() != 4 {
+                diagnostics.push(make_diag(
+                    &mut diag_idx,
+                    line_num + 1,
+                    Some(&active.source_file),
+                    format!("malformed BRDA line (expected 4 fields): '{trimmed}'"),
+                ));
                 continue;
             }
 
-            let Ok(line_no) = parts[0].parse::<i64>() else {
-                continue;
-            };
-            let Ok(block_no) = parts[1].parse::<i64>() else {
-                continue;
-            };
-            let Ok(branch_no) = parts[2].parse::<i64>() else {
+            let (Ok(line_no), Ok(block_no), Ok(branch_no)) = (
+                parts[0].parse::<i64>(),
+                parts[1].parse::<i64>(),
+                parts[2].parse::<i64>(),
+            ) else {
+                diagnostics.push(make_diag(
+                    &mut diag_idx,
+                    line_num + 1,
+                    Some(&active.source_file),
+                    format!("unparseable BRDA values: '{trimmed}'"),
+                ));
                 continue;
             };
             let hit_count = if parts[3] == "-" {
@@ -318,7 +328,7 @@ fn parse_lcov_report(lcov_path: &Path) -> Result<Vec<LcovFileCoverage>> {
         );
     }
 
-    Ok(files)
+    Ok((files, diagnostics))
 }
 
 fn normalize_lcov_path(path: &str) -> String {

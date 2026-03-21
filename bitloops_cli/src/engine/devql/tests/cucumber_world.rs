@@ -1,7 +1,12 @@
 use super::*;
 use crate::app::test_mapping::model::DiscoveryIssue;
 use crate::domain::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::engine::devql::capabilities::knowledge::{
+    AssociateKnowledgeResult, IngestKnowledgeResult,
+};
+use crate::engine::devql::knowledge_support::KnowledgeBddHarness;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -38,6 +43,11 @@ pub(super) struct DevqlBddWorld {
     pub(super) materialized_links: Vec<TestLinkRecord>,
     pub(super) discovery_issues: Vec<DiscoveryIssue>,
     pub(super) tests_query_response: Option<Value>,
+    pub(super) knowledge: Option<KnowledgeBddHarness>,
+    pub(super) knowledge_last_ingest: Option<IngestKnowledgeResult>,
+    pub(super) knowledge_last_association: Option<AssociateKnowledgeResult>,
+    pub(super) knowledge_last_error: Option<anyhow::Error>,
+    pub(super) knowledge_ids: HashMap<String, String>,
 }
 
 impl Default for DevqlBddWorld {
@@ -64,6 +74,11 @@ impl Default for DevqlBddWorld {
             materialized_links: Vec::new(),
             discovery_issues: Vec::new(),
             tests_query_response: None,
+            knowledge: None,
+            knowledge_last_ingest: None,
+            knowledge_last_association: None,
+            knowledge_last_error: None,
+            knowledge_ids: HashMap::new(),
         }
     }
 }
@@ -91,6 +106,11 @@ impl DevqlBddWorld {
         self.materialized_links.clear();
         self.discovery_issues.clear();
         self.tests_query_response = None;
+        self.knowledge = None;
+        self.knowledge_last_ingest = None;
+        self.knowledge_last_association = None;
+        self.knowledge_last_error = None;
+        self.knowledge_ids.clear();
     }
 
     pub(super) fn test_cfg() -> DevqlConfig {
@@ -200,5 +220,60 @@ impl DevqlBddWorld {
             sql.contains(fragment),
             "expected SQL fragment `{fragment}` in:\n{sql}"
         );
+    }
+
+    pub(super) fn init_knowledge_harness(&mut self) {
+        if self.knowledge.is_none() {
+            self.knowledge = Some(
+                KnowledgeBddHarness::new()
+                    .unwrap_or_else(|err| panic!("initialize knowledge bdd harness: {err:#}")),
+            );
+        }
+    }
+
+    pub(super) fn knowledge_harness_mut(&mut self) -> &mut KnowledgeBddHarness {
+        self.knowledge
+            .as_mut()
+            .expect("knowledge harness should be initialized")
+    }
+
+    pub(super) fn remember_id(&mut self, key: &str, value: impl Into<String>) {
+        self.knowledge_ids.insert(key.to_string(), value.into());
+    }
+
+    pub(super) fn resolve_placeholders(&self, raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '<' {
+                out.push(ch);
+                continue;
+            }
+
+            let mut key = String::new();
+            let mut found_end = false;
+            for next in chars.by_ref() {
+                if next == '>' {
+                    found_end = true;
+                    break;
+                }
+                key.push(next);
+            }
+
+            if !found_end {
+                out.push('<');
+                out.push_str(key.as_str());
+                break;
+            }
+
+            if let Some(value) = self.knowledge_ids.get(key.as_str()) {
+                out.push_str(value.as_str());
+            } else {
+                out.push('<');
+                out.push_str(key.as_str());
+                out.push('>');
+            }
+        }
+        out
     }
 }

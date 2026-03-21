@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::domain::CoverageHitRecord;
-use crate::repository::TestHarnessRepository;
+use crate::domain::{CoverageDiagnosticRecord, CoverageHitRecord};
+use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 
 #[derive(Debug, Deserialize)]
 struct LlvmCoverageExport {
@@ -33,11 +33,12 @@ struct Segment {
 }
 
 pub fn ingest_llvm_json(
-    repository: &impl TestHarnessRepository,
+    store: &dyn TestHarnessCoverageGateway,
     json_path: &Path,
     commit_sha: &str,
+    repo_id: &str,
     capture_id: &str,
-) -> Result<Vec<CoverageHitRecord>> {
+) -> Result<(Vec<CoverageHitRecord>, Vec<CoverageDiagnosticRecord>)> {
     let raw = fs::read_to_string(json_path)
         .with_context(|| format!("failed to read LLVM JSON file {}", json_path.display()))?;
 
@@ -45,11 +46,33 @@ pub fn ingest_llvm_json(
         .with_context(|| format!("failed to parse LLVM JSON from {}", json_path.display()))?;
 
     let mut hits = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut diag_idx: usize = 0;
 
     for data in &export.data {
         for file in &data.files {
             let line_hits = extract_line_hits(&file.segments);
-            let artefacts = repository.load_artefacts_for_file_lines(commit_sha, &file.filename)?;
+            let artefacts = store.load_artefacts_for_file_lines(commit_sha, &file.filename)?;
+
+            if artefacts.is_empty() {
+                diagnostics.push(CoverageDiagnosticRecord {
+                    diagnostic_id: format!("diag:{capture_id}:unmapped:{diag_idx}"),
+                    capture_id: capture_id.to_string(),
+                    repo_id: repo_id.to_string(),
+                    commit_sha: commit_sha.to_string(),
+                    path: Some(file.filename.clone()),
+                    line: None,
+                    severity: "warning".to_string(),
+                    code: "unmapped_file".to_string(),
+                    message: format!(
+                        "coverage file '{}' has no matching production artefacts",
+                        file.filename
+                    ),
+                    metadata_json: None,
+                });
+                diag_idx += 1;
+                continue;
+            }
 
             for (artefact_id, start_line, end_line) in &artefacts {
                 for (line, count) in &line_hits {
@@ -70,7 +93,7 @@ pub fn ingest_llvm_json(
         }
     }
 
-    Ok(hits)
+    Ok((hits, diagnostics))
 }
 
 /// Extract per-line hit counts from LLVM JSON segments.

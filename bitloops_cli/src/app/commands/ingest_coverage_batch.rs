@@ -7,22 +7,15 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::domain::{BatchManifestEntry, CoverageFormat, ScopeKind};
-use crate::repository::{TestHarnessRepository, open_sqlite_repository};
+use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
 
 #[derive(Debug, Clone)]
 pub struct IngestCoverageBatchSummary {
     pub entries: usize,
 }
 
-pub fn handle(db_path: &Path, manifest_path: &Path, commit_sha: &str) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    let summary = execute(&mut repository, manifest_path, commit_sha)?;
-    print_summary(commit_sha, &summary);
-    Ok(())
-}
-
 pub fn execute(
-    repository: &mut impl TestHarnessRepository,
+    store: &mut impl TestHarnessCoverageGateway,
     manifest_path: &Path,
     commit_sha: &str,
 ) -> Result<IngestCoverageBatchSummary> {
@@ -53,7 +46,7 @@ pub fn execute(
         })?;
 
         crate::app::commands::ingest_coverage::execute(
-            repository,
+            store,
             &coverage_path,
             commit_sha,
             scope_kind,
@@ -75,7 +68,7 @@ pub fn print_summary(commit_sha: &str, summary: &IngestCoverageBatchSummary) {
     );
 }
 
-fn parse_manifest_entries(manifest_path: &Path) -> Result<Vec<BatchManifestEntry>> {
+pub fn parse_manifest_entries(manifest_path: &Path) -> Result<Vec<BatchManifestEntry>> {
     let raw = fs::read_to_string(manifest_path)
         .with_context(|| format!("failed to read manifest file {}", manifest_path.display()))?;
 

@@ -214,8 +214,8 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         &relational,
         &FileRevision {
             commit_sha: commit_old,
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: commit_old,
                 temp_checkpoint_id: None,
             },
@@ -235,8 +235,8 @@ async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_hist
         &relational,
         &FileRevision {
             commit_sha: commit_new,
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: commit_new,
                 temp_checkpoint_id: None,
             },
@@ -345,8 +345,8 @@ async fn older_current_refresh_does_not_clobber_newer_snapshot_for_the_same_path
         &relational,
         &FileRevision {
             commit_sha: "commit-new",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-new",
                 temp_checkpoint_id: None,
             },
@@ -366,8 +366,8 @@ async fn older_current_refresh_does_not_clobber_newer_snapshot_for_the_same_path
         &relational,
         &FileRevision {
             commit_sha: "commit-old",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-old",
                 temp_checkpoint_id: None,
             },
@@ -430,8 +430,8 @@ async fn refreshing_a_path_rebuilds_current_outgoing_edges_instead_of_accumulati
         &relational,
         &FileRevision {
             commit_sha: "commit-1",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-1",
                 temp_checkpoint_id: None,
             },
@@ -455,8 +455,8 @@ async fn refreshing_a_path_rebuilds_current_outgoing_edges_instead_of_accumulati
         &relational,
         &FileRevision {
             commit_sha: "commit-2",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-2",
                 temp_checkpoint_id: None,
             },
@@ -538,8 +538,8 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
         &relational,
         &FileRevision {
             commit_sha: "commit-target-1",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-target-1",
                 temp_checkpoint_id: None,
             },
@@ -559,8 +559,8 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
         &relational,
         &FileRevision {
             commit_sha: "commit-caller-1",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-caller-1",
                 temp_checkpoint_id: None,
             },
@@ -584,8 +584,8 @@ async fn deleting_a_current_symbol_removes_its_row_and_clears_inbound_edge_targe
         &relational,
         &FileRevision {
             commit_sha: "commit-target-2",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-target-2",
                 temp_checkpoint_id: None,
             },
@@ -685,8 +685,8 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
         &relational,
         &FileRevision {
             commit_sha: "commit-lib-1",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-lib-1",
                 temp_checkpoint_id: None,
             },
@@ -706,8 +706,8 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
         &relational,
         &FileRevision {
             commit_sha: "commit-app-1",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-app-1",
                 temp_checkpoint_id: None,
             },
@@ -755,8 +755,8 @@ async fn cross_file_current_edges_resolve_targets_and_retarget_after_target_refr
         &relational,
         &FileRevision {
             commit_sha: "commit-lib-2",
-            revision: RevisionRef {
-                kind: "commit",
+            revision: TemporalRevisionRef {
+                kind: TemporalRevisionKind::Commit,
                 id: "commit-lib-2",
                 temp_checkpoint_id: None,
             },

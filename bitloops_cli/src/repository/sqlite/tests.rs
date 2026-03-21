@@ -1,3 +1,4 @@
+use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 use super::SqliteTestHarnessRepository;
@@ -6,7 +7,7 @@ use crate::domain::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
 };
-use crate::repository::TestHarnessRepository;
+use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
 struct SampleBatch<'a> {
     repo_id: &'a str,
@@ -70,6 +71,69 @@ fn load_production_artefacts_includes_workspace_crate_functions() {
         .expect("load production artefacts");
     assert_eq!(artefacts.len(), 1);
     assert_eq!(artefacts[0].artefact_id, "function:workspace");
+}
+
+#[test]
+fn list_and_find_artefacts_fall_back_to_language_kind_when_canonical_kind_is_null() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let db_path = temp_dir.path().join("workspace-null-kind.db");
+    init_database(&db_path, false, "seed").expect("failed to initialize db");
+
+    let mut repository = SqliteTestHarnessRepository::open_existing(&db_path).expect("open db");
+    repository
+        .replace_production_artefacts(&sample_batch(SampleBatch {
+            repo_id: "ruff-workspace",
+            commit_sha: "commit-workspace",
+            path: "src/lib.rs",
+            blob_sha: "blob-c",
+            artefact_id: "file:workspace",
+            symbol_id: "sym:file:workspace",
+            canonical_kind: "file",
+            symbol_fqn: Some("src/lib.rs"),
+        }))
+        .expect("replace production artefacts");
+
+    let conn = Connection::open(&db_path).expect("open sqlite connection");
+    conn.execute(
+        r#"
+INSERT INTO artefacts (
+  artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind,
+  symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature,
+  modifiers, docstring, content_hash
+) VALUES (
+  ?1, ?2, ?3, ?4, ?5, 'rust', NULL, 'Struct', ?6, ?7, 10, 20, 100, 240, NULL, '[]', NULL, 'hash-struct'
+)
+"#,
+        params![
+            "struct:workspace",
+            "sym:struct:workspace",
+            "ruff-workspace",
+            "blob-c",
+            "src/lib.rs",
+            "src/lib.rs::Struct",
+            "file:workspace",
+        ],
+    )
+    .expect("insert struct artefact");
+
+    let listed = repository
+        .list_artefacts("commit-workspace", None)
+        .expect("list artefacts");
+    assert!(listed.iter().any(|artefact| {
+        artefact.symbol_fqn.as_deref() == Some("src/lib.rs::Struct") && artefact.kind == "struct"
+    }));
+
+    let structs = repository
+        .list_artefacts("commit-workspace", Some("struct"))
+        .expect("list struct artefacts");
+    assert_eq!(structs.len(), 1);
+    assert_eq!(structs[0].kind, "struct");
+
+    let queried = repository
+        .find_artefact("commit-workspace", "Struct")
+        .expect("find struct artefact");
+    assert_eq!(queried.artefact_id, "struct:workspace");
+    assert_eq!(queried.canonical_kind, "struct");
 }
 
 fn sample_batch(sample: SampleBatch<'_>) -> ProductionIngestionBatch {

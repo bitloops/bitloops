@@ -40,6 +40,29 @@ fn executor_test_cfg_for_repo_root(repo_root: PathBuf) -> DevqlConfig {
     cfg
 }
 
+fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
+    let sqlite_path = repo_root.join(".bitloops/stores/relational/relational.db");
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).expect("create sqlite parent");
+    }
+    rusqlite::Connection::open(&sqlite_path).expect("create sqlite file");
+    let config_dir = repo_root.join(".bitloops");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "stores": {
+                "relational": {
+                    "provider": "sqlite",
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }))
+        .expect("serialise config"),
+    )
+    .expect("write config");
+}
+
 async fn sqlite_relational_with_sql(sql: &str) -> RelationalStorage {
     let temp = tempdir().expect("temp dir");
     let db_path = temp.path().join("relational.sqlite");
@@ -314,4 +337,151 @@ async fn session_chat_payload_returns_none_when_checkpoint_is_missing() {
     let payload = session_chat_payload(&cfg, "checkpoint-1", "session-1", &mut cache);
 
     assert!(payload.is_none());
+}
+
+#[tokio::test]
+async fn execute_registered_stages_routes_to_test_harness_pack() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    configure_executor_sqlite_backend(&repo_root);
+    let cfg = executor_test_cfg_for_repo_root(repo_root);
+    let parsed = parse_devql_query(r#"repo("bitloops")->tests()->limit(3)"#).expect("parse");
+
+    let rows = execute_registered_stages(
+        &cfg,
+        &parsed,
+        vec![json!({
+            "artefact_id": "a-1",
+            "path": "src/lib.rs",
+            "canonical_kind": "function",
+            "symbol_fqn": "src/lib.rs::a_1",
+            "start_line": 1,
+            "end_line": 3
+        })],
+    )
+    .await
+    .expect("execute registered stages");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]
+            .get("artefact")
+            .and_then(|value| value.get("artefact_id"))
+            .and_then(Value::as_str),
+        Some("a-1")
+    );
+    assert_eq!(
+        rows[0]
+            .get("summary")
+            .and_then(|value| value.get("total_covering_tests"))
+            .and_then(Value::as_i64),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn execute_registered_stages_with_composition_rejects_undeclared_cross_pack_dependency() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    configure_executor_sqlite_backend(&repo_root);
+    let cfg = executor_test_cfg_for_repo_root(repo_root);
+    let parsed = parse_devql_query(r#"repo("bitloops")->knowledge()->limit(1)"#).expect("parse");
+    let composition = RegisteredStageCompositionContext {
+        caller_capability_id: "test_harness".to_string(),
+        depth: 1,
+        max_depth: 3,
+    };
+
+    let err = execute_registered_stages_with_composition(
+        &cfg,
+        &parsed,
+        vec![json!({ "artefact_id": "a-1" })],
+        Some(&composition),
+    )
+    .await
+    .expect_err("undeclared cross-pack invocation must fail");
+
+    assert!(
+        err.to_string().contains("no descriptor dependency")
+            && err.to_string().contains("cross_pack_access"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn execute_registered_stages_with_composition_allows_declared_cross_pack_dependency() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    configure_executor_sqlite_backend(&repo_root);
+    let cfg = executor_test_cfg_for_repo_root(repo_root);
+    let parsed = parse_devql_query(r#"repo("bitloops")->tests()->limit(3)"#).expect("parse");
+    let composition = RegisteredStageCompositionContext {
+        caller_capability_id: "knowledge".to_string(),
+        depth: 1,
+        max_depth: 3,
+    };
+
+    let rows = execute_registered_stages_with_composition(
+        &cfg,
+        &parsed,
+        vec![json!({
+            "artefact_id": "a-1",
+            "path": "src/lib.rs",
+            "canonical_kind": "function",
+            "symbol_fqn": "src/lib.rs::a_1",
+            "start_line": 1,
+            "end_line": 3
+        })],
+        Some(&composition),
+    )
+    .await
+    .expect("declared dependency should allow cross-pack invocation");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]
+            .get("summary")
+            .and_then(|value| value.get("total_covering_tests"))
+            .and_then(Value::as_i64),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn execute_registered_stages_with_composition_rejects_depth_overflow() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    configure_executor_sqlite_backend(&repo_root);
+    let cfg = executor_test_cfg_for_repo_root(repo_root);
+    let parsed = parse_devql_query(r#"repo("bitloops")->tests()->limit(3)"#).expect("parse");
+    let composition = RegisteredStageCompositionContext {
+        caller_capability_id: "knowledge".to_string(),
+        depth: 4,
+        max_depth: 3,
+    };
+
+    let err = execute_registered_stages_with_composition(
+        &cfg,
+        &parsed,
+        vec![json!({
+            "artefact_id": "a-1",
+            "path": "src/lib.rs",
+            "canonical_kind": "function",
+            "symbol_fqn": "src/lib.rs::a_1",
+            "start_line": 1,
+            "end_line": 3
+        })],
+        Some(&composition),
+    )
+    .await
+    .expect_err("composition depth overflow must fail");
+
+    assert!(
+        err.to_string().contains("DevQL composition depth 4 exceeds configured max depth 3"),
+        "unexpected error: {err}"
+    );
 }

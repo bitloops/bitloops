@@ -8,15 +8,16 @@ async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, checkpoint_schema_sql_sqlite())
         .await
         .context("creating SQLite checkpoint migration tables")?;
-    init_sqlite_semantic_features_schema(sqlite_path)
-        .await
-        .context("creating SQLite semantic feature tables")?;
-    init_sqlite_semantic_embeddings_schema(sqlite_path)
-        .await
-        .context("creating SQLite semantic embedding tables")?;
-    init_sqlite_semantic_clones_schema(sqlite_path)
-        .await
-        .context("creating SQLite semantic clone tables")?;
+    crate::engine::devql::capabilities::semantic_clones::init_sqlite_semantic_features_schema(
+        sqlite_path,
+    )
+    .await
+    .context("creating SQLite semantic feature tables")?;
+    crate::engine::devql::capabilities::semantic_clones::init_sqlite_semantic_embeddings_schema(
+        sqlite_path,
+    )
+    .await
+    .context("creating SQLite semantic embedding tables")?;
     Ok(())
 }
 
@@ -49,15 +50,21 @@ async fn init_postgres_schema(
         .await
         .context("normalising Postgres DevQL edge model values")?;
 
-    init_postgres_semantic_features_schema(pg_client)
-        .await
-        .context("creating Postgres semantic feature tables")?;
-    init_postgres_semantic_embeddings_schema(pg_client)
-        .await
-        .context("creating Postgres semantic embedding tables")?;
-    init_postgres_semantic_clones_schema(pg_client)
-        .await
-        .context("creating Postgres semantic clone tables")?;
+    crate::engine::devql::capabilities::semantic_clones::init_postgres_semantic_features_schema(
+        pg_client,
+    )
+    .await
+    .context("creating Postgres semantic feature tables")?;
+    crate::engine::devql::capabilities::semantic_clones::init_postgres_semantic_embeddings_schema(
+        pg_client,
+    )
+    .await
+    .context("creating Postgres semantic embedding tables")?;
+    crate::engine::devql::capabilities::semantic_clones::pipeline::init_postgres_semantic_clones_schema(
+        pg_client,
+    )
+    .await
+    .context("creating Postgres semantic clone tables")?;
     let checkpoint_schema_sql = checkpoint_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
@@ -67,6 +74,11 @@ async fn init_postgres_schema(
     postgres_exec(pg_client, test_links_upgrade_sql)
         .await
         .context("adding confidence/linkage_status columns to test_links")?;
+
+    let workspace_revisions_sql = workspace_revisions_sql();
+    postgres_exec(pg_client, workspace_revisions_sql)
+        .await
+        .context("creating workspace_revisions table")?;
 
     Ok(())
 }

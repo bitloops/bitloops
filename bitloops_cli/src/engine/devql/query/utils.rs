@@ -109,7 +109,7 @@ fn sql_string_list_ch(values: &[String]) -> String {
         .join(",")
 }
 
-fn sql_string_list_pg(values: &[String]) -> String {
+pub(crate) fn sql_string_list_pg(values: &[String]) -> String {
     values
         .iter()
         .map(|value| format!("'{}'", esc_pg(value)))

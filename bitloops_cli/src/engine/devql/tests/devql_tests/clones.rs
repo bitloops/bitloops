@@ -43,13 +43,14 @@ async fn execute_devql_query_rejects_clones_with_asof() {
 }
 
 #[tokio::test]
-async fn init_sqlite_schema_creates_symbol_clone_edges_table() {
+async fn sqlite_symbol_clone_edges_table_exists_after_semantic_clones_ddl() {
     let temp = tempdir().expect("temp dir");
     let db_path = temp.path().join("devql.sqlite");
 
     init_sqlite_schema(&db_path)
         .await
         .expect("initialise sqlite relational schema");
+    apply_symbol_clone_edges_sqlite_schema(&db_path);
 
     let conn = rusqlite::Connection::open(&db_path).expect("open sqlite db");
     let mut stmt = conn

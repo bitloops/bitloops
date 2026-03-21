@@ -1,10 +1,15 @@
-#!/bin/sh
-# Bitloops git hooks
-# Pre-push hook: push session logs alongside user's push
-# $1 is the remote name (e.g., "origin")
-bitloops hooks git pre-push "$1" || true
-# Chain: run pre-existing hook
-_bitloops_hook_dir="$(dirname "$0")"
-if [ -x "$_bitloops_hook_dir/pre-push.pre-bitloops" ]; then
-"$_bitloops_hook_dir/pre-push.pre-bitloops" "$@"
-fi
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Git exports repository/config variables to hooks. Clear them so nested git
+# commands in tests resolve against each temp repo and default config safely.
+while IFS= read -r name; do
+  unset "$name"
+done < <(git rev-parse --local-env-vars)
+
+# Also clear config file overrides that are not part of local-env-vars.
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM
+
+bash "$ROOT/bitloops_cli/scripts/coverage-baseline-check.sh" check

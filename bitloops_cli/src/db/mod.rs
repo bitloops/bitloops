@@ -7,6 +7,11 @@ use rusqlite::Connection;
 pub mod schema;
 pub mod seed;
 
+/// SQLite DDL for the full test-domain schema (test discovery, coverage, classifications, etc.).
+pub fn test_domain_schema_sql() -> &'static str {
+    TEST_DOMAIN_SCHEMA_SQL
+}
+
 const TEST_DOMAIN_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS test_suites (
     suite_id TEXT PRIMARY KEY,
@@ -143,6 +148,25 @@ CREATE TABLE IF NOT EXISTS coverage_hits (
 CREATE INDEX IF NOT EXISTS coverage_hits_production_idx
 ON coverage_hits (production_artefact_id, capture_id);
 
+CREATE TABLE IF NOT EXISTS coverage_diagnostics (
+    diagnostic_id TEXT PRIMARY KEY,
+    capture_id TEXT REFERENCES coverage_captures(capture_id) ON DELETE CASCADE,
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    path TEXT,
+    line INTEGER,
+    severity TEXT NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS coverage_diagnostics_commit_idx
+ON coverage_diagnostics (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS coverage_diagnostics_capture_idx
+ON coverage_diagnostics (capture_id);
+
 CREATE TABLE IF NOT EXISTS test_discovery_runs (
     discovery_run_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -219,7 +243,7 @@ pub fn init_test_domain_database(db_path: &Path) -> Result<()> {
 
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .context("failed to enable foreign keys")?;
-    conn.execute_batch(TEST_DOMAIN_SCHEMA_SQL)
+    conn.execute_batch(test_domain_schema_sql())
         .context("failed to create test-domain schema")?;
 
     println!("test-domain schema initialized at {}", db_path.display());

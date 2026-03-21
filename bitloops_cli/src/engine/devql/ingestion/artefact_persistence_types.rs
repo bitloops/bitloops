@@ -2,22 +2,15 @@
 
 struct FileRevision<'a> {
     commit_sha: &'a str,
-    revision: RevisionRef<'a>,
+    revision: TemporalRevisionRef<'a>,
     commit_unix: i64,
     path: &'a str,
     blob_sha: &'a str,
 }
 
 #[derive(Debug, Clone)]
-struct RevisionRef<'a> {
-    kind: &'a str,
-    id: &'a str,
-    temp_checkpoint_id: Option<i64>,
-}
-
-#[derive(Debug, Clone)]
 struct CurrentFileRevisionRecord {
-    revision_kind: String,
+    revision_kind: TemporalRevisionKind,
     revision_id: String,
     blob_sha: String,
     updated_at_unix: i64,

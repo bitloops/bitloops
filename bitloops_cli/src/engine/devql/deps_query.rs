@@ -156,7 +156,7 @@ fn build_deps_source_filters(
         source_filters.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
     }
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
-        source_filters.push(format!("{alias}.canonical_kind = '{}'", esc_pg(kind)));
+        source_filters.push(canonical_kind_filter_sql(&format!("{alias}.canonical_kind"), kind));
     }
     if let Some(symbol_fqn) = parsed.artefacts.symbol_fqn.as_deref() {
         source_filters.push(format!("{alias}.symbol_fqn = '{}'", esc_pg(symbol_fqn)));

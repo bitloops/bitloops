@@ -22,7 +22,7 @@ fn sql_jsonb_text_array(values: &[String]) -> String {
     )
 }
 
-fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
+pub(crate) fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
     let raw = esc_pg(&value.to_string());
     match relational.dialect() {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
@@ -30,15 +30,11 @@ fn sql_json_value(relational: &RelationalStorage, value: &Value) -> String {
     }
 }
 
-fn sql_now(relational: &RelationalStorage) -> &'static str {
+pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     match relational.dialect() {
         RelationalDialect::Postgres => "now()",
         RelationalDialect::Sqlite => "datetime('now')",
     }
-}
-
-fn is_supported_symbol_language(language: &str) -> bool {
-    matches!(language, "typescript" | "javascript" | "rust")
 }
 
 fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {

@@ -190,38 +190,44 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
     let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
         CurrentFileRevisionRecord {
-            revision_kind: revision_kind.to_string(),
+            revision_kind: TemporalRevisionKind::from_str(revision_kind)
+                .expect("test revision kind should be valid"),
             revision_id: revision_id.to_string(),
             blob_sha: "blob".to_string(),
             updated_at_unix,
         }
     };
-    assert!(incoming_revision_is_newer(None, "commit", "commit-b", 200));
+    assert!(incoming_revision_is_newer(
+        None,
+        TemporalRevisionKind::Commit,
+        "commit-b",
+        200
+    ));
     let existing_1 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_1),
-        "commit",
+        TemporalRevisionKind::Commit,
         "commit-b",
         200
     ));
     let existing_2 = state("commit-a", "commit", "commit-a", 100);
     assert!(incoming_revision_is_newer(
         Some(&existing_2),
-        "commit",
+        TemporalRevisionKind::Commit,
         "commit-b",
         100
     ));
     let existing_3 = state("commit-b", "commit", "commit-b", 200);
     assert!(!incoming_revision_is_newer(
         Some(&existing_3),
-        "commit",
+        TemporalRevisionKind::Commit,
         "commit-a",
         100
     ));
     let existing_4 = state("commit-z", "commit", "commit-z", 200);
     assert!(!incoming_revision_is_newer(
         Some(&existing_4),
-        "commit",
+        TemporalRevisionKind::Commit,
         "commit-a",
         200
     ));

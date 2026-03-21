@@ -99,13 +99,61 @@ fn create_duckdb_db(path: &Path) {
         .expect("validate duckdb db file");
 }
 
+fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
+    use crate::engine::devql::capabilities::semantic_clones::schema::semantic_clones_sqlite_schema_sql;
+    let conn = rusqlite::Connection::open(path).expect("open sqlite for clone DDL");
+    conn.execute_batch(semantic_clones_sqlite_schema_sql())
+        .expect("apply symbol_clone_edges DDL");
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
         .expect("initialise sqlite relational schema");
-    RelationalStorage::Sqlite {
-        path: path.to_path_buf(),
-    }
+    let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking({
+        let path = path_buf.clone();
+        move || apply_symbol_clone_edges_sqlite_schema(&path)
+    })
+    .await
+    .expect("join blocking clone DDL");
+    RelationalStorage::Sqlite { path: path_buf }
+}
+
+#[tokio::test]
+async fn init_duckdb_schema_creates_checkpoint_events_table() {
+    let temp = tempdir().expect("temp dir");
+    let path = temp.path().join("events.duckdb");
+    let events_cfg = backend_cfg(None, Some(path.to_string_lossy().to_string())).events;
+
+    init_duckdb_schema(&events_cfg)
+        .await
+        .expect("initialise duckdb schema");
+
+    let conn = duckdb::Connection::open(path).expect("open duckdb");
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'checkpoint_events'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query checkpoint_events table");
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn init_clickhouse_schema_returns_error_for_unreachable_endpoint() {
+    let mut cfg = test_cfg();
+    cfg.clickhouse_url = "http://127.0.0.1:9".to_string();
+
+    let err = init_clickhouse_schema(&cfg)
+        .await
+        .expect_err("unreachable clickhouse endpoint must fail");
+
+    assert!(
+        err.to_string().contains("ClickHouse")
+            || err.to_string().contains("sending ClickHouse request")
+    );
 }
 
 fn seed_git_repo() -> TempDir {

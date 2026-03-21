@@ -3,8 +3,13 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::app::commands::{ingest_coverage, ingest_coverage_batch, ingest_results, ingest_tests};
+use crate::app::commands::{ingest_coverage_batch, ingest_results};
 use crate::domain::{CoverageFormat, ScopeKind};
+use crate::engine::devql::capabilities::test_harness::types::{
+    TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
+};
+use crate::engine::devql::capability_host::DevqlCapabilityHost;
+use crate::engine::devql::resolve_repo_identity;
 use crate::engine::{paths, test_harness as test_harness_engine};
 use crate::read::query_test_harness;
 use crate::read::query_view::{DEFAULT_QUERY_VIEW, QueryViewArg};
@@ -109,23 +114,31 @@ pub async fn run(args: TestLensArgs) -> Result<()> {
 
     match command {
         TestLensCommand::Init(_) => test_harness_engine::init_schema_for_repo(&repo_root),
-        TestLensCommand::IngestTests(args) => run_ingest_tests(&repo_root, &args),
-        TestLensCommand::IngestCoverage(args) => run_ingest_coverage(&repo_root, &args),
-        TestLensCommand::IngestCoverageBatch(args) => run_ingest_coverage_batch(&repo_root, &args),
+        TestLensCommand::IngestTests(args) => run_ingest_tests(&repo_root, &args).await,
+        TestLensCommand::IngestCoverage(args) => run_ingest_coverage(&repo_root, &args).await,
+        TestLensCommand::IngestCoverageBatch(args) => {
+            run_ingest_coverage_batch(&repo_root, &args).await
+        }
         TestLensCommand::IngestResults(args) => run_ingest_results(&repo_root, &args),
         TestLensCommand::Query(args) => run_query(&repo_root, &args),
         TestLensCommand::List(args) => run_list(&repo_root, &args),
     }
 }
 
-fn run_ingest_tests(repo_root: &Path, args: &TestLensIngestTestsArgs) -> Result<()> {
-    let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let summary = ingest_tests::execute(&mut repository, repo_root, &args.commit)?;
-    ingest_tests::print_summary(&args.commit, &summary);
+async fn run_ingest_tests(repo_root: &Path, args: &TestLensIngestTestsArgs) -> Result<()> {
+    let repo = resolve_repo_identity(repo_root)?;
+    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    host.ensure_migrations_applied_sync()?;
+
+    let payload = serde_json::json!({ "commit_sha": args.commit });
+    let result = host
+        .invoke_ingester("test_harness", TEST_HARNESS_LINKAGE_INGESTER_ID, payload)
+        .await?;
+    println!("{}", result.render_human());
     Ok(())
 }
 
-fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs) -> Result<()> {
+async fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs) -> Result<()> {
     let scope_kind = args.scope.parse::<ScopeKind>().map_err(|_| {
         anyhow::anyhow!(
             "invalid scope: {} (expected workspace, package, test-scenario, or doctest)",
@@ -150,27 +163,81 @@ fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs) -> R
         }
     }
 
-    let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let summary = ingest_coverage::execute(
-        &mut repository,
-        coverage_path,
-        &args.commit,
-        scope_kind,
-        &args.tool,
-        args.test_artefact_id.as_deref(),
-        format,
-    )?;
-    ingest_coverage::print_summary(&args.commit, &summary);
+    let repo = resolve_repo_identity(repo_root)?;
+    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    host.ensure_migrations_applied_sync()?;
+
+    let payload = serde_json::json!({
+        "coverage_path": coverage_path.to_string_lossy(),
+        "commit_sha": args.commit,
+        "scope_kind": args.scope,
+        "tool": args.tool,
+        "test_artefact_id": args.test_artefact_id,
+        "format": format.as_str(),
+    });
+
+    let result = host
+        .invoke_ingester("test_harness", TEST_HARNESS_COVERAGE_INGESTER_ID, payload)
+        .await?;
+    println!("{}", result.render_human());
     Ok(())
 }
 
-fn run_ingest_coverage_batch(
+async fn run_ingest_coverage_batch(
     repo_root: &Path,
     args: &TestLensIngestCoverageBatchArgs,
 ) -> Result<()> {
-    let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let summary = ingest_coverage_batch::execute(&mut repository, &args.manifest, &args.commit)?;
-    ingest_coverage_batch::print_summary(&args.commit, &summary);
+    let entries = ingest_coverage_batch::parse_manifest_entries(&args.manifest)?;
+    let manifest_dir = args
+        .manifest
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    let repo = resolve_repo_identity(repo_root)?;
+    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    host.ensure_migrations_applied_sync()?;
+
+    for (index, entry) in entries.iter().enumerate() {
+        let coverage_path = manifest_dir.join(&entry.path);
+        if !coverage_path.exists() {
+            anyhow::bail!(
+                "manifest entry {} references non-existent file: {}",
+                index,
+                coverage_path.display()
+            );
+        }
+
+        entry.scope.parse::<ScopeKind>().map_err(|_| {
+            anyhow::anyhow!(
+                "invalid scope: {} (expected workspace, package, test-scenario, or doctest)",
+                entry.scope
+            )
+        })?;
+        let format = entry.format.parse::<CoverageFormat>().map_err(|_| {
+            anyhow::anyhow!(
+                "unknown format: {} (expected lcov or llvm-json)",
+                entry.format
+            )
+        })?;
+
+        let payload = serde_json::json!({
+            "coverage_path": coverage_path.to_string_lossy(),
+            "commit_sha": args.commit,
+            "scope_kind": entry.scope,
+            "tool": entry.tool,
+            "test_artefact_id": entry.test_artefact_id,
+            "format": format.as_str(),
+        });
+
+        host.invoke_ingester("test_harness", TEST_HARNESS_COVERAGE_INGESTER_ID, payload)
+            .await?;
+    }
+
+    println!(
+        "batch ingested {} coverage entries for commit {}",
+        entries.len(),
+        args.commit
+    );
     Ok(())
 }
 

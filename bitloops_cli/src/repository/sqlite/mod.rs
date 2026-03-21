@@ -14,11 +14,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::db::open_existing_database;
 use crate::domain::{
-    CoverageBranchRecord, CoverageCaptureRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
+    CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
+    ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    derive_test_classification,
 };
 use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
@@ -26,11 +27,12 @@ use self::lists::{
     load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
 };
 use self::writes::{
-    clear_existing_production_data, clear_existing_test_discovery_data, upsert_commit,
-    upsert_current_file_state, upsert_current_production_artefact, upsert_current_production_edge,
-    upsert_file_state, upsert_production_artefact, upsert_production_edge, upsert_repository,
-    upsert_test_classification, upsert_test_discovery_diagnostic, upsert_test_discovery_run,
-    upsert_test_link, upsert_test_run, upsert_test_scenario, upsert_test_suite,
+    clear_existing_production_data, clear_existing_test_discovery_data, table_exists,
+    upsert_commit, upsert_current_file_state, upsert_current_production_artefact,
+    upsert_current_production_edge, upsert_file_state, upsert_production_artefact,
+    upsert_production_edge, upsert_repository, upsert_test_classification,
+    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_link, upsert_test_run,
+    upsert_test_scenario, upsert_test_suite,
 };
 
 pub struct SqliteTestHarnessRepository {
@@ -179,6 +181,7 @@ ORDER BY a.path ASC, a.start_line ASC
             .conn
             .transaction()
             .context("failed to start production artefact transaction")?;
+        let has_current_file_state = table_exists(&tx, "current_file_state")?;
         clear_existing_production_data(&tx, &batch.commit.commit_sha)?;
 
         upsert_repository(&tx, &batch.repository)?;
@@ -186,8 +189,10 @@ ORDER BY a.path ASC, a.start_line ASC
         for row in &batch.file_states {
             upsert_file_state(&tx, row)?;
         }
-        for row in &batch.current_file_states {
-            upsert_current_file_state(&tx, row)?;
+        if has_current_file_state {
+            for row in &batch.current_file_states {
+                upsert_current_file_state(&tx, row)?;
+            }
         }
         for artefact in &batch.artefacts {
             upsert_production_artefact(&tx, artefact)?;
@@ -342,6 +347,59 @@ ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
         Ok(())
     }
 
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()> {
+        if diagnostics.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start coverage diagnostics transaction")?;
+
+        for diag in diagnostics {
+            tx.execute(
+                r#"
+INSERT INTO coverage_diagnostics (
+  diagnostic_id, capture_id, repo_id, commit_sha, path, line,
+  severity, code, message, metadata_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+ON CONFLICT(diagnostic_id) DO UPDATE SET
+  capture_id = excluded.capture_id,
+  severity = excluded.severity,
+  code = excluded.code,
+  message = excluded.message,
+  metadata_json = excluded.metadata_json
+"#,
+                params![
+                    diag.diagnostic_id,
+                    diag.capture_id,
+                    diag.repo_id,
+                    diag.commit_sha,
+                    diag.path,
+                    diag.line,
+                    diag.severity,
+                    diag.code,
+                    diag.message,
+                    diag.metadata_json,
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "failed inserting coverage diagnostic {}",
+                    diag.diagnostic_id
+                )
+            })?;
+        }
+
+        tx.commit()
+            .context("failed to commit coverage diagnostics transaction")?;
+        Ok(())
+    }
+
     fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
         self.conn
             .execute(
@@ -428,7 +486,13 @@ impl TestHarnessQueryRepository for SqliteTestHarnessRepository {
             .conn
             .prepare(
                 r#"
-SELECT DISTINCT a.artefact_id, a.symbol_fqn, a.canonical_kind, a.path, a.start_line, a.end_line
+SELECT DISTINCT
+  a.artefact_id,
+  a.symbol_fqn,
+  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
+  a.path,
+  a.start_line,
+  a.end_line
 FROM file_state fs
 JOIN artefacts a
   ON a.repo_id = fs.repo_id
@@ -763,5 +827,52 @@ ORDER BY ch.line, ch.branch_id
             branch_covered,
             branches,
         }))
+    }
+
+    fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts> {
+        fn count(conn: &Connection, sql: &str, commit_sha: &str) -> Result<u64> {
+            let n: i64 = conn
+                .query_row(sql, params![commit_sha], |row| row.get(0))
+                .context("test harness commit count query")?;
+            Ok(n.max(0) as u64)
+        }
+
+        let conn = &self.conn;
+        Ok(TestHarnessCommitCounts {
+            test_suites: count(
+                conn,
+                "SELECT COUNT(*) FROM test_suites WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_scenarios: count(
+                conn,
+                "SELECT COUNT(*) FROM test_scenarios WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_links: count(
+                conn,
+                "SELECT COUNT(*) FROM test_links WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            test_classifications: count(
+                conn,
+                "SELECT COUNT(*) FROM test_classifications WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            coverage_captures: count(
+                conn,
+                "SELECT COUNT(*) FROM coverage_captures WHERE commit_sha = ?1",
+                commit_sha,
+            )?,
+            coverage_hits: count(
+                conn,
+                r#"
+SELECT COUNT(*) FROM coverage_hits ch
+JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
+WHERE cc.commit_sha = ?1
+"#,
+                commit_sha,
+            )?,
+        })
     }
 }
