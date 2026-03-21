@@ -20,6 +20,7 @@ rg 'rusqlite|SqliteConnectionPool|sqlx|duckdb::|Connection::open' \
   bitloops_cli/src/engine/devql/capabilities/test_harness
 rg 'rusqlite|SqliteConnectionPool|sqlx|duckdb::' \
   bitloops_cli/src/engine/devql/capabilities/knowledge
+# Expect matches only under knowledge/storage/ and #[cfg(test)] in services.rs
 
 # Ingestion: semantic clones vs test harness surfaces
 rg -i 'semantic_clone|symbol_clone|test_harness|test_links|coverage|linkage' \
@@ -61,11 +62,11 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 |------|--------|
 | `knowledge/storage/sqlite_relational.rs` | **rusqlite** + `SqliteConnectionPool` — **gateway implementation** (expected location). |
 | `knowledge/storage/duckdb_documents.rs` | **duckdb::Connection** — **gateway implementation** (expected). |
-| `knowledge/plugin.rs` | Constructs `SqliteKnowledgeRelationalStore` with pool — **host/plugin wiring** (borderline: still knowledge-adjacent). |
 | `knowledge/services.rs` (`#[cfg(test)]`) | Constructs `SqliteKnowledgeRelationalStore` for tests. |
-| `knowledge/tests.rs` | **Heavy** `rusqlite` / `duckdb` / `SqliteConnectionPool` for assertions — **tests only**; acceptable if kept out of production call paths. |
 
-**Interpretation:** No evidence of **Knowledge pack production code** opening databases outside `storage/` and host wiring. **Leaks to watch:** `plugin.rs` and test-only construction paths should stay the only non-storage constructors of concrete stores.
+**Update (2026-03-21):** Removed dead **`knowledge/plugin.rs`**, **`knowledge/providers/`** (thin wrappers around `engine::adapters::connectors`), and orphan **`knowledge/tests.rs`**. CLI and integration tests use **`DevqlCapabilityHost`** / **`KnowledgeServices`** + BDD harness only.
+
+**Interpretation:** No evidence of **Knowledge pack production code** opening databases outside `storage/` and **`LocalCapabilityRuntime`** / host wiring. **Leaks to watch:** test-only store construction in `services.rs` tests; keep new production opens out of pack logic.
 
 ---
 

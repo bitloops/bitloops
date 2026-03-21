@@ -291,9 +291,11 @@ impl DevqlCapabilityHost {
         };
 
         let request = IngestRequest::new(payload);
-        let mut runtime = self
-            .runtime
-            .runtime_with_relational(devql_relational, Some(capability_id));
+        let mut runtime = self.runtime.runtime_with_relational(
+            devql_relational,
+            Some(capability_id),
+            Some(ingester_name),
+        );
         let limit = self.invocation_policy.ingester_timeout;
         match handler {
             RegisteredIngester::Core(h) => {

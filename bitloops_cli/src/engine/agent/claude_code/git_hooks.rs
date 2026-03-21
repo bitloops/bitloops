@@ -134,7 +134,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "commit-msg",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
-                 # Commit-msg hook: strip trailer if no user content (allows aborting empty commits)\n\
+                 # Commit-msg: `bitloops hooks git commit-msg` (default manual-commit: no-op)\n\
                  {cmd_prefix} hooks git commit-msg \"$1\" || exit 1\n"
             ),
         },
@@ -142,7 +142,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "post-commit",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
-                 # Post-commit hook: condense session data if commit has Bitloops-Checkpoint trailer\n\
+                 # Post-commit: session/checkpoint bookkeeping; failures must not block git\n\
                  {cmd_prefix} hooks git post-commit 2>/dev/null || true\n"
             ),
         },
@@ -150,7 +150,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "pre-push",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
-                 # Pre-push hook: push session logs alongside user's push\n\
+                 # Pre-push: `bitloops hooks git pre-push` (default manual-commit: no-op)\n\
                  # $1 is the remote name (e.g., \"origin\")\n\
                  {cmd_prefix} hooks git pre-push \"$1\" || true\n"
             ),

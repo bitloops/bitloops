@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Repo dev hook (via `scripts/setup-hooks.sh` → core.hooksPath=.githooks).
+# Coverage baseline gate only — does not invoke the Bitloops CLI.
+
 ROOT="$(git rev-parse --show-toplevel)"
 
 # Git exports repository/config variables to hooks. Clear them so nested git

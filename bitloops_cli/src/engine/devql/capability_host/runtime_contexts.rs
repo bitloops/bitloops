@@ -73,13 +73,14 @@ impl LocalCapabilityRuntimeResources {
     }
 
     pub fn runtime(&self) -> LocalCapabilityRuntime<'_> {
-        self.runtime_with_relational(None, None)
+        self.runtime_with_relational(None, None, None)
     }
 
     pub fn runtime_with_relational<'a>(
         &'a self,
         devql_relational: Option<&'a RelationalStorage>,
         invoking_capability_id: Option<&'a str>,
+        invoking_ingester_id: Option<&'a str>,
     ) -> LocalCapabilityRuntime<'a> {
         LocalCapabilityRuntime::new(
             &self.repo_root,
@@ -95,6 +96,7 @@ impl LocalCapabilityRuntimeResources {
             &self.stores,
             devql_relational,
             invoking_capability_id,
+            invoking_ingester_id,
         )
     }
 }
@@ -141,6 +143,7 @@ pub struct LocalCapabilityRuntime<'a> {
     stores: &'a dyn StoreHealthGateway,
     devql_relational: Option<&'a RelationalStorage>,
     invoking_capability_id: Option<&'a str>,
+    invoking_ingester_id: Option<&'a str>,
 }
 
 impl<'a> LocalCapabilityRuntime<'a> {
@@ -159,6 +162,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
         stores: &'a dyn StoreHealthGateway,
         devql_relational: Option<&'a RelationalStorage>,
         invoking_capability_id: Option<&'a str>,
+        invoking_ingester_id: Option<&'a str>,
     ) -> Self {
         Self {
             repo_root,
@@ -174,6 +178,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
             stores,
             devql_relational,
             invoking_capability_id,
+            invoking_ingester_id,
         }
     }
 }
@@ -240,6 +245,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn invoking_capability_id(&self) -> Option<&str> {
         self.invoking_capability_id
+    }
+
+    fn invoking_ingester_id(&self) -> Option<&str> {
+        self.invoking_ingester_id
     }
 }
 

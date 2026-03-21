@@ -88,11 +88,15 @@ This document captures an architecture review of first-party capability packs ag
 
 Risk: other packs or core paths opening the **same files** with ad hoc SQL instead of new gateways.
 
+**Update (2026-03-21):** **`capabilities/knowledge/mod.rs`** documents the hygiene contract (gateways + **`CapabilityConfigView`** + provenance). Persisted ingestion and association provenance JSON now includes **`capability_version`** and **`api_version`** from **`KNOWLEDGE_DESCRIPTOR`**, and refresh ingests stamp **`knowledge.refresh`** (add path **`knowledge.add`**) instead of reusing the add label.
+
+**Update (2026-03-21, follow-up):** **`CapabilityIngestContext::invoking_ingester_id`** + host wiring populate **`ingester_id`** and **`invoking_capability_id`** on persisted provenance for **`DevqlCapabilityHost::invoke_ingester`** runs. Removed dead **`plugin.rs`**, **`providers/`**, and orphan **`tests.rs`**; knowledge fetch stays on **`engine::adapters::connectors`**.
+
 **Suggested approach:**
 
 - Keep **all** relational/DuckDB paths for knowledge behind **`RelationalGateway`** / **`DocumentStoreGateway`** (implemented only by knowledge storage types from the host); reject new direct store usage outside `capabilities/knowledge/storage/` in review.
 - When adding **config**, prefer **`CapabilityConfigView`** (already used in health paths) consistently; avoid parsing raw repo config inside pack logic except through the view.
-- Track **provenance** fields on writes per compass (capability id/version/run) where not already stamped.
+- **Optional later:** add a per-invocation **trace / run id** (UUID) on the ingest runtime if you need cross-service correlation beyond **`ingester_id`**.
 
 ---
 
@@ -120,7 +124,7 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 | 2 | Context surface area | **Done:** core vs **`Knowledge*Context`** for stages/ingesters (**`register_knowledge_*`**) and for migrations (**`CapabilityMigrationContext`** vs **`KnowledgeMigrationContext`**, **`MigrationRunner::Core` / `Knowledge`**) |
 | 3 | Test Harness depth | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain |
 | 4 | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented |
-| 5 | Knowledge hygiene | Gateway-only store access; config/provenance consistency |
+| 5 | Knowledge hygiene | **Done (this pass):** module docs; provenance (`capability_version` / `api_version`, add vs refresh, host **`ingester_id`**); removed dead plugin/providers/orphan tests. **Ongoing:** review discipline (gateways + config view); optional trace id |
 | 6 | Observability | **Done:** `bitloops devql packs` (+ `--with-extensions` for `CoreExtensionHost`, JSON wrap only with that flag); clearer error prefixes on host paths |
 
 ---

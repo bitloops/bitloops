@@ -1,7 +1,7 @@
 use crate::engine::devql::cucumber_world::DevqlBddWorld;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 fn regex(pattern: &str) -> Regex {
@@ -666,9 +666,29 @@ fn then_all_source_rows_stamped_for(
             let value: Value = serde_json::from_str(row.as_str()).expect("parse source provenance");
             assert_eq!(value["capability"], Value::String("knowledge".to_string()));
             assert_eq!(
+                value["capability_version"],
+                json!(
+                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                        .version
+                )
+            );
+            assert_eq!(
+                value["api_version"],
+                json!(
+                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                        .api_version
+                )
+            );
+            assert_eq!(
                 value["operation"],
                 Value::String(expected_operation.to_string())
             );
+            if let Some(id) = value.get("ingester_id").and_then(Value::as_str) {
+                assert_eq!(id, expected_operation.as_str());
+            }
+            if let Some(cap) = value.get("invoking_capability_id").and_then(Value::as_str) {
+                assert_eq!(cap, "knowledge");
+            }
         }
     })
 }
@@ -689,9 +709,29 @@ fn then_all_item_rows_stamped_for(
             let value: Value = serde_json::from_str(row.as_str()).expect("parse item provenance");
             assert_eq!(value["capability"], Value::String("knowledge".to_string()));
             assert_eq!(
+                value["capability_version"],
+                json!(
+                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                        .version
+                )
+            );
+            assert_eq!(
+                value["api_version"],
+                json!(
+                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                        .api_version
+                )
+            );
+            assert_eq!(
                 value["operation"],
                 Value::String(expected_operation.to_string())
             );
+            if let Some(id) = value.get("ingester_id").and_then(Value::as_str) {
+                assert_eq!(id, expected_operation.as_str());
+            }
+            if let Some(cap) = value.get("invoking_capability_id").and_then(Value::as_str) {
+                assert_eq!(cap, "knowledge");
+            }
         }
     })
 }

@@ -42,6 +42,12 @@ pub trait CapabilityIngestContext: Send {
         None
     }
 
+    /// Registered ingester name for the active invocation (e.g. `knowledge.add`). `None` outside
+    /// ingester dispatch.
+    fn invoking_ingester_id(&self) -> Option<&str> {
+        None
+    }
+
     /// DevQL relational store only when `capability_id` matches the active ingester invocation.
     fn devql_relational_scoped(
         &self,

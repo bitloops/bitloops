@@ -6,7 +6,10 @@ use crate::engine::devql::capability_host::{
     KnowledgeExecutionContext, KnowledgeIngestContext, StageRequest,
 };
 
-use super::provenance::{build_association_provenance, build_ingestion_provenance};
+use super::provenance::{
+    INGEST_WRITE_ADD, INGEST_WRITE_REFRESH, IngestInvocation, IngestWriteLabels,
+    build_association_provenance, build_ingestion_provenance,
+};
 use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target_ref};
 use super::storage::{
     KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgeRelationAssertionRow,
@@ -52,11 +55,8 @@ impl KnowledgeIngestionService {
         ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<IngestKnowledgeResult>> {
         Box::pin(async move {
-            let parsed = parse_knowledge_url(&request.url)?;
-            let adapter = ctx.connectors().knowledge_adapter_for(&parsed)?;
-            let fetched = adapter.fetch(&parsed, ctx.connector_context()).await?;
-            let fetched: FetchedKnowledgeDocument = fetched.into();
-            self.materialize_document(ctx, &parsed, fetched)
+            let (parsed, fetched) = Self::fetch_document(ctx, &request.url).await?;
+            self.materialize_document(ctx, &parsed, fetched, INGEST_WRITE_ADD)
         })
     }
 
@@ -84,14 +84,9 @@ impl KnowledgeIngestionService {
                     )
                 })?;
 
-            let ingest_result = self
-                .ingest_source(
-                    IngestKnowledgeRequest {
-                        url: source.canonical_url,
-                    },
-                    ctx,
-                )
-                .await?;
+            let (parsed, fetched) = Self::fetch_document(ctx, &source.canonical_url).await?;
+            let ingest_result =
+                self.materialize_document(ctx, &parsed, fetched, INGEST_WRITE_REFRESH)?;
 
             let new_version_created = matches!(
                 ingest_result.version_status,
@@ -107,11 +102,22 @@ impl KnowledgeIngestionService {
         })
     }
 
+    async fn fetch_document(
+        ctx: &mut dyn KnowledgeIngestContext,
+        url: &str,
+    ) -> Result<(super::types::ParsedKnowledgeUrl, FetchedKnowledgeDocument)> {
+        let parsed = parse_knowledge_url(url)?;
+        let adapter = ctx.connectors().knowledge_adapter_for(&parsed)?;
+        let fetched = adapter.fetch(&parsed, ctx.connector_context()).await?;
+        Ok((parsed, fetched.into()))
+    }
+
     fn materialize_document(
         &self,
         ctx: &mut dyn KnowledgeIngestContext,
         parsed: &super::types::ParsedKnowledgeUrl,
         fetched: FetchedKnowledgeDocument,
+        labels: IngestWriteLabels,
     ) -> Result<IngestKnowledgeResult> {
         let payload_value = serde_json::to_value(&fetched.payload)
             .context("serialising knowledge payload envelope")?;
@@ -121,7 +127,8 @@ impl KnowledgeIngestionService {
         let source_id = knowledge_source_id(&parsed.canonical_external_id);
         let item_id = knowledge_item_id(&ctx.repo().repo_id, &source_id);
         let derived_knowledge_item_version_id = knowledge_item_version_id(&item_id, &hash);
-        let provenance = build_ingestion_provenance(parsed);
+        let provenance =
+            build_ingestion_provenance(parsed, labels, IngestInvocation::from_context(ctx));
         let provenance_json =
             serde_json::to_string(&provenance).context("serialising knowledge provenance")?;
 
@@ -321,6 +328,7 @@ impl KnowledgeRelationService {
             &target_id,
             target_knowledge_item_version_id.as_deref(),
             &request.association_method,
+            IngestInvocation::from_context(ctx),
         );
         let provenance_json = serde_json::to_string(&provenance)
             .context("serialising knowledge association provenance")?;
@@ -540,6 +548,8 @@ mod tests {
         connectors: StubConnectorRegistry,
         provenance: TestProvenanceBuilder,
         graph: TestGraphGateway,
+        invoking_capability_id: Option<&'static str>,
+        invoking_ingester_id: Option<&'static str>,
     }
 
     impl CapabilityExecutionContext for TestRuntimeContext {
@@ -596,6 +606,14 @@ mod tests {
 
         fn provenance(&self) -> &dyn ProvenanceBuilder {
             &self.provenance
+        }
+
+        fn invoking_capability_id(&self) -> Option<&str> {
+            self.invoking_capability_id
+        }
+
+        fn invoking_ingester_id(&self) -> Option<&str> {
+            self.invoking_ingester_id
         }
     }
 
@@ -697,6 +715,15 @@ mod tests {
         temp: &TempDir,
         records: Vec<ExternalKnowledgeRecord>,
     ) -> Result<TestRuntimeContext> {
+        build_context_with_dispatch(temp, records, None, None)
+    }
+
+    fn build_context_with_dispatch(
+        temp: &TempDir,
+        records: Vec<ExternalKnowledgeRecord>,
+        invoking_capability_id: Option<&'static str>,
+        invoking_ingester_id: Option<&'static str>,
+    ) -> Result<TestRuntimeContext> {
         let repo_root = temp.path().join("repo");
         fs::create_dir_all(&repo_root)?;
         init_test_repo(&repo_root, "main", "Bitloops Bot", "bot@bitloops.dev");
@@ -736,6 +763,8 @@ mod tests {
             connectors,
             provenance: TestProvenanceBuilder,
             graph: TestGraphGateway,
+            invoking_capability_id,
+            invoking_ingester_id,
         })
     }
 
@@ -854,6 +883,52 @@ mod tests {
         assert_eq!(found.body_preview.as_deref(), Some("second body"));
         assert!(ctx.blobs.payload_exists(&found.storage_path)?);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ingestion_provenance_includes_dispatch_metadata_when_present() -> Result<()> {
+        use rusqlite::Connection;
+
+        let temp = TempDir::new()?;
+        let url = "https://github.com/bitloops/bitloops/issues/42";
+        let parsed = parse_knowledge_url(url)?;
+        let mut ctx = build_context_with_dispatch(
+            &temp,
+            vec![build_record(
+                &parsed,
+                "Issue 42",
+                "body",
+                "2026-03-18T10:00:00Z",
+            )],
+            Some("knowledge"),
+            Some("knowledge.add"),
+        )?;
+
+        KnowledgeServices::new()
+            .ingestion
+            .ingest_source(
+                IngestKnowledgeRequest {
+                    url: url.to_string(),
+                },
+                &mut ctx,
+            )
+            .await?;
+
+        let sqlite_path = test_backends(&temp).relational.resolve_sqlite_db_path()?;
+        let conn = Connection::open(&sqlite_path)?;
+        let prov: String = conn.query_row(
+            "SELECT provenance_json FROM knowledge_sources LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let value: Value = serde_json::from_str(&prov)?;
+        assert_eq!(
+            value["invoking_capability_id"],
+            json!("knowledge"),
+            "{value}"
+        );
+        assert_eq!(value["ingester_id"], json!("knowledge.add"), "{value}");
         Ok(())
     }
 }

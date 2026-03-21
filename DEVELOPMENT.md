@@ -34,10 +34,12 @@ Run once from the repo root:
 bash scripts/setup-hooks.sh
 ```
 
-This configures git to use the versioned hooks in `.githooks/`:
+This configures git to use the versioned hooks in `.githooks/` (local `core.hooksPath` only — not committed):
 
 - `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
 - `pre-push`: strict coverage non-regression check via `./bitloops_cli/scripts/coverage-baseline-check.sh check`
+
+These hooks do **not** run `bitloops enable` or call the Bitloops CLI. Developing this repo does not require installing Bitloops in your working tree. If you want session/checkpoint git integration here, run `bitloops enable` separately (it manages `.git/hooks` or merges with your hooks setup — see CLI docs).
 
 ## Testing
 
