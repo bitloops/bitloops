@@ -6,8 +6,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::models::{BatchManifestEntry, CoverageFormat, ScopeKind};
 use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
+use crate::models::{BatchManifestEntry, CoverageFormat, ScopeKind};
 
 #[derive(Debug, Clone)]
 pub struct IngestCoverageBatchSummary {

@@ -5,8 +5,8 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::commands::enable::find_repo_root;
-use crate::engine::agent::{AgentAdapterRegistry, AgentReadinessStatus};
 use crate::config::settings;
+use crate::engine::agent::{AgentAdapterRegistry, AgentReadinessStatus};
 
 mod agent_hooks;
 mod agent_selection;

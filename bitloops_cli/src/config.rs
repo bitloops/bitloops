@@ -5,8 +5,8 @@ mod constants;
 mod file_config;
 mod resolve;
 pub mod settings;
-mod types;
 mod store_config_utils;
+mod types;
 
 pub use constants::{BITLOOPS_CONFIG_RELATIVE_PATH, BITLOOPS_CONFIG_TOML_RELATIVE_PATH};
 pub use resolve::{

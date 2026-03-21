@@ -15,17 +15,17 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::config::settings;
 use crate::engine::agent::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_CURSOR, AGENT_TYPE_CLAUDE_CODE,
     AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
-use crate::git;
 use crate::engine::history::devql_prefetch;
-#[cfg(test)]
-use crate::telemetry::logging;
-use crate::config::settings;
 use crate::engine::transcript::commit_message;
 use crate::engine::transcript::utils::get_transcript_position;
+use crate::git;
+#[cfg(test)]
+use crate::telemetry::logging;
 use crate::utils::paths;
 use crate::utils::strings;
 

@@ -178,10 +178,8 @@ mod tests {
         branch_exists_locally, checkout_branch, first_line, get_current_branch,
         resume_from_current_branch, run_resume,
     };
+    use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
     use crate::engine::db::SqliteConnectionPool;
-    use crate::config::{
-        resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
-    };
     use std::fs;
     use std::path::Path;
     use std::process::Command;

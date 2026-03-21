@@ -73,6 +73,7 @@ fn dependency_enabled(value: Option<&Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ProviderConfig;
     use crate::engine::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
@@ -80,7 +81,6 @@ mod tests {
     use crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl;
     use crate::engine::devql::capability_host::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::StoreHealthGateway;
-    use crate::config::ProviderConfig;
     use anyhow::Result;
     use serde_json::json;
     use std::path::{Path, PathBuf};

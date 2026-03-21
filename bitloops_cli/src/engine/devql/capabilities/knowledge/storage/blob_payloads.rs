@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 
+use crate::config::StoreBackendConfig;
 use crate::engine::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 use crate::engine::devql::capability_host::gateways::BlobPayloadGateway;
-use crate::config::StoreBackendConfig;
 
 use super::models::{KnowledgePayloadRef, knowledge_payload_key};
 

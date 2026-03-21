@@ -6,9 +6,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Subcommand};
 
+use crate::config::settings;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::find_most_recent_session;
-use crate::config::settings;
 use crate::engine::transcript::parse::parse_from_file_at_line;
 use crate::engine::transcript::utils::extract_modified_files;
 use crate::utils::paths;

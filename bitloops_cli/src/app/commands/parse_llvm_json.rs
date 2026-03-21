@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::models::{CoverageDiagnosticRecord, CoverageHitRecord};
 use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
+use crate::models::{CoverageDiagnosticRecord, CoverageHitRecord};
 
 #[derive(Debug, Deserialize)]
 struct LlvmCoverageExport {

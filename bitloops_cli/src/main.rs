@@ -1,13 +1,13 @@
 use clap::Parser;
 
 pub use bitloops_cli::app;
+pub use bitloops_cli::config;
 pub use bitloops_cli::db;
-pub use bitloops_cli::models;
 pub use bitloops_cli::engine;
 pub use bitloops_cli::git;
+pub use bitloops_cli::models;
 pub use bitloops_cli::read;
 pub use bitloops_cli::repository;
-pub use bitloops_cli::config;
 pub use bitloops_cli::telemetry;
 pub use bitloops_cli::utils;
 mod branding;

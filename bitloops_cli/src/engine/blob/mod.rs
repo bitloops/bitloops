@@ -14,10 +14,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
-use crate::engine::db::SqliteConnectionPool;
 use crate::config::{
     BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
 };
+use crate::engine::db::SqliteConnectionPool;
 
 thread_local! {
     static BLOB_SYNC_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };

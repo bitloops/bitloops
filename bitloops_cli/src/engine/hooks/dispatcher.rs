@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
+use crate::config::settings;
 use crate::engine::agent::codex::types::{CodexSessionInfoRaw, parse_codex_session_info};
 use crate::engine::agent::cursor::types::{
     CursorAfterShellExecutionRaw, CursorBeforeShellExecutionRaw, CursorBeforeSubmitPromptRaw,
@@ -21,15 +22,14 @@ use crate::engine::lifecycle::adapters::{
     COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
     route_hook_command_to_lifecycle,
 };
-use crate::telemetry::logging;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
 use crate::engine::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL;
-use crate::config::settings;
 use crate::engine::strategy::Strategy;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::registry::{self, StrategyRegistry};
+use crate::telemetry::logging;
 use crate::utils::paths;
 
 use super::git;

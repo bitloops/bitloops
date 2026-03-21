@@ -561,12 +561,10 @@ pub fn handle_lifecycle_turn_end(
         &summary,
     )?;
 
-    let author = crate::git::get_git_author().unwrap_or(
-        crate::git::GitAuthor {
-            name: "Unknown".to_string(),
-            email: "unknown@local".to_string(),
-        },
-    );
+    let author = crate::git::get_git_author().unwrap_or(crate::git::GitAuthor {
+        name: "Unknown".to_string(),
+        email: "unknown@local".to_string(),
+    });
 
     let pre_untracked: Vec<String> = pre_prompt
         .as_ref()

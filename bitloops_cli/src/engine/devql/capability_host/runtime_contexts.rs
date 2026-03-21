@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::config::{
+    ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
+    resolve_store_backend_config_for_repo,
+};
 use crate::engine::adapters::connectors::BuiltinConnectorRegistry;
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::devql::RelationalStorage;
 use crate::engine::devql::RepoIdentity;
 use crate::engine::devql::capabilities::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-};
-use crate::config::{
-    ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
-    resolve_store_backend_config_for_repo,
 };
 
 use super::config_view::CapabilityConfigView;

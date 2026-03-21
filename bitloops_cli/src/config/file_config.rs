@@ -3,11 +3,11 @@ use std::fs;
 use std::path::Path;
 
 use super::constants::*;
-use super::types::{DashboardFileConfig, StoreFileConfig, WatchFileConfig};
 use super::store_config_utils::{
     current_repo_root_or_cwd, load_repo_config_value, read_any_bool, read_any_string,
     read_any_string_opt, read_any_u64, read_any_u64_opt,
 };
+use super::types::{DashboardFileConfig, StoreFileConfig, WatchFileConfig};
 
 impl StoreFileConfig {
     /// Load config from `<repo>/.bitloops/config.json`.

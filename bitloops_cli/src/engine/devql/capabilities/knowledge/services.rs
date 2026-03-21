@@ -442,6 +442,10 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
+    use crate::config::{
+        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
+        ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
+    };
     use crate::engine::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
@@ -459,10 +463,6 @@ mod tests {
     use crate::engine::devql::capability_host::{
         CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
         KnowledgeIngestContext, StageRequest,
-    };
-    use crate::config::{
-        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
-        ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 

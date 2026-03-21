@@ -2,10 +2,10 @@ use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde_json::{Value, json};
 
+use crate::config::AtlassianProviderConfig;
 use crate::engine::devql::capabilities::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
-use crate::config::AtlassianProviderConfig;
 
 use super::types::{
     BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,

@@ -9,10 +9,10 @@ use std::time::SystemTime;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::telemetry::logging;
+use crate::config::settings;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::find_most_recent_session;
-use crate::config::settings;
+use crate::telemetry::logging;
 use crate::utils::paths;
 
 use crate::engine::strategy::Strategy;

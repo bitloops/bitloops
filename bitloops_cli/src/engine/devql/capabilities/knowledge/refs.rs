@@ -325,6 +325,7 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
+    use crate::config::ProviderConfig;
     use crate::engine::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
@@ -338,7 +339,6 @@ mod tests {
         BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
     };
     use crate::engine::devql::capability_host::{CapabilityIngestContext, KnowledgeIngestContext};
-    use crate::config::ProviderConfig;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;

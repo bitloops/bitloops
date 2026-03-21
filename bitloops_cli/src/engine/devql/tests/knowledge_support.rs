@@ -8,6 +8,11 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use crate::config::{
+    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
+    EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
+    StoreBackendConfig,
+};
 use crate::engine::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
@@ -31,11 +36,6 @@ use crate::engine::devql::capability_host::contexts::{
 use crate::engine::devql::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
     RelationalGateway,
-};
-use crate::config::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
-    EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
-    StoreBackendConfig,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 

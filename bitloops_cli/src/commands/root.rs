@@ -287,12 +287,14 @@ pub(crate) fn run_persistent_post_run(hidden_chain: &[bool], command_name: &str)
             .and_then(|repo_root| {
                 build_telemetry_event(hidden_chain, &repo_root, command_name, build_version())
             })
-            .map(|event| crate::telemetry::analytics::TelemetryDispatchContext {
-                strategy: event.strategy,
-                agent: event.agent,
-                is_bitloops_enabled: event.is_enabled,
-                version: event.cli_version,
-            })
+            .map(
+                |event| crate::telemetry::analytics::TelemetryDispatchContext {
+                    strategy: event.strategy,
+                    agent: event.agent,
+                    is_bitloops_enabled: event.is_enabled,
+                    version: event.cli_version,
+                },
+            )
     });
 
     if let Some(ctx) = dispatch_context {

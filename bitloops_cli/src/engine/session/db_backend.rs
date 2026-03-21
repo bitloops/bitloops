@@ -7,9 +7,9 @@ use serde::de::DeserializeOwned;
 use super::backend::SessionBackend;
 use super::phase::SessionPhase;
 use super::state::{PrePromptState, PreTaskState, SessionState};
+use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
 use crate::engine::db::SqliteConnectionPool;
 use crate::engine::validation::validators::{validate_session_id, validate_tool_use_id};
-use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
 
 pub struct DbSessionBackend {
     repo_id: String,
