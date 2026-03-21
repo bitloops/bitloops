@@ -22,24 +22,37 @@ pub enum CoreExtensionHostError {
 impl Display for CoreExtensionHostError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Language(error) => write!(f, "language pack registration failed: {error}"),
+            Self::Language(error) => {
+                write!(
+                    f,
+                    "[core_extension_host:language_pack] registration failed: {error}"
+                )
+            }
             Self::Capability(error) => {
-                write!(f, "capability pack registration failed: {error}")
+                write!(
+                    f,
+                    "[core_extension_host:capability_pack] registration failed: {error}"
+                )
             }
             Self::Compatibility(error) => {
-                write!(f, "extension compatibility check failed: {error}")
+                write!(
+                    f,
+                    "[core_extension_host:compatibility] check failed: {error}"
+                )
             }
-            Self::Migration(message) => write!(f, "capability migration failed: {message}"),
+            Self::Migration(message) => {
+                write!(f, "[core_extension_host:migration] failed: {message}")
+            }
             Self::CapabilityStageNotRegistered(stage_id) => {
                 write!(
                     f,
-                    "capability stage `{stage_id}` is not owned by any registered capability pack"
+                    "[core_extension_host:resolve_stage] [stage:{stage_id}] not owned by any registered capability pack"
                 )
             }
             Self::CapabilityIngesterNotRegistered(ingester_id) => {
                 write!(
                     f,
-                    "capability ingester `{ingester_id}` is not owned by any registered capability pack"
+                    "[core_extension_host:resolve_ingester] [ingester:{ingester_id}] not owned by any registered capability pack"
                 )
             }
             Self::CapabilityNotReady {
@@ -48,7 +61,7 @@ impl Display for CoreExtensionHostError {
             } => {
                 write!(
                     f,
-                    "capability pack `{capability_pack_id}` is not ready: {reason}"
+                    "[core_extension_host:readiness] [capability_pack:{capability_pack_id}] not ready: {reason}"
                 )
             }
         }

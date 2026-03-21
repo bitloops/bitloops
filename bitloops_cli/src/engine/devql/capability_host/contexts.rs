@@ -48,15 +48,21 @@ pub trait CapabilityIngestContext: Send {
         capability_id: &str,
     ) -> Result<&crate::engine::devql::RelationalStorage> {
         let Some(inv) = self.invoking_capability_id() else {
-            bail!("no active ingester invocation for scoped DevQL relational access");
+            bail!(
+                "[devql_relational_scoped] no active ingester invocation (expected_capability_id={capability_id})"
+            );
         };
         if inv != capability_id {
             bail!(
-                "scoped DevQL relational denied: invoking `{inv}` cannot claim `{capability_id}`"
+                "[devql_relational_scoped] invoking_capability_id={inv} does not match expected_capability_id={capability_id}"
             );
         }
         self.devql_relational()
-            .ok_or_else(|| anyhow!("DevQL relational storage not attached for this ingest"))
+            .ok_or_else(|| {
+                anyhow!(
+                    "[devql_relational_scoped] relational store not attached for this ingest (expected_capability_id={capability_id})"
+                )
+            })
     }
 }
 

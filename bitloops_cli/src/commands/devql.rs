@@ -5,12 +5,15 @@ use crate::engine::devql::capabilities::knowledge::{
     run_knowledge_add_via_host, run_knowledge_associate_via_host, run_knowledge_refresh_via_host,
     run_knowledge_versions_via_host,
 };
-use crate::engine::devql::{DevqlConfig, resolve_repo_identity, run_ingest, run_init, run_query};
+use crate::engine::devql::{
+    DevqlConfig, resolve_repo_identity, run_capability_packs_report, run_ingest, run_init,
+    run_query,
+};
 use crate::engine::paths;
 
 pub use crate::engine::devql::run_connection_status;
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArgs {
@@ -28,6 +31,8 @@ pub enum DevqlCommand {
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
     ConnectionStatus(DevqlConnectionStatusArgs),
+    /// List registered capability packs, migrations, and host policy (optional health checks).
+    Packs(DevqlPacksArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
 }
@@ -58,6 +63,25 @@ pub struct DevqlQueryArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlConnectionStatusArgs {}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlPacksArgs {
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Run each pack's registered health checks (may read config and probe store paths).
+    #[arg(long, default_value_t = false)]
+    pub with_health: bool,
+
+    /// Apply registered pack migrations before reporting (same as ingest/init migration pass).
+    #[arg(long, default_value_t = false)]
+    pub apply_migrations: bool,
+
+    /// Include `CoreExtensionHost` (language packs + extension capability descriptors, readiness, diagnostics).
+    #[arg(long, default_value_t = false)]
+    pub with_extensions: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlKnowledgeArgs {
@@ -139,6 +163,13 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         DevqlCommand::Init(_) => run_init(&cfg).await,
         DevqlCommand::Ingest(args) => run_ingest(&cfg, args.init, args.max_checkpoints).await,
         DevqlCommand::Query(args) => run_query(&cfg, &args.query, args.compact).await,
+        DevqlCommand::Packs(args) => run_capability_packs_report(
+            &cfg,
+            args.json,
+            args.apply_migrations,
+            args.with_health,
+            args.with_extensions,
+        ),
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
     }
@@ -171,6 +202,32 @@ mod tests {
 
         assert!(ingest.init);
         assert_eq!(ingest.max_checkpoints, 500);
+    }
+
+    #[test]
+    fn devql_cli_parses_packs_flags() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "devql",
+            "packs",
+            "--json",
+            "--with-health",
+            "--apply-migrations",
+            "--with-extensions",
+        ])
+        .expect("devql packs should parse");
+
+        let Some(Commands::Devql(args)) = parsed.command else {
+            panic!("expected devql command");
+        };
+        let Some(DevqlCommand::Packs(packs)) = args.command else {
+            panic!("expected devql packs command");
+        };
+
+        assert!(packs.json);
+        assert!(packs.with_health);
+        assert!(packs.apply_migrations);
+        assert!(packs.with_extensions);
     }
 
     #[test]

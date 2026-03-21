@@ -7,16 +7,25 @@ use super::registrar::{CapabilityPack, CapabilityRegistrar};
 
 pub fn validate_descriptor(descriptor: &CapabilityDescriptor) -> Result<()> {
     if descriptor.id.trim().is_empty() {
-        bail!("capability descriptor id must not be empty");
+        bail!("[capability_pack:descriptor] id must not be empty");
     }
     if descriptor.display_name.trim().is_empty() {
-        bail!("capability descriptor display name must not be empty");
+        bail!(
+            "[capability_pack:descriptor] display_name must not be empty (capability_id={})",
+            descriptor.id
+        );
     }
     if descriptor.version.trim().is_empty() {
-        bail!("capability descriptor version must not be empty");
+        bail!(
+            "[capability_pack:descriptor] version must not be empty (capability_id={})",
+            descriptor.id
+        );
     }
     if descriptor.api_version == 0 {
-        bail!("capability descriptor api_version must be greater than zero");
+        bail!(
+            "[capability_pack:descriptor] api_version must be > 0 (capability_id={})",
+            descriptor.id
+        );
     }
     Ok(())
 }

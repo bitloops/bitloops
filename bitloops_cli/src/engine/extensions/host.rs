@@ -15,9 +15,13 @@ use super::lifecycle::{
 pub(crate) mod builtins;
 mod error;
 mod readiness_snapshot;
+mod registry_report;
 
 pub use error::CoreExtensionHostError;
 pub use readiness_snapshot::CoreExtensionHostReadinessSnapshot;
+pub use registry_report::{
+    CoreExtensionHostRegistryReport, format_core_extension_host_registry_human,
+};
 
 use builtins::{
     KNOWLEDGE_CAPABILITY_PACK, RUST_LANGUAGE_PACK, TEST_HARNESS_CAPABILITY_PACK,

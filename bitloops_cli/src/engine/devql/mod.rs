@@ -233,6 +233,55 @@ pub async fn run_connection_status() -> Result<()> {
     Ok(())
 }
 
+pub fn run_capability_packs_report(
+    cfg: &DevqlConfig,
+    json: bool,
+    apply_migrations: bool,
+    with_health: bool,
+    with_extensions: bool,
+) -> Result<()> {
+    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    if apply_migrations {
+        host.ensure_migrations_applied_sync()?;
+    }
+    let mut devql_report = host.registry_report();
+    if with_health {
+        devql_report.health = capability_host::collect_health_outcomes(&host);
+    }
+
+    let (core_extension_host, core_extension_host_error) = if with_extensions {
+        match crate::engine::extensions::CoreExtensionHost::with_builtins() {
+            Ok(ext_host) => (Some(ext_host.registry_report()), None),
+            Err(err) => (None, Some(err.to_string())),
+        }
+    } else {
+        (None, None)
+    };
+
+    let combined = capability_host::PackLifecycleReport {
+        devql_capability_host: devql_report,
+        core_extension_host,
+        core_extension_host_error,
+    };
+
+    if json {
+        if with_extensions {
+            println!("{}", serde_json::to_string_pretty(&combined)?);
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&combined.devql_capability_host)?
+            );
+        }
+    } else {
+        println!(
+            "{}",
+            capability_host::format_pack_lifecycle_report_human(&combined)
+        );
+    }
+    Ok(())
+}
+
 async fn collect_connection_status_rows(cfg: &StoreBackendConfig) -> Vec<DatabaseStatusRow> {
     vec![
         DatabaseStatusRow {

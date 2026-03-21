@@ -132,6 +132,137 @@ impl DevqlCapabilityHost {
         self.query_examples.as_slice()
     }
 
+    /// Snapshot of registered packs, migrations, invocation policy, and cross-pack grants.
+    /// Health results are empty; use [`super::diagnostics::collect_health_outcomes`] when needed.
+    pub fn registry_report(&self) -> super::diagnostics::HostRegistryReport {
+        use super::diagnostics::{
+            CrossPackGrantSummary, HostRegistryReport, InvocationSummary, MigrationStepSummary,
+            PackRegistryEntry,
+        };
+
+        let repo = self.repo();
+        let migration_plan: Vec<MigrationStepSummary> = self
+            .migrations
+            .iter()
+            .map(|m| MigrationStepSummary {
+                capability_id: m.capability_id.to_string(),
+                version: m.version.to_string(),
+                description: m.description.to_string(),
+            })
+            .collect();
+
+        let cross_pack_grants: Vec<CrossPackGrantSummary> = self
+            .cross_pack_access()
+            .grants
+            .iter()
+            .map(CrossPackGrantSummary::from)
+            .collect();
+
+        let mut pack_ids: Vec<String> = self.descriptors.keys().cloned().collect();
+        pack_ids.sort();
+
+        let packs: Vec<PackRegistryEntry> = pack_ids
+            .into_iter()
+            .filter_map(|id| {
+                self.descriptor(&id)
+                    .map(|descriptor| self.pack_registry_entry(descriptor))
+            })
+            .collect();
+
+        HostRegistryReport {
+            repo_id: repo.repo_id.clone(),
+            repo_identity: repo.identity.clone(),
+            repo_root: self.repo_root().display().to_string(),
+            migrations_applied_this_session: self.migrations_applied,
+            invocation: InvocationSummary::from(self.invocation_policy()),
+            cross_pack_grants,
+            migration_plan,
+            packs,
+            health: Vec::new(),
+        }
+    }
+
+    fn pack_registry_entry(
+        &self,
+        d: &'static CapabilityDescriptor,
+    ) -> super::diagnostics::PackRegistryEntry {
+        use super::diagnostics::{MigrationStepSummary, PackRegistryEntry, SchemaModuleSummary};
+
+        let id = d.id.to_string();
+
+        let mut stages: Vec<String> = self
+            .stages
+            .keys()
+            .filter(|(cap, _)| cap == &id)
+            .map(|(_, name)| name.clone())
+            .collect();
+        stages.sort();
+
+        let mut ingesters: Vec<String> = self
+            .ingesters
+            .keys()
+            .filter(|(cap, _)| cap == &id)
+            .map(|(_, name)| name.clone())
+            .collect();
+        ingesters.sort();
+
+        let migrations: Vec<MigrationStepSummary> = self
+            .migrations
+            .iter()
+            .filter(|m| m.capability_id == d.id)
+            .map(|m| MigrationStepSummary {
+                capability_id: m.capability_id.to_string(),
+                version: m.version.to_string(),
+                description: m.description.to_string(),
+            })
+            .collect();
+
+        let schema_modules: Vec<SchemaModuleSummary> = self
+            .schema_modules
+            .iter()
+            .filter(|m| m.capability_id == d.id)
+            .map(|m| SchemaModuleSummary {
+                name: m.name.to_string(),
+                description: m.description.to_string(),
+            })
+            .collect();
+
+        let mut health_check_names: Vec<String> = self
+            .health_checks
+            .get(&id)
+            .map(|checks| checks.iter().map(|c| c.name.to_string()).collect())
+            .unwrap_or_default();
+        health_check_names.sort();
+
+        let query_example_count: usize = self
+            .query_examples
+            .iter()
+            .map(|chunk| chunk.iter().filter(|ex| ex.capability_id == d.id).count())
+            .sum();
+
+        let dependencies: Vec<String> = d
+            .dependencies
+            .iter()
+            .map(|dep| format!("{} (>={})", dep.capability_id, dep.min_version))
+            .collect();
+
+        PackRegistryEntry {
+            id,
+            display_name: d.display_name.to_string(),
+            version: d.version.to_string(),
+            api_version: d.api_version,
+            default_enabled: d.default_enabled,
+            experimental: d.experimental,
+            dependencies,
+            stages,
+            ingesters,
+            migrations,
+            schema_modules,
+            health_check_names,
+            query_example_count,
+        }
+    }
+
     pub async fn invoke_ingester(
         &mut self,
         capability_id: &str,
@@ -154,7 +285,9 @@ impl DevqlCapabilityHost {
         let key = (capability_id.to_string(), ingester_name.to_string());
         let handler = self.ingesters.get(&key).cloned();
         let Some(handler) = handler else {
-            bail!("ingester `{ingester_name}` is not registered for capability `{capability_id}`");
+            bail!(
+                "[capability_pack:{capability_id}] [ingester:{ingester_name}] not registered on DevqlCapabilityHost"
+            );
         };
 
         let request = IngestRequest::new(payload);
@@ -193,7 +326,9 @@ impl DevqlCapabilityHost {
         let key = (capability_id.to_string(), stage_name.to_string());
         let handler = self.stages.get(&key).cloned();
         let Some(handler) = handler else {
-            bail!("stage `{stage_name}` is not registered for capability `{capability_id}`");
+            bail!(
+                "[capability_pack:{capability_id}] [stage:{stage_name}] not registered on DevqlCapabilityHost"
+            );
         };
 
         let request = StageRequest::new(payload);
@@ -251,9 +386,9 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         );
         if self.stages.contains_key(&key) {
             bail!(
-                "stage `{}` is already registered for capability `{}`",
-                stage.stage_name,
-                stage.capability_id
+                "[capability_pack:{}] [stage:{}] duplicate registration",
+                stage.capability_id,
+                stage.stage_name
             );
         }
         self.stages
@@ -268,9 +403,9 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         );
         if self.ingesters.contains_key(&key) {
             bail!(
-                "ingester `{}` is already registered for capability `{}`",
-                ingester.ingester_name,
-                ingester.capability_id
+                "[capability_pack:{}] [ingester:{}] duplicate registration",
+                ingester.capability_id,
+                ingester.ingester_name
             );
         }
         self.ingesters
@@ -285,9 +420,9 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         );
         if self.stages.contains_key(&key) {
             bail!(
-                "stage `{}` is already registered for capability `{}`",
-                stage.stage_name,
-                stage.capability_id
+                "[capability_pack:{}] [knowledge_stage:{}] duplicate registration",
+                stage.capability_id,
+                stage.stage_name
             );
         }
         self.stages
@@ -305,9 +440,9 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         );
         if self.ingesters.contains_key(&key) {
             bail!(
-                "ingester `{}` is already registered for capability `{}`",
-                ingester.ingester_name,
-                ingester.capability_id
+                "[capability_pack:{}] [knowledge_ingester:{}] duplicate registration",
+                ingester.capability_id,
+                ingester.ingester_name
             );
         }
         self.ingesters

@@ -446,4 +446,16 @@ impl CoreExtensionHost {
         }
         diagnostics
     }
+
+    /// Serializable registry snapshot (language packs, extension capability descriptors, migration plan, readiness, diagnostics).
+    pub fn registry_report(&self) -> registry_report::CoreExtensionHostRegistryReport {
+        registry_report::build(self)
+    }
+
+    /// Capability pack ids that have completed migrations in this host instance (empty until `run_capability_migrations` runs).
+    pub fn migrated_capability_pack_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.migrated_capability_packs.iter().cloned().collect();
+        ids.sort_unstable();
+        ids
+    }
 }

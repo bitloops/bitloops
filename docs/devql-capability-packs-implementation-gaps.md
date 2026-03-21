@@ -96,12 +96,17 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 
 ## 6. Observability and lifecycle completeness
 
-**Finding:** The registry doc calls for **diagnostics**: which packs loaded, contributions, migrations, health outcomes. `DevqlCapabilityHost` implements registration, collision checks, migration orchestration, and health invocation for **all three** built-in packs (including Semantic Clones), but **CoreExtensionHost** still tracks Knowledge/Test Harness separately, so **unified diagnostics** across both subsystems remain harder until consolidated or explicitly bridged.
+**Update (2026-03-21):** **`bitloops devql packs`** lists registered packs (descriptor, stages, ingesters, per-pack migrations, schema modules, health check names, query-example counts), host **invocation** timeouts and **`cross_pack_access`** grants, and the ordered **migration plan**. **`--json`** emits **`HostRegistryReport`** (unchanged shape when `--with-extensions` is off); **`--with-extensions`** adds a second section (human) or wraps **`PackLifecycleReport`** in JSON. **`--with-health`** runs DevQL host health checks; **`--apply-migrations`** runs the DevQL pack migration pass before reporting. **`--with-extensions`** builds **`CoreExtensionHost::registry_report`** (language packs, extension capability descriptors, migration plan, readiness, diagnostics). Implementation: **`capability_host::diagnostics`** (`PackLifecycleReport`), **`CoreExtensionHostRegistryReport`** / **`format_core_extension_host_registry_human`**, **`run_capability_packs_report`**.
 
-**Suggested approach:**
+**Finding (historical):** The registry doc calls for **diagnostics**: which packs loaded, contributions, migrations, health outcomes. `DevqlCapabilityHost` implements registration, collision checks, migration orchestration, and health invocation for **all three** built-in packs (including Semantic Clones), but **CoreExtensionHost** still tracks Knowledge/Test Harness separately, so **unified diagnostics** across both subsystems remain harder until consolidated or explicitly bridged.
 
-- Expose a **single CLI or debug query** (or structured log at boot) that lists: pack id, lifecycle state, registered stages/ingesters, migration version, health results — **including** extension-registered packs once item 1 is resolved.
-- Ensure **failure modes** (validation, collision, migration failure) surface **pack id + contribution type + identifier** as the registry doc requires.
+**Update (2026-03-21, follow-up):** **`--with-extensions`** surfaces **`CoreExtensionHost`** in the same CLI. **`CoreExtensionHostError`** and several **`DevqlCapabilityHost`** `bail!` paths now use **`[subsystem:operation] … [contribution:id]`**-style prefixes for easier log triage.
+
+**Residual:** Optional **structured log at boot** listing both hosts without a subprocess.
+
+**Suggested approach (remaining):**
+
+- Emit a **single boot diagnostic** (tracing or structured stderr) if you need continuous visibility beyond on-demand CLI.
 
 ---
 
@@ -114,7 +119,7 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 | 3 | Test Harness depth | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain |
 | 4 | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented |
 | 5 | Knowledge hygiene | Gateway-only store access; config/provenance consistency |
-| 6 | Observability | One lifecycle/diagnostic story across all packs |
+| 6 | Observability | **Done:** `bitloops devql packs` (+ `--with-extensions` for `CoreExtensionHost`, JSON wrap only with that flag); clearer error prefixes on host paths |
 
 ---
 

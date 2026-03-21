@@ -76,6 +76,12 @@ During ingester dispatch, the host sets **`invoking_capability_id`**. Handlers t
 
 ---
 
+## Pack lifecycle diagnostics (CLI)
+
+From a configured repo, **`bitloops devql packs`** prints a snapshot of the **`DevqlCapabilityHost`**: registered pack ids, stages, ingesters, migration steps, schema modules, health check names, query-example counts, invocation timeouts, and **`host.cross_pack_access`** grants. Use **`--json`** for machine-readable output (same top-level shape as **`HostRegistryReport`** unless **`--with-extensions`** is set, which emits **`PackLifecycleReport`** including **`core_extension_host`**). **`--with-extensions`** appends **`CoreExtensionHost`** registry data (language packs, extension capability descriptors, readiness, diagnostics). **`--with-health`** runs DevQL host health checks; **`--apply-migrations`** runs DevQL pack migrations before reporting. Implementation: **`capability_host::diagnostics`**, **`DevqlCapabilityHost::registry_report`**, **`CoreExtensionHost::registry_report`** (+ **`CoreExtensionHostRegistryReport`**), **`run_capability_packs_report`**.
+
+---
+
 ## Relational DDL: Postgres bootstrap vs SQLite pack migrations (semantic stack)
 
 DevQL uses **two complementary mechanisms** for first-party capability tables on the relational backend:
@@ -98,4 +104,4 @@ DevQL uses **two complementary mechanisms** for first-party capability tables on
 
 ---
 
-*Last updated: 2026-03-21.*
+*Last updated: 2026-03-21 (packs diagnostics CLI).*

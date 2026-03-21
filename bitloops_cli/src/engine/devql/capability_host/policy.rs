@@ -140,7 +140,7 @@ where
 {
     match tokio::time::timeout(limit, fut).await {
         Ok(inner) => inner,
-        Err(_) => bail!("{label} timed out after {limit:?}"),
+        Err(_) => bail!("[capability_host:timeout] {label} timed out after {limit:?}"),
     }
 }
 

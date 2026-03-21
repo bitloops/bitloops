@@ -2,6 +2,7 @@ pub mod composition;
 pub mod config_view;
 pub mod contexts;
 pub mod descriptor;
+pub mod diagnostics;
 pub mod gateways;
 pub mod health;
 pub mod host;
@@ -20,6 +21,10 @@ pub use contexts::{
     CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
 };
 pub use descriptor::{CapabilityDependency, CapabilityDescriptor};
+pub use diagnostics::{
+    HostRegistryReport, PackLifecycleReport, collect_health_outcomes,
+    format_pack_lifecycle_report_human, format_registry_report_human,
+};
 pub use health::{CapabilityHealthCheck, CapabilityHealthResult};
 pub use host::DevqlCapabilityHost;
 pub use migrations::CapabilityMigration;

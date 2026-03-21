@@ -66,8 +66,7 @@ pub async fn execute_devql_subquery(
     let next_depth = current_depth.saturating_add(1);
     if next_depth > max_depth {
         bail!(
-            "DevQL subquery depth {next_depth} exceeds max depth {max_depth} for capability `{}`",
-            caller_capability_id
+            "[capability_pack:{caller_capability_id}] [devql_subquery] depth {next_depth} exceeds max_depth {max_depth}"
         );
     }
 
