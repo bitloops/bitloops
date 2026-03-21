@@ -1,6 +1,29 @@
-use crate::engine::devql::capabilities::semantic_clones::schema::{
-    semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
+//! Symbol clone edge rebuild orchestration for the **semantic_clones** capability pack.
+//!
+//! Pure clone scoring lives in [`semantic_clones_pack::build_symbol_clone_edges`]. This module
+//! loads candidates from DevQL relational storage, applies pack DDL when needed, and persists
+//! edges. **DevQL ingestion** should trigger rebuild only via the registered ingester
+//! ([`super::SEMANTIC_CLONES_REBUILD_INGESTER_ID`]) or [`rebuild_symbol_clone_edges`](fn@rebuild_symbol_clone_edges) (also re-exported at `crate::engine::devql` under `cfg(test)` for integration tests),
+//! not by duplicating this pipeline.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use serde_json::Value;
+use tokio_postgres::Client;
+
+use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones_pack;
+use crate::engine::devql::{
+    EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, RelationalStorage, esc_pg, postgres_exec, sql_json_value,
+    sql_now, sqlite_exec_path_allow_create,
 };
+
+use super::ensure_semantic_embeddings_schema;
+use crate::engine::semantic_clones;
+use crate::engine::semantic_features as semantic;
+
+use super::schema::{semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql};
 
 async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_clones_sqlite_schema_sql())
@@ -9,9 +32,7 @@ async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn init_postgres_semantic_clones_schema(
-    pg_client: &tokio_postgres::Client,
-) -> Result<()> {
+pub(crate) async fn init_postgres_semantic_clones_schema(pg_client: &Client) -> Result<()> {
     postgres_exec(pg_client, semantic_clones_postgres_schema_sql())
         .await
         .context("creating Postgres semantic clone tables")?;
@@ -106,7 +127,9 @@ async fn load_symbol_clone_candidate_inputs(
                 .and_then(Value::as_str)
                 .map(str::to_string),
             identifier_tokens: parse_clone_json_string_array(row.get("identifier_tokens")),
-            normalized_body_tokens: parse_clone_json_string_array(row.get("normalized_body_tokens")),
+            normalized_body_tokens: parse_clone_json_string_array(
+                row.get("normalized_body_tokens"),
+            ),
             parent_kind: row
                 .get("parent_kind")
                 .and_then(Value::as_str)
@@ -254,7 +277,10 @@ ORDER BY a.path, a.start_line, a.symbol_id",
     )
 }
 
-async fn delete_repo_symbol_clone_edges(relational: &RelationalStorage, repo_id: &str) -> Result<()> {
+async fn delete_repo_symbol_clone_edges(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<()> {
     let sql = format!(
         "DELETE FROM symbol_clone_edges WHERE repo_id = '{}'",
         esc_pg(repo_id),
@@ -332,13 +358,17 @@ fn value_as_usize(value: &Value) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod semantic_clone_persistence_tests {
-    use super::*;
+mod semantic_clone_pipeline_tests {
+    use super::super::schema::{
+        semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
+    };
+
+    use super::build_symbol_clone_candidate_lookup_sql;
 
     #[test]
     fn semantic_clone_schema_includes_clone_edge_table() {
-        let pg = super::semantic_clones_postgres_schema_sql();
-        let sqlite = super::semantic_clones_sqlite_schema_sql();
+        let pg = semantic_clones_postgres_schema_sql();
+        let sqlite = semantic_clones_sqlite_schema_sql();
 
         assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
         assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));

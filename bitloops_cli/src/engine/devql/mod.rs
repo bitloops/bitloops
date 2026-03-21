@@ -14,12 +14,12 @@ use crate::engine::db_status::{
 };
 use crate::engine::devql::capabilities::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
+    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
 };
 use crate::engine::extensions::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
-use crate::engine::providers::embeddings::EmbeddingProvider;
-use crate::engine::semantic_clones;
 use crate::engine::semantic_embeddings;
 use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
@@ -377,7 +377,7 @@ fn clickhouse_endpoint(url: &str, database: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelationalDialect {
+pub(crate) enum RelationalDialect {
     Postgres,
     Sqlite,
 }
@@ -868,12 +868,8 @@ include!("ingestion/artefact_persistence_symbols.rs");
 include!("ingestion/artefact_persistence_edges.rs");
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
 include!("ingestion/artefact_persistence.rs");
-// ingestion: Stage 1 semantic persistence
-include!("ingestion/semantic_features_persistence.rs");
-// ingestion: Stage 2 embedding persistence
-include!("ingestion/semantic_embeddings_persistence.rs");
-// ingestion: Stage 3 clone persistence
-include!("ingestion/semantic_clones_persistence.rs");
+// Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
+// Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: JS/TS artefact extraction (tree-sitter)
 include!("ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)
@@ -895,6 +891,9 @@ include!("query/executor.rs");
 include!("query/utils.rs");
 include!("deps_query.rs");
 include!("db_utils.rs");
+
+#[cfg(test)]
+pub(crate) use capabilities::semantic_clones::pipeline::rebuild_symbol_clone_edges;
 
 #[cfg(test)]
 fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {

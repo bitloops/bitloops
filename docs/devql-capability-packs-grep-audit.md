@@ -71,19 +71,22 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ## 4. `devql/ingestion` — semantic clones vs test harness
 
-### 4.1 Semantic clones (strong concentration)
+### 4.1 Semantic clones (pack-owned pipeline)
 
 | File | Role |
 |------|------|
-| `ingestion/semantic_clones_persistence.rs` | Defines **`symbol_clone_edges`** DDL (SQLite + Postgres), `ensure_semantic_clones_schema`, `rebuild_symbol_clone_edges`, load candidates, delete/insert edges. **Primary leak surface** for clone persistence. |
-| `ingestion/schema/relational_initialisation.rs` | Calls `init_sqlite_semantic_clones_schema` / `init_postgres_semantic_clones_schema` alongside other relational setup. |
+| `capabilities/semantic_clones/stage_semantic_features.rs` | Stage 1: **`symbol_semantics`** / **`symbol_features`** DDL init, pre-stage loaders, upsert orchestration. |
+| `capabilities/semantic_clones/stage_embeddings.rs` | Stage 2: **`symbol_embeddings`** DDL init, upsert orchestration, **`ensure_semantic_embeddings_schema`**. |
+| `capabilities/semantic_clones/pipeline.rs` | Stage 3: **`rebuild_symbol_clone_edges`**, candidate load, delete/insert **`symbol_clone_edges`**, SQLite/Postgres DDL for clone tables (`ensure_semantic_clones_schema`). |
+| `capabilities/semantic_clones/schema.rs` | Canonical **`symbol_clone_edges`** DDL strings (shared with migrations + pipeline). |
+| `ingestion/schema/relational_initialisation.rs` | Relational bootstrap calls **`init_*_schema`** on stages 1–2 and **`pipeline::init_postgres_semantic_clones_schema`** (Postgres + SQLite base paths). |
 | `ingestion/types.rs` | Counters: `symbol_clone_edges_upserted`, `symbol_clone_sources_scored`. |
 
-**Cross-callers (outside `ingestion/` but part of ingest pipeline):**
+**Cross-callers:**
 
-- `engine/devql/mod.rs`, `engine/devql/ingest.rs` — invoke `rebuild_symbol_clone_edges` and bump counters.
+- `engine/devql/mod.rs` — `devql ingest` ends with **`invoke_ingester_with_relational`** for `semantic_clones.rebuild`; **`#[cfg(test)] pub(crate) use`** re-exports `rebuild_symbol_clone_edges` at `crate::engine::devql` for **`devql::tests`**.
 
-**Interpretation (superseded in part):** Clone-edge persistence still lives in `ingestion/semantic_clones_persistence.rs`, but **`devql ingest` rebuilds edges via the `semantic_clones` pack ingester** (`invoke_ingester_with_relational` + `CapabilityIngestContext::devql_relational`). SQLite `symbol_clone_edges` DDL is also applied through **pack migrations** on the DevQL capability host (Postgres DDL remains in relational bootstrap).
+**Interpretation:** Semantic clone **stages 1–3** persistence and rebuild orchestration live under **`capabilities/semantic_clones`** (not `ingestion/`). Ingestion triggers the pack ingester; pure scoring remains in **`engine/capability_packs/builtin/semantic_clones`**. Postgres bootstrap ensures semantic + clone tables early; pack migrations cover versioned SQLite host paths (see [core ↔ pack boundaries](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack)).
 
 ### 4.2 Test harness / `test_links` (thin in `ingestion/`)
 
@@ -107,7 +110,7 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 | Concern | In `devql/ingestion`? |
 |---------|------------------------|
 | Semantic clones SQL mixed into test_links DDL | **No** — separate modules/strings. |
-| test_links DDL mixed into `semantic_clones_persistence.rs` | **No**. |
+| test_links DDL mixed into semantic clones pipeline | **No** (clone DDL in **`capabilities/semantic_clones/schema.rs`** / **`pipeline.rs`**). |
 | Single function touching both tables | **Not found** in `ingestion/`; `relational_initialisation.rs` orchestrates **both** init paths sequentially (shared bootstrap file only). |
 
 ---
@@ -121,7 +124,7 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ### Architectural “leaks” (by design today, not by wrong import)
 
-1. **Semantic clones:** All **`symbol_clone_edges`** lifecycle in **`semantic_clones_persistence.rs`** + ingest entrypoints — **not** behind `CapabilityIngestContext` / pack ingester in `capability_host`.
+1. **Semantic clones:** **`symbol_clone_edges`** rebuild orchestration is in **`capabilities/semantic_clones/pipeline.rs`**; **`devql ingest`** triggers **`semantic_clones.rebuild`** via **`invoke_ingester_with_relational`** (scoped relational on `CapabilityIngestContext`). **Residual:** stage 1–2 tables still written from **`devql/ingestion`**.
 2. **Test harness data:** **`test_links`** migrated in ingestion schema init, but **read/write** lives in **core executor + `engine/test_harness` + repository**, while **`capabilities/test_harness`** stages **compose** into `__core_test_links` instead of owning storage gateways.
 3. **Shared bootstrap:** `relational_initialisation.rs` is a **choke point** that knows about **both** semantic clones schema and test_links upgrades — acceptable operationally, but it **couples** “relational init” to multiple capability domains in one file.
 

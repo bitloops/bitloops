@@ -1,4 +1,4 @@
-async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
+pub(crate) async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
     run_postgres_exec(pg_client, sql).await
 }
 
@@ -229,7 +229,7 @@ async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
     sqlite_exec_path_inner(path, sql, false).await
 }
 
-async fn sqlite_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
+pub(crate) async fn sqlite_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
     sqlite_exec_path_inner(path, sql, true).await
 }
 
@@ -307,7 +307,7 @@ async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     .context("joining DuckDB query task")?
 }
 
-async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -437,7 +437,7 @@ fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
     }
 }
 
-fn esc_pg(value: &str) -> String {
+pub(crate) fn esc_pg(value: &str) -> String {
     value.replace('\'', "''")
 }
 

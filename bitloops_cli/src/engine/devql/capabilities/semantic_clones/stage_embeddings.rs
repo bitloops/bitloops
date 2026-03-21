@@ -1,3 +1,19 @@
+//! Stage 2: symbol embedding rows (`symbol_embeddings`) for the semantic_clones pipeline.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::engine::devql::{
+    RelationalStorage, esc_pg, postgres_exec, sql_string_list_pg, sqlite_exec_path_allow_create,
+};
+use crate::engine::providers::embeddings::EmbeddingProvider;
+use crate::engine::semantic_embeddings;
+use crate::engine::semantic_features as semantic;
+
 fn semantic_embeddings_postgres_schema_sql() -> &'static str {
     r#"
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -44,14 +60,14 @@ ON symbol_embeddings (repo_id, provider, model, dimension, blob_sha);
 "#
 }
 
-async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
+pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_embeddings_sqlite_schema_sql())
         .await
         .context("creating SQLite semantic embedding tables")?;
     Ok(())
 }
 
-async fn init_postgres_semantic_embeddings_schema(
+pub(crate) async fn init_postgres_semantic_embeddings_schema(
     pg_client: &tokio_postgres::Client,
 ) -> Result<()> {
     postgres_exec(pg_client, semantic_embeddings_postgres_schema_sql())
@@ -60,7 +76,7 @@ async fn init_postgres_semantic_embeddings_schema(
     Ok(())
 }
 
-async fn upsert_symbol_embedding_rows(
+pub(crate) async fn upsert_symbol_embedding_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     embedding_provider: Arc<dyn EmbeddingProvider>,
@@ -105,9 +121,13 @@ async fn upsert_symbol_embedding_rows(
     Ok(stats)
 }
 
-async fn ensure_semantic_embeddings_schema(relational: &RelationalStorage) -> Result<()> {
+pub(crate) async fn ensure_semantic_embeddings_schema(
+    relational: &RelationalStorage,
+) -> Result<()> {
     match relational {
-        RelationalStorage::Postgres(client) => init_postgres_semantic_embeddings_schema(client).await,
+        RelationalStorage::Postgres(client) => {
+            init_postgres_semantic_embeddings_schema(client).await
+        }
         RelationalStorage::Sqlite { path } => init_sqlite_semantic_embeddings_schema(path).await,
     }
 }
@@ -252,6 +272,7 @@ fn sql_json_string(values: &[f32]) -> Result<String> {
 #[cfg(test)]
 mod semantic_embedding_persistence_tests {
     use super::*;
+    use crate::engine::devql::sqlite_query_rows_path;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -296,8 +317,8 @@ mod semantic_embedding_persistence_tests {
 
     #[test]
     fn semantic_embedding_postgres_persist_sql_contains_vector_literal() {
-        let sql = build_postgres_symbol_embedding_persist_sql(
-            &semantic_embeddings::SymbolEmbeddingRow {
+        let sql =
+            build_postgres_symbol_embedding_persist_sql(&semantic_embeddings::SymbolEmbeddingRow {
                 artefact_id: "artefact-1".to_string(),
                 repo_id: "repo-1".to_string(),
                 blob_sha: "blob-1".to_string(),
@@ -306,17 +327,16 @@ mod semantic_embedding_persistence_tests {
                 dimension: 3,
                 embedding_input_hash: "hash-1".to_string(),
                 embedding: vec![0.1, -0.2, 0.3],
-            },
-        )
-        .expect("persist sql");
+            })
+            .expect("persist sql");
         assert!(sql.contains("INSERT INTO symbol_embeddings"));
         assert!(sql.contains("'[0.1,-0.2,0.3]'::vector"));
     }
 
     #[test]
     fn semantic_embedding_sqlite_persist_sql_contains_json_literal() {
-        let sql = build_sqlite_symbol_embedding_persist_sql(
-            &semantic_embeddings::SymbolEmbeddingRow {
+        let sql =
+            build_sqlite_symbol_embedding_persist_sql(&semantic_embeddings::SymbolEmbeddingRow {
                 artefact_id: "artefact-1".to_string(),
                 repo_id: "repo-1".to_string(),
                 blob_sha: "blob-1".to_string(),
@@ -325,9 +345,8 @@ mod semantic_embedding_persistence_tests {
                 dimension: 3,
                 embedding_input_hash: "hash-1".to_string(),
                 embedding: vec![0.1, -0.2, 0.3],
-            },
-        )
-        .expect("persist sql");
+            })
+            .expect("persist sql");
         assert!(sql.contains("INSERT INTO symbol_embeddings"));
         assert!(sql.contains("'[0.1,-0.2,0.3]'"));
         assert!(!sql.contains("::vector"));
@@ -353,11 +372,7 @@ mod semantic_embedding_persistence_tests {
 
         let invalid_err =
             sql_vector_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
-        assert!(
-            invalid_err
-                .to_string()
-                .contains("non-finite values")
-        );
+        assert!(invalid_err.to_string().contains("non-finite values"));
     }
 
     #[test]
@@ -367,11 +382,7 @@ mod semantic_embedding_persistence_tests {
 
         let invalid_err =
             sql_json_string(&[0.1, f32::NAN]).expect_err("non-finite vectors must fail");
-        assert!(
-            invalid_err
-                .to_string()
-                .contains("non-finite values")
-        );
+        assert!(invalid_err.to_string().contains("non-finite values"));
     }
 
     #[test]
@@ -458,7 +469,9 @@ mod semantic_embedding_persistence_tests {
     async fn semantic_embedding_schema_ensure_creates_sqlite_table() {
         let temp = tempdir().expect("temp dir");
         let db_path = temp.path().join("semantic-embeddings.sqlite");
-        let relational = RelationalStorage::Sqlite { path: db_path.clone() };
+        let relational = RelationalStorage::Sqlite {
+            path: db_path.clone(),
+        };
 
         ensure_semantic_embeddings_schema(&relational)
             .await

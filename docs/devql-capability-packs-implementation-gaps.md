@@ -66,13 +66,17 @@ This document captures an architecture review of first-party capability packs ag
 
 ## 4. Semantic Clones: pipeline location vs “pack owns enrichers and storage”
 
-**Finding:** Clone-edge build and persistence are orchestrated from **ingestion** with direct **relational** access patterns, while the compass positions Semantic Clones as a pack that owns **Stage 1–3 enrichers**, **vector/embeddings**, **clone edges**, and **pack-scoped migrations**, with model providers behind host-approved access.
+**Update (2026-03-21):** **Clone-edge rebuild orchestration** moved from **`ingestion/semantic_clones_persistence.rs`** to **`capabilities/semantic_clones/pipeline.rs`**. **`devql ingest`** already triggered rebuild via **`invoke_ingester_with_relational`**; the **ingester** now calls **`pipeline::rebuild_symbol_clone_edges`** directly. **`crate::engine::devql::rebuild_symbol_clone_edges`** is a **`#[cfg(test)] pub(crate)`** re-export for **`devql::tests`**. Postgres relational bootstrap calls **`pipeline::init_postgres_semantic_clones_schema`**. The duplicate/unused **`engine/devql/ingest.rs`** file was removed.
 
-**Suggested approach:**
+**Update (2026-03-21, follow-up):** **Stage 1–2 persistence** moved from **`ingestion/semantic_*_persistence.rs`** to **`capabilities/semantic_clones/stage_semantic_features.rs`** and **`stage_embeddings.rs`**, re-exported from **`capabilities/semantic_clones/mod.rs`** for **`run_ingest`**. Relational bootstrap calls those modules’ **`init_*_schema`** functions. **Postgres vs SQLite DDL split** is documented in [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack).
 
-- After item 1’s decision: if Semantic Clones remains partially in ingestion, **draw a clear line**: ingestion may **schedule** or **trigger** pack work, but **business logic and writes** should live in pack modules callable only through **context + gateways**.
-- Move **schema creation** for `symbol_clone_edges` (and related tables) toward **pack migrations** or a single host-owned “relational bootstrap” that is explicitly **pack-scoped** in naming and ownership docs.
-- Ensure **embedding/model** calls go through the same **approved provider** abstraction the compass describes, not ad hoc clients from deep in ingestion.
+**Finding (historical):** Clone-edge build and persistence lived under **`devql/ingestion`**, while the compass positions Semantic Clones as owning enrichers, embeddings, clone edges, and pack-scoped migrations.
+
+**Residual:** **Persistence** for stages 1–2 now lives under **`capabilities/semantic_clones`**; **embedding/LLM provider construction** still flows through **`semantic_clones_pack`** from core ingest — continue converging orchestration on pack builders where practical.
+
+**Suggested approach (remaining):**
+
+- Optional: narrow **`devql ingest`**’s direct use of **`RelationalStorage`** for semantic stages via a small gateway if you want stricter core/pack compile-time separation.
 
 ---
 
@@ -108,7 +112,7 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 | 1 | Dual pack models | **Done (SC):** Semantic Clones on `DevqlCapabilityHost` only; extension host does not register SC. Residual: K+TH still dual-registered (extension + DevQL). |
 | 2 | Context surface area | **Done (stages/ingesters):** core vs **`Knowledge*Context`** + **`register_knowledge_*`**; **open:** migration context still wide |
 | 3 | Test Harness depth | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain |
-| 4 | Semantic Clones structure | Pack-owned enrichers/storage boundaries vs ingestion triggers |
+| 4 | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented |
 | 5 | Knowledge hygiene | Gateway-only store access; config/provenance consistency |
 | 6 | Observability | One lifecycle/diagnostic story across all packs |
 

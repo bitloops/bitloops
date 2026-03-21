@@ -76,6 +76,19 @@ During ingester dispatch, the host sets **`invoking_capability_id`**. Handlers t
 
 ---
 
+## Relational DDL: Postgres bootstrap vs SQLite pack migrations (semantic stack)
+
+DevQL uses **two complementary mechanisms** for first-party capability tables on the relational backend:
+
+| Mechanism | When it runs | Semantic clones stack |
+|-----------|----------------|------------------------|
+| **Relational bootstrap** (`ingestion/schema/relational_initialisation.rs` + related SQL helpers) | `init` / first connection for **Postgres** (and shared SQLite base tables) | Creates **`symbol_semantics`**, **`symbol_features`**, **`symbol_embeddings`**, and **`symbol_clone_edges`** (and extensions such as `vector` where required) so a fresh Postgres DSN is consistent before ingest. Init functions live in **`capabilities/semantic_clones/{stage_semantic_features,stage_embeddings,pipeline}`** and are invoked from bootstrap. |
+| **Capability pack migrations** (`DevqlCapabilityHost::ensure_migrations_applied_sync`, per-pack `migrations/`) | After bootstrap, for **all** backends the host runs registered pack migrations | **SQLite** paths apply **`semantic_clones`** pack DDL (e.g. **`symbol_clone_edges`**) via migrations; Postgres clone tables are still created early in bootstrap for operational parity. |
+
+**Rule of thumb:** if a table must exist **before** any pack migration runs on a given backend, it belongs in bootstrap for that backend; pack migrations remain the **versioned** path for pack-owned schema and for SQLite-first flows.
+
+---
+
 ## Future work
 
 - Replace pack-branded context accessors with **neutral gateway traits** + capability-bound handles.
@@ -85,4 +98,4 @@ During ingester dispatch, the host sets **`invoking_capability_id`**. Handlers t
 
 ---
 
-*Last updated: 2026-03-20.*
+*Last updated: 2026-03-21.*

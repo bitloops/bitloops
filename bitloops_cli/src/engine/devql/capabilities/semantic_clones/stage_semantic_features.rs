@@ -1,3 +1,16 @@
+//! Stage 1: semantic feature rows (`symbol_semantics`, `symbol_features`) for the semantic_clones pipeline.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use serde_json::Value;
+
+use crate::engine::devql::{
+    RelationalDialect, RelationalStorage, esc_pg, postgres_exec, sqlite_exec_path_allow_create,
+};
+use crate::engine::semantic_features as semantic;
+
 fn semantic_features_postgres_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
@@ -98,12 +111,14 @@ END $$;
 "#
 }
 
-async fn init_postgres_semantic_features_schema(pg_client: &tokio_postgres::Client) -> Result<()> {
+pub(crate) async fn init_postgres_semantic_features_schema(
+    pg_client: &tokio_postgres::Client,
+) -> Result<()> {
     postgres_exec(pg_client, semantic_features_postgres_schema_sql()).await?;
     postgres_exec(pg_client, semantic_features_postgres_upgrade_sql()).await
 }
 
-async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
+pub(crate) async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, semantic_features_sqlite_schema_sql()).await?;
     upgrade_sqlite_semantic_features_schema(sqlite_path).await
 }
@@ -176,7 +191,7 @@ fn sqlite_table_has_column(
     Ok(false)
 }
 
-async fn load_pre_stage_artefacts_for_blob(
+pub(crate) async fn load_pre_stage_artefacts_for_blob(
     relational: &RelationalStorage,
     repo_id: &str,
     blob_sha: &str,
@@ -188,19 +203,21 @@ async fn load_pre_stage_artefacts_for_blob(
     parse_semantic_artefact_rows(rows)
 }
 
-async fn load_pre_stage_dependencies_for_blob(
+pub(crate) async fn load_pre_stage_dependencies_for_blob(
     relational: &RelationalStorage,
     repo_id: &str,
     blob_sha: &str,
     path: &str,
 ) -> Result<Vec<semantic::PreStageDependencyRow>> {
     let rows = relational
-        .query_rows(&build_semantic_get_dependencies_sql(repo_id, blob_sha, path))
+        .query_rows(&build_semantic_get_dependencies_sql(
+            repo_id, blob_sha, path,
+        ))
         .await?;
     parse_semantic_dependency_rows(rows)
 }
 
-async fn upsert_semantic_feature_rows(
+pub(crate) async fn upsert_semantic_feature_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
@@ -245,7 +262,10 @@ async fn persist_semantic_feature_rows(
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
     relational
-        .exec(&build_semantic_persist_rows_sql(rows, relational.dialect())?)
+        .exec(&build_semantic_persist_rows_sql(
+            rows,
+            relational.dialect(),
+        )?)
         .await
 }
 
@@ -290,8 +310,7 @@ fn parse_semantic_artefact_rows(rows: Vec<Value>) -> Result<Vec<semantic::PreSta
                 Value::Array(modifiers.iter().cloned().map(Value::String).collect()),
             );
         }
-        let mut artefact =
-            serde_json::from_value::<semantic::PreStageArtefactRow>(normalized_row)?;
+        let mut artefact = serde_json::from_value::<semantic::PreStageArtefactRow>(normalized_row)?;
         artefact.modifiers = modifiers;
         artefacts.push(artefact);
     }
@@ -359,8 +378,7 @@ fn build_semantic_persist_rows_sql(
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
     let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
     let identifier_tokens_expr = sql_json_string_for_dialect(&features.identifier_tokens, dialect)?;
-    let body_tokens_expr =
-        sql_json_string_for_dialect(&features.normalized_body_tokens, dialect)?;
+    let body_tokens_expr = sql_json_string_for_dialect(&features.normalized_body_tokens, dialect)?;
     let context_tokens_expr = sql_json_string_for_dialect(&features.context_tokens, dialect)?;
     let generated_at_sql = semantic_generated_at_now_sql(dialect);
 
@@ -508,11 +526,9 @@ mod semantic_feature_persistence_tests {
 
     #[test]
     fn semantic_feature_persistence_builds_postgres_persist_sql() {
-        let sql = build_semantic_persist_rows_sql(
-            &sample_semantic_rows(),
-            RelationalDialect::Postgres,
-        )
-        .expect("persist SQL");
+        let sql =
+            build_semantic_persist_rows_sql(&sample_semantic_rows(), RelationalDialect::Postgres)
+                .expect("persist SQL");
         assert!(sql.contains("INSERT INTO symbol_semantics"));
         assert!(sql.contains("INSERT INTO symbol_features"));
         assert!(sql.contains("docstring_summary"));
