@@ -26,7 +26,7 @@ pub fn resolve_transcript_ref(conversation_id: &str, raw_path: Option<&str>) -> 
         return path.to_string();
     }
 
-    let Ok(repo_root) = crate::engine::paths::repo_root() else {
+    let Ok(repo_root) = crate::utils::paths::repo_root() else {
         return String::new();
     };
 

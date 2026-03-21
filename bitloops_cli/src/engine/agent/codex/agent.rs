@@ -33,7 +33,7 @@ impl Agent for CodexAgent {
     }
 
     fn detect_presence(&self) -> Result<bool> {
-        let repo_root = crate::engine::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
+        let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
         Ok(repo_root.join(".codex").is_dir() || repo_root.join(".codex/hooks.json").exists())
     }
 

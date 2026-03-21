@@ -161,7 +161,7 @@ fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
         resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
     } else {
-        bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+        bitloops_cli::utils::paths::default_relational_db_path(repo_root)
     }
 }
 

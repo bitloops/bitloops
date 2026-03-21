@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use super::types::{CONTENT_TYPE_TEXT, Line, TYPE_ASSISTANT, TYPE_USER, UserMessage};
-use crate::engine::textutil::strip_ide_context_tags;
+use crate::utils::text::strip_ide_context_tags;
 
 pub fn parse_from_bytes(content: &[u8]) -> Result<Vec<Line>> {
     let mut lines = Vec::new();

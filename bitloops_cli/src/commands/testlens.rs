@@ -10,9 +10,10 @@ use crate::engine::devql::capabilities::test_harness::types::{
 };
 use crate::engine::devql::capability_host::DevqlCapabilityHost;
 use crate::engine::devql::resolve_repo_identity;
-use crate::engine::{paths, test_harness as test_harness_engine};
+use crate::engine::test_harness as test_harness_engine;
 use crate::read::query_test_harness;
 use crate::read::query_view::{DEFAULT_QUERY_VIEW, QueryViewArg};
+use crate::utils::paths;
 
 const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens init`, `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`, `bitloops testlens query`, `bitloops testlens list`";
 

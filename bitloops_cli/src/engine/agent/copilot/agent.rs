@@ -205,7 +205,7 @@ impl TokenCalculator for CopilotCliAgent {
 
 impl CopilotCliAgent {
     pub fn hooks_file_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::engine::paths::repo_root().or_else(|_| {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
             std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
         })?;
         Ok(repo_root.join(".github/hooks/bitloops.json"))

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::engine::paths;
 use crate::test_support::process_state::git_command;
+use crate::utils::paths;
 
 pub(crate) fn git_ok(repo_root: &Path, args: &[&str]) -> String {
     let out = git_command()

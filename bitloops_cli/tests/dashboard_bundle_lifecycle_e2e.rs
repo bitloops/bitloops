@@ -47,7 +47,7 @@ fn ensure_dashboard_store_files(repo_root: &Path) {
             bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
                 .expect("resolve configured sqlite path")
         } else {
-            bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+            bitloops_cli::utils::paths::default_relational_db_path(repo_root)
         };
         let sqlite = bitloops_cli::engine::db::SqliteConnectionPool::connect(sqlite_path)
             .expect("create relational sqlite file");
@@ -60,7 +60,7 @@ fn ensure_dashboard_store_files(repo_root: &Path) {
         let duckdb_path = if let Some(path) = cfg.events.duckdb_path.as_deref() {
             bitloops_cli::store_config::resolve_duckdb_db_path_for_repo(repo_root, Some(path))
         } else {
-            bitloops_cli::engine::paths::default_events_db_path(repo_root)
+            bitloops_cli::utils::paths::default_events_db_path(repo_root)
         };
         if let Some(parent) = duckdb_path.parent()
             && !parent.as_os_str().is_empty()

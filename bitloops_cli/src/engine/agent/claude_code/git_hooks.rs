@@ -263,7 +263,7 @@ fn hook_manager_warning(managers: &[HookManager], cmd_prefix: &str) -> String {
 
 /// Detects external hook managers from repo root and prints warning text when needed.
 pub fn check_and_warn_hook_managers(w: &mut dyn Write, local_dev: bool) {
-    let repo_root = match crate::engine::paths::repo_root() {
+    let repo_root = match crate::utils::paths::repo_root() {
         Ok(root) => root,
         Err(_) => return,
     };

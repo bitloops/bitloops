@@ -51,7 +51,7 @@ impl From<crate::store_config::WatchRuntimeConfig> for DevqlWatchOptions {
 
 pub fn watcher_pid_file(repo_root: &Path) -> PathBuf {
     repo_root
-        .join(crate::engine::paths::BITLOOPS_DIR)
+        .join(crate::utils::paths::BITLOOPS_DIR)
         .join(WATCHER_PID_FILE_NAME)
 }
 
@@ -134,7 +134,7 @@ pub fn run_process_from_cli() -> Result<()> {
 fn resolve_repo_root(explicit_repo_root: Option<PathBuf>) -> Result<PathBuf> {
     match explicit_repo_root {
         Some(repo_root) => Ok(repo_root),
-        None => crate::engine::paths::repo_root(),
+        None => crate::utils::paths::repo_root(),
     }
 }
 

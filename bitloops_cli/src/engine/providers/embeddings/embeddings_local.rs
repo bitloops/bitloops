@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use super::{EmbeddingInputType, EmbeddingProvider};
-use crate::engine::paths;
+use crate::utils::paths;
 
 const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "jinaai/jina-embeddings-v2-base-code";
 

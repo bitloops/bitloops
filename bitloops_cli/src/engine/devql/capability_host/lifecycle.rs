@@ -93,8 +93,8 @@ mod tests {
         StageHandler, StageRegistration, StageRequest, StageResponse,
     };
     use crate::engine::devql::capability_host::runtime_contexts::LocalStoreHealthGateway;
-    use crate::engine::paths;
     use crate::store_config::ProviderConfig;
+    use crate::utils::paths;
     use anyhow::Result;
     use serde_json::json;
     use std::fs::{self, OpenOptions};

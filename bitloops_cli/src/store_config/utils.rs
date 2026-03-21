@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::engine::paths;
+use crate::utils::paths;
 
 use super::constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 use super::types::{BlobStorageProvider, EventsProvider, RelationalProvider};

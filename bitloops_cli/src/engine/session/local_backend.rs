@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-use crate::engine::paths;
+use crate::utils::paths;
 
 use super::backend::SessionBackend;
 use super::state::{PrePromptState, PreTaskState, SessionState};
@@ -587,7 +587,7 @@ mod tests {
     fn pre_task_state_file_path_ends_with_expected_suffix() {
         let (_dir, backend) = setup();
         let got = backend.pre_task_path("toolu_abc123");
-        let expected_suffix = std::path::Path::new(crate::engine::paths::BITLOOPS_TMP_DIR)
+        let expected_suffix = std::path::Path::new(crate::utils::paths::BITLOOPS_TMP_DIR)
             .join("pre-task-toolu_abc123.json");
         assert!(got.is_absolute());
         assert!(

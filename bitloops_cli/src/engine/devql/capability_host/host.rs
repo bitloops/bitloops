@@ -480,7 +480,7 @@ mod tests {
         IngesterHandler, IngesterRegistration, QueryExample, SchemaModule, StageHandler,
         StageRegistration, StageRequest, StageResponse,
     };
-    use crate::engine::paths;
+    use crate::utils::paths;
     use anyhow::Result;
     use serde::Deserialize;
     use serde_json::json;

@@ -11,7 +11,6 @@ use sha2::{Digest, Sha256};
 use crate::commands::enable;
 use crate::commands::explain::{RewindPoint, get_branch_checkpoints_real};
 use crate::engine::git_operations::{hard_reset_with_protection, has_uncommitted_changes};
-use crate::engine::paths;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::SessionState;
 use crate::engine::settings;
@@ -19,6 +18,7 @@ use crate::engine::strategy::manual_commit::{
     read_latest_session_content, read_session_content_by_id,
 };
 use crate::engine::trailers::SESSION_TRAILER_KEY;
+use crate::utils::paths;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 

@@ -7,6 +7,7 @@ pub use bitloops_cli::engine;
 pub use bitloops_cli::read;
 pub use bitloops_cli::repository;
 pub use bitloops_cli::store_config;
+pub use bitloops_cli::utils;
 mod branding;
 mod commands;
 mod server;

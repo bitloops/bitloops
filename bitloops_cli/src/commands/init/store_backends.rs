@@ -3,12 +3,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::engine::paths;
 use crate::store_config::{
     BlobStorageProvider, EventsProvider, RelationalProvider, resolve_blob_local_path_for_repo,
     resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
     resolve_store_backend_config_for_repo,
 };
+use crate::utils::paths;
 
 const DUCKDB_CHECKPOINT_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (

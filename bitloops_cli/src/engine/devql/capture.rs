@@ -285,7 +285,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture temporary checkpoint");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_rows: i64 = conn
@@ -350,7 +350,7 @@ mod tests {
         )
         .expect("capture with mixed dir and file events");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let current_rows: i64 = conn
             .query_row(
@@ -374,7 +374,7 @@ mod tests {
         let repo = crate::engine::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
         let cfg = crate::engine::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
             .expect("build devql config");
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let sqlite = crate::engine::db::SqliteConnectionPool::connect(db_path.clone())
             .expect("connect sqlite");
         sqlite
@@ -464,7 +464,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture second temp batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let file_revision: String = conn
             .query_row(
@@ -503,7 +503,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture no-op batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         if !db_path.exists() {
             return;
         }
@@ -539,7 +539,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
             .expect("capture duplicate batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -579,7 +579,7 @@ mod tests {
         )
         .expect("capture deleted file using runtime handle");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -633,7 +633,7 @@ mod tests {
         )
         .expect("capture duplicate batch with runtime handle");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
         let workspace_rows: i64 = conn
             .query_row(
@@ -665,7 +665,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let workspace_id: i64 = conn
@@ -722,7 +722,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         // temporary_checkpoints should not even exist in the DevQL database —
@@ -756,7 +756,7 @@ mod tests {
         capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
             .expect("capture batch");
 
-        let db_path = crate::engine::paths::default_relational_db_path(dir.path());
+        let db_path = crate::utils::paths::default_relational_db_path(dir.path());
         let conn = Connection::open(db_path).expect("open sqlite");
 
         let table_exists: bool = conn

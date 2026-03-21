@@ -23,11 +23,11 @@ use crate::engine::git_operations;
 use crate::engine::history::devql_prefetch;
 #[cfg(test)]
 use crate::engine::logging;
-use crate::engine::paths;
 use crate::engine::settings;
-use crate::engine::stringutil;
 use crate::engine::transcript::commit_message;
 use crate::engine::transcript::utils::get_transcript_position;
+use crate::utils::paths;
+use crate::utils::strings;
 
 use crate::engine::agent::claude_code::git_hooks;
 use crate::engine::agent::claude_code::hooks as claude_hooks;

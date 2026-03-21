@@ -416,7 +416,7 @@ fn resolve_repo_scoped_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
             .context("resolving configured SQLite path for session DB");
     }
 
-    Ok(crate::engine::paths::default_relational_db_path(repo_root))
+    Ok(crate::utils::paths::default_relational_db_path(repo_root))
 }
 
 fn parse_json_column<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T> {

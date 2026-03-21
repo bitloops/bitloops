@@ -22,7 +22,6 @@ use crate::engine::lifecycle::adapters::{
     route_hook_command_to_lifecycle,
 };
 use crate::engine::logging;
-use crate::engine::paths;
 use crate::engine::session::backend::SessionBackend;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::phase::SessionPhase;
@@ -31,6 +30,7 @@ use crate::engine::settings;
 use crate::engine::strategy::Strategy;
 use crate::engine::strategy::manual_commit::ManualCommitStrategy;
 use crate::engine::strategy::registry::{self, StrategyRegistry};
+use crate::utils::paths;
 
 use super::git;
 use crate::engine::agent::claude_code::hooks_cmd::{

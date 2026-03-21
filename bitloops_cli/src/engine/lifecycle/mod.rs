@@ -137,7 +137,7 @@ pub fn handle_lifecycle_session_start(
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in SessionStart event"))?;
-    let repo_root = crate::engine::paths::repo_root()?;
+    let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
 
     let mut state = backend.load_session(&session_id)?.unwrap_or_else(|| {
@@ -158,7 +158,7 @@ pub fn handle_lifecycle_session_start(
     }
     state.last_interaction_time = Some(now_rfc3339());
     state.worktree_path = repo_root.to_string_lossy().into_owned();
-    state.worktree_id = crate::engine::paths::get_worktree_id(&repo_root)?;
+    state.worktree_id = crate::utils::paths::get_worktree_id(&repo_root)?;
     if state.agent_type.trim().is_empty() {
         state.agent_type = canonical_request.agent.agent_key.clone();
     }
@@ -182,7 +182,7 @@ pub fn handle_lifecycle_turn_start(
         SessionIdPolicy::Strict,
     )
     .map_err(|_| anyhow!("no session_id in TurnStart event"))?;
-    let repo_root = crate::engine::paths::repo_root()?;
+    let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
 
     let transcript_offset = agent
@@ -298,7 +298,7 @@ fn detect_file_changes_for_turn_end(
         }
         if path.is_empty()
             || path.ends_with('/')
-            || crate::engine::paths::is_infrastructure_path(&path)
+            || crate::utils::paths::is_infrastructure_path(&path)
         {
             continue;
         }
@@ -323,7 +323,7 @@ fn detect_file_changes_for_turn_end(
     let normalize = |paths: BTreeSet<String>| {
         paths
             .into_iter()
-            .map(|p| crate::engine::paths::to_relative_path(&p, &base))
+            .map(|p| crate::utils::paths::to_relative_path(&p, &base))
             .filter(|p| !p.is_empty() && !p.starts_with(".."))
             .collect::<Vec<_>>()
     };
@@ -338,11 +338,9 @@ fn filter_and_normalize_paths_for_turn_end(files: &[String], repo_root: &Path) -
     let base = repo_root.to_string_lossy();
     files
         .iter()
-        .map(|p| crate::engine::paths::to_relative_path(p, &base))
+        .map(|p| crate::utils::paths::to_relative_path(p, &base))
         .filter(|p| {
-            !p.is_empty()
-                && !p.starts_with("..")
-                && !crate::engine::paths::is_infrastructure_path(p)
+            !p.is_empty() && !p.starts_with("..") && !crate::utils::paths::is_infrastructure_path(p)
         })
         .collect()
 }
@@ -443,17 +441,17 @@ pub fn handle_lifecycle_turn_end(
         return Err(anyhow!("empty repository"));
     }
 
-    let repo_root = crate::engine::paths::repo_root()?;
+    let repo_root = crate::utils::paths::repo_root()?;
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
 
-    let meta_rel = crate::engine::paths::session_metadata_dir_from_session_id(&session_id);
+    let meta_rel = crate::utils::paths::session_metadata_dir_from_session_id(&session_id);
     let meta_dir_abs = repo_root.join(&meta_rel);
     std::fs::create_dir_all(&meta_dir_abs)
         .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
 
     let transcript_data =
         std::fs::read(&event.session_ref).map_err(|e| anyhow!("failed to read transcript: {e}"))?;
-    let log_path = meta_dir_abs.join(crate::engine::paths::TRANSCRIPT_FILE_NAME);
+    let log_path = meta_dir_abs.join(crate::utils::paths::TRANSCRIPT_FILE_NAME);
     std::fs::write(&log_path, &transcript_data)
         .map_err(|e| anyhow!("failed to write transcript: {e}"))?;
 
@@ -538,12 +536,12 @@ pub fn handle_lifecycle_turn_end(
         summary = s;
     }
 
-    let prompt_file = meta_dir_abs.join(crate::engine::paths::PROMPT_FILE_NAME);
+    let prompt_file = meta_dir_abs.join(crate::utils::paths::PROMPT_FILE_NAME);
     let prompt_content = all_prompts.join("\n\n---\n\n");
     std::fs::write(&prompt_file, &prompt_content)
         .map_err(|e| anyhow!("failed to write prompt file: {e}"))?;
 
-    let summary_file = meta_dir_abs.join(crate::engine::paths::SUMMARY_FILE_NAME);
+    let summary_file = meta_dir_abs.join(crate::utils::paths::SUMMARY_FILE_NAME);
     std::fs::write(&summary_file, &summary)
         .map_err(|e| anyhow!("failed to write summary file: {e}"))?;
 
@@ -554,7 +552,7 @@ pub fn handle_lifecycle_turn_end(
         last_prompt.clone()
     };
 
-    let context_path = meta_dir_abs.join(crate::engine::paths::CONTEXT_FILE_NAME);
+    let context_path = meta_dir_abs.join(crate::utils::paths::CONTEXT_FILE_NAME);
     create_context_file(
         &context_path,
         &commit_message,
@@ -639,7 +637,7 @@ pub fn handle_lifecycle_compaction(
         return Ok(());
     }
 
-    let repo_root = match crate::engine::paths::repo_root() {
+    let repo_root = match crate::utils::paths::repo_root() {
         Ok(root) => root,
         Err(err) => {
             eprintln!(
@@ -691,7 +689,7 @@ pub fn handle_lifecycle_session_end(
         return Ok(());
     }
 
-    let repo_root = crate::engine::paths::repo_root()?;
+    let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
     if let Some(mut state) = backend.load_session(&session_id)? {
         let context = SessionTransitionContext {
@@ -758,7 +756,7 @@ pub fn capture_pre_prompt_state(
 }
 
 fn truncate_prompt_for_storage(prompt: &str) -> String {
-    crate::engine::stringutil::truncate_runes(
+    crate::utils::strings::truncate_runes(
         &prompt.split_whitespace().collect::<Vec<_>>().join(" "),
         100,
         "",
@@ -832,7 +830,7 @@ fn collect_untracked_files_for_lifecycle(repo_root: &Path) -> Vec<String> {
         .lines()
         .filter_map(|line| line.strip_prefix("?? "))
         .map(str::trim)
-        .filter(|path| !path.is_empty() && !crate::engine::paths::is_infrastructure_path(path))
+        .filter(|path| !path.is_empty() && !crate::utils::paths::is_infrastructure_path(path))
         .map(ToOwned::to_owned)
         .collect()
 }

@@ -111,7 +111,7 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 8] {
 }
 
 fn hooks_file_path() -> Result<PathBuf> {
-    let repo_root = crate::engine::paths::repo_root().or_else(|_| {
+    let repo_root = crate::utils::paths::repo_root().or_else(|_| {
         std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
     })?;
     Ok(repo_root.join(HOOKS_DIR).join(HOOKS_FILE_NAME))

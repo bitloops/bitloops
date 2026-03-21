@@ -8,7 +8,7 @@ pub mod read;
 pub mod repository;
 pub mod server;
 pub mod store_config;
-pub mod terminal;
+pub mod utils;
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use bitloops_cli::engine::paths;
+use bitloops_cli::utils::paths;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
 use tempfile::TempDir;

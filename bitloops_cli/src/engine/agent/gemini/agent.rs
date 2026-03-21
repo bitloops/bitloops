@@ -116,7 +116,7 @@ impl Agent for GeminiCliAgent {
     }
 
     fn detect_presence(&self) -> Result<bool> {
-        let repo_root = crate::engine::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
+        let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
 
         let gemini_dir = repo_root.join(".gemini");
         if gemini_dir.exists() {
@@ -797,7 +797,7 @@ impl GeminiCliAgent {
     }
 
     fn settings_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::engine::paths::repo_root().or_else(|_| {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
             std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
         })?;
         Ok(repo_root.join(".gemini").join(GEMINI_SETTINGS_FILE_NAME))

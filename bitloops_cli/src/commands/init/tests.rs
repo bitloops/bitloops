@@ -6,9 +6,9 @@ use super::telemetry::{
 };
 use super::*;
 use crate::commands::{Cli, Commands};
-use crate::engine::paths;
 use crate::engine::settings;
 use crate::test_support::process_state::{with_cwd, with_env_var, with_process_state};
+use crate::utils::paths;
 
 use clap::Parser;
 use std::io::Cursor;

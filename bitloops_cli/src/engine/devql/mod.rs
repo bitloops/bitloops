@@ -31,7 +31,7 @@ use crate::store_config::{
     StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
     resolve_store_embedding_config, resolve_store_semantic_config,
 };
-use crate::terminal::db_status_table::print_db_status_table;
+use crate::utils::terminal::print_db_status_table;
 
 pub mod capabilities;
 pub mod capability_host;

@@ -118,7 +118,7 @@ impl Drop for ProcessStateGuard {
             if env::set_current_dir(old).is_err() {
                 let _ = env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
             }
-            crate::engine::paths::clear_repo_root_cache();
+            crate::utils::paths::clear_repo_root_cache();
         }
 
         restore_env_vars(&self.previous_env);
@@ -138,7 +138,7 @@ pub(crate) fn enter_process_state(
 
     if let Some(path) = cwd {
         env::set_current_dir(path).expect("set cwd");
-        crate::engine::paths::clear_repo_root_cache();
+        crate::utils::paths::clear_repo_root_cache();
     }
 
     ProcessStateGuard {

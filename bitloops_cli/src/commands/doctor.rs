@@ -114,7 +114,7 @@ pub fn classify_session(
 }
 
 pub fn run_doctor(force: bool) -> Result<()> {
-    let repo_root = crate::engine::paths::repo_root()?;
+    let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
     let states = backend.list_sessions()?;
     let mut out = io::stdout().lock();

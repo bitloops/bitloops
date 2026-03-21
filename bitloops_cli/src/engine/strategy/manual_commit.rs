@@ -22,19 +22,19 @@ use crate::engine::agent::{
     AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE, TokenUsage,
     canonical_agent_key,
 };
-use crate::engine::paths;
 use crate::engine::session::phase::{
     Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
     transition_with_context,
 };
 use crate::engine::session::state::{PromptAttribution as SessionPromptAttribution, SessionState};
 use crate::engine::session::{SessionBackend, create_session_backend_or_local};
-use crate::engine::stringutil;
 use crate::engine::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use crate::engine::transcript::commit_message;
 use crate::engine::validation::validators::{
     validate_agent_id, validate_session_id, validate_tool_use_id,
 };
+use crate::utils::paths;
+use crate::utils::strings;
 
 use super::attribution::{
     PromptAttribution as StrategyPromptAttribution, TreeSnapshot,

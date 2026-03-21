@@ -2,7 +2,6 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use crate::engine::paths;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::strategy::manual_commit::run_git;
 use crate::engine::trailers::{
@@ -10,6 +9,7 @@ use crate::engine::trailers::{
 };
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::git_command;
+use crate::utils::paths;
 
 use super::*;
 

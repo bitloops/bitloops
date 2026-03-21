@@ -80,7 +80,7 @@ impl Agent for OpenCodeAgent {
     }
 
     fn detect_presence(&self) -> Result<bool> {
-        let repo_root = crate::engine::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
+        let repo_root = crate::utils::paths::repo_root().unwrap_or_else(|_| PathBuf::from("."));
         Ok(repo_root.join(".opencode").is_dir() || repo_root.join("opencode.json").is_file())
     }
 
@@ -274,7 +274,7 @@ impl OpenCodeAgent {
     }
 
     pub fn plugin_path(&self) -> Result<PathBuf> {
-        let repo_root = crate::engine::paths::repo_root().or_else(|_| {
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
             std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
         })?;
         Ok(get_plugin_path(&repo_root))

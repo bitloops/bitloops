@@ -9,7 +9,7 @@ use crate::engine::devql::{
     DevqlConfig, resolve_repo_identity, run_capability_packs_report, run_ingest, run_init,
     run_query,
 };
-use crate::engine::paths;
+use crate::utils::paths;
 
 pub use crate::engine::devql::run_connection_status;
 

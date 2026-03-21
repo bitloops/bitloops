@@ -666,7 +666,7 @@ fn collect_untracked_files_at_start(repo_root: &Path) -> Vec<String> {
 }
 
 fn truncate_prompt_for_storage(prompt: &str) -> String {
-    stringutil::truncate_runes(&stringutil::collapse_whitespace(prompt), 100, "...")
+    strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
 fn generate_context_from_prompts(prompts: &[String]) -> String {
@@ -677,7 +677,7 @@ fn generate_context_from_prompts(prompts: &[String]) -> String {
     for (idx, prompt) in prompts.iter().enumerate() {
         let mut display = prompt.clone();
         if display.chars().count() > 500 {
-            display = stringutil::truncate_runes(&display, 500, "...");
+            display = strings::truncate_runes(&display, 500, "...");
         }
         out.push_str(&format!("### Prompt {}\n\n{}\n\n", idx + 1, display));
     }

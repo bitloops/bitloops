@@ -99,12 +99,12 @@ fn truncate_description(input: &str, max_len: usize) -> String {
 
 fn extract_user_prompt(value: &Value) -> Option<String> {
     if let Some(content) = value.get("content").and_then(Value::as_str) {
-        return Some(crate::engine::textutil::strip_ide_context_tags(content));
+        return Some(crate::utils::text::strip_ide_context_tags(content));
     }
 
     let content = value.get("message")?.get("content")?;
     if let Some(text) = content.as_str() {
-        return Some(crate::engine::textutil::strip_ide_context_tags(text));
+        return Some(crate::utils::text::strip_ide_context_tags(text));
     }
 
     let items = content.as_array()?;
@@ -119,7 +119,7 @@ fn extract_user_prompt(value: &Value) -> Option<String> {
     if joined.is_empty() {
         None
     } else {
-        Some(crate::engine::textutil::strip_ide_context_tags(&joined))
+        Some(crate::utils::text::strip_ide_context_tags(&joined))
     }
 }
 

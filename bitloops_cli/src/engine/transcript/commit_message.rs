@@ -1,4 +1,4 @@
-use crate::engine::stringutil;
+use crate::utils::strings;
 
 pub const DEFAULT_COMMIT_MESSAGE: &str = "Claude Code session updates";
 
@@ -41,9 +41,9 @@ pub fn clean_prompt_for_commit(prompt: &str) -> String {
     }
     cleaned = cleaned.trim().to_string();
 
-    cleaned = stringutil::truncate_runes(&cleaned, 72, "");
+    cleaned = strings::truncate_runes(&cleaned, 72, "");
     cleaned = cleaned.trim().to_string();
-    stringutil::capitalize_first(&cleaned)
+    strings::capitalize_first(&cleaned)
 }
 
 pub fn generate_commit_message(original_prompt: &str) -> String {

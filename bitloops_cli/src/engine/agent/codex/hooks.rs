@@ -48,7 +48,7 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String, &'static str); 2] {
 }
 
 fn resolve_repo_root() -> Result<PathBuf> {
-    crate::engine::paths::repo_root().or_else(|_| {
+    crate::utils::paths::repo_root().or_else(|_| {
         std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
     })
 }

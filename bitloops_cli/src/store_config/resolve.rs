@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::engine::paths;
+use crate::utils::paths;
 
 use super::constants::*;
 use super::types::{

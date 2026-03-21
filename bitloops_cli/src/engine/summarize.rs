@@ -582,7 +582,7 @@ fn build_condensed_transcript_from_cursor(content: &[u8]) -> Vec<Entry> {
         match role {
             "user" => entries.push(Entry {
                 entry_type: EntryType::User,
-                content: crate::engine::textutil::strip_ide_context_tags(&content),
+                content: crate::utils::text::strip_ide_context_tags(&content),
                 tool_name: String::new(),
                 tool_detail: String::new(),
             }),

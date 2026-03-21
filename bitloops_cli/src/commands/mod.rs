@@ -139,7 +139,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     };
 
     if root::should_attempt_watcher_autostart(&command)
-        && let Ok(repo_root) = crate::engine::paths::repo_root()
+        && let Ok(repo_root) = crate::utils::paths::repo_root()
         && let Err(err) = crate::engine::devql::watch::ensure_watcher_running(&repo_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");

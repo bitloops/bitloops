@@ -52,7 +52,7 @@ fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
         crate::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
-        crate::engine::paths::default_relational_db_path(repo_root)
+        crate::utils::paths::default_relational_db_path(repo_root)
     }
 }
 

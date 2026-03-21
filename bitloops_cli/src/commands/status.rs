@@ -1,5 +1,5 @@
 use crate::engine::agent::agent_display_name;
-use crate::engine::stringutil;
+use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;
 use serde_json::Value;
@@ -267,7 +267,7 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
 }
 
 fn truncate_prompt(input: &str, max_chars: usize) -> String {
-    stringutil::truncate_runes(input, max_chars, "...")
+    strings::truncate_runes(input, max_chars, "...")
 }
 
 pub async fn run(args: StatusArgs) -> Result<()> {

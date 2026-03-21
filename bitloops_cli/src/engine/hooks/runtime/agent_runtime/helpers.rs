@@ -340,7 +340,7 @@ fn next_incremental_sequence(
 }
 
 fn truncate_prompt_for_storage(prompt: &str) -> String {
-    stringutil::truncate_runes(&stringutil::collapse_whitespace(prompt), 100, "...")
+    strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
 fn generate_commit_message(prompt: &str) -> String {

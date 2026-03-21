@@ -31,7 +31,7 @@ pub fn write_task_checkpoint(task_metadata_dir: &str, checkpoint: &TaskCheckpoin
     data.push('\n');
 
     let checkpoint_file =
-        PathBuf::from(task_metadata_dir).join(crate::engine::paths::CHECKPOINT_FILE_NAME);
+        PathBuf::from(task_metadata_dir).join(crate::utils::paths::CHECKPOINT_FILE_NAME);
     fs::write(&checkpoint_file, data).with_context(|| {
         format!(
             "failed to write checkpoint file: {}",
@@ -44,7 +44,7 @@ pub fn write_task_checkpoint(task_metadata_dir: &str, checkpoint: &TaskCheckpoin
 
 pub fn read_task_checkpoint(task_metadata_dir: &str) -> Result<TaskCheckpoint> {
     let checkpoint_file =
-        PathBuf::from(task_metadata_dir).join(crate::engine::paths::CHECKPOINT_FILE_NAME);
+        PathBuf::from(task_metadata_dir).join(crate::utils::paths::CHECKPOINT_FILE_NAME);
     let data = fs::read(&checkpoint_file).with_context(|| {
         format!(
             "failed to read checkpoint file: {}",
@@ -56,7 +56,7 @@ pub fn read_task_checkpoint(task_metadata_dir: &str) -> Result<TaskCheckpoint> {
 }
 
 pub fn write_task_prompt(task_metadata_dir: &str, prompt: &str) -> Result<()> {
-    let prompt_file = PathBuf::from(task_metadata_dir).join(crate::engine::paths::PROMPT_FILE_NAME);
+    let prompt_file = PathBuf::from(task_metadata_dir).join(crate::utils::paths::PROMPT_FILE_NAME);
     fs::write(&prompt_file, prompt).with_context(|| {
         format!(
             "failed to write prompt file: {}",
@@ -132,7 +132,7 @@ mod tests {
             "task metadata directory should be created"
         );
 
-        let checkpoint_file = task_dir.join(crate::engine::paths::CHECKPOINT_FILE_NAME);
+        let checkpoint_file = task_dir.join(crate::utils::paths::CHECKPOINT_FILE_NAME);
         let data = fs::read(&checkpoint_file).expect("failed reading checkpoint file");
         let loaded: TaskCheckpoint =
             serde_json::from_slice(&data).expect("failed unmarshaling checkpoint");
@@ -158,7 +158,7 @@ mod tests {
         write_task_prompt(&task_metadata_dir, prompt).expect("write prompt should succeed");
 
         let prompt_file =
-            PathBuf::from(&task_metadata_dir).join(crate::engine::paths::PROMPT_FILE_NAME);
+            PathBuf::from(&task_metadata_dir).join(crate::utils::paths::PROMPT_FILE_NAME);
         let data = fs::read_to_string(prompt_file).expect("failed to read prompt file");
         assert_eq!(data, prompt);
     }

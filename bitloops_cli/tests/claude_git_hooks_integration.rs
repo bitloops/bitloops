@@ -123,7 +123,7 @@ fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
         bitloops_cli::store_config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
-        bitloops_cli::engine::paths::default_relational_db_path(repo_root)
+        bitloops_cli::utils::paths::default_relational_db_path(repo_root)
     }
 }
 

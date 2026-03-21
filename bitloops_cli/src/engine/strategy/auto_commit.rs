@@ -9,14 +9,14 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::engine::agent::canonical_agent_key;
-use crate::engine::paths;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::session::state::SessionState;
-use crate::engine::stringutil;
 use crate::engine::trailers::{
     AGENT_TRAILER_KEY, CHECKPOINT_TRAILER_KEY, METADATA_TASK_TRAILER_KEY, METADATA_TRAILER_KEY,
     SESSION_TRAILER_KEY, STRATEGY_TRAILER_KEY,
 };
+use crate::utils::paths;
+use crate::utils::strings;
 
 use super::manual_commit::ManualCommitStrategy;
 use super::manual_commit::commit_files_to_metadata_branch;
@@ -480,7 +480,7 @@ impl SessionInitializer for AutoCommitStrategy {
 }
 
 fn truncate_prompt(prompt: &str) -> String {
-    stringutil::truncate_runes(&stringutil::collapse_whitespace(prompt), 100, "...")
+    strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
 fn now_string() -> String {

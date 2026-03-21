@@ -2,9 +2,9 @@ use anyhow::{Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::engine::paths;
 use crate::engine::session::create_session_backend_or_local;
 use crate::engine::strategy::manual_commit::list_orphaned_session_states_for_cleanup;
+use crate::utils::paths;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupType {
@@ -260,7 +260,7 @@ mod tests {
             resolve_sqlite_db_path_for_repo(repo_root, Some(path))
                 .expect("resolve configured sqlite path")
         } else {
-            crate::engine::paths::default_relational_db_path(repo_root)
+            crate::utils::paths::default_relational_db_path(repo_root)
         }
     }
 
