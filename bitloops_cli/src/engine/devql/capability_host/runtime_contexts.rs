@@ -19,6 +19,7 @@ use super::config_view::CapabilityConfigView;
 use super::contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
     CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
+    KnowledgeMigrationContext,
 };
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
@@ -261,14 +262,6 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         self.repo_root
     }
 
-    fn relational(&self) -> &dyn RelationalGateway {
-        self.relational
-    }
-
-    fn documents(&self) -> &dyn DocumentStoreGateway {
-        self.documents
-    }
-
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()> {
         if self.backends.relational.provider != RelationalProvider::Sqlite {
             return Ok(());
@@ -289,6 +282,16 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         conn.execute_batch(sql)
             .context("applying DevQL SQLite DDL")?;
         Ok(())
+    }
+}
+
+impl KnowledgeMigrationContext for LocalCapabilityRuntime<'_> {
+    fn relational(&self) -> &dyn RelationalGateway {
+        self.relational
+    }
+
+    fn documents(&self) -> &dyn DocumentStoreGateway {
+        self.documents
     }
 }
 

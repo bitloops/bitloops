@@ -36,15 +36,17 @@ This document captures an architecture review of first-party capability packs ag
 
 ---
 
-## 2. Host execution contexts: core vs knowledge split (short term done)
+## 2. Host execution + migration contexts: core vs knowledge split (done)
 
 **Update (2026-03-20):** **`CapabilityExecutionContext`** / **`CapabilityIngestContext`** are **core-only** (repo, graph, config, blobs, connectors, DevQL relational helpers, etc.). Knowledge relational + document ports live on **`KnowledgeExecutionContext`** / **`KnowledgeIngestContext`** (supertraits of the core traits). The host registers knowledge contributions via **`register_knowledge_stage`** / **`register_knowledge_ingester`** and dispatches with the knowledge context type; other packs use **`StageHandler`** / **`IngesterHandler`** and never see **`relational()`** / **`documents()`** on the core trait.
 
-**Residual:** **`CapabilityMigrationContext`** still exposes **`relational()`** / **`documents()`** for all pack migrations in one ordered run (only Knowledge migrations use them today). Medium-term: namespaced migration callbacks or split migration context if non-knowledge migrations must not see those ports at compile time.
+**Update (2026-03-21, migrations):** **`CapabilityMigrationContext`** is **core-only** (repo, repo root, **`apply_devql_sqlite_ddl`**). Knowledge store ports are on **`KnowledgeMigrationContext`** (supertrait). Pack migrations use **`MigrationRunner::Core(...)`** vs **`MigrationRunner::Knowledge(...)`**; **`run_migrations`** requires **`KnowledgeMigrationContext`** so knowledge migrations can run in the same ordered pass as core migrations.
+
+**Residual:** If multiple non-knowledge packs need first-class relational/document ports during migrations, introduce a **`CapabilityStorageGateway`** (or per-capability handles) **namespaced by capability id**, matching the registry doc.
 
 **Suggested approach (remaining):**
 
-- **Medium term:** Introduce a **`CapabilityStorageGateway`** (or per-capability gateway handles) on the context, **namespaced by capability id**, matching the registry doc, if multiple packs need first-class document/relational ports.
+- **Medium term:** When cross-pack migration storage is needed, add namespaced gateways rather than widening **`CapabilityMigrationContext`** again.
 
 ---
 
@@ -115,7 +117,7 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 | Order | Topic | Core action |
 |------|--------|-------------|
 | 1 | Dual pack models | **Done (SC):** Semantic Clones on `DevqlCapabilityHost` only; extension host does not register SC. Residual: K+TH still dual-registered (extension + DevQL). |
-| 2 | Context surface area | **Done (stages/ingesters):** core vs **`Knowledge*Context`** + **`register_knowledge_*`**; **open:** migration context still wide |
+| 2 | Context surface area | **Done:** core vs **`Knowledge*Context`** for stages/ingesters (**`register_knowledge_*`**) and for migrations (**`CapabilityMigrationContext`** vs **`KnowledgeMigrationContext`**, **`MigrationRunner::Core` / `Knowledge`**) |
 | 3 | Test Harness depth | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain |
 | 4 | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented |
 | 5 | Knowledge hygiene | Gateway-only store access; config/provenance consistency |

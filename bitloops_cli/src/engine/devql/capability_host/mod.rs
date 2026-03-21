@@ -19,6 +19,7 @@ pub use config_view::CapabilityConfigView;
 pub use contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
     CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
+    KnowledgeMigrationContext,
 };
 pub use descriptor::{CapabilityDependency, CapabilityDescriptor};
 pub use diagnostics::{
@@ -27,7 +28,7 @@ pub use diagnostics::{
 };
 pub use health::{CapabilityHealthCheck, CapabilityHealthResult};
 pub use host::DevqlCapabilityHost;
-pub use migrations::CapabilityMigration;
+pub use migrations::{CapabilityMigration, MigrationRunner};
 pub use policy::{
     CrossPackAccessPolicy, CrossPackGrant, HostInvocationPolicy, PackTrustTier, with_timeout,
 };

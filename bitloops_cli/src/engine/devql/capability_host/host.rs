@@ -472,7 +472,7 @@ mod tests {
     use crate::engine::devql::capability_host::health::{
         CapabilityHealthCheck, CapabilityHealthResult,
     };
-    use crate::engine::devql::capability_host::migrations::CapabilityMigration;
+    use crate::engine::devql::capability_host::migrations::{CapabilityMigration, MigrationRunner};
     use crate::engine::devql::capability_host::registrar::{
         BoxFuture, CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult,
         IngesterHandler, IngesterRegistration, QueryExample, SchemaModule, StageHandler,
@@ -615,7 +615,7 @@ mod tests {
                 capability_id: "knowledge",
                 version: "1",
                 description: "write migration log",
-                run: record_migration,
+                run: MigrationRunner::Core(record_migration),
             }];
             &MIGRATIONS
         }
@@ -771,9 +771,10 @@ mod tests {
             .register_pack(&StageOnlyPack)
             .expect_err("duplicate stage should fail");
 
+        let msg = err.to_string();
         assert!(
-            err.to_string()
-                .contains("stage `knowledge.stage` is already registered")
+            msg.contains("[stage:knowledge.stage]") && msg.contains("duplicate registration"),
+            "unexpected error: {msg}"
         );
     }
 
@@ -787,9 +788,10 @@ mod tests {
             .register_pack(&IngesterOnlyPack)
             .expect_err("duplicate ingester should fail");
 
+        let msg = err.to_string();
         assert!(
-            err.to_string()
-                .contains("ingester `knowledge.ingester` is already registered")
+            msg.contains("[ingester:knowledge.ingester]") && msg.contains("duplicate registration"),
+            "unexpected error: {msg}"
         );
     }
 

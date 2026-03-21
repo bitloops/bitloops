@@ -72,15 +72,25 @@ pub trait KnowledgeIngestContext: CapabilityIngestContext {
     fn documents(&self) -> &dyn DocumentStoreGateway;
 }
 
+/// Migration context for packs that only touch the **DevQL relational** store (e.g. SQLite DDL via
+/// [`apply_devql_sqlite_ddl`](CapabilityMigrationContext::apply_devql_sqlite_ddl)).
+///
+/// Knowledge-specific stores are on [`KnowledgeMigrationContext`] so non-knowledge migrations cannot
+/// call `relational()` / `documents()` at compile time.
 pub trait CapabilityMigrationContext: Send {
     fn repo(&self) -> &RepoIdentity;
     fn repo_root(&self) -> &Path;
-    fn relational(&self) -> &dyn RelationalGateway;
-    fn documents(&self) -> &dyn DocumentStoreGateway;
 
     /// Applies DDL to the DevQL SQLite relational file when the backend is SQLite. No-op for
     /// Postgres (pack tables are ensured via `devql init` / relational bootstrap).
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()>;
+}
+
+/// Knowledge pack migrations that initialise the **knowledge** relational + DuckDB document stores.
+/// Extends [`CapabilityMigrationContext`] (same runtime implements both).
+pub trait KnowledgeMigrationContext: CapabilityMigrationContext {
+    fn relational(&self) -> &dyn RelationalGateway;
+    fn documents(&self) -> &dyn DocumentStoreGateway;
 }
 
 pub trait CapabilityHealthContext: Send + Sync {

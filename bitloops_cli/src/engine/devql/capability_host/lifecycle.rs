@@ -1,8 +1,9 @@
 use anyhow::{Result, bail};
 
+use super::contexts::{CapabilityMigrationContext, KnowledgeMigrationContext};
 use super::descriptor::CapabilityDescriptor;
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
-use super::migrations::CapabilityMigration;
+use super::migrations::{CapabilityMigration, MigrationRunner};
 use super::registrar::{CapabilityPack, CapabilityRegistrar};
 
 pub fn validate_descriptor(descriptor: &CapabilityDescriptor) -> Result<()> {
@@ -42,12 +43,15 @@ pub fn register_pack(
     pack.register(registrar)
 }
 
-pub fn run_migrations(
+pub fn run_migrations<M: KnowledgeMigrationContext>(
     migrations: &[CapabilityMigration],
-    ctx: &mut dyn super::contexts::CapabilityMigrationContext,
+    ctx: &mut M,
 ) -> Result<()> {
     for migration in migrations {
-        (migration.run)(ctx)?;
+        match migration.run {
+            MigrationRunner::Core(f) => f(ctx as &mut dyn CapabilityMigrationContext)?,
+            MigrationRunner::Knowledge(f) => f(ctx as &mut dyn KnowledgeMigrationContext)?,
+        }
     }
     Ok(())
 }
@@ -74,7 +78,7 @@ mod tests {
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::contexts::{
         CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
-        CapabilityMigrationContext,
+        CapabilityMigrationContext, KnowledgeMigrationContext,
     };
     use crate::engine::devql::capability_host::gateways::{
         ConnectorRegistry, DocumentStoreGateway, RelationalGateway, StoreHealthGateway,
@@ -82,7 +86,7 @@ mod tests {
     use crate::engine::devql::capability_host::health::{
         CapabilityHealthCheck, CapabilityHealthResult,
     };
-    use crate::engine::devql::capability_host::migrations::CapabilityMigration;
+    use crate::engine::devql::capability_host::migrations::{CapabilityMigration, MigrationRunner};
     use crate::engine::devql::capability_host::registrar::{
         BoxFuture, CapabilityPack, CapabilityRegistrar, IngesterHandler, IngesterRegistration,
         KnowledgeIngesterRegistration, KnowledgeStageRegistration, QueryExample, SchemaModule,
@@ -291,16 +295,18 @@ mod tests {
             &self.repo_root
         }
 
+        fn apply_devql_sqlite_ddl(&self, _sql: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl KnowledgeMigrationContext for MigrationContext {
         fn relational(&self) -> &dyn RelationalGateway {
             &self.relational
         }
 
         fn documents(&self) -> &dyn DocumentStoreGateway {
             &self.documents
-        }
-
-        fn apply_devql_sqlite_ddl(&self, _sql: &str) -> Result<()> {
-            Ok(())
         }
     }
 
@@ -420,14 +426,18 @@ mod tests {
 
         let err = register_pack(&mut registrar, &pack).expect_err("invalid descriptor");
 
-        assert!(err.to_string().contains("capability descriptor id"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[capability_pack:descriptor]") && msg.contains("id must not be empty"),
+            "unexpected error: {msg}"
+        );
         assert!(!called.load(Ordering::SeqCst));
         assert!(registrar.stages.is_empty());
     }
 
     #[test]
     fn run_migrations_executes_in_order() {
-        fn first(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
+        fn first(ctx: &mut dyn KnowledgeMigrationContext) -> Result<()> {
             let log_path = ctx.repo_root().join("migrations.log");
             ctx.relational().initialise_schema()?;
             ctx.documents().initialise_schema()?;
@@ -455,13 +465,13 @@ mod tests {
                 capability_id: "knowledge",
                 version: "1",
                 description: "first",
-                run: first,
+                run: MigrationRunner::Knowledge(first),
             },
             CapabilityMigration {
                 capability_id: "knowledge",
                 version: "2",
                 description: "second",
-                run: second,
+                run: MigrationRunner::Core(second),
             },
         ];
 
