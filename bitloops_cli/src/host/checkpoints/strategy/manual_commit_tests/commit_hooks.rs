@@ -7,26 +7,26 @@ fn get_git_author_from_repo_global_fallback() {
             (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
         ],
         || {
-        fs::write(
-            home.path().join(".gitconfig"),
-            "[user]\n\tname = Global Author\n\temail = global@test.com\n",
-        )
-        .unwrap();
+            fs::write(
+                home.path().join(".gitconfig"),
+                "[user]\n\tname = Global Author\n\temail = global@test.com\n",
+            )
+            .unwrap();
 
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
-        run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-        run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
+            let dir = tempfile::tempdir().unwrap();
+            setup_git_repo(&dir);
+            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
+            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
 
-        let author = get_git_author_from_repo(dir.path());
-        assert!(
-            author.is_ok(),
-            "expected global git config fallback, got {author:?}"
-        );
-        let (name, email) = author.unwrap();
-        assert_eq!(name, "Global Author");
-        assert_eq!(email, "global@test.com");
-    },
+            let author = get_git_author_from_repo(dir.path());
+            assert!(
+                author.is_ok(),
+                "expected global git config fallback, got {author:?}"
+            );
+            let (name, email) = author.unwrap();
+            assert_eq!(name, "Global Author");
+            assert_eq!(email, "global@test.com");
+        },
     );
 }
 
@@ -39,20 +39,20 @@ fn get_git_author_from_repo_no_config() {
             (ALLOW_HOST_GIT_CONFIG_ENV, Some("1")),
         ],
         || {
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
-        run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
-        run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
+            let dir = tempfile::tempdir().unwrap();
+            setup_git_repo(&dir);
+            run_git(dir.path(), &["config", "--unset", "user.name"]).ok();
+            run_git(dir.path(), &["config", "--unset", "user.email"]).ok();
 
-        let author = get_git_author_from_repo(dir.path());
-        assert!(
-            author.is_ok(),
-            "expected defaults when no git config exists, got {author:?}"
-        );
-        let (name, email) = author.unwrap();
-        assert_eq!(name, "Unknown");
-        assert_eq!(email, "unknown@local");
-    },
+            let author = get_git_author_from_repo(dir.path());
+            assert!(
+                author.is_ok(),
+                "expected defaults when no git config exists, got {author:?}"
+            );
+            let (name, email) = author.unwrap();
+            assert_eq!(name, "Unknown");
+            assert_eq!(email, "unknown@local");
+        },
     );
 }
 
@@ -81,7 +81,7 @@ fn prepare_commit_msg_is_noop_even_with_active_session() {
     let content = fs::read_to_string(&msg_file).unwrap();
     assert_eq!(content, original, "commit message should be unchanged");
     assert!(
-        !content.contains(CHECKPOINT_TRAILER_KEY),
+        !content.contains(CHECKPOINT_KEY),
         "no checkpoint metadata should be injected: {content}"
     );
 }

@@ -10,9 +10,9 @@ use std::io::BufRead;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 use crate::cli::{clean, doctor, enable, reset, resume, versioncheck};
 use crate::config::settings::{self, BitloopsSettings};
+use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 
 pub const ROOT_NAME: &str = "bitloops";
 pub const ROOT_SHORT_ABOUT: &str = "Bitloops CLI";

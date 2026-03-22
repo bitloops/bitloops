@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::cli::explain::*;
-use crate::host::checkpoints::checkpoint_id::CHECKPOINT_TRAILER_KEY;
+use crate::host::checkpoints::checkpoint_id::CHECKPOINT_KEY;
 use crate::test_support::process_state::git_command;
 use anyhow::{Result, anyhow};
 use clap::{Arg, ArgAction, Command};
@@ -1637,10 +1637,7 @@ fn TestGetAssociatedCommits() {
             message: "feat: add feature".to_string(),
             author: "Alice Developer".to_string(),
             timestamp: 2,
-            checkpoints: HashMap::from([(
-                CHECKPOINT_TRAILER_KEY.to_string(),
-                checkpoint_id.to_string(),
-            )]),
+            checkpoints: HashMap::from([(CHECKPOINT_KEY.to_string(), checkpoint_id.to_string())]),
             ..CommitNode::default()
         },
         CommitNode {
@@ -1695,10 +1692,7 @@ fn TestGetAssociatedCommits_MultipleMatches() {
             message: "first checkpoint commit".to_string(),
             author: "Test".to_string(),
             timestamp: 1,
-            checkpoints: HashMap::from([(
-                CHECKPOINT_TRAILER_KEY.to_string(),
-                checkpoint_id.to_string(),
-            )]),
+            checkpoints: HashMap::from([(CHECKPOINT_KEY.to_string(), checkpoint_id.to_string())]),
             ..CommitNode::default()
         },
         CommitNode {
@@ -1706,10 +1700,7 @@ fn TestGetAssociatedCommits_MultipleMatches() {
             message: "second checkpoint commit".to_string(),
             author: "Test".to_string(),
             timestamp: 2,
-            checkpoints: HashMap::from([(
-                CHECKPOINT_TRAILER_KEY.to_string(),
-                checkpoint_id.to_string(),
-            )]),
+            checkpoints: HashMap::from([(CHECKPOINT_KEY.to_string(), checkpoint_id.to_string())]),
             ..CommitNode::default()
         },
     ];
@@ -1758,10 +1749,7 @@ fn TestGetAssociatedCommits_SearchAllFindsMergedBranchCommits() {
             parents: vec!["dddd000000000000000000000000000000000000".to_string()],
             timestamp: 2,
             author: "Feature Dev".to_string(),
-            checkpoints: HashMap::from([(
-                CHECKPOINT_TRAILER_KEY.to_string(),
-                checkpoint_id.to_string(),
-            )]),
+            checkpoints: HashMap::from([(CHECKPOINT_KEY.to_string(), checkpoint_id.to_string())]),
             ..CommitNode::default()
         },
     ];

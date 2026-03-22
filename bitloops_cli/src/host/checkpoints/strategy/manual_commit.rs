@@ -23,7 +23,7 @@ use crate::adapters::agents::{
     canonical_agent_key,
 };
 #[cfg(test)]
-use crate::host::checkpoints::checkpoint_id::CHECKPOINT_TRAILER_KEY;
+use crate::host::checkpoints::checkpoint_id::CHECKPOINT_KEY;
 use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
 use crate::host::checkpoints::session::phase::{
     Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,

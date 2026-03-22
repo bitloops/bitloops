@@ -3,8 +3,8 @@ use super::root::{
     run_curl_bash_post_install_command_with_io, write_completion, write_help, write_version,
 };
 use super::{Cli, Commands};
-use crate::branding::bitloops_wordmark;
 use crate::test_support::process_state::with_env_vars;
+use crate::utils::branding::bitloops_wordmark;
 use clap::{Command, CommandFactory, Parser};
 use std::io::Cursor;
 use tempfile::TempDir;

@@ -1,4 +1,4 @@
-use crate::host::checkpoints::checkpoint_id::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
+use crate::host::checkpoints::checkpoint_id::{CHECKPOINT_KEY, is_valid_checkpoint_id};
 use crate::host::checkpoints::strategy::manual_commit::{
     get_checkpoint_author, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_latest_session_content, read_session_content_by_id, run_git,

@@ -42,7 +42,7 @@ fn build_commit_graph_from_git(
             .cloned()
             .unwrap_or_default();
         if is_valid_checkpoint_id(&checkpoint_id) {
-            checkpoints.insert(CHECKPOINT_TRAILER_KEY.to_string(), checkpoint_id);
+            checkpoints.insert(CHECKPOINT_KEY.to_string(), checkpoint_id);
         }
 
         nodes.push(CommitNode {

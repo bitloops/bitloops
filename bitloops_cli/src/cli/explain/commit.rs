@@ -146,7 +146,7 @@ fn extract_assistant_response(value: &Value) -> Option<String> {
 #[cfg(test)]
 fn commit_checkpoint_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
     commit.checkpoints.iter().any(|(key, value)| {
-        key.eq_ignore_ascii_case(CHECKPOINT_TRAILER_KEY) && value == checkpoint_id
+        key.eq_ignore_ascii_case(CHECKPOINT_KEY) && value == checkpoint_id
     })
 }
 

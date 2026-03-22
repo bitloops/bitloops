@@ -3,7 +3,7 @@
 /// Canonical key name used in `CommitNode.checkpoints` HashMaps for checkpoint identification.
 /// This is NOT a git commit message element — checkpoint↔commit mappings live in the `commit_checkpoints`
 /// relational table.
-pub const CHECKPOINT_TRAILER_KEY: &str = "Bitloops-Checkpoint";
+pub const CHECKPOINT_KEY: &str = "Bitloops-Checkpoint";
 pub const CHECKPOINT_ID_PATTERN: &str = "[0-9a-f]{12}";
 pub const SHORT_ID_LENGTH: usize = 12;
 
