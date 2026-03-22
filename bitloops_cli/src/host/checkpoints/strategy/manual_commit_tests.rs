@@ -1,0 +1,11 @@
+include!("manual_commit_tests/common.rs");
+include!("manual_commit_tests/git_sequence.rs");
+include!("manual_commit_tests/session_state.rs");
+include!("manual_commit_tests/shadow_branch.rs");
+include!("manual_commit_tests/checkpoint_core.rs");
+include!("manual_commit_tests/checkpoint_views.rs");
+include!("manual_commit_tests/checkpoint_temporary.rs");
+include!("manual_commit_tests/checkpoint_redaction.rs");
+include!("manual_commit_tests/update_committed.rs");
+include!("manual_commit_tests/commit_hooks.rs");
+include!("manual_commit_tests/post_commit.rs");

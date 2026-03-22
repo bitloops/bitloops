@@ -889,56 +889,56 @@ pub(crate) async fn execute_query_json_with_composition(
     Ok(Value::Array(rows))
 }
 
-include!("core_contracts.rs");
-include!("canonical_mapping.rs");
-include!("vocab.rs");
+include!("devql/core_contracts.rs");
+include!("devql/canonical_mapping.rs");
+include!("devql/vocab.rs");
 // ingestion: shared types
-include!("ingestion/types.rs");
+include!("devql/ingestion/types.rs");
 // ingestion: repo identity & git remote parsing
-include!("ingestion/repo_identity.rs");
+include!("devql/ingestion/repo_identity.rs");
 // ingestion: database schema DDL
-include!("ingestion/schema.rs");
+include!("devql/ingestion/schema.rs");
 // ingestion: language detection & git blob utilities
-include!("ingestion/language.rs");
+include!("devql/ingestion/language.rs");
 // ingestion: artefact symbol identity helpers
-include!("ingestion/artefact_identity.rs");
+include!("devql/ingestion/artefact_identity.rs");
 // ingestion: checkpoint / commit / event persistence
-include!("ingestion/checkpoint.rs");
+include!("devql/ingestion/checkpoint.rs");
 // ingestion: shared record types for artefact persistence
-include!("ingestion/artefact_persistence_types.rs");
+include!("devql/ingestion/artefact_persistence_types.rs");
 // ingestion: SQL dialect helpers, JSON utilities, timestamp expressions
-include!("ingestion/artefact_persistence_sql.rs");
+include!("devql/ingestion/artefact_persistence_sql.rs");
 // ingestion: file state row, file artefact upsert, revision management
-include!("ingestion/artefact_persistence_file.rs");
+include!("devql/ingestion/artefact_persistence_file.rs");
 // ingestion: symbol record building, content hashing, artefact DB upserts
-include!("ingestion/artefact_persistence_symbols.rs");
+include!("devql/ingestion/artefact_persistence_symbols.rs");
 // ingestion: edge records, current state queries/mutations, row deserialization
-include!("ingestion/artefact_persistence_edges.rs");
+include!("devql/ingestion/artefact_persistence_edges.rs");
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
-include!("ingestion/artefact_persistence.rs");
+include!("devql/ingestion/artefact_persistence.rs");
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: JS/TS artefact extraction (tree-sitter)
-include!("ingestion/extraction_js_ts.rs");
+include!("devql/ingestion/extraction_js_ts.rs");
 // ingestion: Rust artefact extraction (tree-sitter)
-include!("ingestion/extraction_rust.rs");
+include!("devql/ingestion/extraction_rust.rs");
 // ingestion: shared edge-building utilities
-include!("ingestion/edges_shared.rs");
+include!("devql/ingestion/edges_shared.rs");
 // ingestion: export edges (JS/TS + Rust)
-include!("ingestion/edges_export.rs");
+include!("devql/ingestion/edges_export.rs");
 // ingestion: inheritance edges (JS/TS + Rust)
-include!("ingestion/edges_inherits.rs");
+include!("devql/ingestion/edges_inherits.rs");
 // ingestion: reference edges (JS/TS + Rust)
-include!("ingestion/edges_reference.rs");
+include!("devql/ingestion/edges_reference.rs");
 // ingestion: JS/TS dependency edge orchestration
-include!("ingestion/edges_js_ts.rs");
+include!("devql/ingestion/edges_js_ts.rs");
 // ingestion: Rust dependency edge orchestration
-include!("ingestion/edges_rust.rs");
-include!("query/parser.rs");
-include!("query/executor.rs");
-include!("query/utils.rs");
-include!("deps_query.rs");
-include!("db_utils.rs");
+include!("devql/ingestion/edges_rust.rs");
+include!("devql/query/parser.rs");
+include!("devql/query/executor.rs");
+include!("devql/query/utils.rs");
+include!("devql/deps_query.rs");
+include!("devql/db_utils.rs");
 
 #[cfg(test)]
 pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
@@ -949,33 +949,33 @@ fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests/devql_tests.rs"]
+#[path = "devql/tests/devql_tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/identity_tests.rs"]
+#[path = "devql/tests/identity_tests.rs"]
 mod identity_tests;
 
 #[cfg(test)]
-#[path = "tests/mapping_tests.rs"]
+#[path = "devql/tests/mapping_tests.rs"]
 mod mapping_tests;
 
 #[cfg(test)]
-#[path = "tests/core_contract_tests.rs"]
+#[path = "devql/tests/core_contract_tests.rs"]
 mod core_contract_tests;
 
 #[cfg(test)]
-#[path = "tests/cucumber_world.rs"]
+#[path = "devql/tests/cucumber_world.rs"]
 mod cucumber_world;
 
 #[cfg(test)]
-#[path = "tests/cucumber_steps/mod.rs"]
+#[path = "devql/tests/cucumber_steps/mod.rs"]
 mod cucumber_steps;
 
 #[cfg(test)]
-#[path = "tests/cucumber_bdd.rs"]
+#[path = "devql/tests/cucumber_bdd.rs"]
 mod cucumber_bdd;
 
 #[cfg(test)]
-#[path = "tests/knowledge_support.rs"]
+#[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;

@@ -94,5 +94,5 @@ include!("manual_commit/support.rs");
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[path = "manual_commit_tests/mod.rs"]
+#[path = "manual_commit_tests.rs"]
 mod tests;
