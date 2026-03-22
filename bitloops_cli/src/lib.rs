@@ -7,7 +7,6 @@ pub mod config;
 pub mod git;
 pub mod host;
 pub mod models;
-pub mod read;
 pub mod storage;
 pub mod telemetry;
 pub mod utils;

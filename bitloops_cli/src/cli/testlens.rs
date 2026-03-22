@@ -4,15 +4,15 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::capability_packs::test_harness::ingest::{coverage_batch, results};
+use crate::capability_packs::test_harness::query as query_test_harness;
 use crate::capability_packs::test_harness::storage as test_harness_engine;
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
+use crate::cli::testlens_types::{DEFAULT_QUERY_VIEW, QueryViewArg};
 use crate::host::devql::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
 use crate::models::{CoverageFormat, ScopeKind};
-use crate::read::query_test_harness;
-use crate::read::query_view::{DEFAULT_QUERY_VIEW, QueryViewArg};
 use crate::utils::paths;
 
 const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens init`, `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`, `bitloops testlens query`, `bitloops testlens list`";

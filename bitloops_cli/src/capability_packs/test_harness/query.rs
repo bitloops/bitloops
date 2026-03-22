@@ -6,9 +6,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::capability_packs::test_harness::storage::TestHarnessQueryRepository;
+use super::storage::TestHarnessQueryRepository;
+use crate::cli::testlens_types::QueryViewArg;
 use crate::models::{CoverageSummaryRecord, QueriedArtefactRecord};
-use crate::read::query_view::QueryViewArg;
 
 const DEFAULT_MIN_STRENGTH: f64 = 0.3;
 const WELL_TESTED_MIN_BRANCH_COVERAGE_PCT: f64 = 50.0;
@@ -502,8 +502,8 @@ mod tests {
         WELL_TESTED_MIN_BRANCH_COVERAGE_PCT, apply_min_strength_filter, compute_confidence,
         compute_strength, derive_verification_level, effective_min_strength, validate_min_strength,
     };
+    use crate::cli::testlens_types::QueryViewArg;
     use crate::models::CoverageSummaryRecord;
-    use crate::read::query_view::QueryViewArg;
 
     #[test]
     fn applies_default_strength_only_to_full_and_tests_views() {

@@ -15,6 +15,7 @@ pub mod rewind;
 pub mod root;
 pub mod status;
 pub mod testlens;
+pub mod testlens_types;
 pub mod versioncheck;
 
 /// Bitloops CLI
