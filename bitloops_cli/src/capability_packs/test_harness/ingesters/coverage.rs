@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::commands::ingest_coverage;
+use crate::capability_packs::test_harness::ingest::coverage;
 use crate::host::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
@@ -79,7 +79,7 @@ impl IngesterHandler for CoverageIngestIngester {
             let mut g = store
                 .lock()
                 .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
-            let summary = ingest_coverage::execute(
+            let summary = coverage::execute(
                 &mut *g,
                 &coverage_path,
                 &payload.commit_sha,
@@ -89,7 +89,7 @@ impl IngesterHandler for CoverageIngestIngester {
                 format,
             )?;
 
-            let human = ingest_coverage::format_summary(&payload.commit_sha, &summary);
+            let human = coverage::format_summary(&payload.commit_sha, &summary);
             Ok(IngestResult::new(
                 json!({
                     "capability": "test_harness",

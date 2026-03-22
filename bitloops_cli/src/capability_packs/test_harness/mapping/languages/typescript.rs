@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use tree_sitter::{Node, Parser};
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
-use crate::app::test_mapping::file_discovery::{
+use crate::capability_packs::test_harness::mapping::file_discovery::{
     normalize_join, normalize_rel_path, read_source_file,
 };
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
     ScenarioDiscoverySource,
 };
-use crate::app::test_mapping::registry::LanguageProvider;
+use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
 pub(crate) struct TypeScriptLanguageProvider {
     parser: Parser,

@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     EnumeratedTestScenario, EnumerationMode, EnumerationResult, ReferenceCandidate,
     ScenarioDiscoverySource,
 };

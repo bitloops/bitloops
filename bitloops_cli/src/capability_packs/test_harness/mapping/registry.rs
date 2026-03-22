@@ -2,10 +2,12 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::app::test_mapping::languages::{
+use crate::capability_packs::test_harness::mapping::languages::{
     rust::RustLanguageProvider, typescript::TypeScriptLanguageProvider,
 };
-use crate::app::test_mapping::model::{DiscoveredTestFile, EnumerationResult, ReconciledDiscovery};
+use crate::capability_packs::test_harness::mapping::model::{
+    DiscoveredTestFile, EnumerationResult, ReconciledDiscovery,
+};
 
 pub(crate) trait LanguageProvider {
     fn language_id(&self) -> &'static str;

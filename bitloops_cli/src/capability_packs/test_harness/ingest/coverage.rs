@@ -74,13 +74,15 @@ pub fn execute(
         CoverageFormat::Lcov => {
             ingest_lcov(store, coverage_path, commit_sha, &repo_id, &capture_id)?
         }
-        CoverageFormat::LlvmJson => crate::app::commands::parse_llvm_json::ingest_llvm_json(
-            store,
-            coverage_path,
-            commit_sha,
-            &repo_id,
-            &capture_id,
-        )?,
+        CoverageFormat::LlvmJson => {
+            crate::capability_packs::test_harness::ingest::parse_llvm_json::ingest_llvm_json(
+                store,
+                coverage_path,
+                commit_sha,
+                &repo_id,
+                &capture_id,
+            )?
+        }
     };
 
     store.insert_coverage_capture(&capture)?;

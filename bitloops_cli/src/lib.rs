@@ -1,6 +1,5 @@
 pub mod adapters;
 pub mod api;
-pub mod app;
 pub mod branding;
 pub mod capability_packs;
 pub mod cli;

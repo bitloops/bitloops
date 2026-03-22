@@ -1,7 +1,9 @@
-use crate::app::test_mapping::languages::rust::scenarios::collect_rust_suites;
-use crate::app::test_mapping::linker::build_production_index;
-use crate::app::test_mapping::materialize::{MaterializationContext, materialize_source_discovery};
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::languages::rust::scenarios::collect_rust_suites;
+use crate::capability_packs::test_harness::mapping::linker::build_production_index;
+use crate::capability_packs::test_harness::mapping::materialize::{
+    MaterializationContext, materialize_source_discovery,
+};
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, ReferenceCandidate, StructuralMappingStats,
 };
 use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
@@ -500,12 +502,12 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
         let tree = match parser.parse(source, None) {
             Some(tree) => tree,
             None => {
-                world
-                    .discovery_issues
-                    .push(crate::app::test_mapping::model::DiscoveryIssue {
+                world.discovery_issues.push(
+                    crate::capability_packs::test_harness::mapping::model::DiscoveryIssue {
                         path: path.clone(),
                         message: "failed to parse source".to_string(),
-                    });
+                    },
+                );
                 continue;
             }
         };
@@ -710,12 +712,12 @@ fn when_test_discovery_with_diagnostics(
         for (path, source) in &world.test_sources {
             let tree = parser.parse(source, None);
             if tree.is_none() || source.matches('{').count() != source.matches('}').count() {
-                world
-                    .discovery_issues
-                    .push(crate::app::test_mapping::model::DiscoveryIssue {
+                world.discovery_issues.push(
+                    crate::capability_packs::test_harness::mapping::model::DiscoveryIssue {
                         path: path.clone(),
                         message: "parse error or incomplete source".to_string(),
-                    });
+                    },
+                );
             }
         }
     })

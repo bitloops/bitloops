@@ -4,7 +4,7 @@ use anyhow::Context;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::commands::ingest_tests;
+use crate::capability_packs::test_harness::ingest::tests;
 use crate::host::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
@@ -46,10 +46,9 @@ impl IngesterHandler for LinkageIngester {
             let mut g = store
                 .lock()
                 .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
-            let summary =
-                ingest_tests::execute(&mut *g, ctx.repo_root(), payload.commit_sha.as_str())?;
+            let summary = tests::execute(&mut *g, ctx.repo_root(), payload.commit_sha.as_str())?;
 
-            let human = ingest_tests::format_summary(&payload.commit_sha, &summary);
+            let human = tests::format_summary(&payload.commit_sha, &summary);
             Ok(IngestResult::new(
                 json!({
                     "capability": "test_harness",

@@ -45,7 +45,7 @@ pub fn execute(
             )
         })?;
 
-        crate::app::commands::ingest_coverage::execute(
+        crate::capability_packs::test_harness::ingest::coverage::execute(
             store,
             &coverage_path,
             commit_sha,

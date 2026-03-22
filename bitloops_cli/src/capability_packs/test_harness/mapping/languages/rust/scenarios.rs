@@ -1,6 +1,6 @@
 use tree_sitter::Node;
 
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate, ScenarioDiscoverySource,
 };
 

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use tree_sitter::Node;
 
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestScenario, ReferenceCandidate, ScenarioDiscoverySource,
 };
 
@@ -123,7 +123,7 @@ fn collect_rust_test_generating_macro_names(root: Node<'_>, source: &[u8]) -> Ha
     while let Some(node) = stack.pop() {
         if node.kind() == "macro_definition"
             && let Ok(raw_definition) = node.utf8_text(source)
-            && crate::app::test_mapping::file_discovery::rust_source_contains_test_markers(
+            && crate::capability_packs::test_harness::mapping::file_discovery::rust_source_contains_test_markers(
                 raw_definition,
             )
             && let Some(name) = extract_rust_macro_definition_name(raw_definition)

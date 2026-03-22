@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::app::test_mapping;
+use crate::capability_packs::test_harness::mapping;
 use crate::models::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
 use crate::repository::TestHarnessRepository;
 
@@ -32,7 +32,7 @@ pub fn execute(
     let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
     let production = repository.load_production_artefacts(commit_sha)?;
     let started_at = chrono::Utc::now().to_rfc3339();
-    let mapping = test_mapping::execute(&repo_id, repo_dir, commit_sha, &production)?;
+    let mapping = mapping::execute(&repo_id, repo_dir, commit_sha, &production)?;
     let finished_at = chrono::Utc::now().to_rfc3339();
 
     let discovery_run_id = format!("discovery:{commit_sha}");

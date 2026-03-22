@@ -12,17 +12,34 @@ This document captures an architecture review of first-party capability packs ag
 
 **Related:** [Grep-driven boundary audit](./devql-capability-packs-grep-audit.md) (Knowledge vs Test Harness capability modules, `devql/ingestion` table access).
 
+**Update (2026-03-22, Layered Extension Architecture restructuring):** The codebase has been restructured per CLI-1426. Key path changes:
+- `engine/` → `host/` (Core Host substrate)
+- `engine/devql/capabilities/{knowledge,semantic_clones,test_harness}/` → `capability_packs/{knowledge,semantic_clones,test_harness}/` (top-level Layer 1)
+- `engine/semantic_clones/` + `engine/semantic_embeddings/` + `engine/semantic_features/` → consolidated into `capability_packs/semantic_clones/{scoring,embeddings,features}/`
+- `engine/agent/` → `adapters/agents/` (Layer 2)
+- `engine/providers/` → `adapters/model_providers/` (Layer 2)
+- `engine/adapters/connectors/` → `adapters/connectors/` (Layer 2)
+- `engine/{db,blob}/` → `storage/` (Infrastructure)
+- `engine/{telemetry,logging}/` → `telemetry/` (Infrastructure)
+- `engine/{stringutil,textutil,paths}/` + `terminal/` → `utils/` (Shared)
+- `store_config/` + `engine/settings/` → `config/` (Shared)
+- `domain/` → `models.rs` (Shared)
+- `commands/` → `cli/` (Presentation)
+- `server/dashboard/` → `api/` (Presentation)
+
+See [architecture-review.md](../bitloops_cli/docs/architecture-review.md) for the full rationale and mapping.
+
 **Target boundaries (core ↔ packs, timeouts, optional cross-pack grants):** [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md). Implemented in-repo (2026-03-20): `HostInvocationPolicy` + `with_timeout` on stage/ingester dispatch; `execute_devql_subquery` wall-clock limit via `DevqlSubqueryOptions::subquery_timeout`; `host.cross_pack_access` grants **or** descriptor `dependencies` for registered-stage composition; `devql_relational_scoped` binds DevQL relational to the invoking ingester capability id; default `host` config block in `build_capability_config_root`.
 
 ---
 
 ## 1. Dual capability-pack integration models (highest leverage)
 
-**Update (2026-03-20):** Semantic Clones is registered on **`DevqlCapabilityHost`** (`semantic_clones` pack: ingester `semantic_clones.rebuild`, SQLite DDL via pack migration, ingest calls `invoke_ingester_with_relational`). It is **no longer** registered on **`CoreExtensionHost`**. Postgres `symbol_clone_edges` DDL remains in relational bootstrap; extension-style descriptor helpers in `engine/capability_packs/builtin/semantic_clones.rs` remain for provider builders and tests.
+**Update (2026-03-20):** Semantic Clones is registered on **`DevqlCapabilityHost`** (`semantic_clones` pack: ingester `semantic_clones.rebuild`, SQLite DDL via pack migration, ingest calls `invoke_ingester_with_relational`). It is **no longer** registered on **`CoreExtensionHost`**. Postgres `symbol_clone_edges` DDL remains in relational bootstrap; extension-style descriptor helpers in `host/capability_packs/builtin/semantic_clones.rs` remain for provider builders and tests.
 
 **Finding (historical):** Two parallel mechanisms existed: **DevQL capability host** vs **Core extension host** capability descriptors, with **Semantic Clones** incorrectly living on the extension path.
 
-**Status:** **Closed for Semantic Clones (option A).** `builtin_packs(repo_root)` registers **Knowledge**, **Test Harness**, and **Semantic Clones** on `DevqlCapabilityHost`. `CoreExtensionHost::bootstrap_builtins()` registers **only** Knowledge and Test Harness descriptors (for compatibility/readiness); it does **not** register Semantic Clones. Descriptor helpers in `engine/capability_packs/builtin/semantic_clones.rs` remain for provider builders and tests, not extension-host registration.
+**Status:** **Closed for Semantic Clones (option A).** `builtin_packs(repo_root)` registers **Knowledge**, **Test Harness**, and **Semantic Clones** on `DevqlCapabilityHost`. `CoreExtensionHost::bootstrap_builtins()` registers **only** Knowledge and Test Harness descriptors (for compatibility/readiness); it does **not** register Semantic Clones. Descriptor helpers in `host/capability_packs/builtin/semantic_clones.rs` remain for provider builders and tests, not extension-host registration.
 
 **Residual (acceptable unless you want full unification):** Knowledge and Test Harness still have **two registration surfaces** (extension descriptors + DevQL `CapabilityPack`). That is separate from the original “Semantic Clones in the wrong lane” problem.
 
@@ -68,9 +85,9 @@ This document captures an architecture review of first-party capability packs ag
 
 ## 4. Semantic Clones: pipeline location vs “pack owns enrichers and storage”
 
-**Update (2026-03-21):** **Clone-edge rebuild orchestration** moved from **`ingestion/semantic_clones_persistence.rs`** to **`capabilities/semantic_clones/pipeline.rs`**. **`devql ingest`** already triggered rebuild via **`invoke_ingester_with_relational`**; the **ingester** now calls **`pipeline::rebuild_symbol_clone_edges`** directly. **`crate::engine::devql::rebuild_symbol_clone_edges`** is a **`#[cfg(test)] pub(crate)`** re-export for **`devql::tests`**. Postgres relational bootstrap calls **`pipeline::init_postgres_semantic_clones_schema`**. The duplicate/unused **`engine/devql/ingest.rs`** file was removed.
+**Update (2026-03-21):** **Clone-edge rebuild orchestration** moved from **`host/devql/ingestion/semantic_clones_persistence.rs`** to **`capability_packs/semantic_clones/pipeline.rs`**. **`devql ingest`** already triggered rebuild via **`invoke_ingester_with_relational`**; the **ingester** now calls **`pipeline::rebuild_symbol_clone_edges`** directly. **`crate::host::devql::rebuild_symbol_clone_edges`** is a **`#[cfg(test)] pub(crate)`** re-export for **`devql::tests`**. Postgres relational bootstrap calls **`pipeline::init_postgres_semantic_clones_schema`**. The duplicate/unused **`host/devql/ingest.rs`** file was removed.
 
-**Update (2026-03-21, follow-up):** **Stage 1–2 persistence** moved from **`ingestion/semantic_*_persistence.rs`** to **`capabilities/semantic_clones/stage_semantic_features.rs`** and **`stage_embeddings.rs`**, re-exported from **`capabilities/semantic_clones/mod.rs`** for **`run_ingest`**. Relational bootstrap calls those modules’ **`init_*_schema`** functions. **Postgres vs SQLite DDL split** is documented in [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack).
+**Update (2026-03-21, follow-up):** **Stage 1–2 persistence** moved from **`host/devql/ingestion/semantic_*_persistence.rs`** to **`capability_packs/semantic_clones/stage_semantic_features.rs`** and **`stage_embeddings.rs`**, re-exported from **`capability_packs/semantic_clones/mod.rs`** for **`run_ingest`**. Relational bootstrap calls those modules’ **`init_*_schema`** functions. **Postgres vs SQLite DDL split** is documented in [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack).
 
 **Finding (historical):** Clone-edge build and persistence lived under **`devql/ingestion`**, while the compass positions Semantic Clones as owning enrichers, embeddings, clone edges, and pack-scoped migrations.
 
@@ -84,17 +101,17 @@ This document captures an architecture review of first-party capability packs ag
 
 ## 5. Knowledge: strong pattern; guard against store leakage and duplication
 
-**Finding:** Knowledge **services** generally respect **`CapabilityIngestContext` / `CapabilityExecutionContext`** and gateways — aligned with the Knowledge compass. Storage implementations (`capabilities/knowledge/storage/*`) use **rusqlite** / **duckdb** directly, which is acceptable **if** they are only constructed by the host and exposed as **`dyn Knowledge*Gateway`**.
+**Finding:** Knowledge **services** generally respect **`CapabilityIngestContext` / `CapabilityExecutionContext`** and gateways — aligned with the Knowledge compass. Storage implementations (`capability_packs/knowledge/storage/*`) use **rusqlite** / **duckdb** directly, which is acceptable **if** they are only constructed by the host and exposed as **`dyn Knowledge*Gateway`**.
 
 Risk: other packs or core paths opening the **same files** with ad hoc SQL instead of new gateways.
 
-**Update (2026-03-21):** **`capabilities/knowledge/mod.rs`** documents the hygiene contract (gateways + **`CapabilityConfigView`** + provenance). Persisted ingestion and association provenance JSON now includes **`capability_version`** and **`api_version`** from **`KNOWLEDGE_DESCRIPTOR`**, and refresh ingests stamp **`knowledge.refresh`** (add path **`knowledge.add`**) instead of reusing the add label.
+**Update (2026-03-21):** **`capability_packs/knowledge/mod.rs`** documents the hygiene contract (gateways + **`CapabilityConfigView`** + provenance). Persisted ingestion and association provenance JSON now includes **`capability_version`** and **`api_version`** from **`KNOWLEDGE_DESCRIPTOR`**, and refresh ingests stamp **`knowledge.refresh`** (add path **`knowledge.add`**) instead of reusing the add label.
 
-**Update (2026-03-21, follow-up):** **`CapabilityIngestContext::invoking_ingester_id`** + host wiring populate **`ingester_id`** and **`invoking_capability_id`** on persisted provenance for **`DevqlCapabilityHost::invoke_ingester`** runs. Removed dead **`plugin.rs`**, **`providers/`**, and orphan **`tests.rs`**; knowledge fetch stays on **`engine::adapters::connectors`**.
+**Update (2026-03-21, follow-up):** **`CapabilityIngestContext::invoking_ingester_id`** + host wiring populate **`ingester_id`** and **`invoking_capability_id`** on persisted provenance for **`DevqlCapabilityHost::invoke_ingester`** runs. Removed dead **`plugin.rs`**, **`providers/`**, and orphan **`tests.rs`**; knowledge fetch stays on **`adapters::connectors`**.
 
 **Suggested approach:**
 
-- Keep **all** relational/DuckDB paths for knowledge behind **`RelationalGateway`** / **`DocumentStoreGateway`** (implemented only by knowledge storage types from the host); reject new direct store usage outside `capabilities/knowledge/storage/` in review.
+- Keep **all** relational/DuckDB paths for knowledge behind **`RelationalGateway`** / **`DocumentStoreGateway`** (implemented only by knowledge storage types from the host); reject new direct store usage outside `capability_packs/knowledge/storage/` in review.
 - When adding **config**, prefer **`CapabilityConfigView`** (already used in health paths) consistently; avoid parsing raw repo config inside pack logic except through the view.
 - **Optional later:** add a per-invocation **trace / run id** (UUID) on the ingest runtime if you need cross-service correlation beyond **`ingester_id`**.
 

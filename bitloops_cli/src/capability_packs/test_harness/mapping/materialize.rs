@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::app::test_mapping::linker::{matched_production_artefacts, scenario_id_suffix};
-use crate::app::test_mapping::model::ProductionIndex;
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::linker::{
+    matched_production_artefacts, scenario_id_suffix,
+};
+use crate::capability_packs::test_harness::mapping::model::ProductionIndex;
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, EnumeratedTestScenario, ScenarioDiscoverySource, StructuralMappingStats,
 };
 use crate::models::{ProductionArtefact, TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
@@ -214,20 +216,21 @@ pub(crate) fn materialize_enumerated_scenarios(
                 Vec::new()
             } else {
                 vec![
-                    crate::app::test_mapping::model::ReferenceCandidate::SourcePath(
+                    crate::capability_packs::test_harness::mapping::model::ReferenceCandidate::SourcePath(
                         enumerated.relative_path.clone(),
                     ),
                 ]
             },
             suites: Vec::new(),
         };
-        let synthetic_scenario = crate::app::test_mapping::model::DiscoveredTestScenario {
-            name: enumerated.scenario_name.clone(),
-            start_line: enumerated.start_line,
-            end_line: enumerated.start_line.max(1),
-            reference_candidates: enumerated.reference_candidates.clone(),
-            discovery_source: enumerated.discovery_source,
-        };
+        let synthetic_scenario =
+            crate::capability_packs::test_harness::mapping::model::DiscoveredTestScenario {
+                name: enumerated.scenario_name.clone(),
+                start_line: enumerated.start_line,
+                end_line: enumerated.start_line.max(1),
+                reference_candidates: enumerated.reference_candidates.clone(),
+                discovery_source: enumerated.discovery_source,
+            };
 
         for production_artefact in matched_production_artefacts(
             context.production,

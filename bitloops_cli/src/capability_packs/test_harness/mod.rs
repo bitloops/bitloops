@@ -1,6 +1,8 @@
 pub mod descriptor;
 pub mod health;
+pub mod ingest;
 pub mod ingesters;
+pub mod mapping;
 pub mod migrations;
 pub mod pack;
 pub mod query_examples;

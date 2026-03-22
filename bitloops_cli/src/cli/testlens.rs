@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::app::commands::{ingest_coverage_batch, ingest_results};
+use crate::capability_packs::test_harness::ingest::{coverage_batch, results};
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
@@ -188,7 +188,7 @@ async fn run_ingest_coverage_batch(
     repo_root: &Path,
     args: &TestLensIngestCoverageBatchArgs,
 ) -> Result<()> {
-    let entries = ingest_coverage_batch::parse_manifest_entries(&args.manifest)?;
+    let entries = coverage_batch::parse_manifest_entries(&args.manifest)?;
     let manifest_dir = args
         .manifest
         .parent()
@@ -244,8 +244,8 @@ async fn run_ingest_coverage_batch(
 
 fn run_ingest_results(repo_root: &Path, args: &TestLensIngestResultsArgs) -> Result<()> {
     let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let summary = ingest_results::execute(&mut repository, &args.jest_json, &args.commit)?;
-    ingest_results::print_summary(&args.commit, &summary);
+    let summary = results::execute(&mut repository, &args.jest_json, &args.commit)?;
+    results::print_summary(&args.commit, &summary);
     Ok(())
 }
 

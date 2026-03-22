@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, ProductionIndex, ReferenceCandidate,
 };
 use crate::models::ProductionArtefact;

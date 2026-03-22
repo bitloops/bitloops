@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
-use crate::app::test_mapping::model::CandidateTestFile;
-use crate::app::test_mapping::registry::LanguageProvider;
+use crate::capability_packs::test_harness::mapping::model::CandidateTestFile;
+use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
 pub(crate) fn discover_test_files(
     repo_dir: &Path,

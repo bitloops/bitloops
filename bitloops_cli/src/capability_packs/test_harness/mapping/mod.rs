@@ -13,15 +13,15 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::app::test_mapping::file_discovery::discover_test_files;
-use crate::app::test_mapping::linker::build_production_index;
-use crate::app::test_mapping::materialize::{
+use crate::capability_packs::test_harness::mapping::file_discovery::discover_test_files;
+use crate::capability_packs::test_harness::mapping::linker::build_production_index;
+use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_enumerated_scenarios, materialize_source_discovery,
 };
-use crate::app::test_mapping::model::{
+use crate::capability_packs::test_harness::mapping::model::{
     StructuralMappingOutput, StructuralMappingStats, TestDiscoveryBatch,
 };
-use crate::app::test_mapping::registry::StructuralMappingRegistry;
+use crate::capability_packs::test_harness::mapping::registry::StructuralMappingRegistry;
 use crate::models::ProductionArtefact;
 
 pub(crate) fn execute(

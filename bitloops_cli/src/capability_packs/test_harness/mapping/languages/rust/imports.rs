@@ -3,7 +3,7 @@ use std::path::Path;
 
 use tree_sitter::Node;
 
-use crate::app::test_mapping::file_discovery::normalize_rel_path;
+use crate::capability_packs::test_harness::mapping::file_discovery::normalize_rel_path;
 
 pub(crate) fn collect_rust_import_paths_for(
     root: Node<'_>,
