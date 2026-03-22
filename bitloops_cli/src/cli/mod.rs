@@ -166,9 +166,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Debug(args) => debug::run(&args),
         Commands::Devql(args) => devql::run(args).await,
         Commands::Testlens(args) => testlens::run(args).await,
-        Commands::DevqlWatcher(args) => {
-            crate::host::devql::watch::run_process_command(args).await
-        }
+        Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

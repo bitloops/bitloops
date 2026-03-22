@@ -45,7 +45,7 @@ pub fn run(args: &DebugArgs) -> Result<()> {
     match &args.command {
         Some(DebugCommand::AutoCommit(cmd)) => run_auto_commit(cmd),
         None => {
-            let mut cmd = crate::commands::Cli::command();
+            let mut cmd = crate::cli::Cli::command();
             let mut out = io::stdout();
             if let Some(debug_cmd) = cmd.find_subcommand_mut("debug") {
                 debug_cmd.write_long_help(&mut out)?;

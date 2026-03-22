@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::adapters::agents::{AgentAdapterRegistry, AgentReadinessStatus};
-use crate::commands::enable::find_repo_root;
+use crate::cli::enable::find_repo_root;
 use crate::config::settings;
 
 mod agent_hooks;

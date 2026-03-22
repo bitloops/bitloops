@@ -20,10 +20,10 @@ use crate::adapters::agents::{
     AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
 use crate::config::settings;
+use crate::git;
 use crate::host::history::devql_prefetch;
 use crate::host::transcript::commit_message;
 use crate::host::transcript::utils::get_transcript_position;
-use crate::git;
 #[cfg(test)]
 use crate::telemetry::logging;
 use crate::utils::paths;

@@ -119,7 +119,7 @@ pub(super) struct DashboardDbInit {
 }
 
 #[derive(Clone)]
-pub(in crate::server) struct DashboardDbPools {
+pub(crate) struct DashboardDbPools {
     pub(super) relational_provider: RelationalProvider,
     pub(super) events_provider: EventsProvider,
     pub(super) relational: Option<Arc<dyn RelationalHealthStore>>,

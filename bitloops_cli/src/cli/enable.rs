@@ -241,7 +241,7 @@ pub fn run_uninstall(
 ) -> Result<()> {
     if !repo_root.join(".git").exists() {
         writeln!(err_out, "Not a git repository. Nothing to uninstall.")?;
-        return Err(crate::commands::SilentError.into());
+        return Err(crate::cli::SilentError.into());
     }
 
     let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);

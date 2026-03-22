@@ -320,9 +320,9 @@ fn legacy_bitloops_hooks_codex_usage_is_allowlisted() {
     let allowlist = [
         "src/adapters/agents/codex/hooks.rs",
         "src/adapters/agents/codex/hooks_tests.rs",
-        "src/commands/init.rs",
-        "src/commands/init/tests.rs",
-        "src/commands/root_test.rs",
+        "src/cli/init.rs",
+        "src/cli/init/tests.rs",
+        "src/cli/root_test.rs",
     ];
     let mut violations = Vec::new();
 

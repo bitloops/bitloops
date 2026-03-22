@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use std::path::PathBuf;
 
-pub const DEFAULT_DASHBOARD_PORT: u16 = crate::server::dashboard::DEFAULT_DASHBOARD_PORT;
+pub const DEFAULT_DASHBOARD_PORT: u16 = crate::api::DEFAULT_DASHBOARD_PORT;
 
 #[derive(Args, Debug, Clone)]
 pub struct DashboardArgs {
@@ -23,8 +23,8 @@ pub struct DashboardArgs {
     pub bundle_dir: Option<PathBuf>,
 }
 
-fn build_server_config(args: DashboardArgs) -> crate::server::dashboard::DashboardServerConfig {
-    crate::server::dashboard::DashboardServerConfig {
+fn build_server_config(args: DashboardArgs) -> crate::api::DashboardServerConfig {
+    crate::api::DashboardServerConfig {
         host: args.host,
         port: args.port,
         no_open: args.no_open,
@@ -33,13 +33,13 @@ fn build_server_config(args: DashboardArgs) -> crate::server::dashboard::Dashboa
 }
 
 pub async fn run(args: DashboardArgs) -> Result<()> {
-    crate::server::dashboard::run(build_server_config(args)).await
+    crate::api::run(build_server_config(args)).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{Cli, Commands};
+    use crate::cli::{Cli, Commands};
     use clap::Parser;
 
     #[test]
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(args.port, DEFAULT_DASHBOARD_PORT);
         assert_eq!(
             DEFAULT_DASHBOARD_PORT,
-            crate::server::dashboard::DEFAULT_DASHBOARD_PORT
+            crate::api::DEFAULT_DASHBOARD_PORT
         );
         assert!(args.host.is_none());
         assert!(args.bundle_dir.is_none());

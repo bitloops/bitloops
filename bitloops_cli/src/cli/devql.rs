@@ -178,7 +178,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{Cli, Commands};
+    use crate::cli::{Cli, Commands};
     use clap::Parser;
 
     fn test_runtime() -> tokio::runtime::Runtime {

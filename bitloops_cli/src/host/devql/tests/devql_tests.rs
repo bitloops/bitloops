@@ -1,6 +1,6 @@
 use super::*;
-use crate::commands::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
-use crate::commands::{Cli, Commands};
+use crate::cli::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
+use crate::cli::{Cli, Commands};
 use crate::config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use crate::test_support::process_state::enter_process_state;
@@ -338,7 +338,7 @@ async fn devql_run_requires_subcommand() {
 
     assert!(
         err.to_string()
-            .contains(crate::commands::devql::MISSING_SUBCOMMAND_MESSAGE)
+            .contains(crate::cli::devql::MISSING_SUBCOMMAND_MESSAGE)
     );
 }
 

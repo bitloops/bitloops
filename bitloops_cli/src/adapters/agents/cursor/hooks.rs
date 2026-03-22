@@ -579,10 +579,10 @@ mod tests {
 
         let allowlist = [
             "src/adapters/agents/cursor/hooks.rs",
-            "src/commands/enable.rs",
-            "src/commands/init.rs",
-            "src/commands/init/tests.rs",
-            "src/commands/root_test.rs",
+            "src/cli/enable.rs",
+            "src/cli/init.rs",
+            "src/cli/init/tests.rs",
+            "src/cli/root_test.rs",
         ];
         let mut violations = Vec::new();
 

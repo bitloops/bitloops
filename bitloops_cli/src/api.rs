@@ -31,7 +31,7 @@ const API_MAX_PAGE_LIMIT: usize = 500;
 pub(super) const GIT_FIELD_SEPARATOR: char = '\u{1f}';
 pub(super) const GIT_RECORD_SEPARATOR: char = '\u{1e}';
 pub(super) const DASHBOARD_FALLBACK_INSTALL_HTML: &str =
-    include_str!("dashboard_fallback_install.html");
+    include_str!("api/dashboard_fallback_install.html");
 
 #[derive(Debug, Clone)]
 pub struct DashboardServerConfig {

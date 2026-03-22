@@ -6,7 +6,7 @@ use std::{env, fs};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::commands::enable::initialized_agents;
+use crate::cli::enable::initialized_agents;
 
 use super::agent_hooks::{DEFAULT_AGENT, agent_display, available_agents, detect_agents};
 

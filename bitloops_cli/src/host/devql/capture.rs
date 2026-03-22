@@ -159,11 +159,9 @@ async fn apply_current_state_updates(
             path: rel_path,
             blob_sha: &blob_sha,
         };
-        crate::host::devql::upsert_current_state_for_content(
-            cfg, relational, &revision, &content,
-        )
-        .await
-        .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
+        crate::host::devql::upsert_current_state_for_content(cfg, relational, &revision, &content)
+            .await
+            .with_context(|| format!("capturing current DevQL state for {rel_path}"))?;
     }
     for rel_path in deleted {
         if let Err(err) =

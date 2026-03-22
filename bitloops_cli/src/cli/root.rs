@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
-use crate::commands::{clean, doctor, enable, reset, resume, versioncheck};
+use crate::cli::{clean, doctor, enable, reset, resume, versioncheck};
 use crate::config::settings::{self, BitloopsSettings};
 
 pub const ROOT_NAME: &str = "bitloops";
@@ -215,55 +215,55 @@ pub fn run_resume_command(args: &ResumeArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn command_name(command: &crate::commands::Commands) -> &'static str {
+pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
     match command {
-        crate::commands::Commands::Rewind(_) => "rewind",
-        crate::commands::Commands::Resume(_) => "resume",
-        crate::commands::Commands::Clean(_) => "clean",
-        crate::commands::Commands::Reset(_) => "reset",
-        crate::commands::Commands::Init(_) => "init",
-        crate::commands::Commands::Enable(_) => "enable",
-        crate::commands::Commands::Disable(_) => "disable",
-        crate::commands::Commands::Status(_) => "status",
-        crate::commands::Commands::Dashboard(_) => "dashboard",
-        crate::commands::Commands::Hooks(_) => "hooks",
-        crate::commands::Commands::Version(_) => "version",
-        crate::commands::Commands::Explain(_) => "explain",
-        crate::commands::Commands::Debug(_) => "debug",
-        crate::commands::Commands::Devql(_) => "devql",
-        crate::commands::Commands::Testlens(_) => "testlens",
-        crate::commands::Commands::DevqlWatcher(_) => "__devql-watcher",
-        crate::commands::Commands::Doctor(_) => "doctor",
-        crate::commands::Commands::SendAnalytics(_) => "__send_analytics",
-        crate::commands::Commands::Completion(_) => "completion",
-        crate::commands::Commands::CurlBashPostInstall => "curl-bash-post-install",
-        crate::commands::Commands::Help(_) => "help",
+        crate::cli::Commands::Rewind(_) => "rewind",
+        crate::cli::Commands::Resume(_) => "resume",
+        crate::cli::Commands::Clean(_) => "clean",
+        crate::cli::Commands::Reset(_) => "reset",
+        crate::cli::Commands::Init(_) => "init",
+        crate::cli::Commands::Enable(_) => "enable",
+        crate::cli::Commands::Disable(_) => "disable",
+        crate::cli::Commands::Status(_) => "status",
+        crate::cli::Commands::Dashboard(_) => "dashboard",
+        crate::cli::Commands::Hooks(_) => "hooks",
+        crate::cli::Commands::Version(_) => "version",
+        crate::cli::Commands::Explain(_) => "explain",
+        crate::cli::Commands::Debug(_) => "debug",
+        crate::cli::Commands::Devql(_) => "devql",
+        crate::cli::Commands::Testlens(_) => "testlens",
+        crate::cli::Commands::DevqlWatcher(_) => "__devql-watcher",
+        crate::cli::Commands::Doctor(_) => "doctor",
+        crate::cli::Commands::SendAnalytics(_) => "__send_analytics",
+        crate::cli::Commands::Completion(_) => "completion",
+        crate::cli::Commands::CurlBashPostInstall => "curl-bash-post-install",
+        crate::cli::Commands::Help(_) => "help",
     }
 }
 
-pub(crate) fn hidden_chain_for_command(command: &crate::commands::Commands) -> Vec<bool> {
+pub(crate) fn hidden_chain_for_command(command: &crate::cli::Commands) -> Vec<bool> {
     vec![matches!(
         command,
-        crate::commands::Commands::Hooks(_)
-            | crate::commands::Commands::Debug(_)
-            | crate::commands::Commands::DevqlWatcher(_)
-            | crate::commands::Commands::SendAnalytics(_)
-            | crate::commands::Commands::Completion(_)
-            | crate::commands::Commands::CurlBashPostInstall
+        crate::cli::Commands::Hooks(_)
+            | crate::cli::Commands::Debug(_)
+            | crate::cli::Commands::DevqlWatcher(_)
+            | crate::cli::Commands::SendAnalytics(_)
+            | crate::cli::Commands::Completion(_)
+            | crate::cli::Commands::CurlBashPostInstall
     )]
 }
 
-pub(crate) fn should_attempt_watcher_autostart(command: &crate::commands::Commands) -> bool {
+pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
     !matches!(
         command,
-        crate::commands::Commands::Clean(_)
-            | crate::commands::Commands::Disable(_)
-            | crate::commands::Commands::Help(_)
-            | crate::commands::Commands::Version(_)
-            | crate::commands::Commands::Completion(_)
-            | crate::commands::Commands::CurlBashPostInstall
-            | crate::commands::Commands::SendAnalytics(_)
-            | crate::commands::Commands::DevqlWatcher(_)
+        crate::cli::Commands::Clean(_)
+            | crate::cli::Commands::Disable(_)
+            | crate::cli::Commands::Help(_)
+            | crate::cli::Commands::Version(_)
+            | crate::cli::Commands::Completion(_)
+            | crate::cli::Commands::CurlBashPostInstall
+            | crate::cli::Commands::SendAnalytics(_)
+            | crate::cli::Commands::DevqlWatcher(_)
     )
 }
 
@@ -383,7 +383,7 @@ pub fn run_send_analytics_command(
 }
 
 pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Result<()> {
-    let mut cmd = crate::commands::Cli::command();
+    let mut cmd = crate::cli::Cli::command();
     // clap_complete splits subcommand paths using "__". Our hidden
     // "__send_analytics" and "__devql-watcher" commands conflict with that
     // separator and cause a panic during completion generation, so we rename
@@ -454,7 +454,7 @@ pub(crate) fn write_help(
     command_path: &[String],
     show_tree: bool,
 ) -> Result<()> {
-    let root = crate::commands::Cli::command();
+    let root = crate::cli::Cli::command();
     if show_tree {
         return write_command_tree(w, &root);
     }

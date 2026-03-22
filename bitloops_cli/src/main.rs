@@ -4,17 +4,17 @@ pub use bitloops_cli::adapters;
 pub use bitloops_cli::app;
 pub use bitloops_cli::capability_packs;
 pub use bitloops_cli::config;
-pub use bitloops_cli::host;
 pub use bitloops_cli::git;
+pub use bitloops_cli::host;
 pub use bitloops_cli::models;
 pub use bitloops_cli::read;
 pub use bitloops_cli::repository;
 pub use bitloops_cli::storage;
 pub use bitloops_cli::telemetry;
 pub use bitloops_cli::utils;
-mod branding;
-mod commands;
-mod server;
+pub use bitloops_cli::api;
+pub use bitloops_cli::branding;
+pub use bitloops_cli::cli;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -22,13 +22,13 @@ pub(crate) mod test_support;
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let cmd = commands::Cli::parse();
+    let cmd = cli::Cli::parse();
 
     tokio::select! {
-        result = commands::run(cmd) => {
+        result = cli::run(cmd) => {
             if let Err(e) = result {
                 // SilentError: command already printed the error, skip duplicate output
-                if e.downcast_ref::<commands::SilentError>().is_none() {
+                if e.downcast_ref::<cli::SilentError>().is_none() {
                     eprintln!("Error: {e:#}");
                 }
                 std::process::exit(1);

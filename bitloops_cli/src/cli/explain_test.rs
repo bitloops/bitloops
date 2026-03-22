@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::commands::explain::*;
+use crate::cli::explain::*;
 use crate::host::trailers::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::process_state::git_command;
 use anyhow::{Result, anyhow};
