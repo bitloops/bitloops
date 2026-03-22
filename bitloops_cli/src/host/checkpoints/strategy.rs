@@ -116,7 +116,7 @@ pub trait Strategy: Send + Sync {
     }
 
     /// Called by the `post-commit` git hook.
-    /// Reads the `Bitloops-Checkpoint:` trailer from HEAD and condenses session data
+    /// Reads the checkpoint mapping from DB and condenses session data
     /// onto the `bitloops/checkpoints/v1` branch.
     ///
     fn post_commit(&self) -> Result<()>;

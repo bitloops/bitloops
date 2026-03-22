@@ -811,7 +811,7 @@ fn commit_condenses_metadata_to_checkpoints_branch() {
 }
 
 #[test]
-fn intermediate_commit_without_new_prompt_has_no_checkpoint_trailer() {
+fn intermediate_commit_without_new_prompt_has_no_checkpoint_mapping() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     setup_claude_and_enable(dir.path());

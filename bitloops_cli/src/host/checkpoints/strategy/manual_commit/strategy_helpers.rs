@@ -334,7 +334,7 @@ impl ManualCommitStrategy {
         actions
     }
 
-    /// Updates `base_commit` to HEAD for all active sessions (no-trailer commit path).
+    /// Updates `base_commit` to HEAD for all active sessions.
     #[allow(dead_code)]
     fn update_base_commit_for_active_sessions(&self) -> Result<()> {
         let Some(head) = try_head_hash(&self.repo_root)? else {

@@ -82,7 +82,7 @@ fn prepare_commit_msg_is_noop_even_with_active_session() {
     assert_eq!(content, original, "commit message should be unchanged");
     assert!(
         !content.contains(CHECKPOINT_TRAILER_KEY),
-        "no checkpoint trailer should be injected: {content}"
+        "no checkpoint metadata should be injected: {content}"
     );
 }
 
@@ -175,7 +175,7 @@ fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps() {
 }
 
 #[test]
-fn commit_msg_is_noop_for_trailer_only_message() {
+fn commit_msg_is_noop_for_checkpoint_only_message() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 

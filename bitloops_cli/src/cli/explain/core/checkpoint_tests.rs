@@ -94,7 +94,7 @@ fn metadata_from_json_unknown_agent_defaults_to_claude() {
 #[test]
 fn build_commit_graph_from_git_reads_checkpoint_from_db_mapping() {
     let checkpoint_id = "aabbccddeeff";
-    let (repo, commit_sha) = seed_repo_with_single_commit("checkpoint without trailer");
+    let (repo, commit_sha) = seed_repo_with_single_commit("checkpoint via DB");
     insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);
 
     let commits = build_commit_graph_from_git(repo.path(), 50).expect("build commit graph");
@@ -103,5 +103,5 @@ fn build_commit_graph_from_git_reads_checkpoint_from_db_mapping() {
 
     assert_eq!(associated.len(), 1, "expected commit mapped from SQLite");
     assert_eq!(associated[0].sha, commit_sha);
-    assert_eq!(associated[0].message, "checkpoint without trailer");
+    assert_eq!(associated[0].message, "checkpoint via DB");
 }

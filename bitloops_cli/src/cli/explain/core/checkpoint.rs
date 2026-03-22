@@ -36,13 +36,13 @@ fn build_commit_graph_from_git(
         let timestamp: i64 = parts[3].trim().parse().unwrap_or(0);
         let message = parts[4].trim().to_string();
 
-        let mut trailers: HashMap<String, String> = HashMap::new();
+        let mut checkpoints: HashMap<String, String> = HashMap::new();
         let checkpoint_id = checkpoint_mappings
             .get(sha.as_str())
             .cloned()
             .unwrap_or_default();
         if is_valid_checkpoint_id(&checkpoint_id) {
-            trailers.insert(CHECKPOINT_TRAILER_KEY.to_string(), checkpoint_id);
+            checkpoints.insert(CHECKPOINT_TRAILER_KEY.to_string(), checkpoint_id);
         }
 
         nodes.push(CommitNode {
@@ -51,7 +51,7 @@ fn build_commit_graph_from_git(
             author,
             timestamp,
             message,
-            trailers,
+            checkpoints,
             files_changed: Vec::new(),
         });
     }

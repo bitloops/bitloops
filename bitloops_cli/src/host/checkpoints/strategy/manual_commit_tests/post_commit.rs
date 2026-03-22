@@ -17,7 +17,7 @@ fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     };
     backend.save_session(&state).unwrap();
 
-    // Make a regular commit without a Bitloops trailer.
+    // Make a regular commit.
     fs::write(dir.path().join("change.txt"), "change").unwrap();
     git_command()
         .args(["add", "."])
@@ -70,7 +70,7 @@ fn post_commit_creates_full_checkpoint_structure() {
     };
     backend.save_session(&state).unwrap();
 
-    // Commit without trailer; post_commit should assign and persist checkpoint ID.
+    // post_commit should assign and persist checkpoint ID.
     fs::write(dir.path().join("change2.txt"), "change2").unwrap();
     git_command()
         .args(["add", "."])
@@ -102,13 +102,13 @@ fn post_commit_creates_full_checkpoint_structure() {
 }
 
 #[test]
-fn post_commit_without_trailer_condenses_pending_session_and_maps_head() {
+fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
-            session_id: "pc-no-trailer-condense".to_string(),
+            session_id: "pc-no-checkpoint-condense".to_string(),
             phase: SessionPhase::Idle,
             base_commit: head,
             step_count: 1,
@@ -119,7 +119,7 @@ fn post_commit_without_trailer_condenses_pending_session_and_maps_head() {
 
     fs::write(dir.path().join("condense.txt"), "condense").unwrap();
     git_ok(dir.path(), &["add", "condense.txt"]);
-    git_ok(dir.path(), &["commit", "-m", "commit without trailer"]);
+    git_ok(dir.path(), &["commit", "-m", "regular commit"]);
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
 
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
@@ -185,20 +185,20 @@ fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
 }
 
 #[test]
-fn post_commit_without_trailer_updates_active_base_commit() {
+fn post_commit_without_checkpoint_updates_active_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
-            session_id: "pc-no-trailer".to_string(),
+            session_id: "pc-no-checkpoint".to_string(),
             phase: crate::host::checkpoints::session::phase::SessionPhase::Active,
             base_commit: head_before.clone(),
             ..Default::default()
         })
         .unwrap();
 
-    // Create a regular commit without Bitloops-Checkpoint trailer.
+    // Create a regular commit.
     fs::write(dir.path().join("plain.txt"), "plain").unwrap();
     git_command()
         .args(["add", "."])
@@ -217,15 +217,15 @@ fn post_commit_without_trailer_updates_active_base_commit() {
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
 
-    let loaded = backend.load_session("pc-no-trailer").unwrap().unwrap();
+    let loaded = backend.load_session("pc-no-checkpoint").unwrap().unwrap();
     assert_eq!(
         loaded.base_commit, new_head,
-        "base_commit should advance when post-commit sees no trailer"
+        "base_commit should advance when post-commit sees no checkpoint mapping"
     );
     assert_eq!(
         loaded.phase,
         crate::host::checkpoints::session::phase::SessionPhase::Active,
-        "phase should remain active on no-trailer commits"
+        "phase should remain active on no-checkpoint commits"
     );
 }
 
@@ -279,13 +279,13 @@ fn post_commit_skips_already_mapped_head() {
 }
 
 #[test]
-fn post_commit_without_trailer_updates_active_base_commit_during_rebase() {
+fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
     backend
         .save_session(&SessionState {
-            session_id: "pc-no-trailer-rebase".to_string(),
+            session_id: "pc-no-checkpoint-rebase".to_string(),
             phase: SessionPhase::Active,
             base_commit: head_before.clone(),
             ..Default::default()
@@ -294,7 +294,7 @@ fn post_commit_without_trailer_updates_active_base_commit_during_rebase() {
 
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
 
-    // Create a regular commit without Bitloops-Checkpoint trailer.
+    // Create a regular commit.
     fs::write(dir.path().join("plain-rebase.txt"), "plain").unwrap();
     git_command()
         .args(["add", "."])
@@ -313,7 +313,7 @@ fn post_commit_without_trailer_updates_active_base_commit_during_rebase() {
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let loaded = backend
-        .load_session("pc-no-trailer-rebase")
+        .load_session("pc-no-checkpoint-rebase")
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -449,21 +449,10 @@ fn pre_push_is_noop_even_when_checkpoints_branch_exists() {
     );
 }
 
-fn commit_with_checkpoint_trailer(repo_root: &Path, checkpoint_id: &str, filename: &str) {
-    fs::write(
-        repo_root.join(filename),
-        format!("content for {checkpoint_id}\n"),
-    )
-    .unwrap();
+fn commit_file(repo_root: &Path, filename: &str, content: &str) {
+    fs::write(repo_root.join(filename), content).unwrap();
     git_ok(repo_root, &["add", filename]);
-    git_ok(
-        repo_root,
-        &[
-            "commit",
-            "-m",
-            &format!("test commit\n\nBitloops-Checkpoint: {checkpoint_id}"),
-        ],
-    );
+    git_ok(repo_root, &["commit", "-m", "test commit"]);
 }
 
 #[test]
@@ -515,7 +504,7 @@ fn post_commit_active_session_condenses_immediately() {
         })
         .unwrap();
 
-    commit_with_checkpoint_trailer(dir.path(), "a1b2c3d4e5f6", "active.txt");
+    commit_file(dir.path(), "active.txt", "active.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
@@ -555,7 +544,7 @@ fn post_commit_active_session_records_turn_checkpoint_ids() {
         })
         .unwrap();
 
-    commit_with_checkpoint_trailer(dir.path(), "a1b2c3d4e5f6", "index.html");
+    commit_file(dir.path(), "index.html", "index.html content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
@@ -585,7 +574,7 @@ fn post_commit_idle_session_condenses() {
         })
         .unwrap();
 
-    commit_with_checkpoint_trailer(dir.path(), "b1c2d3e4f5a6", "idle.txt");
+    commit_file(dir.path(), "idle.txt", "idle.txt content");
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let loaded = backend.load_session("pc-idle").unwrap().unwrap();
@@ -613,7 +602,7 @@ fn post_commit_rebase_during_active_skips_transition() {
         .unwrap();
 
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
-    commit_with_checkpoint_trailer(dir.path(), "c1d2e3f4a5b6", "rebase.txt");
+    commit_file(dir.path(), "rebase.txt", "rebase.txt content");
 
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
@@ -647,14 +636,7 @@ fn post_commit_files_touched_resets_after_condensation() {
     fs::write(dir.path().join("f1.rs"), "f1").unwrap();
     fs::write(dir.path().join("f2.rs"), "f2").unwrap();
     git_ok(dir.path(), &["add", "f1.rs", "f2.rs"]);
-    git_ok(
-        dir.path(),
-        &[
-            "commit",
-            "-m",
-            "test commit\n\nBitloops-Checkpoint: d1e2f3a4b5c6",
-        ],
-    );
+    git_ok(dir.path(), &["commit", "-m", "test commit"]);
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
     let loaded = backend.load_session("pc-files").unwrap().unwrap();
     assert!(loaded.files_touched.is_empty());
@@ -684,7 +666,7 @@ fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
         })
         .unwrap();
 
-    commit_with_checkpoint_trailer(dir.path(), "0aaabbbccdde", "turn-end.txt");
+    commit_file(dir.path(), "turn-end.txt", "turn-end.txt content");
     let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();

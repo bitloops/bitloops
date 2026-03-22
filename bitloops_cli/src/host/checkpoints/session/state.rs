@@ -112,7 +112,7 @@ pub struct SessionState {
     pub agent_type: String,
 
     /// Checkpoint ID from the most recent condensation.
-    /// Used by `prepare-commit-msg` to restore the trailer on `git commit --amend`.
+    /// Used by `prepare-commit-msg` on `git commit --amend`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub last_checkpoint_id: String,
 

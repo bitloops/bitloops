@@ -1,7 +1,7 @@
 //! Checkpoint ID validation and constants.
 
-/// Canonical key name used in `CommitNode.trailers` HashMaps for checkpoint identification.
-/// This is NOT a git commit trailer — checkpoint↔commit mappings live in the `commit_checkpoints`
+/// Canonical key name used in `CommitNode.checkpoints` HashMaps for checkpoint identification.
+/// This is NOT a git commit message element — checkpoint↔commit mappings live in the `commit_checkpoints`
 /// relational table.
 pub const CHECKPOINT_TRAILER_KEY: &str = "Bitloops-Checkpoint";
 pub const CHECKPOINT_ID_PATTERN: &str = "[0-9a-f]{12}";

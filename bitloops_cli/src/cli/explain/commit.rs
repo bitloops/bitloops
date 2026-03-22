@@ -144,8 +144,8 @@ fn extract_assistant_response(value: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-fn commit_trailer_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
-    commit.trailers.iter().any(|(key, value)| {
+fn commit_checkpoint_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
+    commit.checkpoints.iter().any(|(key, value)| {
         key.eq_ignore_ascii_case(CHECKPOINT_TRAILER_KEY) && value == checkpoint_id
     })
 }

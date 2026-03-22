@@ -351,7 +351,7 @@ fn cursor_mid_turn_agent_commit_user_commit_remainder() {
 }
 
 #[test]
-fn cursor_intermediate_commit_without_new_prompt_has_no_checkpoint_trailer() {
+fn cursor_intermediate_commit_without_new_prompt_has_no_checkpoint_mapping() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     init_and_enable_cursor(dir.path());

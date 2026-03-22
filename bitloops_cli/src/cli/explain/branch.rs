@@ -39,7 +39,7 @@ pub fn get_associated_commits(
 
     if search_all || commits.iter().all(|commit| commit.parents.is_empty()) {
         for commit in commits {
-            if commit_trailer_matches(commit, checkpoint_id) {
+            if commit_checkpoint_matches(commit, checkpoint_id) {
                 collected.push((commit.timestamp, to_associated_commit(commit)));
             }
         }
@@ -51,7 +51,7 @@ pub fn get_associated_commits(
             if !visited.insert(current.sha.as_str()) {
                 break;
             }
-            if commit_trailer_matches(current, checkpoint_id) {
+            if commit_checkpoint_matches(current, checkpoint_id) {
                 collected.push((current.timestamp, to_associated_commit(current)));
             }
 

@@ -295,7 +295,7 @@ pub struct CommitNode {
     pub parents: Vec<String>,
     pub author: String,
     pub timestamp: i64,
-    pub trailers: HashMap<String, String>,
+    pub checkpoints: HashMap<String, String>,
     pub files_changed: Vec<String>,
 }
 

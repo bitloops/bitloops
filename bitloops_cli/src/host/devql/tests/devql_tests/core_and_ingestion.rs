@@ -873,7 +873,7 @@ fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
             "commit",
             "--allow-empty",
             "-m",
-            "checkpoint without trailer",
+            "checkpoint via DB",
         ],
     );
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -887,6 +887,6 @@ fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
         .get(checkpoint_id)
         .expect("checkpoint should be present");
     assert_eq!(info.commit_sha, commit_sha);
-    assert_eq!(info.subject, "checkpoint without trailer");
+    assert_eq!(info.subject, "checkpoint via DB");
     assert!(info.commit_unix > 0);
 }

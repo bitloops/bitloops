@@ -141,30 +141,12 @@ fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
         .success()
 }
 
-fn git_commit_message(repo: &Path, rev: &str) -> String {
-    let mut msg = run_git(repo, &["show", "-s", "--format=%B", rev]);
-    if checkpoint_id_from_message(&msg).is_none()
-        && let Ok(mappings) = read_commit_checkpoint_mappings(repo)
-    {
-        let commit_sha = run_git(repo, &["rev-parse", rev]);
-        if let Some(checkpoint_id) = mappings.get(&commit_sha) {
-            msg.push_str(&format!("\n\nBitloops-Checkpoint: {checkpoint_id}\n"));
-        }
-    }
-    msg
-}
-
-fn checkpoint_id_from_message(message: &str) -> Option<String> {
-    for line in message.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Bitloops-Checkpoint: ") {
-            let id = rest.trim();
-            if id.len() >= 12 && id[..12].chars().all(|c| c.is_ascii_hexdigit()) {
-                return Some(id[..12].to_lowercase());
-            }
-        }
-    }
-    None
+fn checkpoint_id_for_commit(repo: &Path, rev: &str) -> Option<String> {
+    let commit_sha = run_git(repo, &["rev-parse", rev]);
+    read_commit_checkpoint_mappings(repo)
+        .ok()?
+        .get(&commit_sha)
+        .cloned()
 }
 
 fn checkpoint_shard(id: &str) -> (String, String) {
@@ -464,10 +446,9 @@ fn cli_1138_agent_commits_during_turn() {
         "user commit remainder",
     );
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_some(),
-        "final user commit should include checkpoint trailer"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "final user commit should include checkpoint mapping"
     );
 }
 
@@ -615,10 +596,9 @@ fn cli_1141_basic_workflow() {
         "commit hello.rs",
     );
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_some(),
-        "commit should include checkpoint trailer"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "commit should include checkpoint mapping"
     );
     assert!(
         git_ref_exists(dir.path(), "refs/heads/bitloops/checkpoints/v1"),
@@ -658,8 +638,7 @@ fn cli_1142_checkpoint_id_format() {
         &["commit", "-m", "add id format file"],
         "commit id format file",
     );
-    let id = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint trailer should exist");
+    let id = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint mapping should exist");
     assert_eq!(id.len(), 12, "checkpoint id should be 12 chars");
     assert!(
         id.chars()
@@ -705,8 +684,8 @@ fn cli_1143_checkpoint_metadata() {
         "commit metadata target",
     );
 
-    let checkpoint_id = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint trailer should exist");
+    let checkpoint_id =
+        checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint mapping should exist");
     let (a, b) = checkpoint_shard(&checkpoint_id);
     let cp_ref = "bitloops/checkpoints/v1";
 
@@ -762,9 +741,8 @@ fn cli_1144_content_aware_overlap_revert_and_replace() {
         "commit replaced overlap file",
     );
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_some(),
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
         "content-aware overlap should still map commit to a checkpoint in DB mode"
     );
 }
@@ -818,7 +796,7 @@ fn cli_1145_deleted_files_commit_deletion() {
         &["commit", "-m", "add replacement"],
         "commit replacement",
     );
-    let first = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"));
+    let first = checkpoint_id_for_commit(dir.path(), "HEAD");
     assert!(
         first.is_some(),
         "replacement commit should carry checkpoint"
@@ -889,8 +867,7 @@ fn cli_1146_ended_session_user_commits_after_exit() {
         &["commit", "-m", "commit ended A/B"],
         "commit ended A/B",
     );
-    let cp_ab =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint AB");
+    let cp_ab = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint AB");
 
     run_git_expect_success(dir.path(), &["add", "ended_c.rs"], "stage ended C");
     run_git_expect_success(
@@ -898,8 +875,7 @@ fn cli_1146_ended_session_user_commits_after_exit() {
         &["commit", "-m", "commit ended C"],
         "commit ended C",
     );
-    let cp_c =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint C");
+    let cp_c = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint C");
 
     assert_ne!(
         cp_ab, cp_c,
@@ -956,8 +932,8 @@ fn cli_1147_existing_files_modify_and_commit() {
         "commit modified config.rs",
     );
     assert!(
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).is_some(),
-        "existing-file modification should produce checkpoint trailer"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "existing-file modification should produce checkpoint mapping"
     );
 }
 
@@ -1019,8 +995,7 @@ fn cli_1147_existing_files_stash_modifications() {
         &["commit", "-m", "commit file_a.rs"],
         "commit file_a.rs",
     );
-    let cp_a =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint A");
+    let cp_a = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint A");
 
     run_git_expect_success(
         dir.path(),
@@ -1041,8 +1016,7 @@ fn cli_1147_existing_files_stash_modifications() {
         &["commit", "-m", "commit file_b.rs"],
         "commit file_b.rs",
     );
-    let cp_b =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint B");
+    let cp_b = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint B");
     assert_ne!(cp_a, cp_b, "split commits should carry unique checkpoints");
 }
 
@@ -1114,8 +1088,7 @@ fn cli_1147_existing_files_split_commits() {
         &["commit", "-m", "commit model"],
         "commit model.rs",
     );
-    let cp_model = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("model checkpoint");
+    let cp_model = checkpoint_id_for_commit(dir.path(), "HEAD").expect("model checkpoint");
 
     run_git_expect_success(dir.path(), &["add", "view.rs"], "stage view.rs");
     run_git_expect_success(
@@ -1123,8 +1096,7 @@ fn cli_1147_existing_files_split_commits() {
         &["commit", "-m", "commit view"],
         "commit view.rs",
     );
-    let cp_view = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("view checkpoint");
+    let cp_view = checkpoint_id_for_commit(dir.path(), "HEAD").expect("view checkpoint");
 
     run_git_expect_success(dir.path(), &["add", "controller.rs"], "stage controller.rs");
     run_git_expect_success(
@@ -1132,8 +1104,8 @@ fn cli_1147_existing_files_split_commits() {
         &["commit", "-m", "commit controller"],
         "commit controller.rs",
     );
-    let cp_controller = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("controller checkpoint");
+    let cp_controller =
+        checkpoint_id_for_commit(dir.path(), "HEAD").expect("controller checkpoint");
 
     assert_ne!(cp_model, cp_view);
     assert_ne!(cp_view, cp_controller);
@@ -1187,7 +1159,7 @@ fn cli_1147_existing_files_revert_modification() {
     );
 
     assert!(
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).is_some(),
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
         "modified tracked file should still count as overlap and keep checkpoint"
     );
 }
@@ -1246,8 +1218,7 @@ fn cli_1147_existing_files_mixed_new_and_modified() {
         &["commit", "-m", "commit main.rs change"],
         "commit main.rs change",
     );
-    let cp_main = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint main change");
+    let cp_main = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint main change");
 
     run_git_expect_success(
         dir.path(),
@@ -1259,8 +1230,7 @@ fn cli_1147_existing_files_mixed_new_and_modified() {
         &["commit", "-m", "commit utils/types"],
         "commit utils/types",
     );
-    let cp_new = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint new files");
+    let cp_new = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint new files");
 
     assert_ne!(
         cp_main, cp_new,
@@ -1374,8 +1344,8 @@ fn cli_1149_multiple_changes() {
         "commit multi-change files",
     );
     assert!(
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).is_some(),
-        "multi-change commit should carry checkpoint trailer"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "multi-change commit should carry checkpoint mapping"
     );
 }
 
@@ -1736,10 +1706,10 @@ fn cli_1154_scenario1_basic_flow() {
         &["commit", "-m", "commit scenario1.rs"],
         "commit scenario1.rs",
     );
-    let checkpoint = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"));
+    let checkpoint = checkpoint_id_for_commit(dir.path(), "HEAD");
     assert!(
         checkpoint.is_some(),
-        "scenario1 basic flow should produce a checkpoint trailer"
+        "scenario1 basic flow should produce a checkpoint mapping"
     );
 }
 
@@ -1901,8 +1871,7 @@ fn cli_1157_scenario4_user_splits_commits() {
         &["commit", "-m", "commit files A/B"],
         "commit file_a.rs/file_b.rs",
     );
-    let cp_ab =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint AB");
+    let cp_ab = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint AB");
 
     run_git_expect_success(
         dir.path(),
@@ -1914,8 +1883,7 @@ fn cli_1157_scenario4_user_splits_commits() {
         &["commit", "-m", "commit files C/D"],
         "commit file_c.rs/file_d.rs",
     );
-    let cp_cd =
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).expect("checkpoint CD");
+    let cp_cd = checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint CD");
 
     assert_ne!(
         cp_ab, cp_cd,
@@ -2173,8 +2141,8 @@ fn cli_1160_scenario7_partial_staging_simulated() {
         &["commit", "-m", "commit partial content"],
         "commit partial content",
     );
-    let cp_first = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint for partial content");
+    let cp_first =
+        checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint for partial content");
 
     fs::write(dir.path().join("partial.rs"), full_content).unwrap();
     run_git_expect_success(dir.path(), &["add", "partial.rs"], "stage full partial.rs");
@@ -2183,8 +2151,8 @@ fn cli_1160_scenario7_partial_staging_simulated() {
         &["commit", "-m", "commit full content"],
         "commit full content",
     );
-    let cp_second = checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD"))
-        .expect("checkpoint for full content");
+    let cp_second =
+        checkpoint_id_for_commit(dir.path(), "HEAD").expect("checkpoint for full content");
 
     assert_ne!(
         cp_first, cp_second,
@@ -2250,7 +2218,7 @@ fn cli_1161_session_depleted_manual_edit_no_checkpoint() {
     assert_eq!(
         after.len(),
         before.len(),
-        "manual edits after session depletion should not create new checkpoint trailers"
+        "manual edits after session depletion should not create new checkpoint mappings"
     );
 }
 
@@ -2310,13 +2278,13 @@ fn cli_1162_subagent_checkpoint() {
         "commit subagent output",
     );
     assert!(
-        checkpoint_id_from_message(&git_commit_message(dir.path(), "HEAD")).is_some(),
-        "subagent commit flow should produce checkpoint trailer"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "subagent commit flow should produce checkpoint mapping"
     );
 }
 
 #[test]
-fn cli_1163_trailer_removal_skips_condensation() {
+fn cli_1163_missing_checkpoint_text_skips_condensation() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     init_and_enable(dir.path());
@@ -2327,37 +2295,39 @@ fn cli_1163_trailer_removal_skips_condensation() {
         dir.path(),
         sid,
         transcript_path.to_string_lossy().as_ref(),
-        "Create trailer_test.rs",
+        "Create checkpoint_test.rs",
     );
     fs::write(
-        dir.path().join("trailer_test.rs"),
+        dir.path().join("checkpoint_test.rs"),
         "package main\n\nfunc TrailerTest() {}\n",
     )
     .unwrap();
     write_transcript(
         &transcript_path,
-        "Create trailer_test.rs",
-        "Created trailer_test.rs",
+        "Create checkpoint_test.rs",
+        "Created checkpoint_test.rs",
     );
     stop(dir.path(), sid, transcript_path.to_string_lossy().as_ref());
     let checkpoints_before = all_checkpoint_ids_from_history(dir.path());
 
     run_git_expect_success(
         dir.path(),
-        &["add", "trailer_test.rs"],
-        "stage trailer_test.rs",
+        &["add", "checkpoint_test.rs"],
+        "stage checkpoint_test.rs",
     );
-    commit_with_editor_overwrite_message(dir.path(), "Add trailer_test without checkpoint trailer");
+    commit_with_editor_overwrite_message(
+        dir.path(),
+        "Add checkpoint_test without checkpoint mapping",
+    );
 
-    let head_msg = git_commit_message(dir.path(), "HEAD");
     assert!(
-        checkpoint_id_from_message(&head_msg).is_some(),
-        "checkpoint mapping should not depend on commit-message trailer text"
+        checkpoint_id_for_commit(dir.path(), "HEAD").is_some(),
+        "checkpoint mapping should not depend on commit message text"
     );
     let checkpoints_after = all_checkpoint_ids_from_history(dir.path());
     assert_eq!(
         checkpoints_after.len(),
         checkpoints_before.len() + 1,
-        "commit should still condense session metadata even when trailer text is removed"
+        "commit should still condense session metadata even without checkpoint text in message"
     );
 }

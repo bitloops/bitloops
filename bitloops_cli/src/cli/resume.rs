@@ -253,12 +253,11 @@ mod tests {
         dir
     }
 
-    fn create_commit_with_checkpoint_trailer(repo_root: &Path, checkpoint_id: &str) {
+    fn create_commit_with_checkpoint(repo_root: &Path, _checkpoint_id: &str) {
         fs::write(repo_root.join("feature.txt"), "feature content").expect("feature file");
         let (ok, _, err) = run_git(repo_root, &["add", "feature.txt"]);
         assert!(ok, "git add feature file failed: {err}");
 
-        let message = format!("Add feature\n\nBitloops-Checkpoint: {checkpoint_id}");
         let (ok, _, err) = run_git(
             repo_root,
             &[
@@ -270,10 +269,10 @@ mod tests {
                 "commit.gpgsign=false",
                 "commit",
                 "-m",
-                &message,
+                "Add feature",
             ],
         );
-        assert!(ok, "commit with checkpoint trailer failed: {err}");
+        assert!(ok, "commit failed: {err}");
     }
 
     // CLI-564
@@ -355,12 +354,12 @@ mod tests {
 
     // CLI-568
     #[test]
-    fn TestResumeFromCurrentBranch_WithCheckpointTrailer() {
+    fn TestResumeFromCurrentBranch_WithCheckpoint() {
         let repo = setup_resume_test_repo(false);
         let root = repo.path();
 
         let checkpoint_id = "abc123def456";
-        create_commit_with_checkpoint_trailer(root, checkpoint_id);
+        create_commit_with_checkpoint(root, checkpoint_id);
 
         let restore_dir = root.join("claude-projects");
         fs::create_dir_all(&restore_dir).expect("restore dir");

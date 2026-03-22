@@ -324,8 +324,8 @@ fn copilot_basic_workflow() {
 
     let head_message = git_commit_message(dir.path(), "HEAD");
     assert!(
-        !head_message.contains("Bitloops-Checkpoint: "),
-        "manual-commit persistence currently relies on commit-checkpoint mappings, not commit-message trailers\n{head_message}"
+        !head_message.contains("Bitloops-Checkpoint"),
+        "manual-commit uses commit-checkpoint DB mappings, not commit messages\n{head_message}"
     );
 }
 

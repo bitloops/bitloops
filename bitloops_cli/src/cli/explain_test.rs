@@ -45,15 +45,17 @@ fn make_commit(root: &std::path::Path, file: &str, content: &str, msg: &str) -> 
     run_git_cmd(root, &["rev-parse", "HEAD"])
 }
 
+/// Creates a commit and returns its SHA. Does NOT insert DB mappings — callers must
+/// call `insert_commit_checkpoint_mapping` + `insert_committed_checkpoint_row` after
+/// any branch-switching operations (which may destroy untracked DB files).
 fn make_checkpoint_commit(
     root: &std::path::Path,
     file: &str,
     content: &str,
     message: &str,
-    checkpoint_id: &str,
+    _checkpoint_id: &str,
 ) -> String {
-    let full_message = format!("{message}\n\n{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}");
-    make_commit(root, file, content, &full_message)
+    make_commit(root, file, content, message)
 }
 
 fn checkpoint_sqlite_path(repo_root: &std::path::Path) -> PathBuf {
@@ -131,12 +133,15 @@ fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &
         .expect("insert committed checkpoint row");
 }
 
-fn write_committed_checkpoint_metadata(root: &std::path::Path, checkpoint_ids: &[&str]) {
+fn write_committed_checkpoint_metadata_with_mappings(
+    root: &std::path::Path,
+    checkpoints: &[(&str, &str)], // (checkpoint_id, commit_sha)
+) {
     let current_branch = run_git_cmd(root, &["rev-parse", "--abbrev-ref", "HEAD"]);
     run_git_cmd(root, &["checkout", "--orphan", "bitloops/checkpoints/v1"]);
     run_git_cmd(root, &["rm", "-rf", "--ignore-unmatch", "."]);
 
-    for checkpoint_id in checkpoint_ids {
+    for (checkpoint_id, _) in checkpoints {
         let bucket = &checkpoint_id[..2];
         let suffix = &checkpoint_id[2..];
         let metadata_dir = root.join(bucket).join(suffix);
@@ -160,23 +165,10 @@ fn write_committed_checkpoint_metadata(root: &std::path::Path, checkpoint_ids: &
     run_git_cmd(root, &["commit", "-m", "seed checkpoint metadata"]);
     run_git_cmd(root, &["checkout", &current_branch]);
 
-    for checkpoint_id in checkpoint_ids {
+    for (checkpoint_id, commit_sha) in checkpoints {
         insert_committed_checkpoint_row(root, checkpoint_id);
-        let grep_pattern = format!("{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}");
-        let commit_sha = run_git_cmd(
-            root,
-            &[
-                "log",
-                "--all",
-                "--format=%H",
-                "--grep",
-                &grep_pattern,
-                "-n",
-                "1",
-            ],
-        );
         if !commit_sha.is_empty() {
-            insert_commit_checkpoint_mapping(root, &commit_sha, checkpoint_id);
+            insert_commit_checkpoint_mapping(root, commit_sha, checkpoint_id);
         }
     }
 }
@@ -876,7 +868,7 @@ fn TestExplainCommit_NotFound() {
 #[test]
 fn TestExplainCommit_NoBitloopsData() {
     let (tmp, root) = setup_git_repo();
-    make_commit(&root, "file.txt", "content", "feat: no trailer commit");
+    make_commit(&root, "file.txt", "content", "feat: no checkpoint commit");
 
     let sha = run_git_cmd(&root, &["rev-parse", "HEAD"]);
     let output = run_explain_commit_in(&root, &sha, true, false, false, false)
@@ -890,19 +882,14 @@ fn TestExplainCommit_NoBitloopsData() {
 }
 
 #[test]
-fn TestExplainCommit_WithMetadataTrailerButNoCheckpoint() {
+fn TestExplainCommit_WithoutCheckpointMapping() {
     let (tmp, root) = setup_git_repo();
-    // Commit with Bitloops-Metadata trailer but NO Bitloops-Checkpoint trailer.
-    make_commit(
-        &root,
-        "file.txt",
-        "content",
-        "feat: metadata only\n\nBitloops-Metadata: somevalue",
-    );
+    // Commit without a DB checkpoint mapping.
+    make_commit(&root, "file.txt", "content", "feat: metadata only");
 
     let sha = run_git_cmd(&root, &["rev-parse", "HEAD"]);
     let output = run_explain_commit_in(&root, &sha, true, false, false, false)
-        .expect("expected commit with metadata trailer but no checkpoint to succeed");
+        .expect("expected commit with no checkpoint mapping to succeed");
     drop(tmp);
 
     assert!(
@@ -950,12 +937,12 @@ fn TestRunExplainCommit_NoCheckpointTrailer() {
         &root,
         "file.txt",
         "content",
-        "feat: plain commit no trailer",
+        "feat: plain commit no checkpoint",
     );
 
     let sha = run_git_cmd(&root, &["rev-parse", "HEAD"]);
     let output = run_explain_commit_in(&root, &sha, false, false, false, false)
-        .expect("expected explain commit to succeed without checkpoint trailer");
+        .expect("expected explain commit to succeed without checkpoint mapping");
     drop(tmp);
 
     assert!(
@@ -965,15 +952,10 @@ fn TestRunExplainCommit_NoCheckpointTrailer() {
 }
 
 #[test]
-fn TestRunExplainCommit_WithCheckpointTrailer() {
+fn TestRunExplainCommit_WithoutDbMapping() {
     let (tmp, root) = setup_git_repo();
-    // Commit with Bitloops-Checkpoint trailer but no DB commit mapping.
-    make_commit(
-        &root,
-        "file.txt",
-        "content",
-        "feat: add feature\n\nBitloops-Checkpoint: abc123def456",
-    );
+    // Commit without a DB checkpoint mapping — explain should report no checkpoint.
+    make_commit(&root, "file.txt", "content", "feat: add feature");
 
     let sha = run_git_cmd(&root, &["rev-parse", "HEAD"]);
     let output = run_explain_commit_in(&root, &sha, false, false, false, false)
@@ -1655,7 +1637,7 @@ fn TestGetAssociatedCommits() {
             message: "feat: add feature".to_string(),
             author: "Alice Developer".to_string(),
             timestamp: 2,
-            trailers: HashMap::from([(
+            checkpoints: HashMap::from([(
                 CHECKPOINT_TRAILER_KEY.to_string(),
                 checkpoint_id.to_string(),
             )]),
@@ -1713,7 +1695,7 @@ fn TestGetAssociatedCommits_MultipleMatches() {
             message: "first checkpoint commit".to_string(),
             author: "Test".to_string(),
             timestamp: 1,
-            trailers: HashMap::from([(
+            checkpoints: HashMap::from([(
                 CHECKPOINT_TRAILER_KEY.to_string(),
                 checkpoint_id.to_string(),
             )]),
@@ -1724,7 +1706,7 @@ fn TestGetAssociatedCommits_MultipleMatches() {
             message: "second checkpoint commit".to_string(),
             author: "Test".to_string(),
             timestamp: 2,
-            trailers: HashMap::from([(
+            checkpoints: HashMap::from([(
                 CHECKPOINT_TRAILER_KEY.to_string(),
                 checkpoint_id.to_string(),
             )]),
@@ -1776,7 +1758,7 @@ fn TestGetAssociatedCommits_SearchAllFindsMergedBranchCommits() {
             parents: vec!["dddd000000000000000000000000000000000000".to_string()],
             timestamp: 2,
             author: "Feature Dev".to_string(),
-            trailers: HashMap::from([(
+            checkpoints: HashMap::from([(
                 CHECKPOINT_TRAILER_KEY.to_string(),
                 checkpoint_id.to_string(),
             )]),
@@ -2156,7 +2138,7 @@ fn TestGetBranchCheckpointsReal_FiltersMainCommits() {
     let main_checkpoint = "aaa111bbb222";
     let feature_checkpoint = "ccc333ddd444";
 
-    let _ = make_checkpoint_commit(
+    let main_sha = make_checkpoint_commit(
         &root,
         "file.txt",
         "main content",
@@ -2166,14 +2148,20 @@ fn TestGetBranchCheckpointsReal_FiltersMainCommits() {
     let default_branch = run_git_cmd(&root, &["rev-parse", "--abbrev-ref", "HEAD"]);
 
     run_git_cmd(&root, &["checkout", "-b", "feature/test"]);
-    let _ = make_checkpoint_commit(
+    let feature_sha = make_checkpoint_commit(
         &root,
         "feature.txt",
         "feature content",
         "feat: feature checkpoint",
         feature_checkpoint,
     );
-    write_committed_checkpoint_metadata(&root, &[main_checkpoint, feature_checkpoint]);
+    write_committed_checkpoint_metadata_with_mappings(
+        &root,
+        &[
+            (main_checkpoint, &main_sha),
+            (feature_checkpoint, &feature_sha),
+        ],
+    );
     run_git_cmd(&root, &["checkout", "feature/test"]);
 
     let points = get_branch_checkpoints_real(&root, 20)
@@ -2198,7 +2186,7 @@ fn TestGetBranchCheckpointsReal_DefaultBranchFindsMergedCheckpoints() {
     let _ = make_commit(&root, "file.txt", "initial", "initial commit");
     let default_branch = run_git_cmd(&root, &["rev-parse", "--abbrev-ref", "HEAD"]);
     run_git_cmd(&root, &["checkout", "-b", "feature/test"]);
-    let _ = make_checkpoint_commit(
+    let feature_sha = make_checkpoint_commit(
         &root,
         "feature.txt",
         "feature content",
@@ -2210,7 +2198,7 @@ fn TestGetBranchCheckpointsReal_DefaultBranchFindsMergedCheckpoints() {
         &root,
         &["merge", "--no-ff", "feature/test", "-m", "merge feature"],
     );
-    write_committed_checkpoint_metadata(&root, &[checkpoint_id]);
+    write_committed_checkpoint_metadata_with_mappings(&root, &[(checkpoint_id, &feature_sha)]);
     run_git_cmd(&root, &["checkout", &default_branch]);
 
     let points = get_branch_checkpoints_real(&root, 100)

@@ -8,7 +8,6 @@ use super::{
     has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
     select_host_with_dashboard_preference,
 };
-use crate::host::checkpoints::checkpoint_id::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
 use axum::{
@@ -204,16 +203,7 @@ fn seed_dashboard_repo() -> TempDir {
     )
     .expect("update app.rs");
     git_ok(repo_root, &["add", "app.rs"]);
-    git_ok(
-        repo_root,
-        &[
-            "commit",
-            "-m",
-            "Checkpoint commit",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: aabbccddeeff"),
-        ],
-    );
+    git_ok(repo_root, &["commit", "-m", "Checkpoint commit"]);
     let checkpoint_commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
 
     git_ok(
@@ -322,7 +312,7 @@ fn seed_dashboard_repo() -> TempDir {
     dir
 }
 
-fn seed_dashboard_repo_without_commit_trailer() -> TempDir {
+fn seed_dashboard_repo_without_commit_mapping() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
 
@@ -463,16 +453,7 @@ fn seed_dashboard_repo_multi_session() -> TempDir {
     )
     .expect("update app.rs");
     git_ok(repo_root, &["add", "app.rs"]);
-    git_ok(
-        repo_root,
-        &[
-            "commit",
-            "-m",
-            "Checkpoint commit",
-            "-m",
-            &format!("{CHECKPOINT_TRAILER_KEY}: 112233445566"),
-        ],
-    );
+    git_ok(repo_root, &["commit", "-m", "Checkpoint commit"]);
     let checkpoint_commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
 
     git_ok(
@@ -1090,8 +1071,8 @@ async fn api_commits_filters_by_user_agent_and_time() {
 }
 
 #[tokio::test]
-async fn api_commits_uses_db_mapping_when_trailer_is_missing() {
-    let repo = seed_dashboard_repo_without_commit_trailer();
+async fn api_commits_uses_db_mapping_when_commit_mapping_is_missing() {
+    let repo = seed_dashboard_repo_without_commit_mapping();
     let checkpoint_commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     insert_commit_checkpoint_mapping(repo.path(), &checkpoint_commit_sha, "aabbccddeeff");
 
