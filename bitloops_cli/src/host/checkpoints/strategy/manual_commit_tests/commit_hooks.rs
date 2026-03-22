@@ -87,45 +87,6 @@ fn prepare_commit_msg_is_noop_even_with_active_session() {
 }
 
 #[test]
-fn add_checkpoint_trailer_no_comment() {
-    let msg = "feat: implement parser\n";
-    let out = add_checkpoint_trailer(msg, "abc123def456");
-    assert!(out.contains("feat: implement parser"));
-    assert!(out.contains("Bitloops-Checkpoint: abc123def456"));
-}
-
-#[test]
-fn add_checkpoint_trailer_with_comment_has_comment() {
-    let msg = "feat: implement parser\n\nDetailed body line\n";
-    let out = add_checkpoint_trailer(msg, "abc123def456");
-    assert!(out.contains("Detailed body line"));
-    assert!(out.contains("Bitloops-Checkpoint: abc123def456"));
-}
-
-#[test]
-fn add_checkpoint_trailer_with_comment_no_prompt() {
-    let msg = "";
-    let out = add_checkpoint_trailer(msg, "abc123def456");
-    assert!(out.contains("Bitloops-Checkpoint: abc123def456"));
-}
-
-#[test]
-fn add_checkpoint_trailer_conventional_commit_subject() {
-    let msg = "fix(auth): handle nil token\n";
-    let out = add_checkpoint_trailer(msg, "abc123def456");
-    assert!(out.starts_with("fix(auth): handle nil token"));
-    assert!(out.contains("Bitloops-Checkpoint: abc123def456"));
-}
-
-#[test]
-fn add_checkpoint_trailer_existing_trailers() {
-    let msg = "feat: update\n\nSigned-off-by: Dev <dev@test.com>\n";
-    let out = add_checkpoint_trailer(msg, "abc123def456");
-    assert!(out.contains("Signed-off-by: Dev <dev@test.com>"));
-    assert!(out.contains("Bitloops-Checkpoint: abc123def456"));
-}
-
-#[test]
 fn prepare_commit_msg_skips_merge() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

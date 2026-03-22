@@ -1,3 +1,29 @@
+/// Look up the session_id for a given commit SHA via commit_checkpoints → checkpoint_sessions.
+pub fn lookup_session_id_for_commit(repo_root: &Path, commit_sha: &str) -> Result<Option<String>> {
+    let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
+        .context("opening SQLite for session lookup")?;
+    sqlite
+        .initialise_checkpoint_schema()
+        .context("initialising checkpoint schema for session lookup")?;
+
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT cs.session_id
+             FROM commit_checkpoints cc
+             JOIN checkpoint_sessions cs ON cs.checkpoint_id = cc.checkpoint_id
+             WHERE cc.commit_sha = ?1
+             LIMIT 1",
+        )?;
+        let result = {
+            use rusqlite::OptionalExtension;
+            stmt.query_row(rusqlite::params![commit_sha], |row| row.get::<_, String>(0))
+                .optional()?
+        };
+        Ok(result)
+    })
+}
+
 pub fn read_commit_checkpoint_mappings(repo_root: &Path) -> Result<std::collections::HashMap<String, String>> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)

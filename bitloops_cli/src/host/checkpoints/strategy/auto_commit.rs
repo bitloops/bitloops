@@ -11,10 +11,7 @@ use serde_json::json;
 use crate::adapters::agents::canonical_agent_key;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::state::SessionState;
-use crate::host::checkpoints::trailers::{
-    AGENT_TRAILER_KEY, CHECKPOINT_TRAILER_KEY, METADATA_TASK_TRAILER_KEY, METADATA_TRAILER_KEY,
-    SESSION_TRAILER_KEY, STRATEGY_TRAILER_KEY,
-};
+use crate::host::checkpoints::strategy::manual_commit::insert_commit_checkpoint_mapping;
 use crate::utils::paths;
 use crate::utils::strings;
 
@@ -329,7 +326,7 @@ impl AutoCommitStrategy {
             ),
         ];
 
-        let metadata_pointer = if input.is_task {
+        let _tree_root = if input.is_task {
             let task_root = format!("{checkpoint_root}/tasks/{}", input.tool_use_id);
             let task_checkpoint_disk = staging_dir.join("task-checkpoint.json");
             fs::write(
@@ -351,20 +348,7 @@ impl AutoCommitStrategy {
             checkpoint_root.clone()
         };
 
-        let mut message = format!(
-            "Checkpoint: {checkpoint_id}\n\n{SESSION_TRAILER_KEY}: {}\n{STRATEGY_TRAILER_KEY}: auto-commit",
-            input.session_id
-        );
-        if input.is_task {
-            message.push_str(&format!(
-                "\n{METADATA_TASK_TRAILER_KEY}: {metadata_pointer}"
-            ));
-        } else {
-            message.push_str(&format!("\n{METADATA_TRAILER_KEY}: {metadata_pointer}"));
-        }
-        if !canonical_agent.is_empty() {
-            message.push_str(&format!("\n{AGENT_TRAILER_KEY}: {canonical_agent}"));
-        }
+        let message = format!("Checkpoint: {checkpoint_id}");
 
         let author_name = if input.author_name.trim().is_empty() {
             "Bitloops"
@@ -422,18 +406,17 @@ impl AutoCommitStrategy {
         } else {
             ctx.commit_message.trim().to_string()
         };
-        let commit_message = format!("{subject}\n\n{CHECKPOINT_TRAILER_KEY}: {checkpoint_id}");
         run_git(
             &self.repo_root,
-            &[
-                "-c",
-                "core.hooksPath=/dev/null",
-                "commit",
-                "-m",
-                &commit_message,
-            ],
+            &["-c", "core.hooksPath=/dev/null", "commit", "-m", &subject],
         )
         .context("creating auto-commit on active branch")?;
+
+        let head_sha = run_git(&self.repo_root, &["rev-parse", "HEAD"])
+            .context("reading HEAD after auto-commit")?;
+        insert_commit_checkpoint_mapping(&self.repo_root, head_sha.trim(), checkpoint_id)
+            .context("recording checkpoint mapping in DB")?;
+
         Ok(true)
     }
 }

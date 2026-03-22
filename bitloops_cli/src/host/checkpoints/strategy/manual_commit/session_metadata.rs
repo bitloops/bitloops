@@ -263,34 +263,3 @@ fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
-// ── Trailer helpers ───────────────────────────────────────────────────────────
-
-/// Extracts the checkpoint ID from a commit message.
-/// Returns `None` if no valid `Bitloops-Checkpoint: <12hex>` trailer is found.
-pub fn parse_checkpoint_id(message: &str) -> Option<String> {
-    let prefix = format!("{CHECKPOINT_TRAILER_KEY}: ");
-    for line in message.lines() {
-        if let Some(id) = line.trim().strip_prefix(&prefix) {
-            let id = id.trim();
-            if is_valid_checkpoint_id(id) {
-                return Some(id.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Returns the `Bitloops-Checkpoint: <id>` trailer from the HEAD commit, if present.
-#[allow(dead_code)]
-fn get_checkpoint_id_from_head(repo_root: &Path) -> Result<Option<String>> {
-    let body = run_git(repo_root, &["cat-file", "commit", "HEAD"])?;
-    Ok(parse_checkpoint_id(&body))
-}
-
-/// Appends `\n\nBitloops-Checkpoint: <id>\n` to the message.
-#[cfg(test)]
-fn add_checkpoint_trailer(message: &str, id: &str) -> String {
-    let trailer = format!("{CHECKPOINT_TRAILER_KEY}: {id}");
-    let trimmed = message.trim_end_matches('\n');
-    format!("{trimmed}\n\n{trailer}\n")
-}

@@ -452,7 +452,7 @@ fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<b
     })
 }
 
-fn insert_commit_checkpoint_mapping(
+pub fn insert_commit_checkpoint_mapping(
     repo_root: &Path,
     commit_sha: &str,
     checkpoint_id: &str,

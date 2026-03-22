@@ -22,6 +22,9 @@ use crate::adapters::agents::{
     AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE, TokenUsage,
     canonical_agent_key,
 };
+#[cfg(test)]
+use crate::host::checkpoints::checkpoint_id::CHECKPOINT_TRAILER_KEY;
+use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
 use crate::host::checkpoints::session::phase::{
     Action, Event, NoOpActionHandler, SessionPhase, TransitionContext, apply_transition,
     transition_with_context,
@@ -30,7 +33,6 @@ use crate::host::checkpoints::session::state::{
     PromptAttribution as SessionPromptAttribution, SessionState,
 };
 use crate::host::checkpoints::session::{SessionBackend, create_session_backend_or_local};
-use crate::host::checkpoints::trailers::{CHECKPOINT_TRAILER_KEY, is_valid_checkpoint_id};
 use crate::host::checkpoints::transcript::commit_message;
 use crate::host::validation::validators::{
     validate_agent_id, validate_session_id, validate_tool_use_id,

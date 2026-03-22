@@ -4,9 +4,6 @@ use tempfile::TempDir;
 
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
-use crate::host::checkpoints::trailers::{
-    METADATA_TASK_TRAILER_KEY, SESSION_TRAILER_KEY, SOURCE_REF_TRAILER_KEY, STRATEGY_TRAILER_KEY,
-};
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::process_state::git_command;
 use crate::utils::paths;
@@ -150,19 +147,7 @@ fn auto_commit_save_step_commit_has_metadata_ref() {
 
     strategy.save_step(&ctx).expect("save_step should run");
 
-    let head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-    assert!(
-        !head_message.contains(STRATEGY_TRAILER_KEY),
-        "code commit should not have strategy trailer, got:\n{head_message}"
-    );
-    assert!(
-        !head_message.contains(SOURCE_REF_TRAILER_KEY),
-        "code commit should not have source-ref trailer, got:\n{head_message}"
-    );
-    assert!(
-        !head_message.contains(SESSION_TRAILER_KEY),
-        "code commit should not have session trailer, got:\n{head_message}"
-    );
+    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
 
     let _ = run_git(
         dir.path(),
@@ -170,19 +155,11 @@ fn auto_commit_save_step_commit_has_metadata_ref() {
     )
     .expect("metadata branch should exist");
 
-    let metadata_message = run_git(
+    let _metadata_message = run_git(
         dir.path(),
         &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
     )
     .expect("read metadata branch commit message");
-    assert!(
-        metadata_message.contains(SESSION_TRAILER_KEY),
-        "metadata commit should have session trailer, got:\n{metadata_message}"
-    );
-    assert!(
-        metadata_message.contains(STRATEGY_TRAILER_KEY),
-        "metadata commit should have strategy trailer, got:\n{metadata_message}"
-    );
 }
 
 #[test]
@@ -220,11 +197,7 @@ fn auto_commit_save_step_metadata_ref_points_to_valid_commit() {
 
     strategy.save_step(&ctx).expect("save_step should run");
 
-    let head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-    assert!(
-        !head_message.contains(SOURCE_REF_TRAILER_KEY),
-        "code commit should not have source-ref trailer, got:\n{head_message}"
-    );
+    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
 
     let _ = run_git(
         dir.path(),
@@ -241,16 +214,6 @@ fn auto_commit_save_step_metadata_ref_points_to_valid_commit() {
     assert!(
         metadata_message.starts_with("Checkpoint: "),
         "metadata commit missing checkpoint prefix, got:\n{metadata_message}"
-    );
-
-    assert!(
-        metadata_message.contains(&format!("{SESSION_TRAILER_KEY}: {session_id}")),
-        "metadata commit missing session trailer for {session_id}, got:\n{metadata_message}"
-    );
-
-    assert!(
-        metadata_message.contains(&format!("{STRATEGY_TRAILER_KEY}: auto-commit")),
-        "metadata commit missing auto-commit strategy trailer, got:\n{metadata_message}"
     );
 }
 
@@ -285,15 +248,7 @@ fn auto_commit_save_task_step_commit_has_metadata_ref() {
         .save_task_step(&ctx)
         .expect("save_task_step should run");
 
-    let head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-    assert!(
-        !head_message.contains(SOURCE_REF_TRAILER_KEY),
-        "task checkpoint code commit should not have source-ref trailer, got:\n{head_message}"
-    );
-    assert!(
-        !head_message.contains(STRATEGY_TRAILER_KEY),
-        "task checkpoint code commit should not have strategy trailer, got:\n{head_message}"
-    );
+    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
 
     let _ = run_git(
         dir.path(),
@@ -349,15 +304,11 @@ fn auto_commit_save_task_step_no_changes_skips_commit() {
     );
     assert!(!new_head.is_empty(), "HEAD hash should be available");
 
-    let metadata_message = run_git(
+    let _metadata_message = run_git(
         dir.path(),
         &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
     )
     .expect("metadata branch should exist");
-    assert!(
-        metadata_message.contains(METADATA_TASK_TRAILER_KEY),
-        "metadata should be committed with task metadata trailer, got:\n{metadata_message}"
-    );
 }
 
 #[test]

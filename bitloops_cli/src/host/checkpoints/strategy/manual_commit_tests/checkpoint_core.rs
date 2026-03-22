@@ -38,30 +38,6 @@ fn checkpoint_id_methods() {
 }
 
 #[test]
-fn new_checkpoint_id_validation_via_trailer_parser() {
-    let cases = [
-        ("a1b2c3d4e5f6", false),
-        ("a1b2c3", true),
-        ("a1b2c3d4e5f6789012", true),
-        ("a1b2c3d4e5gg", true),
-        ("A1B2C3D4E5F6", true),
-        ("", true),
-    ];
-    for (input, want_err) in cases {
-        let msg = format!("{CHECKPOINT_TRAILER_KEY}: {input}");
-        let got = parse_checkpoint_id(&msg);
-        if want_err {
-            assert!(
-                got.is_none(),
-                "expected invalid checkpoint id for {input:?}"
-            );
-        } else {
-            assert_eq!(got.as_deref(), Some(input), "valid checkpoint id mismatch");
-        }
-    }
-}
-
-#[test]
 fn generate_checkpoint_id_properties() {
     let id = generate_checkpoint_id();
     assert!(

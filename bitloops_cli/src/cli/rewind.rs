@@ -14,10 +14,10 @@ use crate::config::settings;
 use crate::git::{hard_reset_with_protection, has_uncommitted_changes};
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::strategy::manual_commit::lookup_session_id_for_commit;
 use crate::host::checkpoints::strategy::manual_commit::{
     read_latest_session_content, read_session_content_by_id,
 };
-use crate::host::checkpoints::trailers::SESSION_TRAILER_KEY;
 use crate::utils::paths;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -433,18 +433,10 @@ fn resolve_point_session_id(repo_root: &Path, point: &RewindPoint) -> Option<Str
     if !point.session_id.trim().is_empty() {
         return Some(point.session_id.clone());
     }
-    let message = git_stdout(repo_root, &["show", "-s", "--format=%B", &point.id]).ok()?;
-    for line in message.lines() {
-        let trimmed = line.trim();
-        let session_prefix = format!("{SESSION_TRAILER_KEY}:");
-        if let Some(rest) = trimmed.strip_prefix(session_prefix.as_str()) {
-            let session_id = rest.trim();
-            if !session_id.is_empty() {
-                return Some(session_id.to_string());
-            }
-        }
-    }
-    None
+    // Look up session_id via the relational DB: commit_sha → checkpoint_id → session_id
+    lookup_session_id_for_commit(repo_root, &point.id)
+        .ok()
+        .flatten()
 }
 
 fn shadow_branch_ref_for_session_state(state: &SessionState) -> String {
