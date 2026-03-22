@@ -24,9 +24,11 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     }
 
     let repo_root = &cfg.repo_root;
-    let base_commit =
-        crate::host::strategy::manual_commit::run_git(repo_root, &["rev-parse", "HEAD"])
-            .unwrap_or_default();
+    let base_commit = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo_root,
+        &["rev-parse", "HEAD"],
+    )
+    .unwrap_or_default();
 
     let mut modified = Vec::new();
     let mut deleted = Vec::new();
@@ -49,13 +51,13 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         return Ok(());
     }
 
-    let parent_tree = crate::host::strategy::manual_commit::run_git(
+    let parent_tree = crate::host::checkpoints::strategy::manual_commit::run_git(
         repo_root,
         &["rev-parse", &format!("{}^{{tree}}", base_commit)],
     )
     .ok();
 
-    let tree_hash = crate::host::strategy::manual_commit::build_tree(
+    let tree_hash = crate::host::checkpoints::strategy::manual_commit::build_tree(
         repo_root,
         parent_tree.as_deref(),
         &modified,
@@ -174,14 +176,14 @@ async fn apply_current_state_updates(
 }
 
 fn load_file_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
-    crate::host::strategy::manual_commit::run_git(
+    crate::host::checkpoints::strategy::manual_commit::run_git(
         repo_root,
         &["show", &format!("{tree_hash}:{path}")],
     )
 }
 
 fn load_blob_sha_from_tree(repo_root: &Path, tree_hash: &str, path: &str) -> Result<String> {
-    crate::host::strategy::manual_commit::run_git(
+    crate::host::checkpoints::strategy::manual_commit::run_git(
         repo_root,
         &["rev-parse", &format!("{tree_hash}:{path}")],
     )

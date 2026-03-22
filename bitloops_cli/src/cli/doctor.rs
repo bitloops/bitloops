@@ -8,10 +8,10 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::agents::agent_display_name;
 use crate::config::settings;
-use crate::host::session::phase::SessionPhase as RuntimeSessionPhase;
-use crate::host::session::state::SessionState as RuntimeSessionState;
-use crate::host::session::{SessionBackend, create_session_backend_or_local};
-use crate::host::strategy::manual_commit::ManualCommitStrategy;
+use crate::host::checkpoints::session::phase::SessionPhase as RuntimeSessionPhase;
+use crate::host::checkpoints::session::state::SessionState as RuntimeSessionState;
+use crate::host::checkpoints::session::{SessionBackend, create_session_backend_or_local};
+use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
 
 pub const STALENESS_THRESHOLD: Duration = Duration::from_secs(60 * 60);
 
@@ -343,7 +343,7 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 fn list_shadow_branches(repo_root: &Path) -> Vec<String> {
-    if !crate::host::session::legacy_local_backend_enabled() {
+    if !crate::host::checkpoints::session::legacy_local_backend_enabled() {
         return vec![];
     }
 

@@ -7,10 +7,10 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Subcommand};
 
 use crate::config::settings;
-use crate::host::session::create_session_backend_or_local;
-use crate::host::session::state::find_most_recent_session;
-use crate::host::transcript::parse::parse_from_file_at_line;
-use crate::host::transcript::utils::extract_modified_files;
+use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::checkpoints::session::state::find_most_recent_session;
+use crate::host::checkpoints::transcript::parse::parse_from_file_at_line;
+use crate::host::checkpoints::transcript::utils::extract_modified_files;
 use crate::utils::paths;
 
 #[derive(Args, Debug, Clone, Default)]

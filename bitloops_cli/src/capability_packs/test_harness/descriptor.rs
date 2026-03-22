@@ -1,4 +1,4 @@
-use crate::host::devql::capability_host::CapabilityDescriptor;
+use crate::host::capability_host::CapabilityDescriptor;
 
 pub static TEST_HARNESS_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "test_harness",

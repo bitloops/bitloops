@@ -1,4 +1,4 @@
-use crate::host::devql::capability_host::QueryExample;
+use crate::host::capability_host::QueryExample;
 
 pub static KNOWLEDGE_QUERY_EXAMPLES: &[QueryExample] = &[
     QueryExample {

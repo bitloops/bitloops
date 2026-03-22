@@ -1,12 +1,7 @@
+pub mod capability_host;
+pub mod checkpoints;
 pub mod db_status;
 pub mod devql;
-pub mod extensions;
-pub mod history;
+pub mod extension_host;
 pub mod hooks;
-pub mod lifecycle;
-pub mod session;
-pub mod strategy;
-pub mod summarize;
-pub mod trailers;
-pub mod transcript;
 pub mod validation;

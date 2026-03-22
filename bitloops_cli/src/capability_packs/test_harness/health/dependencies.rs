@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::host::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
+use crate::host::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
 
 use super::super::types::resolve_test_harness_config;
 
@@ -78,9 +78,9 @@ mod tests {
     };
     use crate::capability_packs::knowledge::ParsedKnowledgeUrl;
     use crate::config::ProviderConfig;
+    use crate::host::capability_host::CapabilityConfigView;
+    use crate::host::capability_host::gateways::StoreHealthGateway;
     use crate::host::devql::RepoIdentity;
-    use crate::host::devql::capability_host::CapabilityConfigView;
-    use crate::host::devql::capability_host::gateways::StoreHealthGateway;
     use anyhow::Result;
     use serde_json::json;
     use std::path::{Path, PathBuf};

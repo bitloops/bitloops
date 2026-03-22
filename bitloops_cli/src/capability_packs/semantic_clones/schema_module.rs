@@ -1,4 +1,4 @@
-use crate::host::devql::capability_host::SchemaModule;
+use crate::host::capability_host::SchemaModule;
 
 use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 

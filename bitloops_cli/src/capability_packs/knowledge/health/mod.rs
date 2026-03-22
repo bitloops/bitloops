@@ -2,7 +2,7 @@ mod config;
 mod connectors;
 mod storage;
 
-use crate::host::devql::capability_host::CapabilityHealthCheck;
+use crate::host::capability_host::CapabilityHealthCheck;
 
 pub use config::check_knowledge_config;
 pub use connectors::check_knowledge_connectors;

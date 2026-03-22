@@ -2,7 +2,7 @@ mod knowledge;
 
 use std::sync::Arc;
 
-use crate::host::devql::capability_host::StageRegistration;
+use crate::host::capability_host::StageRegistration;
 
 use super::services::KnowledgeServices;
 

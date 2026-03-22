@@ -21,9 +21,9 @@ use crate::adapters::agents::{
 };
 use crate::config::settings;
 use crate::git;
-use crate::host::history::devql_prefetch;
-use crate::host::transcript::commit_message;
-use crate::host::transcript::utils::get_transcript_position;
+use crate::host::checkpoints::history::devql_prefetch;
+use crate::host::checkpoints::transcript::commit_message;
+use crate::host::checkpoints::transcript::utils::get_transcript_position;
 #[cfg(test)]
 use crate::telemetry::logging;
 use crate::utils::paths;
@@ -32,13 +32,13 @@ use crate::utils::strings;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::claude_code::transcript as claude_transcript;
-use crate::host::session::backend::SessionBackend;
-use crate::host::session::phase::{
+use crate::host::checkpoints::session::backend::SessionBackend;
+use crate::host::checkpoints::session::phase::{
     Event, NoOpActionHandler, TransitionContext, apply_transition, transition_with_context,
 };
-use crate::host::session::state::{PrePromptState, PreTaskState, SessionState};
-use crate::host::strategy::noop::NoOpStrategy;
-use crate::host::strategy::{StepContext, Strategy, TaskStepContext};
+use crate::host::checkpoints::session::state::{PrePromptState, PreTaskState, SessionState};
+use crate::host::checkpoints::strategy::noop::NoOpStrategy;
+use crate::host::checkpoints::strategy::{StepContext, Strategy, TaskStepContext};
 
 #[derive(Debug, Clone, Copy)]
 pub struct HookAgentProfile {
@@ -167,9 +167,9 @@ pub fn handle_session_start(
     backend: &dyn SessionBackend,
     repo_root: Option<&std::path::Path>,
 ) -> Result<()> {
-    let session_id = crate::host::lifecycle::apply_session_id_policy(
+    let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
         &input.session_id,
-        crate::host::lifecycle::SessionIdPolicy::Strict,
+        crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
     )
     .context("session-start requires non-empty session_id")?;
 
@@ -227,9 +227,9 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile(
     repo_root: Option<&Path>,
     profile: HookAgentProfile,
 ) -> Result<()> {
-    let session_id = crate::host::lifecycle::apply_session_id_policy(
+    let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
         &input.session_id,
-        crate::host::lifecycle::SessionIdPolicy::Strict,
+        crate::host::checkpoints::lifecycle::SessionIdPolicy::Strict,
     )
     .context("turn-start requires non-empty session_id")?;
 
@@ -358,9 +358,9 @@ pub fn handle_stop_with_profile(
     profile: HookAgentProfile,
 ) -> Result<()> {
     // stop should remain tolerant when pre-turn/session state is missing.
-    let session_id = crate::host::lifecycle::apply_session_id_policy(
+    let session_id = crate::host::checkpoints::lifecycle::apply_session_id_policy(
         &input.session_id,
-        crate::host::lifecycle::SessionIdPolicy::FallbackUnknown,
+        crate::host::checkpoints::lifecycle::SessionIdPolicy::FallbackUnknown,
     )?;
     let mut state = backend.load_session(&session_id)?;
 

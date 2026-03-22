@@ -21,19 +21,18 @@ use crate::config::{
     StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
     resolve_store_embedding_config, resolve_store_semantic_config,
 };
-use crate::host::db_status::{
-    DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
-};
-use crate::host::extensions::{
-    CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
-};
-use crate::host::strategy::manual_commit::{
+use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_session_content, run_git,
 };
+use crate::host::db_status::{
+    DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
+};
+use crate::host::extension_host::{
+    CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
+};
 use crate::utils::terminal::print_db_status_table;
 
-pub mod capability_host;
 pub(crate) mod identity;
 
 pub(crate) use identity::deterministic_uuid;
@@ -42,8 +41,8 @@ pub mod watch;
 pub fn build_capability_host(
     repo_root: &Path,
     repo: RepoIdentity,
-) -> anyhow::Result<capability_host::DevqlCapabilityHost> {
-    capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
+) -> anyhow::Result<crate::host::capability_host::DevqlCapabilityHost> {
+    crate::host::capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
 }
 
 #[derive(Debug, Clone)]
@@ -245,11 +244,11 @@ pub fn run_capability_packs_report(
     }
     let mut devql_report = host.registry_report();
     if with_health {
-        devql_report.health = capability_host::collect_health_outcomes(&host);
+        devql_report.health = crate::host::capability_host::collect_health_outcomes(&host);
     }
 
     let (core_extension_host, core_extension_host_error) = if with_extensions {
-        match crate::host::extensions::CoreExtensionHost::with_builtins() {
+        match crate::host::extension_host::CoreExtensionHost::with_builtins() {
             Ok(ext_host) => (Some(ext_host.registry_report()), None),
             Err(err) => (None, Some(err.to_string())),
         }
@@ -257,7 +256,7 @@ pub fn run_capability_packs_report(
         (None, None)
     };
 
-    let combined = capability_host::PackLifecycleReport {
+    let combined = crate::host::capability_host::PackLifecycleReport {
         devql_capability_host: devql_report,
         core_extension_host,
         core_extension_host_error,
@@ -275,7 +274,7 @@ pub fn run_capability_packs_report(
     } else {
         println!(
             "{}",
-            capability_host::format_pack_lifecycle_report_human(&combined)
+            crate::host::capability_host::format_pack_lifecycle_report_human(&combined)
         );
     }
     Ok(())

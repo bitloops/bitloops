@@ -3,7 +3,9 @@ use std::io::Read;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::host::lifecycle::{LifecycleEvent, LifecycleEventType, read_and_parse_hook_input};
+use crate::host::checkpoints::lifecycle::{
+    LifecycleEvent, LifecycleEventType, read_and_parse_hook_input,
+};
 
 use super::agent::{
     HOOK_NAME_AFTER_AGENT, HOOK_NAME_AFTER_MODEL, HOOK_NAME_AFTER_TOOL, HOOK_NAME_BEFORE_AGENT,

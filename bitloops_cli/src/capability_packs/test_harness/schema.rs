@@ -1,4 +1,4 @@
-use crate::host::devql::capability_host::SchemaModule;
+use crate::host::capability_host::SchemaModule;
 
 pub static TEST_HARNESS_SCHEMA_MODULE: SchemaModule = SchemaModule {
     capability_id: "test_harness",

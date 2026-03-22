@@ -5,7 +5,7 @@ mod versions;
 
 use std::sync::Arc;
 
-use crate::host::devql::capability_host::IngesterRegistration;
+use crate::host::capability_host::IngesterRegistration;
 
 use super::services::KnowledgeServices;
 

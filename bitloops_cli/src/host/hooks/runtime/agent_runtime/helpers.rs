@@ -259,21 +259,21 @@ fn extract_todo_content_from_tool_input(tool_input: Option<&Value>) -> String {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return String::new();
     };
-    crate::host::strategy::messages::extract_in_progress_todo(&todos_json)
+    crate::host::checkpoints::strategy::messages::extract_in_progress_todo(&todos_json)
 }
 
 fn count_todos_from_tool_input(tool_input: Option<&Value>) -> usize {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return 0;
     };
-    crate::host::strategy::messages::count_todos(&todos_json)
+    crate::host::checkpoints::strategy::messages::count_todos(&todos_json)
 }
 
 fn extract_last_completed_todo_from_tool_input(tool_input: Option<&Value>) -> String {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return String::new();
     };
-    crate::host::strategy::messages::extract_last_completed_todo(&todos_json)
+    crate::host::checkpoints::strategy::messages::extract_last_completed_todo(&todos_json)
 }
 
 fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, String) {

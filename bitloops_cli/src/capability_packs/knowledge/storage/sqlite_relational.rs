@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 
-use crate::host::devql::capability_host::gateways::RelationalGateway;
+use crate::host::capability_host::gateways::RelationalGateway;
+use crate::host::checkpoints::trailers::is_valid_checkpoint_id;
 use crate::host::devql::knowledge_schema_sql_sqlite;
-use crate::host::trailers::is_valid_checkpoint_id;
 use crate::storage::SqliteConnectionPool;
 
 use super::models::{KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow};

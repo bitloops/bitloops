@@ -1,4 +1,4 @@
-use crate::host::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
+use crate::host::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
 
 pub fn check_knowledge_config(ctx: &dyn CapabilityHealthContext) -> CapabilityHealthResult {
     match ctx.config_view("knowledge") {

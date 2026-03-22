@@ -14,7 +14,7 @@ use crate::adapters::agents::{
     AGENT_NAME_OPEN_CODE, AGENT_TYPE_OPEN_CODE, Agent, AgentSession, Event, HookInput, HookSupport,
     HookType, TokenUsage, chunk_jsonl, reassemble_jsonl,
 };
-use crate::host::lifecycle::read_and_parse_hook_input;
+use crate::host::checkpoints::lifecycle::read_and_parse_hook_input;
 
 use super::cli_commands::{run_opencode_import, run_opencode_session_delete};
 use super::hooks::{BITLOOPS_MARKER, get_plugin_path, render_plugin_template};

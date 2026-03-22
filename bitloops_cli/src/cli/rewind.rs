@@ -12,12 +12,12 @@ use crate::cli::enable;
 use crate::cli::explain::{RewindPoint, get_branch_checkpoints_real};
 use crate::config::settings;
 use crate::git::{hard_reset_with_protection, has_uncommitted_changes};
-use crate::host::session::create_session_backend_or_local;
-use crate::host::session::state::SessionState;
-use crate::host::strategy::manual_commit::{
+use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::checkpoints::session::state::SessionState;
+use crate::host::checkpoints::strategy::manual_commit::{
     read_latest_session_content, read_session_content_by_id,
 };
-use crate::host::trailers::SESSION_TRAILER_KEY;
+use crate::host::checkpoints::trailers::SESSION_TRAILER_KEY;
 use crate::utils::paths;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

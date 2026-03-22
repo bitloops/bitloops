@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::json;
 
+use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::RepoIdentity;
-use crate::host::devql::capability_host::DevqlCapabilityHost;
 
 pub async fn run_knowledge_add_via_host(
     repo_root: &Path,

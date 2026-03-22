@@ -1,5 +1,5 @@
 fn resolve_registered_stage_owner(
-    host: &crate::host::devql::capability_host::DevqlCapabilityHost,
+    host: &crate::host::capability_host::DevqlCapabilityHost,
     stage_name: &str,
 ) -> Result<&'static str> {
     let owners = host
@@ -19,7 +19,7 @@ fn resolve_registered_stage_owner(
 }
 
 fn validate_registered_stage_composition(
-    host: &crate::host::devql::capability_host::DevqlCapabilityHost,
+    host: &crate::host::capability_host::DevqlCapabilityHost,
     stage_name: &str,
     capability_id: &str,
     composition: Option<&RegisteredStageCompositionContext>,
@@ -65,7 +65,7 @@ fn validate_registered_stage_composition(
         composition.caller_capability_id,
         stage_name,
         capability_id,
-        crate::host::devql::capability_host::CrossPackAccessPolicy::RESOURCE_DEVQL_REGISTERED_STAGE
+        crate::host::capability_host::CrossPackAccessPolicy::RESOURCE_DEVQL_REGISTERED_STAGE
     );
 }
 

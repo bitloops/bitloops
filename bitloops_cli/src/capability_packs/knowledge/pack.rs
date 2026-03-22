@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     CapabilityDescriptor, CapabilityHealthCheck, CapabilityMigration, CapabilityPack,
     CapabilityRegistrar,
 };

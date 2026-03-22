@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::capability_packs::test_harness::ingest::coverage;
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
 use crate::models::{CoverageFormat, ScopeKind};

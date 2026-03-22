@@ -10,7 +10,7 @@ use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
 use crate::cli::testlens_types::{DEFAULT_QUERY_VIEW, QueryViewArg};
-use crate::host::devql::capability_host::DevqlCapabilityHost;
+use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
 use crate::models::{CoverageFormat, ScopeKind};
 use crate::utils::paths;

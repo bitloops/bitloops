@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::host::devql::RepoIdentity;
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
 };
+use crate::host::devql::RepoIdentity;
 
 use super::provenance::{
     INGEST_WRITE_ADD, INGEST_WRITE_REFRESH, IngestInvocation, IngestWriteLabels,
@@ -473,15 +473,15 @@ mod tests {
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };
-    use crate::host::devql::RepoIdentity;
-    use crate::host::devql::capability_host::config_view::CapabilityConfigView;
-    use crate::host::devql::capability_host::gateways::{
+    use crate::host::capability_host::config_view::CapabilityConfigView;
+    use crate::host::capability_host::gateways::{
         BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
         RelationalGateway,
     };
-    use crate::host::devql::capability_host::{
+    use crate::host::capability_host::{
         CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
     };
+    use crate::host::devql::RepoIdentity;
     use crate::storage::SqliteConnectionPool;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 

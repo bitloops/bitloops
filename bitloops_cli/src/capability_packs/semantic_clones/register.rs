@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::host::devql::capability_host::CapabilityRegistrar;
+use crate::host::capability_host::CapabilityRegistrar;
 
 use super::ingesters::build_symbol_clone_rebuild_ingester;
 use super::query_examples::SEMANTIC_CLONES_QUERY_EXAMPLES;
@@ -19,7 +19,7 @@ mod tests {
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
     };
-    use crate::host::devql::capability_host::{IngesterRegistration, QueryExample, SchemaModule};
+    use crate::host::capability_host::{IngesterRegistration, QueryExample, SchemaModule};
 
     #[derive(Default)]
     struct CollectingRegistrar {
@@ -31,7 +31,7 @@ mod tests {
     impl CapabilityRegistrar for CollectingRegistrar {
         fn register_stage(
             &mut self,
-            _stage: crate::host::devql::capability_host::StageRegistration,
+            _stage: crate::host::capability_host::StageRegistration,
         ) -> Result<()> {
             Ok(())
         }

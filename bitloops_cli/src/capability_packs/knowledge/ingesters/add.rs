@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
 

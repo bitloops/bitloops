@@ -10,14 +10,14 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::config::settings;
-use crate::host::session::create_session_backend_or_local;
-use crate::host::session::state::find_most_recent_session;
+use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::checkpoints::session::state::find_most_recent_session;
 use crate::telemetry::logging;
 use crate::utils::paths;
 
-use crate::host::strategy::Strategy;
-use crate::host::strategy::manual_commit::ManualCommitStrategy;
-use crate::host::strategy::registry::{self, StrategyRegistry};
+use crate::host::checkpoints::strategy::Strategy;
+use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
+use crate::host::checkpoints::strategy::registry::{self, StrategyRegistry};
 
 fn init_hook_logging(repo_root: &std::path::Path) -> Box<dyn FnOnce()> {
     let backend = create_session_backend_or_local(repo_root);
@@ -187,11 +187,11 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::session::backend::SessionBackend;
-    use crate::host::session::local_backend::LocalFileBackend;
-    use crate::host::session::phase::SessionPhase;
-    use crate::host::session::state::SessionState;
-    use crate::host::strategy::registry::StrategyRegistry;
+    use crate::host::checkpoints::session::backend::SessionBackend;
+    use crate::host::checkpoints::session::local_backend::LocalFileBackend;
+    use crate::host::checkpoints::session::phase::SessionPhase;
+    use crate::host::checkpoints::session::state::SessionState;
+    use crate::host::checkpoints::strategy::registry::StrategyRegistry;
     use crate::test_support::logger_lock::with_logger_test_lock;
     use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
     use std::fs;

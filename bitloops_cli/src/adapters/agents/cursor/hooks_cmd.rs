@@ -2,13 +2,13 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::host::checkpoints::session::backend::SessionBackend;
+use crate::host::checkpoints::strategy::Strategy;
 use crate::host::hooks::runtime::agent_runtime::{
     CURSOR_HOOK_AGENT_PROFILE, SessionInfoInput, UserPromptSubmitInput, handle_session_end,
     handle_session_start, handle_stop_with_profile,
     handle_user_prompt_submit_with_strategy_and_profile,
 };
-use crate::host::session::backend::SessionBackend;
-use crate::host::strategy::Strategy;
 
 pub fn handle_session_start_cursor(
     input: SessionInfoInput,

@@ -2,7 +2,7 @@ use std::io::Read;
 
 use anyhow::{Context, Result};
 
-use crate::host::lifecycle::{
+use crate::host::checkpoints::lifecycle::{
     LifecycleEvent, LifecycleEventType, SessionIdPolicy, apply_session_id_policy,
 };
 

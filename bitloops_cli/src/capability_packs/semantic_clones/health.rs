@@ -1,5 +1,5 @@
-use crate::host::devql::capability_host::CapabilityHealthContext;
-use crate::host::devql::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
+use crate::host::capability_host::CapabilityHealthContext;
+use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
 
 use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 

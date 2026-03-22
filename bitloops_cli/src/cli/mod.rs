@@ -111,7 +111,8 @@ impl std::fmt::Display for SilentError {
 impl std::error::Error for SilentError {}
 
 pub async fn run(cli: Cli) -> Result<()> {
-    let strategy_registry = crate::host::strategy::registry::StrategyRegistry::builtin();
+    let strategy_registry =
+        crate::host::checkpoints::strategy::registry::StrategyRegistry::builtin();
 
     if cli.version {
         if cli.command.is_some() {

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::adapters::agents::Agent;
-use crate::host::lifecycle::{
+use crate::host::checkpoints::lifecycle::{
     LifecycleEvent, LifecycleEventType, SessionIdPolicy, apply_session_id_policy,
     read_and_parse_hook_input,
 };
@@ -199,7 +199,7 @@ mod tests {
             .expect("event");
         assert_eq!(
             parsed.session_id,
-            crate::host::lifecycle::UNKNOWN_SESSION_ID
+            crate::host::checkpoints::lifecycle::UNKNOWN_SESSION_ID
         );
     }
 

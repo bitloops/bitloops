@@ -8,7 +8,7 @@ use super::{
     has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
     select_host_with_dashboard_preference,
 };
-use crate::host::trailers::CHECKPOINT_TRAILER_KEY;
+use crate::host::checkpoints::trailers::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
 use axum::{

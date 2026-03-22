@@ -245,8 +245,11 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
         return false;
     }
 
-    crate::host::strategy::manual_commit::run_git(repo_root, &["check-ignore", "-q", &rel_str])
-        .is_ok()
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo_root,
+        &["check-ignore", "-q", &rel_str],
+    )
+    .is_ok()
 }
 
 fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {

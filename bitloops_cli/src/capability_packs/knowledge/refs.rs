@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::host::devql::capability_host::CapabilityIngestContext;
-use crate::host::strategy::manual_commit::run_git;
+use crate::host::capability_host::CapabilityIngestContext;
+use crate::host::checkpoints::strategy::manual_commit::run_git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnowledgeRef {
@@ -340,12 +340,12 @@ mod tests {
         KnowledgeRelationAssertionRow, KnowledgeSourceRow,
     };
     use crate::config::ProviderConfig;
-    use crate::host::devql::RepoIdentity;
-    use crate::host::devql::capability_host::CapabilityIngestContext;
-    use crate::host::devql::capability_host::config_view::CapabilityConfigView;
-    use crate::host::devql::capability_host::gateways::{
+    use crate::host::capability_host::CapabilityIngestContext;
+    use crate::host::capability_host::config_view::CapabilityConfigView;
+    use crate::host::capability_host::gateways::{
         BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
     };
+    use crate::host::devql::RepoIdentity;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;

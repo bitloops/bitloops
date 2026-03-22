@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, open_repository_for_repo,
 };
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     CapabilityDescriptor, CapabilityHealthCheck, CapabilityMigration, CapabilityPack,
     CapabilityRegistrar,
 };

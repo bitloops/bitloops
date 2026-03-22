@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
-use crate::host::devql::capability_host::CapabilityRegistrar;
+use crate::host::capability_host::CapabilityRegistrar;
 
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
@@ -44,7 +44,7 @@ mod tests {
         TEST_HARNESS_TESTS_STAGE_ALIAS_ID, TEST_HARNESS_TESTS_STAGE_ID,
         TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
-    use crate::host::devql::capability_host::{
+    use crate::host::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
     };
     use anyhow::Result;

@@ -13,7 +13,7 @@ use crate::config::settings::{
     self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
     settings_local_path, settings_path,
 };
-use crate::host::session::create_session_backend_or_local;
+use crate::host::checkpoints::session::create_session_backend_or_local;
 
 #[derive(Args)]
 pub struct EnableArgs {

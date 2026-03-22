@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::host::devql::capability_host::CapabilityIngestContext;
+use crate::host::capability_host::CapabilityIngestContext;
 
 use super::descriptor::KNOWLEDGE_DESCRIPTOR;
 use super::types::ParsedKnowledgeUrl;

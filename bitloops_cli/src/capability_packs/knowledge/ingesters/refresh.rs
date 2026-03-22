@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
 

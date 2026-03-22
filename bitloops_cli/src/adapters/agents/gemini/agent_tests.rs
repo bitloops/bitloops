@@ -1040,7 +1040,7 @@ fn TestReadAndParse_ValidInput() {
         r#"{"session_id":"test-123","transcript_path":"/path/to/transcript","cwd":"/home/user"}"#,
     );
     let parsed: SessionInfoRawForTest =
-        crate::host::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
+        crate::host::checkpoints::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
     assert_eq!("test-123", parsed.session_id);
     assert_eq!("/path/to/transcript", parsed.transcript_path);
     assert_eq!("/home/user", parsed.cwd);
@@ -1051,8 +1051,10 @@ fn TestReadAndParse_ValidInput() {
 fn TestReadAndParse_EmptyInput() {
     let mut stdin = std::io::Cursor::new("");
     let err =
-        crate::host::lifecycle::read_and_parse_hook_input::<SessionInfoRawForTest>(&mut stdin)
-            .unwrap_err();
+        crate::host::checkpoints::lifecycle::read_and_parse_hook_input::<SessionInfoRawForTest>(
+            &mut stdin,
+        )
+        .unwrap_err();
     assert!(err.to_string().contains("empty hook input"));
 }
 
@@ -1061,8 +1063,10 @@ fn TestReadAndParse_EmptyInput() {
 fn TestReadAndParse_InvalidJSON() {
     let mut stdin = std::io::Cursor::new("not valid json");
     let err =
-        crate::host::lifecycle::read_and_parse_hook_input::<SessionInfoRawForTest>(&mut stdin)
-            .unwrap_err();
+        crate::host::checkpoints::lifecycle::read_and_parse_hook_input::<SessionInfoRawForTest>(
+            &mut stdin,
+        )
+        .unwrap_err();
     assert!(err.to_string().contains("failed to parse hook input"));
 }
 
@@ -1071,7 +1075,7 @@ fn TestReadAndParse_InvalidJSON() {
 fn TestReadAndParse_PartialJSON() {
     let mut stdin = std::io::Cursor::new(r#"{"session_id":"partial-only"}"#);
     let parsed: SessionInfoRawForTest =
-        crate::host::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
+        crate::host::checkpoints::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
     assert_eq!("partial-only", parsed.session_id);
     assert!(parsed.transcript_path.is_empty());
 }
@@ -1083,7 +1087,7 @@ fn TestReadAndParse_ExtraFields() {
         r#"{"session_id":"test","transcript_path":"/t","extra_field":"ignored","another":123}"#,
     );
     let parsed: SessionInfoRawForTest =
-        crate::host::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
+        crate::host::checkpoints::lifecycle::read_and_parse_hook_input(&mut stdin).unwrap();
     assert_eq!("test", parsed.session_id);
 }
 

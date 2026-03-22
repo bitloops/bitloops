@@ -145,7 +145,7 @@ fn token_usage_json_has_values(token_usage: &serde_json::Value) -> bool {
 }
 
 fn token_usage_metadata_has_values(
-    token_usage: &crate::host::strategy::manual_commit::TokenUsageMetadata,
+    token_usage: &crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata,
 ) -> bool {
     if token_usage.input_tokens > 0
         || token_usage.output_tokens > 0
@@ -420,15 +420,15 @@ pub fn generate_checkpoint_summary(
 
     // Convert explain::AgentType to summarize::AgentType.
     let summarize_agent = match content.metadata.agent_type {
-        AgentType::Codex => crate::host::summarize::AgentType::ClaudeCode,
-        AgentType::Cursor => crate::host::summarize::AgentType::Cursor,
-        AgentType::Gemini => crate::host::summarize::AgentType::Gemini,
-        AgentType::OpenCode => crate::host::summarize::AgentType::OpenCode,
-        AgentType::ClaudeCode => crate::host::summarize::AgentType::ClaudeCode,
+        AgentType::Codex => crate::host::checkpoints::summarize::AgentType::ClaudeCode,
+        AgentType::Cursor => crate::host::checkpoints::summarize::AgentType::Cursor,
+        AgentType::Gemini => crate::host::checkpoints::summarize::AgentType::Gemini,
+        AgentType::OpenCode => crate::host::checkpoints::summarize::AgentType::OpenCode,
+        AgentType::ClaudeCode => crate::host::checkpoints::summarize::AgentType::ClaudeCode,
     };
 
     // Scope the transcript to only this checkpoint's portion.
-    let scoped = crate::host::summarize::scope_transcript_for_checkpoint(
+    let scoped = crate::host::checkpoints::summarize::scope_transcript_for_checkpoint(
         &content.transcript,
         content.metadata.checkpoint_transcript_start,
         summarize_agent,
@@ -437,7 +437,7 @@ pub fn generate_checkpoint_summary(
         bail!("checkpoint {checkpoint_id} has no transcript content for this checkpoint (scoped)")
     }
 
-    let summary = crate::host::summarize::generate_from_transcript(
+    let summary = crate::host::checkpoints::summarize::generate_from_transcript(
         &scoped,
         &content.metadata.files_touched,
         summarize_agent,
@@ -447,7 +447,7 @@ pub fn generate_checkpoint_summary(
     let summary_json = serde_json::to_value(&summary)
         .map_err(|e| anyhow!("serializing generated summary: {e}"))?;
 
-    crate::host::strategy::manual_commit::update_summary(repo_root, checkpoint_id, summary_json)
+    crate::host::checkpoints::strategy::manual_commit::update_summary(repo_root, checkpoint_id, summary_json)
 }
 
 // CLI-855 / CLI-858: formatting + transcript stubs

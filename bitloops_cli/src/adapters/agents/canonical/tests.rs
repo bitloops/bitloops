@@ -1,4 +1,4 @@
-use crate::host::lifecycle::{LifecycleEvent, LifecycleEventType};
+use crate::host::checkpoints::lifecycle::{LifecycleEvent, LifecycleEventType};
 
 use super::*;
 

@@ -2,7 +2,7 @@ mod config;
 mod dependencies;
 mod storage;
 
-use crate::host::devql::capability_host::CapabilityHealthCheck;
+use crate::host::capability_host::CapabilityHealthCheck;
 
 pub use config::check_test_harness_config;
 pub use dependencies::check_test_harness_dependencies;

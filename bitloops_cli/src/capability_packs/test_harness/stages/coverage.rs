@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::host::devql::capability_host::{
+use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, DevqlSubqueryOptions, StageHandler, StageRequest,
     StageResponse, execute_devql_subquery,
 };

@@ -10,7 +10,7 @@ use crate::capability_packs::semantic_clones::features::{
     SemanticSummaryProvider, SemanticSummaryProviderConfig,
 };
 use crate::capability_packs::semantic_clones::scoring;
-use crate::host::extensions::{
+use crate::host::extension_host::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
     CapabilityStageContribution, ExtensionCompatibility,

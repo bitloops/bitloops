@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::host::devql::capability_host::{CapabilityConfigView, StageResponse};
+use crate::host::capability_host::{CapabilityConfigView, StageResponse};
 
 pub const TEST_HARNESS_CAPABILITY_ID: &str = "test_harness";
 pub const TEST_HARNESS_TESTS_STAGE_ID: &str = "tests";

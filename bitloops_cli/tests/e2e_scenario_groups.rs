@@ -1,7 +1,7 @@
 mod test_command_support;
 
-use bitloops_cli::host::session::create_session_backend_or_local;
-use bitloops_cli::host::strategy::manual_commit::{
+use bitloops_cli::host::checkpoints::session::create_session_backend_or_local;
+use bitloops_cli::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
 use serde_json::Value;

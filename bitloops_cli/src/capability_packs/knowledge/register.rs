@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::host::devql::capability_host::CapabilityRegistrar;
+use crate::host::capability_host::CapabilityRegistrar;
 
 use super::ingesters::{
     build_knowledge_add_ingester, build_knowledge_associate_ingester,
@@ -30,7 +30,7 @@ pub fn register_knowledge_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::devql::capability_host::{
+    use crate::host::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
     };
     use anyhow::Result;

@@ -2,18 +2,18 @@ use super::*;
 use crate::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_TYPE_CLAUDE_CODE, AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR,
 };
+use crate::host::checkpoints::lifecycle::UNKNOWN_SESSION_ID;
+use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::checkpoints::session::local_backend::LocalFileBackend;
+use crate::host::checkpoints::session::phase::SessionPhase;
+use crate::host::checkpoints::strategy::manual_commit::ManualCommitStrategy;
+use crate::host::checkpoints::strategy::noop::NoOpStrategy;
+use crate::host::checkpoints::strategy::registry;
+use crate::host::checkpoints::strategy::{StepContext, TaskStepContext};
 use crate::host::hooks::dispatcher::{
     CursorHookVerb, HooksAgent, current_hook_agent_name_for_tests, dispatch_cursor_hook,
     run_agent_hook_with_logging,
 };
-use crate::host::lifecycle::UNKNOWN_SESSION_ID;
-use crate::host::session::create_session_backend_or_local;
-use crate::host::session::local_backend::LocalFileBackend;
-use crate::host::session::phase::SessionPhase;
-use crate::host::strategy::manual_commit::ManualCommitStrategy;
-use crate::host::strategy::noop::NoOpStrategy;
-use crate::host::strategy::registry;
-use crate::host::strategy::{StepContext, TaskStepContext};
 use crate::test_support::git_fixtures::ensure_test_store_backends;
 use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::{
@@ -396,7 +396,7 @@ fn cursor_before_shell_execution_creates_shell_fallback_pre_prompt() {
     let pre_prompt = backend.load_pre_prompt("cursor-shell-1").unwrap().unwrap();
     assert_eq!(
         pre_prompt.source,
-        crate::host::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL
+        crate::host::checkpoints::session::state::PRE_PROMPT_SOURCE_CURSOR_SHELL
     );
     assert_eq!(pre_prompt.prompt, "Run shell command: npm test");
 }
