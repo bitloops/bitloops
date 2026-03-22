@@ -4,7 +4,7 @@ pub mod test_harness;
 
 use std::path::Path;
 
-use crate::engine::devql::capability_host::CapabilityPack;
+use crate::host::devql::capability_host::CapabilityPack;
 use knowledge::KnowledgePack;
 use semantic_clones::SemanticClonesPack;
 use test_harness::TestHarnessPack;

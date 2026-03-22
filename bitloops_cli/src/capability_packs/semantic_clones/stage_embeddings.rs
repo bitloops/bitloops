@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::adapters::model_providers::embeddings::EmbeddingProvider;
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::engine::devql::{
+use crate::host::devql::{
     RelationalStorage, esc_pg, postgres_exec, sql_string_list_pg, sqlite_exec_path_allow_create,
 };
 
@@ -270,7 +270,7 @@ fn sql_json_string(values: &[f32]) -> Result<String> {
 #[cfg(test)]
 mod semantic_embedding_persistence_tests {
     use super::*;
-    use crate::engine::devql::sqlite_query_rows_path;
+    use crate::host::devql::sqlite_query_rows_path;
     use serde_json::json;
     use tempfile::tempdir;
 

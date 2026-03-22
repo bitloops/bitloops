@@ -27,7 +27,7 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
-        self.execute_batch(crate::engine::devql::checkpoint_schema_sql_sqlite())
+        self.execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
             .context("initialising SQLite checkpoint schema")?;
         self.with_connection(|conn| {
             match conn.execute_batch("ALTER TABLE sessions ADD COLUMN ended_at TEXT;") {
@@ -40,7 +40,7 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
-        self.execute_batch(crate::engine::devql::devql_schema_sql_sqlite())
+        self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")
     }
 

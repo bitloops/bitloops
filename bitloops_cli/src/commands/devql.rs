@@ -5,13 +5,13 @@ use crate::capability_packs::knowledge::{
     run_knowledge_add_via_host, run_knowledge_associate_via_host, run_knowledge_refresh_via_host,
     run_knowledge_versions_via_host,
 };
-use crate::engine::devql::{
+use crate::host::devql::{
     DevqlConfig, resolve_repo_identity, run_capability_packs_report, run_ingest, run_init,
     run_query,
 };
 use crate::utils::paths;
 
-pub use crate::engine::devql::run_connection_status;
+pub use crate::host::devql::run_connection_status;
 
 pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
 

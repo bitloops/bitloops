@@ -1,4 +1,4 @@
-pub use crate::engine::hooks::runtime::agent_runtime::{
+pub use crate::host::hooks::runtime::agent_runtime::{
     CLAUDE_HOOK_AGENT_PROFILE, CURSOR_HOOK_AGENT_PROFILE, HookAgentProfile, PostTaskInput,
     PostTodoInput, SessionInfoInput, TaskHookInput, TaskToolResponse, UserPromptSubmitInput,
     handle_post_task, handle_post_task_with_profile, handle_post_todo,

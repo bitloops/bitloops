@@ -3,7 +3,7 @@ use std::io::Read;
 use anyhow::Result;
 
 use crate::adapters::agents::Agent;
-use crate::engine::lifecycle::{LifecycleEvent, LifecycleEventType, read_and_parse_hook_input};
+use crate::host::lifecycle::{LifecycleEvent, LifecycleEventType, read_and_parse_hook_input};
 
 use super::agent::CopilotCliAgent;
 use super::transcript::{extract_model_from_events, parse_events_from_offset};

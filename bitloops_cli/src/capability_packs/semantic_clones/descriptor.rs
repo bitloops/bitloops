@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::CapabilityDescriptor;
+use crate::host::devql::capability_host::CapabilityDescriptor;
 
 pub static SEMANTIC_CLONES_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: super::types::SEMANTIC_CLONES_CAPABILITY_ID,

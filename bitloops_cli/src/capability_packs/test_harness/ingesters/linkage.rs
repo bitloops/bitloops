@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::commands::ingest_tests;
-use crate::engine::devql::capability_host::{
+use crate::host::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
-use crate::engine::test_harness::BitloopsTestHarnessRepository;
+use crate::host::test_harness::BitloopsTestHarnessRepository;
 
 use super::super::types::TEST_HARNESS_LINKAGE_INGESTER_ID;
 

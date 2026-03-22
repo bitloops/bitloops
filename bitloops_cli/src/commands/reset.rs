@@ -40,7 +40,7 @@ fn ensure_git_repository(repo_root: &Path) -> Result<()> {
 }
 
 fn cleanup_session_states(repo_root: &Path, target_session_id: Option<&str>) -> Result<()> {
-    let backend = crate::engine::session::create_session_backend_or_local(repo_root);
+    let backend = crate::host::session::create_session_backend_or_local(repo_root);
     if let Some(session_id) = target_session_id {
         backend
             .delete_session(session_id)
@@ -64,7 +64,7 @@ fn cleanup_session_states(repo_root: &Path, target_session_id: Option<&str>) -> 
 mod tests {
     use super::{ResetConfig, run_reset_cmd};
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
-    use crate::engine::session::state::SessionState;
+    use crate::host::session::state::SessionState;
     use crate::storage::SqliteConnectionPool;
     use crate::test_support::process_state::git_command;
     use std::path::Path;
@@ -143,7 +143,7 @@ mod tests {
     ) {
         let _ = file_name;
         let _ = checkpoint_count;
-        let backend = crate::engine::session::create_session_backend_or_local(repo_root);
+        let backend = crate::host::session::create_session_backend_or_local(repo_root);
         backend
             .save_session(&SessionState {
                 session_id: session_id.to_string(),
@@ -195,7 +195,7 @@ mod tests {
         assert!(result.is_ok(), "reset --force should succeed: {result:?}");
 
         assert!(
-            crate::engine::session::create_session_backend_or_local(root)
+            crate::host::session::create_session_backend_or_local(root)
                 .load_session("2026-02-02-test123")
                 .expect("load session")
                 .is_none(),
@@ -225,7 +225,7 @@ mod tests {
             "reset should succeed without shadow branch: {result:?}"
         );
         assert!(
-            crate::engine::session::create_session_backend_or_local(root)
+            crate::host::session::create_session_backend_or_local(root)
                 .load_session("2026-02-02-orphaned")
                 .expect("load session")
                 .is_none(),
@@ -297,14 +297,14 @@ mod tests {
         );
 
         assert!(
-            crate::engine::session::create_session_backend_or_local(root)
+            crate::host::session::create_session_backend_or_local(root)
                 .load_session("2026-02-02-session1")
                 .expect("load session1")
                 .is_none(),
             "session1 should be deleted"
         );
         assert!(
-            crate::engine::session::create_session_backend_or_local(root)
+            crate::host::session::create_session_backend_or_local(root)
                 .load_session("2026-02-02-session2")
                 .expect("load session2")
                 .is_none(),

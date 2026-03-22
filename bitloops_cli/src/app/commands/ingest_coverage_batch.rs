@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::engine::devql::capability_host::gateways::TestHarnessCoverageGateway;
+use crate::host::devql::capability_host::gateways::TestHarnessCoverageGateway;
 use crate::models::{BatchManifestEntry, CoverageFormat, ScopeKind};
 
 #[derive(Debug, Clone)]

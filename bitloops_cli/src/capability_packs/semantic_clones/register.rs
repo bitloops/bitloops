@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::engine::devql::capability_host::CapabilityRegistrar;
+use crate::host::devql::capability_host::CapabilityRegistrar;
 
 use super::ingesters::build_symbol_clone_rebuild_ingester;
 use super::query_examples::SEMANTIC_CLONES_QUERY_EXAMPLES;
@@ -19,7 +19,7 @@ mod tests {
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
     };
-    use crate::engine::devql::capability_host::{IngesterRegistration, QueryExample, SchemaModule};
+    use crate::host::devql::capability_host::{IngesterRegistration, QueryExample, SchemaModule};
 
     #[derive(Default)]
     struct CollectingRegistrar {
@@ -31,7 +31,7 @@ mod tests {
     impl CapabilityRegistrar for CollectingRegistrar {
         fn register_stage(
             &mut self,
-            _stage: crate::engine::devql::capability_host::StageRegistration,
+            _stage: crate::host::devql::capability_host::StageRegistration,
         ) -> Result<()> {
             Ok(())
         }
@@ -44,14 +44,14 @@ mod tests {
 
         fn register_knowledge_stage(
             &mut self,
-            _stage: crate::engine::devql::capability_host::KnowledgeStageRegistration,
+            _stage: crate::host::devql::capability_host::KnowledgeStageRegistration,
         ) -> Result<()> {
             Ok(())
         }
 
         fn register_knowledge_ingester(
             &mut self,
-            _ingester: crate::engine::devql::capability_host::KnowledgeIngesterRegistration,
+            _ingester: crate::host::devql::capability_host::KnowledgeIngesterRegistration,
         ) -> Result<()> {
             Ok(())
         }

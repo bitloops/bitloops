@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::QueryExample;
+use crate::host::devql::capability_host::QueryExample;
 
 use super::types::SEMANTIC_CLONES_CAPABILITY_ID;
 

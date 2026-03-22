@@ -1,7 +1,7 @@
 use std::env;
 use std::fmt::Write as _;
 
-use crate::engine::db_status::{DatabaseConnectionStatus, DatabaseStatusRow};
+use crate::host::db_status::{DatabaseConnectionStatus, DatabaseStatusRow};
 
 pub fn print_db_status_table(rows: &[DatabaseStatusRow]) {
     print!("{}", render_db_status_table(rows));

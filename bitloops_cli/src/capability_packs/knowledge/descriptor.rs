@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::{CapabilityDependency, CapabilityDescriptor};
+use crate::host::devql::capability_host::{CapabilityDependency, CapabilityDescriptor};
 
 const KNOWLEDGE_DEPENDENCIES: &[CapabilityDependency] = &[CapabilityDependency {
     capability_id: "test_harness",

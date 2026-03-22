@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::engine::devql::EDGE_KIND_EXPORTS;
+use crate::host::devql::EDGE_KIND_EXPORTS;
 
 use super::MAX_BODY_TOKENS;
 

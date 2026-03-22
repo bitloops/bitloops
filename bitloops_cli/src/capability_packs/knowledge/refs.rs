@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::engine::devql::capability_host::KnowledgeIngestContext;
-use crate::engine::strategy::manual_commit::run_git;
+use crate::host::devql::capability_host::KnowledgeIngestContext;
+use crate::host::strategy::manual_commit::run_git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnowledgeRef {
@@ -333,12 +333,12 @@ mod tests {
         KnowledgeRelationAssertionRow, KnowledgeSourceRow,
     };
     use crate::config::ProviderConfig;
-    use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
-    use crate::engine::devql::capability_host::gateways::{
+    use crate::host::devql::RepoIdentity;
+    use crate::host::devql::capability_host::config_view::CapabilityConfigView;
+    use crate::host::devql::capability_host::gateways::{
         BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
     };
-    use crate::engine::devql::capability_host::{CapabilityIngestContext, KnowledgeIngestContext};
+    use crate::host::devql::capability_host::{CapabilityIngestContext, KnowledgeIngestContext};
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;
@@ -577,7 +577,7 @@ mod tests {
             organization: "bitloops".to_string(),
             name: "refs-tests".to_string(),
             identity: identity.clone(),
-            repo_id: crate::engine::devql::deterministic_uuid(&format!("repo://{identity}")),
+            repo_id: crate::host::devql::deterministic_uuid(&format!("repo://{identity}")),
         }
     }
 

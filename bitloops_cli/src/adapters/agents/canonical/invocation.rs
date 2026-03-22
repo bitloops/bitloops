@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use anyhow::Result;
 
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::engine::lifecycle::LifecycleEvent;
+use crate::host::lifecycle::LifecycleEvent;
 
 use super::{
     CanonicalAgentIdentity, CanonicalContractCompatibility, CanonicalLifecycleEvent,

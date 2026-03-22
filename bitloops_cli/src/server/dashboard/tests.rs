@@ -8,7 +8,7 @@ use super::{
     has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
     select_host_with_dashboard_preference,
 };
-use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
+use crate::host::trailers::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
 use axum::{
@@ -31,7 +31,7 @@ fn insert_commit_checkpoint_mapping(repo_root: &Path, commit_sha: &str, checkpoi
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
-    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
         .with_connection(|conn| {
             conn.execute(
@@ -84,7 +84,7 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
-    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let files_touched_raw =
         serde_json::to_string(seed.files_touched).expect("serialise files_touched");
     let token_usage_raw = serde_json::to_string(&seed.token_usage).expect("serialise token_usage");

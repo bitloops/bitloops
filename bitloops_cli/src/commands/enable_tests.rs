@@ -510,7 +510,7 @@ fn count_session_states_includes_legacy_invalid_json_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
-    let backend = crate::engine::session::local_backend::LocalFileBackend::new(dir.path());
+    let backend = crate::host::session::local_backend::LocalFileBackend::new(dir.path());
     let sessions_dir = backend.sessions_dir();
     fs::create_dir_all(&sessions_dir).unwrap();
     fs::write(sessions_dir.join("legacy-invalid.json"), "{not-json").unwrap();

@@ -27,7 +27,7 @@ impl PostgresSyncConnection {
     }
 
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
-        self.execute_batch(crate::engine::devql::checkpoint_schema_sql_postgres())
+        self.execute_batch(crate::host::devql::checkpoint_schema_sql_postgres())
             .context("initialising Postgres checkpoint schema")
     }
 

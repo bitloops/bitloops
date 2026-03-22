@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::adapters::agents::TokenUsage;
-use crate::engine::transcript::parse::{parse_from_bytes, parse_from_file_at_line};
-use crate::engine::transcript::types::{Line, TYPE_ASSISTANT, TYPE_USER};
-use crate::engine::transcript::utils::{
+use crate::host::transcript::parse::{parse_from_bytes, parse_from_file_at_line};
+use crate::host::transcript::types::{Line, TYPE_ASSISTANT, TYPE_USER};
+use crate::host::transcript::utils::{
     agent_transcript_path, extract_last_user_prompt as extract_last_user_prompt_shared,
     extract_modified_files as extract_modified_files_shared,
     find_checkpoint_uuid as find_checkpoint_uuid_shared,

@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::QueryExample;
+use crate::host::devql::capability_host::QueryExample;
 
 pub static TEST_HARNESS_QUERY_EXAMPLES: &[QueryExample] = &[
     QueryExample {

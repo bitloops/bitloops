@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::commands::explain::*;
-use crate::engine::trailers::CHECKPOINT_TRAILER_KEY;
+use crate::host::trailers::CHECKPOINT_TRAILER_KEY;
 use crate::test_support::process_state::git_command;
 use anyhow::{Result, anyhow};
 use clap::{Arg, ArgAction, Command};
@@ -87,7 +87,7 @@ fn insert_commit_checkpoint_mapping(
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
-    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
         .with_connection(|conn| {
             conn.execute(
@@ -107,7 +107,7 @@ fn insert_committed_checkpoint_row(repo_root: &std::path::Path, checkpoint_id: &
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
-    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
 
     sqlite
         .with_connection(|conn| {

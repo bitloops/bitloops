@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 
-use crate::engine::lifecycle::{LifecycleEvent, LifecycleEventType};
+use crate::host::lifecycle::{LifecycleEvent, LifecycleEventType};
 
 use super::CanonicalSessionDescriptor;
 

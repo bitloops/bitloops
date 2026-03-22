@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::engine::strategy::manual_commit::{
+use crate::host::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_latest_session_content,
 };
 

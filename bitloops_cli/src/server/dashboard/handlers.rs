@@ -13,8 +13,8 @@ use super::{
     read_checkpoint_info_for_filtering, read_commit_numstat, walk_branch_commits_with_checkpoints,
 };
 use super::{bundle, bundle_types::BundleError};
-use crate::engine::strategy::manual_commit::{CommittedInfo, read_session_content};
-use crate::engine::trailers::is_valid_checkpoint_id;
+use crate::host::strategy::manual_commit::{CommittedInfo, read_session_content};
+use crate::host::trailers::is_valid_checkpoint_id;
 use axum::{
     Json,
     extract::{Path as AxumPath, Query, State},

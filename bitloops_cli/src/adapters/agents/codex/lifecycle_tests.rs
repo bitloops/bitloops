@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::lifecycle::LifecycleEventType;
+use crate::host::lifecycle::LifecycleEventType;
 
 #[test]
 fn parse_unknown_hook_returns_none() {
@@ -54,7 +54,7 @@ fn parse_stop_defaults_empty_session_id_to_unknown() {
     assert_eq!(parsed.event_type, Some(LifecycleEventType::TurnEnd));
     assert_eq!(
         parsed.session_id,
-        crate::engine::lifecycle::UNKNOWN_SESSION_ID
+        crate::host::lifecycle::UNKNOWN_SESSION_ID
     );
     assert_eq!(parsed.session_ref, "/tmp/codex-4.jsonl");
 }

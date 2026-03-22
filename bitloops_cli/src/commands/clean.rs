@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::engine::session::create_session_backend_or_local;
-use crate::engine::strategy::manual_commit::list_orphaned_session_states_for_cleanup;
+use crate::host::session::create_session_backend_or_local;
+use crate::host::strategy::manual_commit::list_orphaned_session_states_for_cleanup;
 use crate::utils::paths;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,7 +224,7 @@ fn is_valid_cleanup_id(id: &str) -> bool {
 mod tests {
     use super::{CleanupItem, CleanupType, run_clean, run_clean_with_items};
     use crate::config::{resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo};
-    use crate::engine::session::state::SessionState;
+    use crate::host::session::state::SessionState;
     use crate::storage::SqliteConnectionPool;
     use crate::test_support::process_state::{git_command, with_process_state};
     use std::io::Cursor;
@@ -310,7 +310,7 @@ mod tests {
 
     fn create_orphan_session_state(repo: &Path, session_id: &str) {
         with_legacy_local_backend_at(repo, || {
-            let backend = crate::engine::session::create_session_backend_or_local(repo);
+            let backend = crate::host::session::create_session_backend_or_local(repo);
             let state = SessionState {
                 session_id: session_id.to_string(),
                 base_commit: "1234567abcdef".to_string(),
@@ -478,7 +478,7 @@ mod tests {
         create_orphan_session_state(&root, "orphan-session-456");
 
         with_legacy_local_backend_at(&root, || {
-            let backend = crate::engine::session::create_session_backend_or_local(&root);
+            let backend = crate::host::session::create_session_backend_or_local(&root);
             assert!(
                 backend
                     .load_session("orphan-session-456")
@@ -498,7 +498,7 @@ mod tests {
             "expected deleted session-state section, got: {output}"
         );
         with_legacy_local_backend_at(&root, || {
-            let backend = crate::engine::session::create_session_backend_or_local(&root);
+            let backend = crate::host::session::create_session_backend_or_local(&root);
             assert!(
                 backend
                     .load_session("orphan-session-456")

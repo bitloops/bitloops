@@ -66,7 +66,7 @@ pub enum Commands {
     Dashboard(dashboard::DashboardArgs),
     /// Internal: agent hook handlers (called by supported agents, not users).
     #[command(hide = true)]
-    Hooks(crate::engine::hooks::dispatcher::HooksArgs),
+    Hooks(crate::host::hooks::dispatcher::HooksArgs),
     /// Show build information.
     Version(root::VersionArgs),
     /// Explain a session, commit, or checkpoint
@@ -80,7 +80,7 @@ pub enum Commands {
     Testlens(testlens::TestLensArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
-    DevqlWatcher(crate::engine::devql::watch::WatcherProcessArgs),
+    DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -110,7 +110,7 @@ impl std::fmt::Display for SilentError {
 impl std::error::Error for SilentError {}
 
 pub async fn run(cli: Cli) -> Result<()> {
-    let strategy_registry = crate::engine::strategy::registry::StrategyRegistry::builtin();
+    let strategy_registry = crate::host::strategy::registry::StrategyRegistry::builtin();
 
     if cli.version {
         if cli.command.is_some() {
@@ -140,7 +140,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     if root::should_attempt_watcher_autostart(&command)
         && let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Err(err) = crate::engine::devql::watch::ensure_watcher_running(&repo_root)
+        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
@@ -159,7 +159,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Status(args) => status::run(args).await,
         Commands::Dashboard(args) => dashboard::run(args).await,
         Commands::Hooks(args) => {
-            crate::engine::hooks::dispatcher::run(args, &strategy_registry).await
+            crate::host::hooks::dispatcher::run(args, &strategy_registry).await
         }
         Commands::Version(args) => root::run_version_command(args.check),
         Commands::Explain(args) => explain::run(args).await,
@@ -167,7 +167,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Devql(args) => devql::run(args).await,
         Commands::Testlens(args) => testlens::run(args).await,
         Commands::DevqlWatcher(args) => {
-            crate::engine::devql::watch::run_process_command(args).await
+            crate::host::devql::watch::run_process_command(args).await
         }
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),

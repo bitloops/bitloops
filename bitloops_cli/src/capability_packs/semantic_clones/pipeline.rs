@@ -3,7 +3,7 @@
 //! Pure clone scoring lives in [`semantic_clones_pack::build_symbol_clone_edges`]. This module
 //! loads candidates from DevQL relational storage, applies pack DDL when needed, and persists
 //! edges. **DevQL ingestion** should trigger rebuild only via the registered ingester
-//! ([`super::SEMANTIC_CLONES_REBUILD_INGESTER_ID`]) or [`rebuild_symbol_clone_edges`](fn@rebuild_symbol_clone_edges) (also re-exported at `crate::engine::devql` under `cfg(test)` for integration tests),
+//! ([`super::SEMANTIC_CLONES_REBUILD_INGESTER_ID`]) or [`rebuild_symbol_clone_edges`](fn@rebuild_symbol_clone_edges) (also re-exported at `crate::host::devql` under `cfg(test)` for integration tests),
 //! not by duplicating this pipeline.
 
 use std::collections::{HashMap, HashSet};
@@ -13,8 +13,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio_postgres::Client;
 
-use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones_pack;
-use crate::engine::devql::{
+use crate::host::capability_packs::builtin::semantic_clones as semantic_clones_pack;
+use crate::host::devql::{
     EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, RelationalStorage, esc_pg, postgres_exec, sql_json_value,
     sql_now, sqlite_exec_path_allow_create,
 };

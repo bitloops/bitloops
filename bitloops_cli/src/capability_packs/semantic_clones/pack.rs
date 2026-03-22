@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::engine::devql::capability_host::{
+use crate::host::devql::capability_host::{
     CapabilityDescriptor, CapabilityHealthCheck, CapabilityMigration, CapabilityPack,
     CapabilityRegistrar,
 };

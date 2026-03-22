@@ -32,7 +32,7 @@ fn insert_commit_checkpoint_mapping(
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
-    let repo_id = crate::engine::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
         .with_connection(|conn| {
             conn.execute(

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::Digest;
 
-use crate::engine::devql::deterministic_uuid;
+use crate::host::devql::deterministic_uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgePayloadRef {

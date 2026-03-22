@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::SchemaModule;
+use crate::host::devql::capability_host::SchemaModule;
 
 pub static KNOWLEDGE_SCHEMA_MODULE: SchemaModule = SchemaModule {
     capability_id: "knowledge",

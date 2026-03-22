@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
-use crate::engine::devql::capability_host::CapabilityRegistrar;
-use crate::engine::test_harness::BitloopsTestHarnessRepository;
+use crate::host::devql::capability_host::CapabilityRegistrar;
+use crate::host::test_harness::BitloopsTestHarnessRepository;
 
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
@@ -44,7 +44,7 @@ mod tests {
         TEST_HARNESS_TESTS_STAGE_ALIAS_ID, TEST_HARNESS_TESTS_STAGE_ID,
         TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
-    use crate::engine::devql::capability_host::{
+    use crate::host::devql::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
     };
     use anyhow::Result;
@@ -71,14 +71,14 @@ mod tests {
 
         fn register_knowledge_stage(
             &mut self,
-            _stage: crate::engine::devql::capability_host::KnowledgeStageRegistration,
+            _stage: crate::host::devql::capability_host::KnowledgeStageRegistration,
         ) -> Result<()> {
             Ok(())
         }
 
         fn register_knowledge_ingester(
             &mut self,
-            _ingester: crate::engine::devql::capability_host::KnowledgeIngesterRegistration,
+            _ingester: crate::host::devql::capability_host::KnowledgeIngesterRegistration,
         ) -> Result<()> {
             Ok(())
         }

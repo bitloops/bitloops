@@ -5,8 +5,8 @@ mod summaries;
 
 use std::sync::{Arc, Mutex};
 
-use crate::engine::devql::capability_host::IngesterRegistration;
-use crate::engine::test_harness::BitloopsTestHarnessRepository;
+use crate::host::devql::capability_host::IngesterRegistration;
+use crate::host::test_harness::BitloopsTestHarnessRepository;
 
 use super::types::{
     TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,

@@ -2,7 +2,7 @@ mod coverage;
 mod tests;
 mod tests_summary;
 
-use crate::engine::devql::capability_host::StageRegistration;
+use crate::host::devql::capability_host::StageRegistration;
 
 use super::types::{
     TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID, TEST_HARNESS_COVERAGE_STAGE_ID,

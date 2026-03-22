@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
+use crate::host::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
 
 pub fn check_knowledge_connectors(ctx: &dyn CapabilityHealthContext) -> CapabilityHealthResult {
     let config = match ctx.config_view("knowledge") {
@@ -45,9 +45,9 @@ mod tests {
     };
     use crate::capability_packs::knowledge::ParsedKnowledgeUrl;
     use crate::config::ProviderConfig;
-    use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
-    use crate::engine::devql::capability_host::gateways::StoreHealthGateway;
+    use crate::host::devql::RepoIdentity;
+    use crate::host::devql::capability_host::config_view::CapabilityConfigView;
+    use crate::host::devql::capability_host::gateways::StoreHealthGateway;
     use anyhow::Result;
     use serde_json::json;
     use std::path::{Path, PathBuf};

@@ -2,11 +2,11 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::engine::hooks::runtime::agent_runtime::{
+use crate::host::hooks::runtime::agent_runtime::{
     CODEX_HOOK_AGENT_PROFILE, SessionInfoInput, handle_session_start, handle_stop_with_profile,
 };
-use crate::engine::session::backend::SessionBackend;
-use crate::engine::strategy::Strategy;
+use crate::host::session::backend::SessionBackend;
+use crate::host::strategy::Strategy;
 
 pub fn handle_session_start_codex(
     input: SessionInfoInput,
@@ -35,11 +35,11 @@ pub fn handle_stop_codex(
 mod tests {
     use super::*;
     use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_TYPE_CODEX};
-    use crate::engine::session::backend::SessionBackend;
-    use crate::engine::session::local_backend::LocalFileBackend;
-    use crate::engine::session::phase::SessionPhase;
-    use crate::engine::session::state::PrePromptState;
-    use crate::engine::strategy::{StepContext, TaskStepContext};
+    use crate::host::session::backend::SessionBackend;
+    use crate::host::session::local_backend::LocalFileBackend;
+    use crate::host::session::phase::SessionPhase;
+    use crate::host::session::state::PrePromptState;
+    use crate::host::strategy::{StepContext, TaskStepContext};
     use crate::test_support::process_state::git_command;
     use std::fs;
     use std::path::Path;

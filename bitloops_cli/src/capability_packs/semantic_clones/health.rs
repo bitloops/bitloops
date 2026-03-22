@@ -1,5 +1,5 @@
-use crate::engine::devql::capability_host::CapabilityHealthContext;
-use crate::engine::devql::capability_host::health::{
+use crate::host::devql::capability_host::CapabilityHealthContext;
+use crate::host::devql::capability_host::health::{
     CapabilityHealthCheck, CapabilityHealthResult,
 };
 

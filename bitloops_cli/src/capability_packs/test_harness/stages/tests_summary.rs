@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::{
+use crate::host::devql::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
 };
 

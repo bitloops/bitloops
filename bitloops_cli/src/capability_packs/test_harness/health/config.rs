@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
+use crate::host::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
 
 use super::super::types::resolve_test_harness_config;
 

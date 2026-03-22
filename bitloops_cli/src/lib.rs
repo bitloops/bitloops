@@ -4,7 +4,7 @@ pub mod branding;
 pub mod capability_packs;
 pub mod commands;
 pub mod config;
-pub mod engine;
+pub mod host;
 pub mod git;
 pub mod models;
 pub mod read;

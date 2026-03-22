@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use crate::engine::devql::capability_host::registrar::{
+use crate::host::devql::capability_host::registrar::{
     BoxFuture, IngestRequest, IngestResult, IngesterHandler, IngesterRegistration,
 };
 
@@ -15,7 +15,7 @@ impl IngesterHandler for SymbolCloneRebuildIngester {
     fn ingest<'a>(
         &'a self,
         _request: IngestRequest,
-        ctx: &'a mut dyn crate::engine::devql::capability_host::CapabilityIngestContext,
+        ctx: &'a mut dyn crate::host::devql::capability_host::CapabilityIngestContext,
     ) -> BoxFuture<'a, Result<IngestResult>> {
         Box::pin(async move {
             let relational = ctx

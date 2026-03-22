@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use anyhow::{Result, anyhow};
 
 use crate::adapters::agents::{agent_display_name, canonical_agent_key};
-use crate::engine::lifecycle::LifecycleEvent;
+use crate::host::lifecycle::LifecycleEvent;
 
 fn canonicalise_agent_key(raw: impl AsRef<str>) -> String {
     let collapsed = raw

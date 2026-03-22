@@ -1,4 +1,4 @@
-use crate::engine::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
+use crate::host::devql::capability_host::{CapabilityHealthContext, CapabilityHealthResult};
 
 pub fn check_test_harness_storage(ctx: &dyn CapabilityHealthContext) -> CapabilityHealthResult {
     let stores = ctx.stores();

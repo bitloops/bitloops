@@ -11,12 +11,12 @@ use sha2::{Digest, Sha256};
 use crate::commands::enable;
 use crate::commands::explain::{RewindPoint, get_branch_checkpoints_real};
 use crate::config::settings;
-use crate::engine::session::create_session_backend_or_local;
-use crate::engine::session::state::SessionState;
-use crate::engine::strategy::manual_commit::{
+use crate::host::session::create_session_backend_or_local;
+use crate::host::session::state::SessionState;
+use crate::host::strategy::manual_commit::{
     read_latest_session_content, read_session_content_by_id,
 };
-use crate::engine::trailers::SESSION_TRAILER_KEY;
+use crate::host::trailers::SESSION_TRAILER_KEY;
 use crate::git::{hard_reset_with_protection, has_uncommitted_changes};
 use crate::utils::paths;
 #[cfg(unix)]

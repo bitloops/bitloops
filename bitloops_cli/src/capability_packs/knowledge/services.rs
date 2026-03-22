@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::engine::devql::RepoIdentity;
-use crate::engine::devql::capability_host::{
+use crate::host::devql::RepoIdentity;
+use crate::host::devql::capability_host::{
     KnowledgeExecutionContext, KnowledgeIngestContext, StageRequest,
 };
 
@@ -453,13 +453,13 @@ mod tests {
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };
-    use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
-    use crate::engine::devql::capability_host::gateways::{
+    use crate::host::devql::RepoIdentity;
+    use crate::host::devql::capability_host::config_view::CapabilityConfigView;
+    use crate::host::devql::capability_host::gateways::{
         BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
         RelationalGateway,
     };
-    use crate::engine::devql::capability_host::{
+    use crate::host::devql::capability_host::{
         CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
         KnowledgeIngestContext, StageRequest,
     };
@@ -675,7 +675,7 @@ mod tests {
             organization: "bitloops".to_string(),
             name: "knowledge-tests".to_string(),
             identity: identity.clone(),
-            repo_id: crate::engine::devql::deterministic_uuid(&format!("repo://{identity}")),
+            repo_id: crate::host::devql::deterministic_uuid(&format!("repo://{identity}")),
         }
     }
 
