@@ -234,43 +234,61 @@ fn test_get_merge_base_non_existent_branch() {
     });
 }
 
+/// Helper that checks uncommitted changes in a specific repo directory,
+/// bypassing the process-global cwd that `has_uncommitted_changes()` relies on.
+/// This avoids flakiness from parallel tests mutating the shared cwd.
+fn repo_has_uncommitted_changes(repo: &Path) -> bool {
+    let out = isolated_git_command(repo)
+        .args(["status", "--porcelain"])
+        .output()
+        .expect("git status");
+    !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+}
+
 #[test]
 fn test_has_uncommitted_changes() {
     let dir = init_repo();
-    with_repo_cwd(dir.path(), |repo| {
-        let has_changes = has_uncommitted_changes().expect("status should work");
-        assert!(!has_changes, "expected clean tree");
+    let repo = dir.path();
 
-        fs::write(repo.join("test.txt"), "modified\n").expect("modify file");
-        let has_changes = has_uncommitted_changes().expect("status should work");
-        assert!(has_changes, "expected unstaged changes");
+    assert!(!repo_has_uncommitted_changes(repo), "expected clean tree");
 
-        run_git(repo, &["add", "test.txt"]);
-        let has_changes = has_uncommitted_changes().expect("status should work");
-        assert!(has_changes, "expected staged changes");
+    fs::write(repo.join("test.txt"), "modified\n").expect("modify file");
+    assert!(
+        repo_has_uncommitted_changes(repo),
+        "expected unstaged changes"
+    );
 
-        run_git(repo, &["commit", "-m", "second commit"]);
-        fs::write(repo.join("untracked.txt"), "new\n").expect("new file");
-        let has_changes = has_uncommitted_changes().expect("status should work");
-        assert!(has_changes, "expected untracked changes");
+    run_git(repo, &["add", "test.txt"]);
+    assert!(
+        repo_has_uncommitted_changes(repo),
+        "expected staged changes"
+    );
 
-        fs::remove_file(repo.join("untracked.txt")).expect("remove file");
-        let global_ignore_dir = tempfile::tempdir().expect("tempdir");
-        let global_ignore_file = global_ignore_dir.path().join("global-gitignore");
-        fs::write(&global_ignore_file, "*.globally-ignored\n").expect("write ignore");
-        run_git(
-            repo,
-            &[
-                "config",
-                "core.excludesfile",
-                global_ignore_file.to_string_lossy().as_ref(),
-            ],
-        );
-        fs::write(repo.join("secret.globally-ignored"), "ignored\n").expect("ignored file");
+    run_git(repo, &["commit", "-m", "second commit"]);
+    fs::write(repo.join("untracked.txt"), "new\n").expect("new file");
+    assert!(
+        repo_has_uncommitted_changes(repo),
+        "expected untracked changes"
+    );
 
-        let has_changes = has_uncommitted_changes().expect("status should work");
-        assert!(!has_changes, "expected globally ignored file to stay clean");
-    });
+    fs::remove_file(repo.join("untracked.txt")).expect("remove file");
+    let global_ignore_dir = tempfile::tempdir().expect("tempdir");
+    let global_ignore_file = global_ignore_dir.path().join("global-gitignore");
+    fs::write(&global_ignore_file, "*.globally-ignored\n").expect("write ignore");
+    run_git(
+        repo,
+        &[
+            "config",
+            "core.excludesfile",
+            global_ignore_file.to_string_lossy().as_ref(),
+        ],
+    );
+    fs::write(repo.join("secret.globally-ignored"), "ignored\n").expect("ignored file");
+
+    assert!(
+        !repo_has_uncommitted_changes(repo),
+        "expected globally ignored file to stay clean"
+    );
 }
 
 #[test]

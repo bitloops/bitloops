@@ -78,10 +78,7 @@ mod tests {
         };
 
         assert_eq!(args.port, DEFAULT_DASHBOARD_PORT);
-        assert_eq!(
-            DEFAULT_DASHBOARD_PORT,
-            crate::api::DEFAULT_DASHBOARD_PORT
-        );
+        assert_eq!(DEFAULT_DASHBOARD_PORT, crate::api::DEFAULT_DASHBOARD_PORT);
         assert!(args.host.is_none());
         assert!(args.bundle_dir.is_none());
         assert!(!args.no_open);

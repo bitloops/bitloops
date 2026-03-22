@@ -1,8 +1,11 @@
 use clap::Parser;
 
 pub use bitloops_cli::adapters;
+pub use bitloops_cli::api;
 pub use bitloops_cli::app;
+pub use bitloops_cli::branding;
 pub use bitloops_cli::capability_packs;
+pub use bitloops_cli::cli;
 pub use bitloops_cli::config;
 pub use bitloops_cli::git;
 pub use bitloops_cli::host;
@@ -12,11 +15,9 @@ pub use bitloops_cli::repository;
 pub use bitloops_cli::storage;
 pub use bitloops_cli::telemetry;
 pub use bitloops_cli::utils;
-pub use bitloops_cli::api;
-pub use bitloops_cli::branding;
-pub use bitloops_cli::cli;
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) mod test_support;
 
 #[tokio::main]
