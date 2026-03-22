@@ -9,8 +9,8 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Deserialize;
 
+use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::models::TestRunRecord;
-use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Deserialize)]
 struct JestJson {

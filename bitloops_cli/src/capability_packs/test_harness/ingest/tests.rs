@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::capability_packs::test_harness::mapping;
+use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::models::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
-use crate::repository::TestHarnessRepository;
 
 #[derive(Debug, Clone)]
 pub struct IngestTestsIssue {

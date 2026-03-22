@@ -8,16 +8,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use tempfile::TempDir;
 
 use super::PostgresTestHarnessRepository;
+use crate::capability_packs::test_harness::storage::{
+    TestHarnessQueryRepository, TestHarnessRepository,
+};
 use crate::models::{
     CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
     CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
     ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestDiscoveryDiagnosticRecord,
     TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
-use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 
 mod devql_schema {
-    include!("../../devql/ingestion/schema/relational_postgres_schema.rs");
+    include!("../../../../host/devql/ingestion/schema/relational_postgres_schema.rs");
 
     pub(crate) fn sql() -> &'static str {
         postgres_schema_sql()

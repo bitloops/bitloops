@@ -1,12 +1,12 @@
-mod postgres;
-mod schema;
-
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 
+use super::{
+    PostgresTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessCoverageGateway,
+    TestHarnessQueryRepository, TestHarnessRepository,
+};
 use crate::config::{RelationalProvider, resolve_store_backend_config_for_repo};
-use crate::host::devql::capability_host::gateways::TestHarnessCoverageGateway;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
@@ -14,12 +14,7 @@ use crate::models::{
     ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
     TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
-use crate::repository::{
-    SqliteTestHarnessRepository, TestHarnessQueryRepository, TestHarnessRepository,
-};
 use crate::storage::init::init_test_domain_database;
-
-pub use postgres::PostgresTestHarnessRepository;
 
 pub enum BitloopsTestHarnessRepository {
     Sqlite(SqliteTestHarnessRepository),

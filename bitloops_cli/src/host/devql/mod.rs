@@ -493,12 +493,13 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
     let test_harness_context =
         capability_ingest_context_for_ingester(cfg, None, TEST_HARNESS_CAPABILITY_INGESTER_ID)
             .context("resolving test-harness capability ingester owner")?;
-    crate::host::test_harness::init_schema_for_repo(&cfg.repo_root).with_context(|| {
-        format!(
-            "initialising test-harness schema for capability pack `{}`",
-            test_harness_context.capability_pack_id
-        )
-    })?;
+    crate::capability_packs::test_harness::storage::init_schema_for_repo(&cfg.repo_root)
+        .with_context(|| {
+            format!(
+                "initialising test-harness schema for capability pack `{}`",
+                test_harness_context.capability_pack_id
+            )
+        })?;
     Ok(())
 }
 

@@ -14,7 +14,27 @@ use crate::models::{
     TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 
+pub mod dispatch;
+pub mod postgres;
+pub mod schema;
 pub mod sqlite;
+
+/// Narrow coverage gateway: subset of TestHarnessRepository used by coverage ingest paths.
+pub trait TestHarnessCoverageGateway: Send {
+    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
+    fn load_artefacts_for_file_lines(
+        &self,
+        commit_sha: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>>;
+    fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;
+    fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()>;
+    fn insert_coverage_diagnostics(
+        &mut self,
+        diagnostics: &[CoverageDiagnosticRecord],
+    ) -> Result<()>;
+    fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize>;
+}
 
 pub trait TestHarnessRepository {
     fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
@@ -84,6 +104,8 @@ pub trait TestHarnessQueryRepository {
     fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts>;
 }
 
+pub use dispatch::{BitloopsTestHarnessRepository, init_schema_for_repo, open_repository_for_repo};
+pub use postgres::PostgresTestHarnessRepository;
 pub use sqlite::SqliteTestHarnessRepository;
 
 pub fn open_sqlite_repository(db_path: &Path) -> Result<SqliteTestHarnessRepository> {

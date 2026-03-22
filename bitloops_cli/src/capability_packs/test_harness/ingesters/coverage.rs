@@ -6,10 +6,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::capability_packs::test_harness::ingest::coverage;
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
-use crate::host::test_harness::BitloopsTestHarnessRepository;
 use crate::models::{CoverageFormat, ScopeKind};
 
 use super::super::types::TEST_HARNESS_COVERAGE_INGESTER_ID;

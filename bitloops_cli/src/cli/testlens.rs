@@ -4,12 +4,12 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::capability_packs::test_harness::ingest::{coverage_batch, results};
+use crate::capability_packs::test_harness::storage as test_harness_engine;
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
 use crate::host::devql::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
-use crate::host::test_harness as test_harness_engine;
 use crate::models::{CoverageFormat, ScopeKind};
 use crate::read::query_test_harness;
 use crate::read::query_view::{DEFAULT_QUERY_VIEW, QueryViewArg};

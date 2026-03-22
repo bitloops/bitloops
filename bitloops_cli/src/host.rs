@@ -8,7 +8,6 @@ pub mod lifecycle;
 pub mod session;
 pub mod strategy;
 pub mod summarize;
-pub mod test_harness;
 pub mod trailers;
 pub mod transcript;
 pub mod validation;

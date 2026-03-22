@@ -12,6 +12,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::capability_packs::test_harness::storage::{
+    TestHarnessQueryRepository, TestHarnessRepository,
+};
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
@@ -20,7 +23,6 @@ use crate::models::{
     TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
     derive_test_classification,
 };
-use crate::repository::{TestHarnessQueryRepository, TestHarnessRepository};
 use crate::storage::init::open_existing_database;
 
 use self::lists::{

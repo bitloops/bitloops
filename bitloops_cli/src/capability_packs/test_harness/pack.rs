@@ -3,11 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
+use crate::capability_packs::test_harness::storage::{
+    BitloopsTestHarnessRepository, open_repository_for_repo,
+};
 use crate::host::devql::capability_host::{
     CapabilityDescriptor, CapabilityHealthCheck, CapabilityMigration, CapabilityPack,
     CapabilityRegistrar,
 };
-use crate::host::test_harness::{BitloopsTestHarnessRepository, open_repository_for_repo};
 
 use super::descriptor::TEST_HARNESS_DESCRIPTOR;
 use super::health::TEST_HARNESS_HEALTH_CHECKS;

@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::capability_host::CapabilityRegistrar;
-use crate::host::test_harness::BitloopsTestHarnessRepository;
 
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,

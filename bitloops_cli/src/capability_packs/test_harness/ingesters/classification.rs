@@ -4,11 +4,11 @@ use anyhow::Context;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
+use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::devql::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
-use crate::host::test_harness::BitloopsTestHarnessRepository;
-use crate::repository::TestHarnessRepository;
 
 use super::super::types::TEST_HARNESS_CLASSIFICATION_INGESTER_ID;
 

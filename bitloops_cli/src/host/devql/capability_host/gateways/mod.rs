@@ -1,7 +1,6 @@
 pub mod blob_payloads;
 pub mod documents;
 pub mod relational;
-pub mod test_harness;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -12,7 +11,6 @@ pub use crate::adapters::connectors::{
 pub use blob_payloads::BlobPayloadGateway;
 pub use documents::DocumentStoreGateway;
 pub use relational::RelationalGateway;
-pub use test_harness::TestHarnessCoverageGateway;
 
 pub trait CanonicalGraphGateway: Send + Sync {}
 

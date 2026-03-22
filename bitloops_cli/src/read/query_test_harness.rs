@@ -6,9 +6,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::capability_packs::test_harness::storage::TestHarnessQueryRepository;
 use crate::models::{CoverageSummaryRecord, QueriedArtefactRecord};
 use crate::read::query_view::QueryViewArg;
-use crate::repository::TestHarnessQueryRepository;
 
 const DEFAULT_MIN_STRENGTH: f64 = 0.3;
 const WELL_TESTED_MIN_BRANCH_COVERAGE_PCT: f64 = 50.0;
