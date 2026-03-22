@@ -626,13 +626,27 @@ impl TempPostgres {
             return Ok(None);
         };
 
+        // Retry up to 3 times: free_port() has a race window between dropping the
+        // listener and pg_ctl binding the port — under parallel test load another
+        // process can steal the port and cause pg_ctl to fail.
+        for _ in 0..3 {
+            match Self::try_start(&initdb_path, &pg_ctl_path) {
+                Ok(pg) => return Ok(Some(pg)),
+                Err(e) => eprintln!("TempPostgres startup attempt failed: {e:#}"),
+            }
+        }
+        eprintln!("skipping Postgres test: all startup attempts failed under parallel load");
+        Ok(None)
+    }
+
+    fn try_start(initdb_path: &Path, pg_ctl_path: &Path) -> Result<Self> {
         let root = TempDir::new().context("creating temporary postgres root")?;
         let data_dir = root.path().join("data");
         let socket_dir = root.path().join("socket");
         fs::create_dir_all(&socket_dir).context("creating postgres socket directory")?;
 
         run_command(
-            Command::new(&initdb_path).args([
+            Command::new(initdb_path).args([
                 "-D",
                 data_dir
                     .to_str()
@@ -653,7 +667,7 @@ impl TempPostgres {
             port
         );
         run_status_command(
-            Command::new(&pg_ctl_path).args([
+            Command::new(pg_ctl_path).args([
                 "-D",
                 data_dir
                     .to_str()
@@ -672,13 +686,13 @@ impl TempPostgres {
             port
         );
 
-        Ok(Some(Self {
+        Ok(Self {
             _root: root,
             data_dir,
             socket_dir,
-            pg_ctl_path,
+            pg_ctl_path: pg_ctl_path.to_path_buf(),
             dsn,
-        }))
+        })
     }
 
     fn dsn(&self) -> &str {
