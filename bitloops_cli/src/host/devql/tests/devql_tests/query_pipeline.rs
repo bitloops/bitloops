@@ -1513,11 +1513,14 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
         .expect("serialise config"),
     )
     .expect("write config");
-    let host_sqlite_path = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
-        .expect("resolve backend config")
-        .relational
-        .resolve_sqlite_db_path()
-        .expect("resolve host sqlite path");
+    // Use _for_repo to avoid cwd dependency under parallel test execution.
+    let backends = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .expect("resolve backend config");
+    let host_sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
+        &cfg.repo_root,
+        backends.relational.sqlite_path.as_deref(),
+    )
+    .expect("resolve host sqlite path");
     assert_eq!(host_sqlite_path, sqlite_path);
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 
@@ -1807,11 +1810,14 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         .expect("serialise config"),
     )
     .expect("write config");
-    let host_sqlite_path = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
-        .expect("resolve backend config")
-        .relational
-        .resolve_sqlite_db_path()
-        .expect("resolve host sqlite path");
+    // Use _for_repo to avoid cwd dependency under parallel test execution.
+    let backends = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .expect("resolve backend config");
+    let host_sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
+        &cfg.repo_root,
+        backends.relational.sqlite_path.as_deref(),
+    )
+    .expect("resolve host sqlite path");
     assert_eq!(host_sqlite_path, sqlite_path);
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
 

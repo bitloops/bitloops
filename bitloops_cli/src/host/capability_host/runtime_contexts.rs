@@ -45,7 +45,9 @@ impl LocalCapabilityRuntimeResources {
         let backends = resolve_store_backend_config_for_repo(repo_root)?;
         let provider_config = resolve_provider_config_for_repo(repo_root)?;
 
-        let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(repo_root)?;
         let relational =
             SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
         let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
@@ -273,7 +275,7 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         let path = self
             .backends
             .relational
-            .resolve_sqlite_db_path()
+            .resolve_sqlite_db_path_for_repo(self.repo_root)
             .context("resolving SQLite path for DevQL relational DDL")?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();

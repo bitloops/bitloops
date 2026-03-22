@@ -1,8 +1,9 @@
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::resolve::{
     resolve_blob_local_path, resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path,
+    resolve_sqlite_db_path_for_repo,
 };
 use super::store_config_utils::current_repo_root_or_cwd;
 
@@ -105,6 +106,11 @@ pub struct RelationalBackendConfig {
 impl RelationalBackendConfig {
     pub fn resolve_sqlite_db_path(&self) -> Result<PathBuf> {
         resolve_sqlite_db_path(self.sqlite_path.as_deref())
+    }
+
+    /// Resolve the SQLite path relative to an explicit repo root (avoids cwd dependency).
+    pub fn resolve_sqlite_db_path_for_repo(&self, repo_root: &Path) -> Result<PathBuf> {
+        resolve_sqlite_db_path_for_repo(repo_root, self.sqlite_path.as_deref())
     }
 }
 

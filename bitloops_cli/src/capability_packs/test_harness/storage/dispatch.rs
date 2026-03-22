@@ -29,7 +29,7 @@ pub fn init_schema_for_repo(repo_root: &Path) -> Result<()> {
         RelationalProvider::Sqlite => {
             let sqlite_path = backends
                 .relational
-                .resolve_sqlite_db_path()
+                .resolve_sqlite_db_path_for_repo(repo_root)
                 .context("resolving SQLite path for test-harness schema init")?;
             init_test_domain_database(&sqlite_path)
         }
@@ -54,7 +54,7 @@ pub fn open_repository_for_repo(repo_root: &Path) -> Result<BitloopsTestHarnessR
         RelationalProvider::Sqlite => {
             let sqlite_path = backends
                 .relational
-                .resolve_sqlite_db_path()
+                .resolve_sqlite_db_path_for_repo(repo_root)
                 .context("resolving SQLite path for `bitloops testlens`")?;
             Ok(BitloopsTestHarnessRepository::Sqlite(
                 SqliteTestHarnessRepository::open_existing(&sqlite_path)?,
