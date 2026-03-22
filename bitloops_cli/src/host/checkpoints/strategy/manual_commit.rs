@@ -98,6 +98,12 @@ mod support;
 
 pub(crate) use self::strategy_impl::*;
 pub use self::support::*;
+pub(crate) use CommittedMetadata;
+pub(crate) use WriteCommittedOptions;
+pub(crate) use persist_committed_checkpoint_db_and_blobs;
+pub(crate) use redact_bytes;
+pub(crate) use redact_jsonl_bytes_with_fallback;
+pub(crate) use redact_text;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

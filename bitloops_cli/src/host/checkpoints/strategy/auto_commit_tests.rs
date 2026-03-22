@@ -113,7 +113,7 @@ fn get_session_context_not_found_returns_empty() {
 }
 
 #[test]
-fn auto_commit_save_step_commit_has_metadata_ref() {
+fn auto_commit_save_step_writes_checkpoint_to_db() {
     let dir = tempfile::tempdir().expect("tempdir");
     setup_git_repo(&dir);
 
@@ -147,23 +147,20 @@ fn auto_commit_save_step_commit_has_metadata_ref() {
 
     strategy.save_step(&ctx).expect("save_step should run");
 
-    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-
-    let _ = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should exist");
-
-    let _metadata_message = run_git(
-        dir.path(),
-        &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("read metadata branch commit message");
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).expect("read HEAD sha");
+    let mappings =
+        crate::host::checkpoints::strategy::manual_commit::read_commit_checkpoint_mappings(
+            dir.path(),
+        )
+        .expect("read mappings");
+    assert!(
+        mappings.contains_key(head_sha.trim()),
+        "auto-commit should record checkpoint mapping in DB"
+    );
 }
 
 #[test]
-fn auto_commit_save_step_metadata_ref_points_to_valid_commit() {
+fn auto_commit_save_step_checkpoint_maps_head_to_db() {
     let dir = tempfile::tempdir().expect("tempdir");
     setup_git_repo(&dir);
 
@@ -197,28 +194,26 @@ fn auto_commit_save_step_metadata_ref_points_to_valid_commit() {
 
     strategy.save_step(&ctx).expect("save_step should run");
 
-    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-
-    let _ = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("failed to get metadata branch");
-
-    let metadata_message = run_git(
-        dir.path(),
-        &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("read metadata branch commit");
-
+    let head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
     assert!(
-        metadata_message.starts_with("Checkpoint: "),
-        "metadata commit missing checkpoint prefix, got:\n{metadata_message}"
+        head_message.contains("Test session commit"),
+        "HEAD commit message should contain the step commit message"
+    );
+
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).expect("read HEAD sha");
+    let mappings =
+        crate::host::checkpoints::strategy::manual_commit::read_commit_checkpoint_mappings(
+            dir.path(),
+        )
+        .expect("read mappings");
+    assert!(
+        mappings.contains_key(head_sha.trim()),
+        "auto-commit should record checkpoint mapping in DB"
     );
 }
 
 #[test]
-fn auto_commit_save_task_step_commit_has_metadata_ref() {
+fn auto_commit_save_task_step_writes_checkpoint_to_db() {
     let dir = tempfile::tempdir().expect("tempdir");
     setup_git_repo(&dir);
 
@@ -248,23 +243,14 @@ fn auto_commit_save_task_step_commit_has_metadata_ref() {
         .save_task_step(&ctx)
         .expect("save_task_step should run");
 
-    let _head_message = run_git(dir.path(), &["log", "-1", "--pretty=%B"]).expect("read HEAD");
-
-    let _ = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should exist");
-
-    let metadata_message = run_git(
-        dir.path(),
-        &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("read metadata branch commit");
+    let committed = crate::host::checkpoints::strategy::manual_commit::list_committed(dir.path())
+        .expect("list_committed");
     assert!(
-        metadata_message.contains("Checkpoint: "),
-        "metadata commit missing checkpoint format, got:\n{metadata_message}"
+        !committed.is_empty(),
+        "save_task_step should persist at least one checkpoint in DB"
     );
+    let found = committed.iter().any(|c| c.session_id == "test-session-789");
+    assert!(found, "DB should contain a checkpoint for the task session");
 }
 
 #[test]
@@ -303,12 +289,6 @@ fn auto_commit_save_task_step_no_changes_skips_commit() {
         "checkpoint without file changes should keep the same tree hash"
     );
     assert!(!new_head.is_empty(), "HEAD hash should be available");
-
-    let _metadata_message = run_git(
-        dir.path(),
-        &["log", "-1", "--pretty=%B", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should exist");
 }
 
 #[test]
@@ -528,11 +508,10 @@ fn auto_commit_save_step_files_already_committed() {
     .expect("commit as user");
     let user_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).expect("read user commit");
 
-    let sessions_commit_before = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should exist");
+    let db_count_before =
+        crate::host::checkpoints::strategy::manual_commit::list_committed(dir.path())
+            .map(|v| v.len())
+            .unwrap_or(0);
 
     let session_id = "2025-12-22-already-committed-test";
     let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
@@ -565,14 +544,13 @@ fn auto_commit_save_step_files_already_committed() {
         "HEAD should remain user's commit when file already committed"
     );
 
-    let sessions_commit_after = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should still exist");
+    let db_count_after =
+        crate::host::checkpoints::strategy::manual_commit::list_committed(dir.path())
+            .map(|v| v.len())
+            .unwrap_or(0);
     assert_eq!(
-        sessions_commit_after, sessions_commit_before,
-        "metadata branch should not get new commits when file is already committed"
+        db_count_after, db_count_before,
+        "DB should not get new checkpoints when file is already committed"
     );
 }
 
@@ -585,11 +563,11 @@ fn auto_commit_save_step_no_changes_skipped() {
     strategy.ensure_setup().expect("ensure setup");
 
     let initial_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).expect("initial HEAD");
-    let sessions_commit_before = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should exist");
+
+    let db_count_before =
+        crate::host::checkpoints::strategy::manual_commit::list_committed(dir.path())
+            .map(|v| v.len())
+            .unwrap_or(0);
 
     let session_id = "2025-12-22-no-changes-test";
     let metadata_dir_rel = format!("{}/{}", paths::BITLOOPS_METADATA_DIR, session_id);
@@ -622,14 +600,13 @@ fn auto_commit_save_step_no_changes_skipped() {
         "HEAD should remain initial commit when there are no code changes"
     );
 
-    let sessions_commit_after = run_git(
-        dir.path(),
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .expect("metadata branch should still exist");
+    let db_count_after =
+        crate::host::checkpoints::strategy::manual_commit::list_committed(dir.path())
+            .map(|v| v.len())
+            .unwrap_or(0);
     assert_eq!(
-        sessions_commit_after, sessions_commit_before,
-        "metadata branch should not get new commits when there are no code changes"
+        db_count_after, db_count_before,
+        "DB should not get new checkpoints when there are no code changes"
     );
 }
 

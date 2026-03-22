@@ -6,18 +6,19 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use serde_json::json;
 
 use crate::adapters::agents::canonical_agent_key;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::state::SessionState;
-use crate::host::checkpoints::strategy::manual_commit::insert_commit_checkpoint_mapping;
+use crate::host::checkpoints::strategy::manual_commit::{
+    CommittedMetadata, WriteCommittedOptions, insert_commit_checkpoint_mapping,
+    persist_committed_checkpoint_db_and_blobs, redact_bytes, redact_jsonl_bytes_with_fallback,
+    redact_text, run_git,
+};
 use crate::utils::paths;
 use crate::utils::strings;
 
 use super::manual_commit::ManualCommitStrategy;
-use super::manual_commit::commit_files_to_metadata_branch;
-use super::manual_commit::run_git;
 use super::{StepContext, Strategy, TaskStepContext};
 
 pub const NO_DESCRIPTION: &str = "No description";
@@ -74,109 +75,76 @@ impl AutoCommitStrategy {
     }
 
     pub fn description(&self) -> &'static str {
-        "Auto-commits code to active branch with metadata on bitloops/checkpoints/v1"
+        "Auto-commits code to active branch with checkpoint metadata in DB/blob storage"
     }
 
     pub fn ensure_setup(&self) -> Result<()> {
-        if run_git(
-            &self.repo_root,
-            &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-        )
-        .is_ok()
-        {
-            return Ok(());
-        }
-
-        let head = run_git(&self.repo_root, &["rev-parse", "HEAD"])?;
-        run_git(
-            &self.repo_root,
-            &[
-                "update-ref",
-                &format!("refs/heads/{}", paths::METADATA_BRANCH_NAME),
-                &head,
-            ],
-        )?;
         Ok(())
     }
 
     pub fn list_sessions(&self) -> Result<Vec<Session>> {
+        use super::manual_commit::{list_committed, read_session_content};
         let mut sessions: BTreeMap<String, Session> = BTreeMap::new();
-        let checkpoint_ids = list_checkpoint_ids(&self.repo_root)?;
 
-        for checkpoint_id in checkpoint_ids {
-            let session_count = checkpoint_session_count(&self.repo_root, &checkpoint_id);
-            for idx in 0..session_count {
-                let Some(session_id) = checkpoint_session_id(&self.repo_root, &checkpoint_id, idx)
-                else {
-                    continue;
-                };
+        let committed = match list_committed(&self.repo_root) {
+            Ok(v) => v,
+            Err(_) => return Ok(vec![]),
+        };
+        for info in committed {
+            let session_id = if info.session_id.is_empty() {
+                info.checkpoint_id.clone()
+            } else {
+                info.session_id.clone()
+            };
 
-                let description =
-                    checkpoint_session_description(&self.repo_root, &checkpoint_id, idx);
-                let entry = sessions
-                    .entry(session_id.clone())
-                    .or_insert_with(|| Session {
-                        id: session_id,
-                        description: NO_DESCRIPTION.to_string(),
-                        checkpoints: vec![],
-                    });
+            let description = read_session_content(&self.repo_root, &info.checkpoint_id, 0)
+                .ok()
+                .and_then(|c| {
+                    c.prompts
+                        .lines()
+                        .find(|l| !l.is_empty())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| NO_DESCRIPTION.to_string());
 
-                if description != NO_DESCRIPTION {
-                    entry.description = description;
-                }
-
-                entry.checkpoints.push(Checkpoint {
-                    checkpoint_id: checkpoint_id.clone(),
+            let entry = sessions
+                .entry(session_id.clone())
+                .or_insert_with(|| Session {
+                    id: session_id,
+                    description: NO_DESCRIPTION.to_string(),
+                    checkpoints: vec![],
                 });
+            if description != NO_DESCRIPTION {
+                entry.description = description;
             }
+            entry.checkpoints.push(Checkpoint {
+                checkpoint_id: info.checkpoint_id.clone(),
+            });
         }
 
         Ok(sessions.into_values().collect())
     }
 
     pub fn get_session_context(&self, session_id: &str) -> String {
-        let Ok(checkpoint_ids) = list_checkpoint_ids(&self.repo_root) else {
+        use super::manual_commit::{list_committed, read_session_content_by_id};
+        let Ok(committed) = list_committed(&self.repo_root) else {
             return String::new();
         };
 
-        let mut found: Option<(String, usize)> = None;
-        for checkpoint_id in checkpoint_ids {
-            let session_count = checkpoint_session_count(&self.repo_root, &checkpoint_id);
-            for idx in 0..session_count {
-                if checkpoint_session_id(&self.repo_root, &checkpoint_id, idx).as_deref()
-                    == Some(session_id)
-                {
-                    found = Some((checkpoint_id.clone(), idx));
-                }
+        for info in committed.iter().rev() {
+            if let Ok(content) =
+                read_session_content_by_id(&self.repo_root, &info.checkpoint_id, session_id)
+            {
+                return content.context;
             }
         }
-
-        let Some((checkpoint_id, idx)) = found else {
-            return String::new();
-        };
-
-        read_checkpoint_file(
-            &self.repo_root,
-            &checkpoint_id,
-            idx,
-            paths::CONTEXT_FILE_NAME,
-        )
-        .unwrap_or_default()
+        String::new()
     }
 
     pub fn get_checkpoint_log(&self, checkpoint: &Checkpoint) -> Result<Vec<u8>> {
-        let session_count = checkpoint_session_count(&self.repo_root, &checkpoint.checkpoint_id);
-        if session_count == 0 {
-            anyhow::bail!("checkpoint has no sessions");
-        }
-
-        let transcript = read_checkpoint_file(
-            &self.repo_root,
-            &checkpoint.checkpoint_id,
-            session_count - 1,
-            paths::TRANSCRIPT_FILE_NAME,
-        )?;
-        Ok(transcript.into_bytes())
+        use super::manual_commit::read_latest_session_content;
+        let content = read_latest_session_content(&self.repo_root, &checkpoint.checkpoint_id)?;
+        Ok(content.transcript.into_bytes())
     }
 
     fn has_worktree_changes(&self, files: &[String]) -> bool {
@@ -204,172 +172,77 @@ impl AutoCommitStrategy {
             .unwrap_or(false)
     }
 
-    fn write_checkpoint_metadata_commit(&self, input: &MetadataCommitInput<'_>) -> Result<()> {
+    fn write_checkpoint_to_db(&self, input: &MetadataCommitInput<'_>) -> Result<()> {
         let checkpoint_id = input.checkpoint_id;
-        let (a, b) = checkpoint_id.split_at(2);
-        let checkpoint_root = format!("{a}/{b}");
-        let session_root = format!("{checkpoint_root}/0");
-
-        let sessions = vec![json!({
-            "metadata": format!("/{session_root}/{}", paths::METADATA_FILE_NAME),
-            "transcript": format!("/{session_root}/{}", paths::TRANSCRIPT_FILE_NAME),
-            "context": format!("/{session_root}/{}", paths::CONTEXT_FILE_NAME),
-            "content_hash": format!("/{session_root}/{}", paths::CONTENT_HASH_FILE_NAME),
-            "prompt": format!("/{session_root}/{}", paths::PROMPT_FILE_NAME),
-        })];
-
+        let canonical_agent = canonical_agent_key(input.agent_type);
         let branch = run_git(
             &self.repo_root,
             &["symbolic-ref", "--quiet", "--short", "HEAD"],
         )
         .unwrap_or_default();
 
-        let mut top_metadata = json!({
-            "checkpoint_id": checkpoint_id,
-            "cli_version": env!("CARGO_PKG_VERSION"),
-            "strategy": "auto-commit",
-            "branch": branch,
-            "sessions": sessions,
-            "checkpoints_count": 1,
-            "files_touched": input.files_touched,
-        });
-        if branch.trim().is_empty() {
-            top_metadata
-                .as_object_mut()
-                .expect("top metadata should be object")
-                .remove("branch");
-        }
+        let redacted_transcript = redact_jsonl_bytes_with_fallback(input.transcript);
+        let redacted_prompts = redact_text(input.prompt);
+        let redacted_context = redact_bytes(input.context.as_bytes());
 
-        let created_at = now_rfc3339();
-        let canonical_agent = canonical_agent_key(input.agent_type);
-        let mut session_metadata = json!({
-            "checkpoint_id": checkpoint_id,
-            "session_id": input.session_id,
-            "checkpoints_count": 1,
-            "strategy": "auto-commit",
-            "agent": canonical_agent.clone(),
-            "created_at": created_at,
-            "cli_version": env!("CARGO_PKG_VERSION"),
-            "files_touched": input.files_touched,
-            "branch": branch,
-        });
-        if canonical_agent.is_empty() {
-            session_metadata
-                .as_object_mut()
-                .expect("session metadata should be object")
-                .remove("agent");
-        }
-        if branch.trim().is_empty() {
-            session_metadata
-                .as_object_mut()
-                .expect("session metadata should be object")
-                .remove("branch");
-        }
-
-        let staging_dir = self
-            .repo_root
-            .join(paths::BITLOOPS_TMP_DIR)
-            .join(format!("auto-commit-{}", uuid::Uuid::new_v4().simple()));
-        fs::create_dir_all(&staging_dir).context("creating auto-commit staging directory")?;
-
-        let top_metadata_disk = staging_dir.join("metadata.json");
-        let session_metadata_disk = staging_dir.join("session-metadata.json");
-        let transcript_disk = staging_dir.join("transcript.jsonl");
-        let prompt_disk = staging_dir.join("prompt.txt");
-        let context_disk = staging_dir.join("context.md");
-        let content_hash_disk = staging_dir.join(paths::CONTENT_HASH_FILE_NAME);
-
-        fs::write(
-            &top_metadata_disk,
-            serde_json::to_string_pretty(&top_metadata).context("serializing top metadata")?,
-        )
-        .context("writing top metadata")?;
-        fs::write(
-            &session_metadata_disk,
-            serde_json::to_string_pretty(&session_metadata)
-                .context("serializing session metadata")?,
-        )
-        .context("writing session metadata")?;
-        fs::write(&transcript_disk, input.transcript).context("writing transcript")?;
-        fs::write(&prompt_disk, input.prompt).context("writing prompt")?;
-        fs::write(&context_disk, input.context).context("writing context")?;
-        fs::write(
-            &content_hash_disk,
-            format!("sha256:{}", sha256_hex(input.transcript)),
-        )
-        .context("writing content hash")?;
-
-        let mut files: Vec<(PathBuf, String)> = vec![
-            (
-                top_metadata_disk,
-                format!("{checkpoint_root}/{}", paths::METADATA_FILE_NAME),
-            ),
-            (
-                session_metadata_disk,
-                format!("{session_root}/{}", paths::METADATA_FILE_NAME),
-            ),
-            (
-                transcript_disk,
-                format!("{session_root}/{}", paths::TRANSCRIPT_FILE_NAME),
-            ),
-            (
-                prompt_disk,
-                format!("{session_root}/{}", paths::PROMPT_FILE_NAME),
-            ),
-            (
-                context_disk,
-                format!("{session_root}/{}", paths::CONTEXT_FILE_NAME),
-            ),
-            (
-                content_hash_disk,
-                format!("{session_root}/{}", paths::CONTENT_HASH_FILE_NAME),
-            ),
-        ];
-
-        let _tree_root = if input.is_task {
-            let task_root = format!("{checkpoint_root}/tasks/{}", input.tool_use_id);
-            let task_checkpoint_disk = staging_dir.join("task-checkpoint.json");
-            fs::write(
-                &task_checkpoint_disk,
-                serde_json::to_string_pretty(&json!({
-                    "session_id": input.session_id,
-                    "tool_use_id": input.tool_use_id,
-                    "agent_id": input.agent_id,
-                }))
-                .context("serializing task checkpoint metadata")?,
-            )
-            .context("writing task checkpoint metadata")?;
-            files.push((
-                task_checkpoint_disk,
-                format!("{task_root}/{}", paths::CHECKPOINT_FILE_NAME),
-            ));
-            task_root
-        } else {
-            checkpoint_root.clone()
+        let session_meta = CommittedMetadata {
+            checkpoint_id: checkpoint_id.to_string(),
+            session_id: input.session_id.to_string(),
+            checkpoints_count: 1,
+            strategy: "auto-commit".to_string(),
+            agent: canonical_agent,
+            created_at: now_rfc3339(),
+            cli_version: env!("CARGO_PKG_VERSION").to_string(),
+            turn_id: String::new(),
+            files_touched: input.files_touched.to_vec(),
+            is_task: input.is_task,
+            tool_use_id: input.tool_use_id.to_string(),
+            transcript_identifier_at_start: String::new(),
+            checkpoint_transcript_start: 0,
+            transcript_lines_at_start: 0,
+            branch: branch.trim().to_string(),
+            summary: None,
+            token_usage: None,
+            initial_attribution: None,
+            transcript_path: String::new(),
         };
 
-        let message = format!("Checkpoint: {checkpoint_id}");
-
-        let author_name = if input.author_name.trim().is_empty() {
-            "Bitloops"
-        } else {
-            input.author_name
+        let opts = WriteCommittedOptions {
+            checkpoint_id: checkpoint_id.to_string(),
+            session_id: input.session_id.to_string(),
+            strategy: "auto-commit".to_string(),
+            agent: session_meta.agent.clone(),
+            transcript: input.transcript.to_vec(),
+            prompts: None,
+            context: Some(input.context.as_bytes().to_vec()),
+            checkpoints_count: 1,
+            files_touched: input.files_touched.to_vec(),
+            token_usage_input: None,
+            token_usage_output: None,
+            token_usage_api_call_count: None,
+            turn_id: String::new(),
+            transcript_identifier_at_start: String::new(),
+            checkpoint_transcript_start: 0,
+            token_usage: None,
+            initial_attribution: None,
+            author_name: input.author_name.to_string(),
+            author_email: input.author_email.to_string(),
+            summary: None,
+            is_task: input.is_task,
+            tool_use_id: input.tool_use_id.to_string(),
+            agent_id: input.agent_id.to_string(),
+            transcript_path: String::new(),
+            subagent_transcript_path: String::new(),
         };
-        let author_email = if input.author_email.trim().is_empty() {
-            "bitloops@localhost"
-        } else {
-            input.author_email
-        };
 
-        let result = commit_files_to_metadata_branch(
+        persist_committed_checkpoint_db_and_blobs(
             &self.repo_root,
-            &files,
-            &message,
-            author_name,
-            author_email,
-        );
-        let _ = fs::remove_dir_all(&staging_dir);
-        result
+            &opts,
+            &session_meta,
+            &redacted_transcript,
+            &redacted_prompts,
+            &redacted_context,
+        )
     }
 
     fn commit_code_to_active_branch(&self, ctx: &StepContext, checkpoint_id: &str) -> Result<bool> {
@@ -559,130 +432,6 @@ fn merge_files_touched(
     seen.into_iter().collect()
 }
 
-fn sha256_hex(input: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(input);
-    format!("{hash:x}")
-}
-
-fn list_checkpoint_ids(repo_root: &Path) -> Result<Vec<String>> {
-    if run_git(
-        repo_root,
-        &["rev-parse", "--verify", paths::METADATA_BRANCH_NAME],
-    )
-    .is_err()
-    {
-        return Ok(vec![]);
-    }
-
-    let mut checkpoint_ids = vec![];
-    let buckets = run_git(
-        repo_root,
-        &["ls-tree", "--name-only", paths::METADATA_BRANCH_NAME],
-    )?;
-    for bucket in buckets.lines() {
-        if bucket.len() != 2 || !bucket.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            continue;
-        }
-        let children = run_git(
-            repo_root,
-            &[
-                "ls-tree",
-                "--name-only",
-                &format!("{}:{bucket}", paths::METADATA_BRANCH_NAME),
-            ],
-        )?;
-        for child in children.lines() {
-            if !child.chars().all(|ch| ch.is_ascii_hexdigit()) {
-                continue;
-            }
-            let checkpoint_id = format!("{bucket}{child}");
-            if checkpoint_id.len() == 12 {
-                checkpoint_ids.push(checkpoint_id);
-            }
-        }
-    }
-    checkpoint_ids.sort();
-    Ok(checkpoint_ids)
-}
-
-fn checkpoint_session_count(repo_root: &Path, checkpoint_id: &str) -> usize {
-    let Ok(summary) = read_checkpoint_summary(repo_root, checkpoint_id) else {
-        return 0;
-    };
-
-    summary
-        .get("sessions")
-        .and_then(serde_json::Value::as_array)
-        .map(std::vec::Vec::len)
-        .unwrap_or(0)
-}
-
-fn checkpoint_session_id(
-    repo_root: &Path,
-    checkpoint_id: &str,
-    session_idx: usize,
-) -> Option<String> {
-    let raw = read_checkpoint_file(
-        repo_root,
-        checkpoint_id,
-        session_idx,
-        paths::METADATA_FILE_NAME,
-    )
-    .ok()?;
-    let json = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
-    json.get("session_id")
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string)
-}
-
-fn checkpoint_session_description(
-    repo_root: &Path,
-    checkpoint_id: &str,
-    session_idx: usize,
-) -> String {
-    let Ok(prompt) = read_checkpoint_file(
-        repo_root,
-        checkpoint_id,
-        session_idx,
-        paths::PROMPT_FILE_NAME,
-    ) else {
-        return NO_DESCRIPTION.to_string();
-    };
-    let first_line = prompt.lines().next().unwrap_or_default().trim().to_string();
-    if first_line.is_empty() {
-        NO_DESCRIPTION.to_string()
-    } else {
-        first_line
-    }
-}
-
-fn read_checkpoint_summary(repo_root: &Path, checkpoint_id: &str) -> Result<serde_json::Value> {
-    let summary_raw =
-        read_checkpoint_root_file(repo_root, checkpoint_id, paths::METADATA_FILE_NAME)?;
-    Ok(serde_json::from_str(&summary_raw)?)
-}
-
-fn read_checkpoint_root_file(repo_root: &Path, checkpoint_id: &str, name: &str) -> Result<String> {
-    let (a, b) = checkpoint_id.split_at(2);
-    let spec = format!("{}:{a}/{b}/{name}", paths::METADATA_BRANCH_NAME);
-    run_git(repo_root, &["show", &spec])
-}
-
-fn read_checkpoint_file(
-    repo_root: &Path,
-    checkpoint_id: &str,
-    session_idx: usize,
-    name: &str,
-) -> Result<String> {
-    let (a, b) = checkpoint_id.split_at(2);
-    let spec = format!(
-        "{}:{a}/{b}/{session_idx}/{name}",
-        paths::METADATA_BRANCH_NAME
-    );
-    run_git(repo_root, &["show", &spec])
-}
-
 impl Strategy for AutoCommitStrategy {
     fn name(&self) -> &str {
         "auto-commit"
@@ -722,7 +471,7 @@ impl Strategy for AutoCommitStrategy {
             return Ok(());
         }
 
-        self.write_checkpoint_metadata_commit(&MetadataCommitInput {
+        self.write_checkpoint_to_db(&MetadataCommitInput {
             checkpoint_id: &checkpoint_id,
             session_id: &ctx.session_id,
             agent_type: &ctx.agent_type,
@@ -748,7 +497,7 @@ impl Strategy for AutoCommitStrategy {
         };
         let checkpoint_id = generate_checkpoint_id();
 
-        self.write_checkpoint_metadata_commit(&MetadataCommitInput {
+        self.write_checkpoint_to_db(&MetadataCommitInput {
             checkpoint_id: &checkpoint_id,
             session_id: &ctx.session_id,
             agent_type: &ctx.agent_type,
