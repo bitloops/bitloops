@@ -1,4 +1,11 @@
-include!("checkpoint_views/types.rs");
-include!("checkpoint_views/readers.rs");
-include!("checkpoint_views/mappings.rs");
-include!("checkpoint_views/metadata_branch.rs");
+use super::*;
+
+mod mappings;
+mod metadata_branch;
+mod readers;
+mod types;
+
+pub use self::mappings::*;
+pub(crate) use self::metadata_branch::*;
+pub use self::readers::*;
+pub use self::types::*;

@@ -1,12 +1,14 @@
+use super::*;
+
 // SQL dialect helpers, JSON serialization utilities, and timestamp expressions.
 
-fn sql_nullable_text(value: Option<&str>) -> String {
+pub(super) fn sql_nullable_text(value: Option<&str>) -> String {
     value
         .map(|text| format!("'{}'", esc_pg(text)))
         .unwrap_or_else(|| "NULL".to_string())
 }
 
-fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> String {
+pub(super) fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> String {
     let raw = esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()));
     match relational.dialect() {
         RelationalDialect::Postgres => format!("'{raw}'::jsonb"),
@@ -15,7 +17,7 @@ fn sql_json_text_array(relational: &RelationalStorage, values: &[String]) -> Str
 }
 
 #[cfg(test)]
-fn sql_jsonb_text_array(values: &[String]) -> String {
+pub(super) fn sql_jsonb_text_array(values: &[String]) -> String {
     format!(
         "'{}'::jsonb",
         esc_pg(&serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string()))
@@ -37,21 +39,21 @@ pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
-fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
+pub(super) fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
     match relational.dialect() {
         RelationalDialect::Postgres => "EXTRACT(EPOCH FROM updated_at)::BIGINT",
         RelationalDialect::Sqlite => "CAST(strftime('%s', updated_at) AS INTEGER)",
     }
 }
 
-fn revision_timestamp_sql(relational: &RelationalStorage, revision_unix: i64) -> String {
+pub(super) fn revision_timestamp_sql(relational: &RelationalStorage, revision_unix: i64) -> String {
     match relational.dialect() {
         RelationalDialect::Postgres => format!("to_timestamp({revision_unix})"),
         RelationalDialect::Sqlite => format!("datetime({revision_unix}, 'unixepoch')"),
     }
 }
 
-fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
+pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values
             .iter()
@@ -63,7 +65,7 @@ fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
+pub(super) fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
     match value {
         Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or(default),
         Some(other) => other.clone(),
@@ -71,7 +73,7 @@ fn parse_json_value_or_default(value: Option<&Value>, default: Value) -> Value {
     }
 }
 
-fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
+pub(super) fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     value.and_then(|value| {
         value
             .as_i64()
@@ -80,6 +82,6 @@ fn parse_nullable_i32(value: Option<&Value>) -> Option<i32> {
     })
 }
 
-fn parse_required_i32(value: Option<&Value>) -> i32 {
+pub(super) fn parse_required_i32(value: Option<&Value>) -> i32 {
     parse_nullable_i32(value).unwrap_or_default()
 }

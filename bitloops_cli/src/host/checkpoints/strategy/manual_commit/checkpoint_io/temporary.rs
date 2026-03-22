@@ -1,5 +1,7 @@
+use super::*;
+
 #[derive(Debug, Clone)]
-struct TemporaryCheckpointRecord {
+pub(crate) struct TemporaryCheckpointRecord {
     session_id: String,
     tree_hash: String,
     step_number: i64,
@@ -17,7 +19,7 @@ struct TemporaryCheckpointRecord {
     commit_message: String,
 }
 
-fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf> {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for temporary checkpoints")?;
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
@@ -28,7 +30,7 @@ fn resolve_temporary_checkpoint_sqlite_path(repo_root: &Path) -> Result<PathBuf>
     Ok(paths::default_relational_db_path(repo_root))
 }
 
-fn insert_temporary_checkpoint_record(
+pub(crate) fn insert_temporary_checkpoint_record(
     repo_root: &Path,
     record: &TemporaryCheckpointRecord,
 ) -> Result<()> {
@@ -91,7 +93,10 @@ fn insert_temporary_checkpoint_record(
     })
 }
 
-fn latest_temporary_checkpoint_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
+pub(crate) fn latest_temporary_checkpoint_tree_hash(
+    repo_root: &Path,
+    session_id: &str,
+) -> Option<String> {
     use rusqlite::OptionalExtension;
 
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root).ok()?;
@@ -119,7 +124,10 @@ fn latest_temporary_checkpoint_tree_hash(repo_root: &Path, session_id: &str) -> 
         .flatten()
 }
 
-fn write_temporary(repo_root: &Path, opts: WriteTemporaryOptions) -> Result<WriteTemporaryResult> {
+pub(crate) fn write_temporary(
+    repo_root: &Path,
+    opts: WriteTemporaryOptions,
+) -> Result<WriteTemporaryResult> {
     if opts.base_commit.is_empty() {
         anyhow::bail!("BaseCommit is required for temporary checkpoint");
     }
@@ -232,7 +240,7 @@ fn write_temporary(repo_root: &Path, opts: WriteTemporaryOptions) -> Result<Writ
     })
 }
 
-fn write_temporary_task(
+pub(crate) fn write_temporary_task(
     repo_root: &Path,
     opts: WriteTemporaryTaskOptions,
 ) -> Result<WriteTemporaryResult> {

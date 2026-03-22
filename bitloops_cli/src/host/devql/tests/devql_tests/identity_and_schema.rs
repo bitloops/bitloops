@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn symbol_id_is_stable_when_impl_block_moves_lines() {
     let original = JsTsArtefact {
@@ -188,15 +190,16 @@ fn artefacts_upgrade_sql_adds_modifiers_and_docstring() {
 
 #[test]
 fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebreaker() {
-    let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
-        CurrentFileRevisionRecord {
-            revision_kind: TemporalRevisionKind::from_str(revision_kind)
-                .expect("test revision kind should be valid"),
-            revision_id: revision_id.to_string(),
-            blob_sha: "blob".to_string(),
-            updated_at_unix,
-        }
-    };
+    let state =
+        |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
+            CurrentFileRevisionRecord {
+                revision_kind: TemporalRevisionKind::from_str(revision_kind)
+                    .expect("test revision kind should be valid"),
+                revision_id: revision_id.to_string(),
+                blob_sha: "blob".to_string(),
+                updated_at_unix,
+            }
+        };
     assert!(incoming_revision_is_newer(
         None,
         TemporalRevisionKind::Commit,
@@ -235,9 +238,8 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 
 #[test]
 fn devql_ingest_accepts_explicit_false_for_init() {
-    let parsed =
-        crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
-            .expect("devql ingest should parse with explicit boolean value");
+    let parsed = crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
+        .expect("devql ingest should parse with explicit boolean value");
 
     let Some(crate::cli::Commands::Devql(args)) = parsed.command else {
         panic!("expected devql command");

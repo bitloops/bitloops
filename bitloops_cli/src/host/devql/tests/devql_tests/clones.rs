@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn parse_devql_clones_stage_basic() {
     let parsed = parse_devql_query(
@@ -22,7 +24,10 @@ async fn execute_devql_query_rejects_clones_without_artefacts_stage() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("clones() requires an artefacts() stage"));
+    assert!(
+        err.to_string()
+            .contains("clones() requires an artefacts() stage")
+    );
 }
 
 #[tokio::test]
@@ -39,7 +44,10 @@ async fn execute_devql_query_rejects_clones_with_asof() {
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("clones() does not yet support asOf"));
+    assert!(
+        err.to_string()
+            .contains("clones() does not yet support asOf")
+    );
 }
 
 #[tokio::test]

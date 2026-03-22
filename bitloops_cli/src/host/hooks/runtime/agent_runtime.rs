@@ -672,7 +672,8 @@ pub fn handle_post_todo_with_profile(
     Ok(())
 }
 
-include!("agent_runtime/helpers.rs");
+mod helpers;
+use self::helpers::*;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

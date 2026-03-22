@@ -1,8 +1,13 @@
+use super::*;
+
 pub(crate) async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
     run_postgres_exec(pg_client, sql).await
 }
 
-async fn pg_query_rows(pg_client: &tokio_postgres::Client, sql: &str) -> Result<Vec<Value>> {
+pub(super) async fn pg_query_rows(
+    pg_client: &tokio_postgres::Client,
+    sql: &str,
+) -> Result<Vec<Value>> {
     let wrapped = format!(
         "SELECT coalesce(json_agg(t), '[]'::json)::text FROM ({}) t",
         sql.trim().trim_end_matches(';')
@@ -22,7 +27,7 @@ async fn pg_query_rows(pg_client: &tokio_postgres::Client, sql: &str) -> Result<
     }
 }
 
-async fn run_postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
+pub(super) async fn run_postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(30), pg_client.batch_execute(sql))
         .await
         .context("Postgres statement timeout after 30s")?
@@ -30,7 +35,7 @@ async fn run_postgres_exec(pg_client: &tokio_postgres::Client, sql: &str) -> Res
     Ok(())
 }
 
-async fn run_postgres_query_scalar_text(
+pub(super) async fn run_postgres_query_scalar_text(
     pg_client: &tokio_postgres::Client,
     sql: &str,
 ) -> Result<String> {
@@ -44,7 +49,7 @@ async fn run_postgres_query_scalar_text(
     Ok(value)
 }
 
-fn validate_postgres_sslmode_for_notls(dsn: &str, ssl_mode: SslMode) -> Result<()> {
+pub(super) fn validate_postgres_sslmode_for_notls(dsn: &str, ssl_mode: SslMode) -> Result<()> {
     let dsn_lower = dsn.to_ascii_lowercase();
     if dsn_lower.contains("sslmode=verify-ca") || dsn_lower.contains("sslmode=verify-full") {
         bail!(
@@ -69,7 +74,7 @@ or configure a TLS-enabled Postgres client.",
     Ok(())
 }
 
-async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
+pub(super) async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
     let mut pg_cfg: tokio_postgres::Config = dsn.parse().context("parsing Postgres DSN")?;
     validate_postgres_sslmode_for_notls(dsn, pg_cfg.get_ssl_mode())?;
 
@@ -89,7 +94,7 @@ async fn connect_postgres_client(dsn: &str) -> Result<tokio_postgres::Client> {
     Ok(client)
 }
 
-fn truncate_for_error(input: &str) -> String {
+pub(super) fn truncate_for_error(input: &str) -> String {
     const MAX: usize = 500;
     let mut out = input.to_string();
     if out.len() > MAX {
@@ -99,7 +104,7 @@ fn truncate_for_error(input: &str) -> String {
     out
 }
 
-async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<String> {
+pub(super) async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<String> {
     run_clickhouse_sql_http(
         &cfg.clickhouse_endpoint(),
         cfg.clickhouse_user.as_deref(),
@@ -109,7 +114,7 @@ async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<String> {
     .await
 }
 
-async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
+pub(super) async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
     let mut query = sql.trim().to_string();
     if !query.to_ascii_uppercase().contains("FORMAT JSON") {
         query.push_str(" FORMAT JSON");
@@ -129,11 +134,11 @@ async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
 }
 
 /// Connect timeout (seconds) for HTTP when talking to ClickHouse.
-const CLICKHOUSE_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(super) const CLICKHOUSE_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Total transfer timeout (seconds) for HTTP when talking to ClickHouse.
-const CLICKHOUSE_MAX_TIME_SECS: u64 = 30;
+pub(super) const CLICKHOUSE_MAX_TIME_SECS: u64 = 30;
 
-async fn run_clickhouse_sql_http(
+pub(super) async fn run_clickhouse_sql_http(
     url: &str,
     user: Option<&str>,
     password: Option<&str>,
@@ -174,7 +179,7 @@ async fn run_clickhouse_sql_http(
     Ok(body)
 }
 
-fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
+pub(super) fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
     static CLICKHOUSE_HTTP_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     let result = CLICKHOUSE_HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -190,15 +195,19 @@ fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
     }
 }
 
-async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
+pub(super) async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
     duckdb_exec_path_inner(path, sql, false).await
 }
 
-async fn duckdb_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
+pub(super) async fn duckdb_exec_path_allow_create(path: &Path, sql: &str) -> Result<()> {
     duckdb_exec_path_inner(path, sql, true).await
 }
 
-async fn duckdb_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> Result<()> {
+pub(super) async fn duckdb_exec_path_inner(
+    path: &Path,
+    sql: &str,
+    allow_create: bool,
+) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -225,7 +234,7 @@ async fn duckdb_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> R
     .context("joining DuckDB execute task")?
 }
 
-async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
+pub(super) async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
     sqlite_exec_path_inner(path, sql, false).await
 }
 
@@ -233,7 +242,11 @@ pub(crate) async fn sqlite_exec_path_allow_create(path: &Path, sql: &str) -> Res
     sqlite_exec_path_inner(path, sql, true).await
 }
 
-async fn sqlite_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> Result<()> {
+pub(super) async fn sqlite_exec_path_inner(
+    path: &Path,
+    sql: &str,
+    allow_create: bool,
+) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
@@ -269,7 +282,7 @@ async fn sqlite_exec_path_inner(path: &Path, sql: &str, allow_create: bool) -> R
     .context("joining SQLite execute task")?
 }
 
-async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+pub(super) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -350,7 +363,7 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
     .context("joining SQLite query task")?
 }
 
-fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
+pub(super) fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
     use rusqlite::types::ValueRef as SqlValueRef;
     match value {
         SqlValueRef::Null => Value::Null,
@@ -368,7 +381,7 @@ fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
     }
 }
 
-fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
+pub(super) fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
     use duckdb::types::Value as DuckValue;
     match value {
         DuckValue::Null => Value::Null,
@@ -441,7 +454,7 @@ pub(crate) fn esc_pg(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-fn esc_ch(value: &str) -> String {
+pub(super) fn esc_ch(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -449,7 +462,7 @@ fn esc_ch(value: &str) -> String {
         .replace('\r', "\\r")
 }
 
-fn normalize_repo_path(path: &str) -> String {
+pub(super) fn normalize_repo_path(path: &str) -> String {
     let mut normalized = path.trim().replace('\\', "/");
     while normalized.starts_with("./") {
         normalized = normalized[2..].to_string();
@@ -457,7 +470,7 @@ fn normalize_repo_path(path: &str) -> String {
     normalized.trim_start_matches('/').to_string()
 }
 
-fn build_path_candidates(path: &str) -> Vec<String> {
+pub(super) fn build_path_candidates(path: &str) -> Vec<String> {
     let mut out = Vec::new();
     let raw = path.trim();
     if !raw.is_empty() {
@@ -475,7 +488,7 @@ fn build_path_candidates(path: &str) -> Vec<String> {
     out
 }
 
-fn sql_path_candidates_clause(column: &str, candidates: &[String]) -> String {
+pub(super) fn sql_path_candidates_clause(column: &str, candidates: &[String]) -> String {
     if candidates.is_empty() {
         return "1=0".to_string();
     }
@@ -487,7 +500,7 @@ fn sql_path_candidates_clause(column: &str, candidates: &[String]) -> String {
         .join(" OR ")
 }
 
-fn format_ch_array(values: &[String]) -> String {
+pub(super) fn format_ch_array(values: &[String]) -> String {
     if values.is_empty() {
         return "[]".to_string();
     }
@@ -499,6 +512,6 @@ fn format_ch_array(values: &[String]) -> String {
     format!("[{}]", parts.join(","))
 }
 
-fn glob_to_sql_like(glob: &str) -> String {
+pub(super) fn glob_to_sql_like(glob: &str) -> String {
     glob.replace("**", "%").replace('*', "%")
 }

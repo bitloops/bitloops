@@ -1,4 +1,6 @@
-fn likely_diverged_implementation(
+use super::*;
+
+pub(super) fn likely_diverged_implementation(
     semantic_score: f32,
     lexical: &LexicalSignals,
     structural: &StructuralSignals,
@@ -16,7 +18,7 @@ fn likely_diverged_implementation(
         && derived.clone_confidence >= CLONE_CONFIDENCE_MEDIUM_THRESHOLD
 }
 
-fn likely_shared_logic_candidate(
+pub(super) fn likely_shared_logic_candidate(
     semantic_score: f32,
     lexical: &LexicalSignals,
     structural: &StructuralSignals,
@@ -29,7 +31,7 @@ fn likely_shared_logic_candidate(
         && derived.clone_confidence >= SHARED_LOGIC_MIN_CLONE_CONFIDENCE
 }
 
-fn likely_contextual_neighbor(
+pub(super) fn likely_contextual_neighbor(
     candidate_score: f32,
     semantic_score: f32,
     derived: &DerivedCloneSignals,

@@ -1,7 +1,9 @@
+use super::*;
+
 // Core-owned canonical contracts shared across extraction, persistence, and query layers.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum CoreCanonicalArtefactKind {
+pub(super) enum CoreCanonicalArtefactKind {
     File,
     Namespace,
     Module,
@@ -16,7 +18,7 @@ enum CoreCanonicalArtefactKind {
 }
 
 impl CoreCanonicalArtefactKind {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
             Self::Namespace => "namespace",
@@ -32,7 +34,7 @@ impl CoreCanonicalArtefactKind {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Some(Self::File),
             "namespace" => Some(Self::Namespace),
@@ -51,7 +53,7 @@ impl CoreCanonicalArtefactKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum CanonicalKindProjection {
+pub(super) enum CanonicalKindProjection {
     File,
     Module,
     Import,
@@ -64,7 +66,7 @@ enum CanonicalKindProjection {
 }
 
 impl CanonicalKindProjection {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
             Self::Module => "module",
@@ -78,7 +80,7 @@ impl CanonicalKindProjection {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Some(Self::File),
             "module" => Some(Self::Module),
@@ -93,7 +95,7 @@ impl CanonicalKindProjection {
         }
     }
 
-    fn core_kind(self) -> CoreCanonicalArtefactKind {
+    pub(super) fn core_kind(self) -> CoreCanonicalArtefactKind {
         match self {
             Self::File => CoreCanonicalArtefactKind::File,
             Self::Module => CoreCanonicalArtefactKind::Module,
@@ -103,20 +105,24 @@ impl CanonicalKindProjection {
             Self::Variable => CoreCanonicalArtefactKind::Value,
         }
     }
-
 }
 
-fn artefact_core_kind(canonical_kind: Option<&str>) -> Option<CoreCanonicalArtefactKind> {
+pub(super) fn artefact_core_kind(
+    canonical_kind: Option<&str>,
+) -> Option<CoreCanonicalArtefactKind> {
     canonical_kind
         .and_then(CanonicalKindProjection::from_str)
         .map(CanonicalKindProjection::core_kind)
 }
 
-fn artefact_has_core_kind(canonical_kind: Option<&str>, expected: CoreCanonicalArtefactKind) -> bool {
+pub(super) fn artefact_has_core_kind(
+    canonical_kind: Option<&str>,
+    expected: CoreCanonicalArtefactKind,
+) -> bool {
     artefact_core_kind(canonical_kind).is_some_and(|kind| kind == expected)
 }
 
-fn canonical_kind_filter_sql(column: &str, requested_kind: &str) -> String {
+pub(super) fn canonical_kind_filter_sql(column: &str, requested_kind: &str) -> String {
     let kind = requested_kind.trim();
     if kind.is_empty() {
         return "1 = 0".to_string();
@@ -160,20 +166,20 @@ fn canonical_kind_filter_sql(column: &str, requested_kind: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum TemporalRevisionKind {
+pub(super) enum TemporalRevisionKind {
     Commit,
     Temporary,
 }
 
 impl TemporalRevisionKind {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Commit => "commit",
             Self::Temporary => "temporary",
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "commit" => Some(Self::Commit),
             "temporary" => Some(Self::Temporary),
@@ -183,25 +189,25 @@ impl TemporalRevisionKind {
 }
 
 #[derive(Debug, Clone)]
-struct TemporalRevisionRef<'a> {
-    kind: TemporalRevisionKind,
-    id: &'a str,
-    temp_checkpoint_id: Option<i64>,
+pub(super) struct TemporalRevisionRef<'a> {
+    pub(super) kind: TemporalRevisionKind,
+    pub(super) id: &'a str,
+    pub(super) temp_checkpoint_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct CanonicalProvenanceRef<'a> {
-    repo_id: &'a str,
-    blob_sha: &'a str,
-    commit_sha: Option<&'a str>,
-    path: Option<&'a str>,
-    extension_family: Option<&'a str>,
-    extension_id: Option<&'a str>,
-    operation_run_id: Option<&'a str>,
+pub(super) struct CanonicalProvenanceRef<'a> {
+    pub(super) repo_id: &'a str,
+    pub(super) blob_sha: &'a str,
+    pub(super) commit_sha: Option<&'a str>,
+    pub(super) path: Option<&'a str>,
+    pub(super) extension_family: Option<&'a str>,
+    pub(super) extension_id: Option<&'a str>,
+    pub(super) operation_run_id: Option<&'a str>,
 }
 
 impl<'a> CanonicalProvenanceRef<'a> {
-    fn for_blob(repo_id: &'a str, blob_sha: &'a str) -> Self {
+    pub(super) fn for_blob(repo_id: &'a str, blob_sha: &'a str) -> Self {
         Self {
             repo_id,
             blob_sha,
@@ -213,17 +219,17 @@ impl<'a> CanonicalProvenanceRef<'a> {
         }
     }
 
-    fn with_source_anchor(mut self, commit_sha: &'a str, path: &'a str) -> Self {
+    pub(super) fn with_source_anchor(mut self, commit_sha: &'a str, path: &'a str) -> Self {
         self.commit_sha = Some(commit_sha);
         self.path = Some(path);
         self
     }
 
-    fn artefact_identity_scope(self) -> String {
+    pub(super) fn artefact_identity_scope(self) -> String {
         format!("{}|{}", self.repo_id, self.blob_sha)
     }
 
-    fn temporal_identity_scope(self) -> Option<String> {
+    pub(super) fn temporal_identity_scope(self) -> Option<String> {
         let commit_sha = self.commit_sha?;
         let path = self.path?;
         Some(format!("{commit_sha}|{path}|{}", self.blob_sha))

@@ -1,21 +1,21 @@
 use super::*;
 use crate::adapters::agents::AGENT_TYPE_CLAUDE_CODE;
-use crate::storage::SqliteConnectionPool;
 use crate::host::checkpoints::session::backend::SessionBackend;
 use crate::host::checkpoints::session::create_session_backend_or_local;
-use crate::host::checkpoints::session::local_backend::LocalFileBackend;
+pub(crate) use crate::host::checkpoints::session::local_backend::LocalFileBackend;
 use crate::host::checkpoints::session::state::{PrePromptState, PreTaskState, SessionState};
-use crate::test_support::process_state::{
-    ALLOW_HOST_GIT_CONFIG_ENV, isolated_git_command, with_env_vars, with_git_env_cleared,
+pub(crate) use crate::storage::SqliteConnectionPool;
+pub(crate) use crate::test_support::process_state::{
+    ALLOW_HOST_GIT_CONFIG_ENV, git_command, isolated_git_command, with_env_vars,
+    with_git_env_cleared,
 };
 use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::TempDir;
-const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
+pub(crate) use tempfile::TempDir;
+pub(crate) const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
-fn ensure_test_store_backends(repo_root: &Path) {
+pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     let sqlite_path = paths::default_relational_db_path(repo_root);
     if let Some(parent) = sqlite_path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -28,8 +28,9 @@ fn ensure_test_store_backends(repo_root: &Path) {
         fs::create_dir_all(parent).unwrap();
     }
     let duckdb = duckdb::Connection::open(duckdb_path).unwrap();
-    duckdb.execute_batch(
-        "CREATE TABLE IF NOT EXISTS checkpoint_events (
+    duckdb
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS checkpoint_events (
             event_id VARCHAR PRIMARY KEY,
             event_time VARCHAR,
             repo_id VARCHAR,
@@ -43,16 +44,19 @@ fn ensure_test_store_backends(repo_root: &Path) {
             files_touched VARCHAR,
             payload VARCHAR
         );",
-    )
-    .unwrap();
+        )
+        .unwrap();
 
     fs::create_dir_all(paths::default_blob_store_path(repo_root)).unwrap();
 }
 
 /// Creates a real git repository with an initial commit for testing.
-fn setup_git_repo(dir: &TempDir) -> String {
+pub(crate) fn setup_git_repo(dir: &TempDir) -> String {
     let run = |args: &[&str]| {
-        let out = isolated_git_command(dir.path()).args(args).output().unwrap();
+        let out = isolated_git_command(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
         assert!(
             out.status.success(),
             "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
@@ -84,9 +88,12 @@ fn setup_git_repo(dir: &TempDir) -> String {
 }
 
 /// Creates a git repo with no commits.
-fn setup_empty_git_repo(dir: &TempDir) {
+pub(crate) fn setup_empty_git_repo(dir: &TempDir) {
     let run = |args: &[&str]| {
-        let out = isolated_git_command(dir.path()).args(args).output().unwrap();
+        let out = isolated_git_command(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
         assert!(
             out.status.success(),
             "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
@@ -102,11 +109,11 @@ fn setup_empty_git_repo(dir: &TempDir) {
     ensure_test_store_backends(dir.path());
 }
 
-fn session_backend(repo_root: &Path) -> Box<dyn SessionBackend> {
+pub(crate) fn session_backend(repo_root: &Path) -> Box<dyn SessionBackend> {
     create_session_backend_or_local(repo_root)
 }
 
-struct CountingBackend {
+pub(crate) struct CountingBackend {
     inner: LocalFileBackend,
     save_calls: Arc<AtomicUsize>,
 }
@@ -159,7 +166,7 @@ impl SessionBackend for CountingBackend {
 }
 
 #[test]
-fn initialize_session_uses_injected_session_backend() {
+pub(crate) fn initialize_session_uses_injected_session_backend() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let save_calls = Arc::new(AtomicUsize::new(0));
@@ -194,15 +201,15 @@ fn initialize_session_uses_injected_session_backend() {
     assert_eq!(state.phase, SessionPhase::Active);
 }
 
-fn git_ok(repo_root: &Path, args: &[&str]) -> String {
+pub(crate) fn git_ok(repo_root: &Path, args: &[&str]) -> String {
     run_git(repo_root, args).unwrap_or_else(|e| panic!("git {:?} failed: {e}", args))
 }
 
-fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
+pub(crate) fn temporary_checkpoints_db_path(repo_root: &Path) -> PathBuf {
     paths::default_relational_db_path(repo_root)
 }
 
-fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
+pub(crate) fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<String> {
     let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
     sqlite.initialise_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -227,7 +234,7 @@ fn latest_temporary_tree_hash(repo_root: &Path, session_id: &str) -> Option<Stri
         .flatten()
 }
 
-fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
+pub(crate) fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
     let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
     sqlite.initialise_checkpoint_schema().unwrap();
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -248,7 +255,7 @@ fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
         .unwrap()
 }
 
-fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<String> {
+pub(crate) fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<String> {
     let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).ok()?;
     sqlite.initialise_checkpoint_schema().ok()?;
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -273,7 +280,7 @@ fn query_commit_checkpoint_id(repo_root: &Path, commit_sha: &str) -> Option<Stri
         .flatten()
 }
 
-fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
+pub(crate) fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
     let sqlite = SqliteConnectionPool::connect(temporary_checkpoints_db_path(repo_root)).unwrap();
     sqlite.initialise_checkpoint_schema().unwrap();
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
@@ -295,17 +302,17 @@ fn query_commit_checkpoint_count(repo_root: &Path, commit_sha: &str) -> i64 {
 }
 
 #[derive(Debug)]
-struct CheckpointBlobRow {
-    storage_backend: String,
-    storage_path: String,
-    content_hash: String,
+pub(crate) struct CheckpointBlobRow {
+    pub(crate) storage_backend: String,
+    pub(crate) storage_path: String,
+    pub(crate) content_hash: String,
 }
 
-fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
+pub(crate) fn committed_checkpoint_blob_root(repo_root: &Path) -> PathBuf {
     paths::default_blob_store_path(repo_root)
 }
 
-fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {
+pub(crate) fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u8> {
     let disk_path = committed_checkpoint_blob_root(repo_root).join(storage_path);
     std::fs::read(&disk_path).unwrap_or_else(|err| {
         panic!(
@@ -315,7 +322,7 @@ fn read_blob_payload_from_storage(repo_root: &Path, storage_path: &str) -> Vec<u
     })
 }
 
-fn query_checkpoint_session_content_hash(
+pub(crate) fn query_checkpoint_session_content_hash(
     repo_root: &Path,
     checkpoint_id: &str,
     session_id: &str,
@@ -339,7 +346,7 @@ fn query_checkpoint_session_content_hash(
         .flatten()
 }
 
-fn query_checkpoint_subagent_transcript_path(
+pub(crate) fn query_checkpoint_subagent_transcript_path(
     repo_root: &Path,
     checkpoint_id: &str,
     session_id: &str,
@@ -363,7 +370,7 @@ fn query_checkpoint_subagent_transcript_path(
         .flatten()
 }
 
-fn query_checkpoint_session_content_hash_by_index(
+pub(crate) fn query_checkpoint_session_content_hash_by_index(
     repo_root: &Path,
     checkpoint_id: &str,
     session_index: i64,
@@ -387,7 +394,7 @@ fn query_checkpoint_session_content_hash_by_index(
         .flatten()
 }
 
-fn query_checkpoint_blob_row(
+pub(crate) fn query_checkpoint_blob_row(
     repo_root: &Path,
     checkpoint_id: &str,
     session_index: i64,
@@ -418,7 +425,7 @@ fn query_checkpoint_blob_row(
         .flatten()
 }
 
-fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
+pub(crate) fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
     let parent = tempfile::tempdir().unwrap();
     let main_repo = parent.path().join("main");
     let worktree_dir = parent.path().join("worktree");
@@ -444,7 +451,11 @@ fn init_sequence_worktree_repo() -> (TempDir, PathBuf, PathBuf) {
     (parent, main_repo, worktree_dir)
 }
 
-fn create_shadow_branch_with_content(repo_root: &Path, branch: &str, files: &[(&str, &str)]) {
+pub(crate) fn create_shadow_branch_with_content(
+    repo_root: &Path,
+    branch: &str,
+    files: &[(&str, &str)],
+) {
     let current = git_ok(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]);
     git_ok(repo_root, &["checkout", "-b", branch]);
 

@@ -1,4 +1,6 @@
-fn js_ts_canonical_projection(language_kind: &str) -> Option<CanonicalKindProjection> {
+use super::*;
+
+pub(super) fn js_ts_canonical_projection(language_kind: &str) -> Option<CanonicalKindProjection> {
     match language_kind {
         "function_declaration" => Some(CanonicalKindProjection::Function),
         "method_definition" => Some(CanonicalKindProjection::Method),
@@ -12,11 +14,11 @@ fn js_ts_canonical_projection(language_kind: &str) -> Option<CanonicalKindProjec
     }
 }
 
-fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
+pub(super) fn js_ts_canonical_kind(language_kind: &str) -> Option<&'static str> {
     js_ts_canonical_projection(language_kind).map(CanonicalKindProjection::as_str)
 }
 
-fn js_ts_supports_language_kind(language_kind: &str) -> bool {
+pub(super) fn js_ts_supports_language_kind(language_kind: &str) -> bool {
     matches!(
         language_kind,
         "function_declaration"
@@ -35,7 +37,7 @@ fn js_ts_supports_language_kind(language_kind: &str) -> bool {
     )
 }
 
-fn rust_canonical_projection(
+pub(super) fn rust_canonical_projection(
     language_kind: &str,
     inside_impl: bool,
 ) -> Option<CanonicalKindProjection> {
@@ -55,11 +57,11 @@ fn rust_canonical_projection(
     }
 }
 
-fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'static str> {
+pub(super) fn rust_canonical_kind(language_kind: &str, inside_impl: bool) -> Option<&'static str> {
     rust_canonical_projection(language_kind, inside_impl).map(CanonicalKindProjection::as_str)
 }
 
-fn rust_supports_language_kind(language_kind: &str) -> bool {
+pub(super) fn rust_supports_language_kind(language_kind: &str) -> bool {
     matches!(
         language_kind,
         "function_item"

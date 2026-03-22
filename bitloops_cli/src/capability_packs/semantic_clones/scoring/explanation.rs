@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LimitingSignal {
     LowBodyOverlap,
@@ -19,20 +21,20 @@ impl LimitingSignal {
     }
 }
 
-struct ExplanationContext<'a> {
-    source: &'a SymbolCloneCandidateInput,
-    target: &'a SymbolCloneCandidateInput,
-    candidate_score: f32,
-    semantic_score: f32,
-    lexical: &'a LexicalSignals,
-    structural: &'a StructuralSignals,
-    derived: &'a DerivedCloneSignals,
-    duplicate_body_hash_match: bool,
-    signature_shape_hash_match: bool,
-    labels: &'a [String],
+pub(super) struct ExplanationContext<'a> {
+    pub(super) source: &'a SymbolCloneCandidateInput,
+    pub(super) target: &'a SymbolCloneCandidateInput,
+    pub(super) candidate_score: f32,
+    pub(super) semantic_score: f32,
+    pub(super) lexical: &'a LexicalSignals,
+    pub(super) structural: &'a StructuralSignals,
+    pub(super) derived: &'a DerivedCloneSignals,
+    pub(super) duplicate_body_hash_match: bool,
+    pub(super) signature_shape_hash_match: bool,
+    pub(super) labels: &'a [String],
 }
 
-fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
+pub(super) fn build_explanation(ctx: &ExplanationContext<'_>) -> Value {
     let limiting_signals = build_limiting_signals(ctx)
         .into_iter()
         .map(LimitingSignal::as_str)

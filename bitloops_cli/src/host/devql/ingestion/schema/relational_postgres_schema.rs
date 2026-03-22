@@ -1,4 +1,4 @@
-fn postgres_schema_sql() -> &'static str {
+pub(crate) fn postgres_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS repositories (
     repo_id TEXT PRIMARY KEY,

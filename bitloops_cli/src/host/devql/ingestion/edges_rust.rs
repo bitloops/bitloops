@@ -1,6 +1,8 @@
+use super::*;
+
 // Rust dependency edge extraction (use imports, calls, macros, impl trait).
 
-fn extract_rust_dependency_edges(
+pub(super) fn extract_rust_dependency_edges(
     content: &str,
     path: &str,
     artefacts: &[JsTsArtefact],
@@ -45,7 +47,10 @@ fn extract_rust_dependency_edges(
         content,
         path,
         &call_ctx,
-        &mut EdgeCollector { out: &mut edges, seen: &mut seen_calls },
+        &mut EdgeCollector {
+            out: &mut edges,
+            seen: &mut seen_calls,
+        },
     );
     let (type_targets, value_targets) = rust_reference_target_maps(artefacts);
     let export_targets = top_level_export_target_map(artefacts);
@@ -62,7 +67,10 @@ fn extract_rust_dependency_edges(
             value_targets: &value_targets,
             imported_symbol_refs: &empty_imports,
         },
-        &mut EdgeCollector { out: &mut edges, seen: &mut seen_references },
+        &mut EdgeCollector {
+            out: &mut edges,
+            seen: &mut seen_references,
+        },
     );
     collect_rust_extends_edges_recursive(
         root,
@@ -82,7 +90,7 @@ fn extract_rust_dependency_edges(
     Ok(edges)
 }
 
-fn collect_rust_edges_recursive(
+pub(super) fn collect_rust_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -93,26 +101,27 @@ fn collect_rust_edges_recursive(
     let start_line = node.start_position().row as i32 + 1;
 
     if kind == "use_declaration"
-        && let Ok(text) = node.utf8_text(content.as_bytes()) {
-            let cleaned = text
-                .trim()
-                .trim_start_matches("use")
-                .trim()
-                .trim_end_matches(';')
-                .trim()
-                .to_string();
-            if !cleaned.is_empty() {
-                ec.out.push(JsTsDependencyEdge {
-                    edge_kind: EdgeKind::Imports,
-                    from_symbol_fqn: path.to_string(),
-                    to_target_symbol_fqn: None,
-                    to_symbol_ref: Some(cleaned),
-                    start_line: Some(start_line),
-                    end_line: Some(node.end_position().row as i32 + 1),
-                    metadata: EdgeMetadata::import(ImportForm::Binding),
-                });
-            }
+        && let Ok(text) = node.utf8_text(content.as_bytes())
+    {
+        let cleaned = text
+            .trim()
+            .trim_start_matches("use")
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .to_string();
+        if !cleaned.is_empty() {
+            ec.out.push(JsTsDependencyEdge {
+                edge_kind: EdgeKind::Imports,
+                from_symbol_fqn: path.to_string(),
+                to_target_symbol_fqn: None,
+                to_symbol_ref: Some(cleaned),
+                start_line: Some(start_line),
+                end_line: Some(node.end_position().row as i32 + 1),
+                metadata: EdgeMetadata::import(ImportForm::Binding),
+            });
         }
+    }
 
     if matches!(kind, "call_expression" | "method_call_expression")
         && let Some(owner) = smallest_enclosing_callable(start_line, ctx.callables)
@@ -145,25 +154,26 @@ fn collect_rust_edges_recursive(
     }
 
     if kind == "impl_item"
-        && let Ok(text) = node.utf8_text(content.as_bytes()) {
-            let impl_re = Regex::new(r"impl\s+([A-Za-z0-9_:<>]+)\s+for\s+([A-Za-z0-9_:<>]+)");
-            if let Ok(impl_re) = impl_re
-                && let Some(cap) = impl_re.captures(text)
-            {
-                    let trait_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
-                    if !trait_name.is_empty() {
-                        ec.out.push(JsTsDependencyEdge {
-                            edge_kind: EdgeKind::Implements,
-                            from_symbol_fqn: format!("{path}::impl@{start_line}"),
-                            to_target_symbol_fqn: None,
-                            to_symbol_ref: Some(trait_name),
-                            start_line: Some(start_line),
-                            end_line: Some(node.end_position().row as i32 + 1),
-                            metadata: EdgeMetadata::none(),
-                        });
-                    }
+        && let Ok(text) = node.utf8_text(content.as_bytes())
+    {
+        let impl_re = Regex::new(r"impl\s+([A-Za-z0-9_:<>]+)\s+for\s+([A-Za-z0-9_:<>]+)");
+        if let Ok(impl_re) = impl_re
+            && let Some(cap) = impl_re.captures(text)
+        {
+            let trait_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
+            if !trait_name.is_empty() {
+                ec.out.push(JsTsDependencyEdge {
+                    edge_kind: EdgeKind::Implements,
+                    from_symbol_fqn: format!("{path}::impl@{start_line}"),
+                    to_target_symbol_fqn: None,
+                    to_symbol_ref: Some(trait_name),
+                    start_line: Some(start_line),
+                    end_line: Some(node.end_position().row as i32 + 1),
+                    metadata: EdgeMetadata::none(),
+                });
             }
         }
+    }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -171,7 +181,7 @@ fn collect_rust_edges_recursive(
     }
 }
 
-fn collect_rust_imported_symbol_refs(
+pub(super) fn collect_rust_imported_symbol_refs(
     node: tree_sitter::Node,
     content: &str,
     imported_symbol_refs: &mut HashMap<String, String>,
@@ -182,7 +192,9 @@ fn collect_rust_imported_symbol_refs(
         let mut entries = Vec::new();
         collect_rust_use_export_entries(argument, content, None, &mut entries);
         for entry in entries {
-            imported_symbol_refs.entry(entry.export_name).or_insert(entry.path);
+            imported_symbol_refs
+                .entry(entry.export_name)
+                .or_insert(entry.path);
         }
     }
 
@@ -192,14 +204,20 @@ fn collect_rust_imported_symbol_refs(
     }
 }
 
-fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, CallForm)> {
+pub(super) fn rust_call_target(
+    node: tree_sitter::Node,
+    content: &str,
+) -> Option<(String, CallForm)> {
     match node.kind() {
         "method_call_expression" => {
             let name_node = node
                 .child_by_field_name("name")
                 .or_else(|| node.child_by_field_name("method"))?;
             let target_name = rust_callable_name_from_text(
-                name_node.utf8_text(content.as_bytes()).ok()?.trim_end_matches('!'),
+                name_node
+                    .utf8_text(content.as_bytes())
+                    .ok()?
+                    .trim_end_matches('!'),
             )?;
             Some((target_name, CallForm::Method))
         }
@@ -218,7 +236,10 @@ fn rust_call_target(node: tree_sitter::Node, content: &str) -> Option<(String, C
     }
 }
 
-fn rust_macro_target(node: tree_sitter::Node, content: &str) -> Option<(String, CallForm)> {
+pub(super) fn rust_macro_target(
+    node: tree_sitter::Node,
+    content: &str,
+) -> Option<(String, CallForm)> {
     let macro_node = node.child_by_field_name("macro")?;
     let target_name = rust_callable_name_from_text(
         macro_node
@@ -230,7 +251,7 @@ fn rust_macro_target(node: tree_sitter::Node, content: &str) -> Option<(String, 
     Some((target_name, CallForm::Macro))
 }
 
-fn rust_callable_name_from_text(text: &str) -> Option<String> {
+pub(super) fn rust_callable_name_from_text(text: &str) -> Option<String> {
     let mut candidate = text.trim();
     if candidate.is_empty() {
         return None;
@@ -263,10 +284,7 @@ fn rust_callable_name_from_text(text: &str) -> Option<String> {
         candidate = prefix.strip_suffix("::").unwrap_or(prefix).trim_end();
     }
 
-    let candidate = candidate
-        .trim_end_matches('!')
-        .trim_end_matches('?')
-        .trim();
+    let candidate = candidate.trim_end_matches('!').trim_end_matches('?').trim();
     let tail = candidate
         .rsplit('.')
         .next()
@@ -279,14 +297,17 @@ fn rust_callable_name_from_text(text: &str) -> Option<String> {
     if !(first.is_ascii_alphabetic() || first == '_') {
         return None;
     }
-    if !tail.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+    if !tail
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
         return None;
     }
 
     Some(tail.to_string())
 }
 
-fn push_rust_call_edge(
+pub(super) fn push_rust_call_edge(
     ec: &mut EdgeCollector<'_>,
     from_symbol_fqn: &str,
     target_name: &str,

@@ -1,4 +1,7 @@
-async fn execute_devql_query(
+use super::*;
+use anyhow::{anyhow, bail};
+
+pub(crate) async fn execute_devql_query(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     events_cfg: &EventsBackendConfig,
@@ -104,7 +107,10 @@ async fn execute_devql_query(
     }
 
     if parsed.has_test_harness_core_branch_coverage_stage
-        && parsed.test_harness_core_branch_coverage.artefact_id.is_none()
+        && parsed
+            .test_harness_core_branch_coverage
+            .artefact_id
+            .is_none()
     {
         log_devql_validation_failure(
             parsed,
@@ -180,15 +186,15 @@ async fn execute_devql_query(
         bail!("coverage() cannot be combined with tests() stage");
     }
 
-    if has_tests_stage
-        && has_non_tests_or_coverage_registered_stage(parsed)
-    {
+    if has_tests_stage && has_non_tests_or_coverage_registered_stage(parsed) {
         log_devql_validation_failure(
             parsed,
             "tests_with_non_test_harness_stage",
             "tests() cannot currently be combined with additional registered capability-pack stages",
         );
-        bail!("tests() cannot currently be combined with additional registered capability-pack stages");
+        bail!(
+            "tests() cannot currently be combined with additional registered capability-pack stages"
+        );
     }
 
     if has_coverage_stage && !parsed.has_artefacts_stage {
@@ -227,15 +233,15 @@ async fn execute_devql_query(
         bail!("coverage() cannot be combined with chatHistory() stage");
     }
 
-    if has_coverage_stage
-        && has_non_tests_or_coverage_registered_stage(parsed)
-    {
+    if has_coverage_stage && has_non_tests_or_coverage_registered_stage(parsed) {
         log_devql_validation_failure(
             parsed,
             "coverage_with_non_test_harness_stage",
             "coverage() cannot currently be combined with additional registered capability-pack stages",
         );
-        bail!("coverage() cannot currently be combined with additional registered capability-pack stages");
+        bail!(
+            "coverage() cannot currently be combined with additional registered capability-pack stages"
+        );
     }
 
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
@@ -249,12 +255,15 @@ async fn execute_devql_query(
     execute_relational_pipeline(cfg, events_cfg, parsed, relational).await
 }
 
-fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
+pub(crate) fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
     let has_internal_test_harness_core_stage = has_internal_test_harness_core_stage(parsed);
     crate::telemetry::logging::warn(
-        &crate::telemetry::logging::with_component(crate::telemetry::logging::background(), "devql"),
+        &crate::telemetry::logging::with_component(
+            crate::telemetry::logging::background(),
+            "devql",
+        ),
         "devql query validation failed",
         &[
             crate::telemetry::logging::string_attr("rule", rule),
@@ -284,41 +293,39 @@ fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &
     );
 }
 
-fn has_registered_tests_stage(parsed: &ParsedDevqlQuery) -> bool {
+pub(crate) fn has_registered_tests_stage(parsed: &ParsedDevqlQuery) -> bool {
     parsed
         .registered_stages
         .iter()
         .any(|stage| is_tests_stage_name(&stage.stage_name))
 }
 
-fn has_registered_coverage_stage(parsed: &ParsedDevqlQuery) -> bool {
+pub(crate) fn has_registered_coverage_stage(parsed: &ParsedDevqlQuery) -> bool {
     parsed
         .registered_stages
         .iter()
         .any(|stage| is_coverage_stage_name(&stage.stage_name))
 }
 
-fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQuery) -> bool {
-    parsed
-        .registered_stages
-        .iter()
-        .any(|stage| !is_tests_stage_name(&stage.stage_name) && !is_coverage_stage_name(&stage.stage_name))
+pub(crate) fn has_non_tests_or_coverage_registered_stage(parsed: &ParsedDevqlQuery) -> bool {
+    parsed.registered_stages.iter().any(|stage| {
+        !is_tests_stage_name(&stage.stage_name) && !is_coverage_stage_name(&stage.stage_name)
+    })
 }
 
-fn is_tests_stage_name(stage_name: &str) -> bool {
+pub(crate) fn is_tests_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
         || stage_name
             == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
 }
 
-fn is_coverage_stage_name(stage_name: &str) -> bool {
-    stage_name
-        == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
+pub(crate) fn is_coverage_stage_name(stage_name: &str) -> bool {
+    stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
         || stage_name
             == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
 }
 
-fn has_internal_test_harness_core_stage(parsed: &ParsedDevqlQuery) -> bool {
+pub(crate) fn has_internal_test_harness_core_stage(parsed: &ParsedDevqlQuery) -> bool {
     parsed.has_test_harness_core_test_links_stage
         || parsed.has_test_harness_core_line_coverage_stage
         || parsed.has_test_harness_core_branch_coverage_stage

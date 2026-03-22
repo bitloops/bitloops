@@ -1,8 +1,12 @@
+use super::*;
+
 // Symbol record building, content hashing, and artefact DB upserts.
 
-fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -> &'a str {
+pub(super) fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -> &'a str {
     let len = content.len();
-    let start = usize::try_from(item.start_byte).unwrap_or_default().min(len);
+    let start = usize::try_from(item.start_byte)
+        .unwrap_or_default()
+        .min(len);
     let end = usize::try_from(item.end_byte).unwrap_or_default().min(len);
     if start >= end {
         return "";
@@ -11,7 +15,7 @@ fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -> &'a str {
     content.get(start..end).unwrap_or("")
 }
 
-fn symbol_content_hash(item: &JsTsArtefact, content: &str) -> String {
+pub(super) fn symbol_content_hash(item: &JsTsArtefact, content: &str) -> String {
     deterministic_uuid(&format!(
         "{}|{}|{}|{}|{}|{}",
         item.canonical_kind.as_deref().unwrap_or("<null>"),
@@ -23,7 +27,7 @@ fn symbol_content_hash(item: &JsTsArtefact, content: &str) -> String {
     ))
 }
 
-fn build_symbol_records(
+pub(super) fn build_symbol_records(
     cfg: &DevqlConfig,
     path: &str,
     blob_sha: &str,
@@ -84,7 +88,7 @@ fn build_symbol_records(
     out
 }
 
-async fn persist_historical_artefact(
+pub(super) async fn persist_historical_artefact(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -124,7 +128,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
     relational.exec(&sql).await
 }
 
-async fn upsert_current_artefact(
+pub(super) async fn upsert_current_artefact(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,

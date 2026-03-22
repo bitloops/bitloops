@@ -1,3 +1,5 @@
+use super::*;
+
 pub fn append_transcript_section(
     output: &mut String,
     verbose: bool,

@@ -1,3 +1,5 @@
+use super::*;
+
 fn executor_test_cfg() -> DevqlConfig {
     DevqlConfig {
         repo_root: PathBuf::from("."),
@@ -93,7 +95,10 @@ fn normalise_duckdb_event_row_parses_json_payload_columns() {
 
     let normalized = normalise_duckdb_event_row(row);
 
-    assert_eq!(normalized.get("files_touched"), Some(&json!(["src/lib.rs"])));
+    assert_eq!(
+        normalized.get("files_touched"),
+        Some(&json!(["src/lib.rs"]))
+    );
     assert_eq!(normalized.get("payload"), Some(&json!({"agent": "codex"})));
 }
 
@@ -181,7 +186,10 @@ async fn commit_shas_for_artefact_blob_reads_sqlite_rows() {
         .await
         .expect("load commit shas");
 
-    assert_eq!(commit_shas, vec!["commit-1".to_string(), "commit-2".to_string()]);
+    assert_eq!(
+        commit_shas,
+        vec!["commit-1".to_string(), "commit-2".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -481,7 +489,8 @@ async fn execute_registered_stages_with_composition_rejects_depth_overflow() {
     .expect_err("composition depth overflow must fail");
 
     assert!(
-        err.to_string().contains("DevQL composition depth 4 exceeds configured max depth 3"),
+        err.to_string()
+            .contains("DevQL composition depth 4 exceeds configured max depth 3"),
         "unexpected error: {err}"
     );
 }

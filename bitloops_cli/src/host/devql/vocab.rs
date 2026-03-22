@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) const EDGE_KIND_IMPORTS: &str = "imports";
 pub(crate) const EDGE_KIND_CALLS: &str = "calls";
 pub(crate) const EDGE_KIND_REFERENCES: &str = "references";
@@ -6,7 +8,7 @@ pub(crate) const EDGE_KIND_IMPLEMENTS: &str = "implements";
 pub(crate) const EDGE_KIND_EXPORTS: &str = "exports";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum EdgeKind {
+pub(super) enum EdgeKind {
     Imports,
     Calls,
     References,
@@ -18,7 +20,7 @@ enum EdgeKind {
 impl EdgeKind {
     const LEGACY_INHERITS: &'static str = "inherits";
 
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Imports => EDGE_KIND_IMPORTS,
             Self::Calls => EDGE_KIND_CALLS,
@@ -29,7 +31,7 @@ impl EdgeKind {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             EDGE_KIND_IMPORTS => Some(Self::Imports),
             EDGE_KIND_CALLS => Some(Self::Calls),
@@ -55,7 +57,7 @@ impl std::fmt::Display for EdgeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum DepsKind {
+pub(super) enum DepsKind {
     Imports,
     Calls,
     References,
@@ -74,7 +76,7 @@ impl DepsKind {
         Self::Exports,
     ];
 
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Imports => EdgeKind::Imports.as_str(),
             Self::Calls => EdgeKind::Calls.as_str(),
@@ -85,7 +87,7 @@ impl DepsKind {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match EdgeKind::from_str(value)? {
             EdgeKind::Imports => Some(Self::Imports),
             EdgeKind::Calls => Some(Self::Calls),
@@ -96,7 +98,7 @@ impl DepsKind {
         }
     }
 
-    fn all_names() -> [&'static str; 6] {
+    pub(super) fn all_names() -> [&'static str; 6] {
         Self::ALL.map(Self::as_str)
     }
 }
@@ -108,7 +110,7 @@ impl PartialEq<&str> for DepsKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum DepsDirection {
+pub(super) enum DepsDirection {
     Out,
     In,
     Both,
@@ -117,7 +119,7 @@ enum DepsDirection {
 impl DepsDirection {
     const ALL: [Self; 3] = [Self::Out, Self::In, Self::Both];
 
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Out => "out",
             Self::In => "in",
@@ -125,7 +127,7 @@ impl DepsDirection {
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "out" => Some(Self::Out),
             "in" => Some(Self::In),
@@ -134,7 +136,7 @@ impl DepsDirection {
         }
     }
 
-    fn all_names() -> [&'static str; 3] {
+    pub(super) fn all_names() -> [&'static str; 3] {
         Self::ALL.map(Self::as_str)
     }
 }
@@ -146,20 +148,20 @@ impl PartialEq<&str> for DepsDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ImportForm {
+pub(super) enum ImportForm {
     Binding,
     SideEffect,
 }
 
 impl ImportForm {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Binding => "binding",
             Self::SideEffect => "side_effect",
         }
     }
 
-    fn from_str(value: &str) -> Option<Self> {
+    pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "module" | "use" | "binding" => Some(Self::Binding),
             "side_effect" => Some(Self::SideEffect),
@@ -169,13 +171,13 @@ impl ImportForm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum RefKind {
+pub(super) enum RefKind {
     Type,
     Value,
 }
 
 impl RefKind {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Type => "type",
             Self::Value => "value",
@@ -184,7 +186,7 @@ impl RefKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum CallForm {
+pub(super) enum CallForm {
     Identifier,
     Member,
     Function,
@@ -194,7 +196,7 @@ enum CallForm {
 }
 
 impl CallForm {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Identifier => "identifier",
             Self::Member => "member",
@@ -207,7 +209,7 @@ impl CallForm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Resolution {
+pub(super) enum Resolution {
     Local,
     Import,
     Unresolved,
@@ -216,7 +218,7 @@ enum Resolution {
 }
 
 impl Resolution {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
             Self::Import => "import",
@@ -228,7 +230,7 @@ impl Resolution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ExportForm {
+pub(super) enum ExportForm {
     Declaration,
     Default,
     Named,
@@ -239,7 +241,7 @@ enum ExportForm {
 }
 
 impl ExportForm {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Declaration => "declaration",
             Self::Default => "default",
@@ -252,11 +254,11 @@ impl ExportForm {
     }
 }
 
-fn normalise_edge_kind_value(value: &str) -> Option<String> {
+pub(super) fn normalise_edge_kind_value(value: &str) -> Option<String> {
     EdgeKind::from_str(value).map(|kind| kind.as_str().to_string())
 }
 
-fn normalise_edge_metadata(edge_kind: &str, metadata: &mut Value) {
+pub(super) fn normalise_edge_metadata(edge_kind: &str, metadata: &mut Value) {
     let Some(obj) = metadata.as_object_mut() else {
         return;
     };

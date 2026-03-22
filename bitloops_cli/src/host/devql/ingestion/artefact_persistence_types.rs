@@ -1,64 +1,66 @@
+use super::*;
+
 // Shared record types for artefact persistence.
 
-struct FileRevision<'a> {
-    commit_sha: &'a str,
-    revision: TemporalRevisionRef<'a>,
-    commit_unix: i64,
-    path: &'a str,
-    blob_sha: &'a str,
+pub(super) struct FileRevision<'a> {
+    pub(super) commit_sha: &'a str,
+    pub(super) revision: TemporalRevisionRef<'a>,
+    pub(super) commit_unix: i64,
+    pub(super) path: &'a str,
+    pub(super) blob_sha: &'a str,
 }
 
 #[derive(Debug, Clone)]
-struct CurrentFileRevisionRecord {
-    revision_kind: TemporalRevisionKind,
-    revision_id: String,
-    blob_sha: String,
-    updated_at_unix: i64,
+pub(super) struct CurrentFileRevisionRecord {
+    pub(super) revision_kind: TemporalRevisionKind,
+    pub(super) revision_id: String,
+    pub(super) blob_sha: String,
+    pub(super) updated_at_unix: i64,
 }
 
 #[derive(Debug, Clone)]
-struct PersistedArtefactRecord {
-    symbol_id: String,
-    artefact_id: String,
-    canonical_kind: Option<String>,
-    language_kind: String,
-    symbol_fqn: String,
-    parent_symbol_id: Option<String>,
-    parent_artefact_id: Option<String>,
-    start_line: i32,
-    end_line: i32,
-    start_byte: i32,
-    end_byte: i32,
-    signature: Option<String>,
-    modifiers: Vec<String>,
-    docstring: Option<String>,
-    content_hash: String,
+pub(super) struct PersistedArtefactRecord {
+    pub(super) symbol_id: String,
+    pub(super) artefact_id: String,
+    pub(super) canonical_kind: Option<String>,
+    pub(super) language_kind: String,
+    pub(super) symbol_fqn: String,
+    pub(super) parent_symbol_id: Option<String>,
+    pub(super) parent_artefact_id: Option<String>,
+    pub(super) start_line: i32,
+    pub(super) end_line: i32,
+    pub(super) start_byte: i32,
+    pub(super) end_byte: i32,
+    pub(super) signature: Option<String>,
+    pub(super) modifiers: Vec<String>,
+    pub(super) docstring: Option<String>,
+    pub(super) content_hash: String,
 }
 
 #[derive(Debug, Clone)]
-struct PersistedEdgeRecord {
-    edge_id: String,
-    from_symbol_id: String,
-    from_artefact_id: String,
-    to_symbol_id: Option<String>,
-    to_artefact_id: Option<String>,
-    to_symbol_ref: Option<String>,
-    edge_kind: String,
-    language: String,
-    start_line: Option<i32>,
-    end_line: Option<i32>,
-    metadata: Value,
+pub(super) struct PersistedEdgeRecord {
+    pub(super) edge_id: String,
+    pub(super) from_symbol_id: String,
+    pub(super) from_artefact_id: String,
+    pub(super) to_symbol_id: Option<String>,
+    pub(super) to_artefact_id: Option<String>,
+    pub(super) to_symbol_ref: Option<String>,
+    pub(super) edge_kind: String,
+    pub(super) language: String,
+    pub(super) start_line: Option<i32>,
+    pub(super) end_line: Option<i32>,
+    pub(super) metadata: Value,
 }
 
 #[derive(Debug, Clone)]
-struct CurrentArtefactStateRecord {
-    record: PersistedArtefactRecord,
-    symbol_id: String,
-    symbol_fqn: String,
+pub(super) struct CurrentArtefactStateRecord {
+    pub(super) record: PersistedArtefactRecord,
+    pub(super) symbol_id: String,
+    pub(super) symbol_fqn: String,
 }
 
 #[derive(Debug, Clone)]
-struct CurrentEdgeStateRecord {
-    edge_id: String,
-    record: PersistedEdgeRecord,
+pub(super) struct CurrentEdgeStateRecord {
+    pub(super) edge_id: String,
+    pub(super) record: PersistedEdgeRecord,
 }

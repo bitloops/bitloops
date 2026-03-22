@@ -1,10 +1,17 @@
-fn resolve_registered_stage_owner(
+use super::*;
+use anyhow::bail;
+use serde_json::json;
+
+pub(crate) fn resolve_registered_stage_owner(
     host: &crate::host::capability_host::DevqlCapabilityHost,
     stage_name: &str,
 ) -> Result<&'static str> {
     let owners = host
         .descriptors()
-        .filter_map(|descriptor| host.has_stage(descriptor.id, stage_name).then_some(descriptor.id))
+        .filter_map(|descriptor| {
+            host.has_stage(descriptor.id, stage_name)
+                .then_some(descriptor.id)
+        })
         .collect::<Vec<_>>();
 
     match owners.as_slice() {
@@ -18,7 +25,7 @@ fn resolve_registered_stage_owner(
     }
 }
 
-fn validate_registered_stage_composition(
+pub(crate) fn validate_registered_stage_composition(
     host: &crate::host::capability_host::DevqlCapabilityHost,
     stage_name: &str,
     capability_id: &str,
@@ -69,14 +76,16 @@ fn validate_registered_stage_composition(
     );
 }
 
-fn build_registered_stage_query_context(
+pub(crate) fn build_registered_stage_query_context(
     resolved_commit_sha: Option<String>,
     composition: Option<&RegisteredStageCompositionContext>,
 ) -> Value {
     let mut query_context = serde_json::Map::new();
     query_context.insert(
         "resolved_commit_sha".to_string(),
-        resolved_commit_sha.map(Value::String).unwrap_or(Value::Null),
+        resolved_commit_sha
+            .map(Value::String)
+            .unwrap_or(Value::Null),
     );
     if let Some(composition) = composition {
         query_context.insert(
@@ -92,7 +101,7 @@ fn build_registered_stage_query_context(
 }
 
 #[cfg(test)]
-async fn execute_registered_stages(
+pub(crate) async fn execute_registered_stages(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     rows: Vec<Value>,
@@ -100,7 +109,7 @@ async fn execute_registered_stages(
     execute_registered_stages_with_composition(cfg, parsed, rows, None).await
 }
 
-async fn execute_registered_stages_with_composition(
+pub(crate) async fn execute_registered_stages_with_composition(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     mut rows: Vec<Value>,
@@ -114,7 +123,12 @@ async fn execute_registered_stages_with_composition(
     let resolved_commit_sha = resolve_commit_selector(cfg, parsed)?;
     for stage in &parsed.registered_stages {
         let capability_id = resolve_registered_stage_owner(&host, &stage.stage_name)?;
-        validate_registered_stage_composition(&host, &stage.stage_name, capability_id, composition)?;
+        validate_registered_stage_composition(
+            &host,
+            &stage.stage_name,
+            capability_id,
+            composition,
+        )?;
         let query_context =
             build_registered_stage_query_context(resolved_commit_sha.clone(), composition);
 

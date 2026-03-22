@@ -1,4 +1,6 @@
-fn get_git_author_from_repo(repo_root: &Path) -> Result<(String, String)> {
+use super::*;
+
+pub(crate) fn get_git_author_from_repo(repo_root: &Path) -> Result<(String, String)> {
     let local_name = run_git(repo_root, &["config", "--get", "user.name"]).ok();
     let local_email = run_git(repo_root, &["config", "--get", "user.email"]).ok();
     let global_name = run_git(repo_root, &["config", "--global", "--get", "user.name"]).ok();
@@ -16,32 +18,32 @@ fn get_git_author_from_repo(repo_root: &Path) -> Result<(String, String)> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-struct CodeLearning {
-    path: String,
+pub(crate) struct CodeLearning {
+    pub(crate) path: String,
     #[serde(default)]
-    line: u32,
+    pub(crate) line: u32,
     #[serde(default)]
-    end_line: u32,
-    finding: String,
+    pub(crate) end_line: u32,
+    pub(crate) finding: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-struct LearningsSummary {
-    repo: Vec<String>,
-    code: Vec<CodeLearning>,
-    workflow: Vec<String>,
+pub(crate) struct LearningsSummary {
+    pub(crate) repo: Vec<String>,
+    pub(crate) code: Vec<CodeLearning>,
+    pub(crate) workflow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-struct Summary {
-    intent: String,
-    outcome: String,
-    learnings: LearningsSummary,
-    friction: Vec<String>,
-    open_items: Vec<String>,
+pub(crate) struct Summary {
+    pub(crate) intent: String,
+    pub(crate) outcome: String,
+    pub(crate) learnings: LearningsSummary,
+    pub(crate) friction: Vec<String>,
+    pub(crate) open_items: Vec<String>,
 }
 
-fn redact_summary(summary: Option<&Summary>) -> Result<Option<Summary>> {
+pub(crate) fn redact_summary(summary: Option<&Summary>) -> Result<Option<Summary>> {
     let Some(summary) = summary else {
         return Ok(None);
     };
@@ -58,7 +60,7 @@ fn redact_summary(summary: Option<&Summary>) -> Result<Option<Summary>> {
     }))
 }
 
-fn redact_string_slice(values: Option<&[String]>) -> Result<Option<Vec<String>>> {
+pub(crate) fn redact_string_slice(values: Option<&[String]>) -> Result<Option<Vec<String>>> {
     let Some(values) = values else {
         return Ok(None);
     };
@@ -67,7 +69,9 @@ fn redact_string_slice(values: Option<&[String]>) -> Result<Option<Vec<String>>>
     ))
 }
 
-fn redact_code_learnings(values: Option<&[CodeLearning]>) -> Result<Option<Vec<CodeLearning>>> {
+pub(crate) fn redact_code_learnings(
+    values: Option<&[CodeLearning]>,
+) -> Result<Option<Vec<CodeLearning>>> {
     let Some(values) = values else {
         return Ok(None);
     };
@@ -84,14 +88,14 @@ fn redact_code_learnings(values: Option<&[CodeLearning]>) -> Result<Option<Vec<C
     ))
 }
 
-fn copy_metadata_dir(
+pub(crate) fn copy_metadata_dir(
     metadata_dir: &Path,
     base_path: &str,
 ) -> Result<std::collections::BTreeMap<String, String>> {
     add_directory_to_entries_with_abs_path(metadata_dir, base_path)
 }
 
-fn add_directory_to_entries_with_abs_path(
+pub(crate) fn add_directory_to_entries_with_abs_path(
     metadata_dir: &Path,
     base_path: &str,
 ) -> Result<std::collections::BTreeMap<String, String>> {
@@ -140,9 +144,9 @@ fn add_directory_to_entries_with_abs_path(
     Ok(out)
 }
 
-const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+pub(crate) const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-fn ensure_metadata_branch(repo_root: &Path) -> Result<()> {
+pub(crate) fn ensure_metadata_branch(repo_root: &Path) -> Result<()> {
     let metadata_ref = format!("refs/heads/{}", paths::METADATA_BRANCH_NAME);
     if run_git(repo_root, &["rev-parse", &metadata_ref]).is_ok() {
         return Ok(());
@@ -237,7 +241,7 @@ pub(crate) fn git_show_file_bytes(
     Ok(output.stdout)
 }
 
-fn get_commit_author(repo_root: &Path, commit_ref: &str) -> Option<(String, String)> {
+pub(crate) fn get_commit_author(repo_root: &Path, commit_ref: &str) -> Option<(String, String)> {
     let raw = run_git(repo_root, &["show", "-s", "--format=%an%n%ae", commit_ref]).ok()?;
     let mut lines = raw.lines();
     let name = lines.next().unwrap_or_default().trim().to_string();
@@ -265,11 +269,11 @@ pub(crate) fn metadata_read_ref(repo_root: &Path) -> Option<String> {
     None
 }
 
-fn current_branch_name(repo_root: &Path) -> String {
+pub(crate) fn current_branch_name(repo_root: &Path) -> String {
     run_git(repo_root, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default()
 }
 
-fn redact_json_value(value: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn redact_json_value(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::String(s) => serde_json::Value::String(redact_text(s)),
         serde_json::Value::Array(arr) => {
@@ -284,17 +288,17 @@ fn redact_json_value(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-fn redact_bytes(input: &[u8]) -> Vec<u8> {
+pub(crate) fn redact_bytes(input: &[u8]) -> Vec<u8> {
     redact::bytes(input).into_owned()
 }
 
-fn redact_jsonl_bytes_with_fallback(input: &[u8]) -> Vec<u8> {
+pub(crate) fn redact_jsonl_bytes_with_fallback(input: &[u8]) -> Vec<u8> {
     match redact::jsonl_bytes(input) {
         Ok(redacted) => redacted.into_owned(),
         Err(_) => redact::bytes(input).into_owned(),
     }
 }
 
-fn redact_text(input: &str) -> String {
+pub(crate) fn redact_text(input: &str) -> String {
     redact::string(input)
 }

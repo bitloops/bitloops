@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CheckpointSessionRef {
     #[serde(default)]
@@ -70,12 +72,12 @@ pub struct CommittedInfo {
     pub tool_use_id: String,
 }
 
-fn summary_session_count(summary: &CheckpointSummaryView) -> usize {
+pub(crate) fn summary_session_count(summary: &CheckpointSummaryView) -> usize {
     summary.sessions.len()
 }
 
 #[allow(dead_code)]
-fn to_committed_info(
+pub(crate) fn to_committed_info(
     repo_root: &Path,
     read_ref: &str,
     summary: &CheckpointSummaryView,
@@ -168,7 +170,7 @@ fn to_committed_info(
     info
 }
 
-fn push_unique_agent(agents: &mut Vec<String>, agent: &str) {
+pub(crate) fn push_unique_agent(agents: &mut Vec<String>, agent: &str) {
     let normalized = canonicalize_agent_type(agent);
     if normalized.is_empty() || agents.iter().any(|existing| existing == &normalized) {
         return;
@@ -176,13 +178,13 @@ fn push_unique_agent(agents: &mut Vec<String>, agent: &str) {
     agents.push(normalized);
 }
 
-fn first_prompt_preview(prompts_blob: &str) -> String {
+pub(crate) fn first_prompt_preview(prompts_blob: &str) -> String {
     let first_prompt = prompts_blob.split("\n\n---\n\n").next().unwrap_or_default();
     let stripped = strip_leading_wrapped_tags(first_prompt).trim_start();
     stripped.chars().take(160).collect()
 }
 
-fn strip_leading_wrapped_tags(input: &str) -> &str {
+pub(crate) fn strip_leading_wrapped_tags(input: &str) -> &str {
     let mut rest = input.trim_start();
     loop {
         let Some((tag_name, after_open)) = parse_leading_open_tag(rest) else {
@@ -196,7 +198,7 @@ fn strip_leading_wrapped_tags(input: &str) -> &str {
     }
 }
 
-fn parse_leading_open_tag(input: &str) -> Option<(String, &str)> {
+pub(crate) fn parse_leading_open_tag(input: &str) -> Option<(String, &str)> {
     let trimmed = input.trim_start();
     if !trimmed.starts_with('<') || trimmed.starts_with("</") {
         return None;

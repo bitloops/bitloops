@@ -1,3 +1,5 @@
+use super::*;
+
 // Git remote URL parsing and repository identity resolution.
 
 pub fn resolve_repo_identity(repo_root: &Path) -> Result<RepoIdentity> {
@@ -41,7 +43,7 @@ pub fn resolve_repo_id(repo_root: &Path) -> Result<String> {
     Ok(resolve_repo_identity(repo_root)?.repo_id)
 }
 
-fn parse_remote_owner_name(remote: &str) -> Option<(String, String)> {
+pub(super) fn parse_remote_owner_name(remote: &str) -> Option<(String, String)> {
     let trimmed = remote.trim().trim_end_matches('/');
 
     if let Some(rest) = trimmed.strip_prefix("git@") {
@@ -63,7 +65,7 @@ fn parse_remote_owner_name(remote: &str) -> Option<(String, String)> {
     None
 }
 
-fn parse_owner_name_path(path: &str) -> Option<(String, String)> {
+pub(super) fn parse_owner_name_path(path: &str) -> Option<(String, String)> {
     let clean = path.trim().trim_end_matches(".git");
     let mut parts = clean
         .split('/')

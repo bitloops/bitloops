@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn read_committed_returns_checkpoint_summary() {
+pub(crate) fn read_committed_returns_checkpoint_summary() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "c1c2c3c4c5c6";
@@ -32,7 +34,7 @@ fn read_committed_returns_checkpoint_summary() {
     assert!(summary.sessions[1].metadata.contains("/1/"));
 }
 #[test]
-fn write_committed_aggregation() {
+pub(crate) fn write_committed_aggregation() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "b1b2b3b4b5b6";
@@ -137,7 +139,7 @@ fn write_committed_aggregation() {
 }
 
 #[test]
-fn read_session_content_by_index() {
+pub(crate) fn read_session_content_by_index() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "d1d2d3d4d5d6";
@@ -182,7 +184,7 @@ fn read_session_content_by_index() {
 }
 
 #[test]
-fn read_session_content_invalid_index() {
+pub(crate) fn read_session_content_invalid_index() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "e1e2e3e4e5e6";
@@ -206,7 +208,7 @@ fn read_session_content_invalid_index() {
 }
 
 #[test]
-fn read_latest_session_content_returns_latest() {
+pub(crate) fn read_latest_session_content_returns_latest() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "f1f2f3f4f5f6";
@@ -233,7 +235,7 @@ fn read_latest_session_content_returns_latest() {
 }
 
 #[test]
-fn read_session_content_by_id_lookup() {
+pub(crate) fn read_session_content_by_id_lookup() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "010203040506";
@@ -259,7 +261,7 @@ fn read_session_content_by_id_lookup() {
 }
 
 #[test]
-fn read_session_content_by_id_not_found() {
+pub(crate) fn read_session_content_by_id_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "111213141516";
@@ -284,7 +286,7 @@ fn read_session_content_by_id_not_found() {
 }
 
 #[test]
-fn list_committed_multi_session_info() {
+pub(crate) fn list_committed_multi_session_info() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "212223242526";
@@ -319,7 +321,7 @@ fn list_committed_multi_session_info() {
 }
 
 #[test]
-fn write_committed_session_with_no_prompts() {
+pub(crate) fn write_committed_session_with_no_prompts() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "313233343536";
@@ -370,7 +372,7 @@ fn write_committed_session_with_no_prompts() {
 }
 
 #[test]
-fn write_committed_session_with_summary() {
+pub(crate) fn write_committed_session_with_summary() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeeff";
@@ -427,7 +429,7 @@ fn write_committed_session_with_summary() {
 }
 
 #[test]
-fn write_committed_session_with_no_context() {
+pub(crate) fn write_committed_session_with_no_context() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "414243444546";

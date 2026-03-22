@@ -1,6 +1,8 @@
+use super::*;
+
 // File state row, file artefact upsert, and revision comparison/management.
 
-async fn upsert_file_state_row(
+pub(super) async fn upsert_file_state_row(
     repo_id: &str,
     relational: &RelationalStorage,
     commit_sha: &str,
@@ -19,7 +21,7 @@ ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_s
     relational.exec(&sql).await
 }
 
-fn build_file_artefact_row_from_content(
+pub(super) fn build_file_artefact_row_from_content(
     repo_id: &str,
     path: &str,
     blob_sha: &str,
@@ -40,7 +42,7 @@ fn build_file_artefact_row_from_content(
     }
 }
 
-async fn upsert_file_artefact_row(
+pub(super) async fn upsert_file_artefact_row(
     repo_id: &str,
     repo_root: &Path,
     relational: &RelationalStorage,
@@ -91,7 +93,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
     })
 }
 
-fn build_file_current_record(
+pub(super) fn build_file_current_record(
     path: &str,
     blob_sha: &str,
     file_artefact: &FileArtefactRow,
@@ -116,7 +118,7 @@ fn build_file_current_record(
     }
 }
 
-async fn load_current_file_revision(
+pub(super) async fn load_current_file_revision(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -165,7 +167,7 @@ FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
     }))
 }
 
-fn incoming_revision_is_newer(
+pub(super) fn incoming_revision_is_newer(
     existing: Option<&CurrentFileRevisionRecord>,
     revision_kind: TemporalRevisionKind,
     revision_id: &str,
@@ -187,7 +189,7 @@ fn incoming_revision_is_newer(
     }
 }
 
-fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
+pub(super) fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
     match (
         incoming
             .strip_prefix("temp:")
@@ -201,7 +203,7 @@ fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
     }
 }
 
-async fn overwrite_current_revision_metadata_for_path(
+pub(super) async fn overwrite_current_revision_metadata_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,

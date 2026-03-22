@@ -33,10 +33,19 @@ use crate::host::extension_host::{
 };
 use crate::utils::terminal::print_db_status_table;
 
+mod connection_status;
 pub(crate) mod identity;
+mod types;
 
+pub use self::connection_status::run_connection_status;
+pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
+
+#[cfg(test)]
+pub(crate) use self::connection_status::{
+    EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,
+};
 
 pub fn build_capability_host(
     repo_root: &Path,
@@ -44,74 +53,6 @@ pub fn build_capability_host(
 ) -> anyhow::Result<crate::host::capability_host::DevqlCapabilityHost> {
     crate::host::capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
 }
-
-#[derive(Debug, Clone)]
-pub struct RepoIdentity {
-    pub(crate) provider: String,
-    pub(crate) organization: String,
-    pub(crate) name: String,
-    pub(crate) identity: String,
-    pub(crate) repo_id: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DevqlConfig {
-    pub(crate) repo_root: PathBuf,
-    pub(crate) repo: RepoIdentity,
-    pub(crate) pg_dsn: Option<String>,
-    pub(crate) clickhouse_url: String,
-    pub(crate) clickhouse_user: Option<String>,
-    pub(crate) clickhouse_password: Option<String>,
-    pub(crate) clickhouse_database: String,
-    pub(crate) semantic_provider: Option<String>,
-    pub(crate) semantic_model: Option<String>,
-    pub(crate) semantic_api_key: Option<String>,
-    pub(crate) semantic_base_url: Option<String>,
-    pub(crate) embedding_provider: Option<String>,
-    pub(crate) embedding_model: Option<String>,
-    pub(crate) embedding_api_key: Option<String>,
-}
-
-impl DevqlConfig {
-    pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        let backend_cfg = resolve_store_backend_config_for_repo(&repo_root)
-            .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config();
-        let embedding_cfg = resolve_store_embedding_config();
-        Ok(Self {
-            repo_root,
-            repo,
-            pg_dsn: backend_cfg.relational.postgres_dsn,
-            clickhouse_url: backend_cfg
-                .events
-                .clickhouse_url
-                .unwrap_or_else(|| "http://localhost:8123".to_string()),
-            clickhouse_user: backend_cfg.events.clickhouse_user,
-            clickhouse_password: backend_cfg.events.clickhouse_password,
-            clickhouse_database: backend_cfg
-                .events
-                .clickhouse_database
-                .unwrap_or_else(|| "default".to_string()),
-            semantic_provider: semantic_cfg.semantic_provider,
-            semantic_model: semantic_cfg.semantic_model,
-            semantic_api_key: semantic_cfg.semantic_api_key,
-            semantic_base_url: semantic_cfg.semantic_base_url,
-            embedding_provider: embedding_cfg.embedding_provider,
-            embedding_model: embedding_cfg.embedding_model,
-            embedding_api_key: embedding_cfg.embedding_api_key,
-        })
-    }
-
-    fn clickhouse_endpoint(&self) -> String {
-        let base = self.clickhouse_url.trim_end_matches('/');
-        format!("{base}/?database={}", self.clickhouse_database)
-    }
-}
-
-const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
-const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
-const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
-const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
@@ -217,20 +158,6 @@ fn capability_ingest_context_for_ingester(
     ))
 }
 
-pub async fn run_connection_status() -> Result<()> {
-    let cfg = resolve_store_backend_config()?;
-    let rows = collect_connection_status_rows(&cfg).await;
-
-    print_db_status_table(&rows);
-
-    let failures = rows.iter().filter(|row| row.status.is_failure()).count();
-    if failures > 0 {
-        bail!("{failures} backend connection check(s) failed");
-    }
-
-    Ok(())
-}
-
 pub fn run_capability_packs_report(
     cfg: &DevqlConfig,
     json: bool,
@@ -278,204 +205,6 @@ pub fn run_capability_packs_report(
         );
     }
     Ok(())
-}
-
-async fn collect_connection_status_rows(cfg: &StoreBackendConfig) -> Vec<DatabaseStatusRow> {
-    vec![
-        DatabaseStatusRow {
-            db: relational_status_label(&cfg.relational),
-            status: relational_connection_status(&cfg.relational).await,
-        },
-        DatabaseStatusRow {
-            db: events_status_label(&cfg.events),
-            status: events_connection_status(&cfg.events).await,
-        },
-    ]
-}
-
-fn relational_status_label(cfg: &RelationalBackendConfig) -> &'static str {
-    match cfg.provider {
-        RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
-        RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
-    }
-}
-
-fn events_status_label(cfg: &EventsBackendConfig) -> &'static str {
-    match cfg.provider {
-        EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
-        EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
-    }
-}
-
-async fn relational_connection_status(cfg: &RelationalBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
-        RelationalProvider::Sqlite => match cfg.resolve_sqlite_db_path() {
-            Ok(path) => match check_sqlite_connection(&path).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            },
-            Err(err) => classify_connection_error(&err.to_string()),
-        },
-        RelationalProvider::Postgres => match cfg.postgres_dsn.as_deref() {
-            Some(dsn) => match check_postgres_connection(dsn).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            },
-            None => DatabaseConnectionStatus::NotConfigured,
-        },
-    }
-}
-
-async fn events_connection_status(cfg: &EventsBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
-        EventsProvider::DuckDb => {
-            let duckdb_path = cfg.duckdb_path_or_default();
-            match check_duckdb_connection(&duckdb_path).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
-        EventsProvider::ClickHouse => {
-            let clickhouse_url = cfg
-                .clickhouse_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:8123".to_string());
-            let clickhouse_database = cfg
-                .clickhouse_database
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let clickhouse_endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
-            match run_clickhouse_sql_http(
-                &clickhouse_endpoint,
-                cfg.clickhouse_user.as_deref(),
-                cfg.clickhouse_password.as_deref(),
-                "SELECT 1 FORMAT TabSeparated",
-            )
-            .await
-            {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
-        }
-    }
-}
-
-async fn check_postgres_connection(dsn: &str) -> Result<()> {
-    let client = connect_postgres_client(dsn).await?;
-
-    let row = tokio::time::timeout(Duration::from_secs(10), client.query_one("SELECT 1", &[]))
-        .await
-        .context("Postgres health query timeout after 10s")?
-        .context("running Postgres health query `SELECT 1`")?;
-    let value: i32 = row
-        .try_get(0)
-        .context("reading Postgres health query result")?;
-    if value != 1 {
-        bail!("unexpected Postgres health query result: {value}");
-    }
-
-    Ok(())
-}
-
-async fn check_sqlite_connection(path: &Path) -> Result<()> {
-    let db_path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = rusqlite::Connection::open_with_flags(
-            &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-        )
-        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-
-        let value: i32 = conn
-            .query_row("SELECT 1", [], |row| row.get(0))
-            .context("running SQLite health query `SELECT 1`")?;
-        if value != 1 {
-            bail!("unexpected SQLite health query result: {value}");
-        }
-
-        Ok(())
-    })
-    .await
-    .context("joining SQLite health query task")?
-}
-
-async fn check_duckdb_connection(path: &Path) -> Result<()> {
-    let db_path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        if !db_path.is_file() {
-            bail!(
-                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
-                db_path.display()
-            );
-        }
-        let conn = duckdb::Connection::open(&db_path)
-            .with_context(|| format!("opening DuckDB events database at {}", db_path.display()))?;
-        conn.execute_batch("SELECT 1")
-            .context("running DuckDB health query `SELECT 1`")?;
-        Ok(())
-    })
-    .await
-    .context("joining DuckDB health query task")?
-}
-
-fn clickhouse_endpoint(url: &str, database: &str) -> String {
-    let base = url.trim_end_matches('/');
-    format!("{base}/?database={database}")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelationalDialect {
-    Postgres,
-    Sqlite,
-}
-
-#[derive(Debug)]
-pub enum RelationalStorage {
-    Postgres(tokio_postgres::Client),
-    Sqlite { path: PathBuf },
-}
-
-impl RelationalStorage {
-    async fn connect(
-        cfg: &DevqlConfig,
-        relational: &RelationalBackendConfig,
-        command: &str,
-    ) -> Result<Self> {
-        match relational.provider {
-            RelationalProvider::Postgres => {
-                let pg_dsn = require_postgres_dsn(cfg, relational, command)?;
-                let client = connect_postgres_client(pg_dsn).await?;
-                Ok(Self::Postgres(client))
-            }
-            RelationalProvider::Sqlite => {
-                let path = relational
-                    .resolve_sqlite_db_path()
-                    .with_context(|| format!("resolving SQLite path for `{command}`"))?;
-                Ok(Self::Sqlite { path })
-            }
-        }
-    }
-
-    pub fn dialect(&self) -> RelationalDialect {
-        match self {
-            Self::Postgres(_) => RelationalDialect::Postgres,
-            Self::Sqlite { .. } => RelationalDialect::Sqlite,
-        }
-    }
-
-    pub async fn exec(&self, sql: &str) -> Result<()> {
-        match self {
-            Self::Postgres(client) => postgres_exec(client, sql).await,
-            Self::Sqlite { path } => sqlite_exec_path(path, sql).await,
-        }
-    }
-
-    pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
-        match self {
-            Self::Postgres(client) => pg_query_rows(client, sql).await,
-            Self::Sqlite { path } => sqlite_query_rows_path(path, sql).await,
-        }
-    }
 }
 
 async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<()> {
@@ -889,56 +618,120 @@ pub(crate) async fn execute_query_json_with_composition(
     Ok(Value::Array(rows))
 }
 
-include!("devql/core_contracts.rs");
-include!("devql/canonical_mapping.rs");
-include!("devql/vocab.rs");
+mod canonical_mapping;
+mod core_contracts;
+mod vocab;
 // ingestion: shared types
-include!("devql/ingestion/types.rs");
+#[path = "devql/ingestion/types.rs"]
+mod ingestion_types;
 // ingestion: repo identity & git remote parsing
-include!("devql/ingestion/repo_identity.rs");
+#[path = "devql/ingestion/repo_identity.rs"]
+mod ingestion_repo_identity;
 // ingestion: database schema DDL
-include!("devql/ingestion/schema.rs");
+#[path = "devql/ingestion/schema.rs"]
+mod ingestion_schema;
 // ingestion: language detection & git blob utilities
-include!("devql/ingestion/language.rs");
+#[path = "devql/ingestion/language.rs"]
+mod ingestion_language;
 // ingestion: artefact symbol identity helpers
-include!("devql/ingestion/artefact_identity.rs");
+#[path = "devql/ingestion/artefact_identity.rs"]
+mod ingestion_artefact_identity;
 // ingestion: checkpoint / commit / event persistence
-include!("devql/ingestion/checkpoint.rs");
+#[path = "devql/ingestion/checkpoint.rs"]
+mod ingestion_checkpoint;
 // ingestion: shared record types for artefact persistence
-include!("devql/ingestion/artefact_persistence_types.rs");
+#[path = "devql/ingestion/artefact_persistence_types.rs"]
+mod ingestion_artefact_persistence_types;
 // ingestion: SQL dialect helpers, JSON utilities, timestamp expressions
-include!("devql/ingestion/artefact_persistence_sql.rs");
+#[path = "devql/ingestion/artefact_persistence_sql.rs"]
+mod ingestion_artefact_persistence_sql;
 // ingestion: file state row, file artefact upsert, revision management
-include!("devql/ingestion/artefact_persistence_file.rs");
+#[path = "devql/ingestion/artefact_persistence_file.rs"]
+mod ingestion_artefact_persistence_file;
 // ingestion: symbol record building, content hashing, artefact DB upserts
-include!("devql/ingestion/artefact_persistence_symbols.rs");
+#[path = "devql/ingestion/artefact_persistence_symbols.rs"]
+mod ingestion_artefact_persistence_symbols;
 // ingestion: edge records, current state queries/mutations, row deserialization
-include!("devql/ingestion/artefact_persistence_edges.rs");
+#[path = "devql/ingestion/artefact_persistence_edges.rs"]
+mod ingestion_artefact_persistence_edges;
 // ingestion: top-level orchestration (refresh/upsert/delete current state)
-include!("devql/ingestion/artefact_persistence.rs");
+#[path = "devql/ingestion/artefact_persistence.rs"]
+mod ingestion_artefact_persistence;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
 // ingestion: JS/TS artefact extraction (tree-sitter)
-include!("devql/ingestion/extraction_js_ts.rs");
+#[path = "devql/ingestion/extraction_js_ts.rs"]
+mod ingestion_extraction_js_ts;
 // ingestion: Rust artefact extraction (tree-sitter)
-include!("devql/ingestion/extraction_rust.rs");
+#[path = "devql/ingestion/extraction_rust.rs"]
+mod ingestion_extraction_rust;
 // ingestion: shared edge-building utilities
-include!("devql/ingestion/edges_shared.rs");
+#[path = "devql/ingestion/edges_shared.rs"]
+mod ingestion_edges_shared;
 // ingestion: export edges (JS/TS + Rust)
-include!("devql/ingestion/edges_export.rs");
+#[path = "devql/ingestion/edges_export.rs"]
+mod ingestion_edges_export;
 // ingestion: inheritance edges (JS/TS + Rust)
-include!("devql/ingestion/edges_inherits.rs");
+#[path = "devql/ingestion/edges_inherits.rs"]
+mod ingestion_edges_inherits;
 // ingestion: reference edges (JS/TS + Rust)
-include!("devql/ingestion/edges_reference.rs");
+#[path = "devql/ingestion/edges_reference.rs"]
+mod ingestion_edges_reference;
 // ingestion: JS/TS dependency edge orchestration
-include!("devql/ingestion/edges_js_ts.rs");
+#[path = "devql/ingestion/edges_js_ts.rs"]
+mod ingestion_edges_js_ts;
 // ingestion: Rust dependency edge orchestration
-include!("devql/ingestion/edges_rust.rs");
-include!("devql/query/parser.rs");
-include!("devql/query/executor.rs");
-include!("devql/query/utils.rs");
-include!("devql/deps_query.rs");
-include!("devql/db_utils.rs");
+#[path = "devql/db_utils.rs"]
+mod db_utils;
+#[path = "devql/deps_query.rs"]
+mod deps_query;
+#[path = "devql/ingestion/edges_rust.rs"]
+mod ingestion_edges_rust;
+#[path = "devql/query/executor.rs"]
+mod query_executor;
+#[path = "devql/query/parser.rs"]
+mod query_parser;
+#[path = "devql/query/utils.rs"]
+mod query_utils;
+
+use self::canonical_mapping::*;
+use self::core_contracts::*;
+use self::db_utils::*;
+pub(crate) use self::db_utils::{
+    esc_pg, postgres_exec, sqlite_exec_path_allow_create, sqlite_query_rows_path,
+};
+use self::deps_query::*;
+use self::ingestion_artefact_identity::*;
+use self::ingestion_artefact_persistence::*;
+use self::ingestion_artefact_persistence_edges::*;
+use self::ingestion_artefact_persistence_file::*;
+use self::ingestion_artefact_persistence_sql::*;
+pub(crate) use self::ingestion_artefact_persistence_sql::{sql_json_value, sql_now};
+use self::ingestion_artefact_persistence_symbols::*;
+use self::ingestion_artefact_persistence_types::*;
+use self::ingestion_checkpoint::*;
+use self::ingestion_edges_export::*;
+use self::ingestion_edges_inherits::*;
+use self::ingestion_edges_js_ts::*;
+use self::ingestion_edges_reference::*;
+use self::ingestion_edges_rust::*;
+use self::ingestion_edges_shared::*;
+use self::ingestion_extraction_js_ts::*;
+use self::ingestion_extraction_rust::*;
+use self::ingestion_language::*;
+pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
+use self::ingestion_schema::*;
+pub(crate) use self::ingestion_schema::{
+    checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
+    knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
+};
+use self::ingestion_types::*;
+use self::query_executor::*;
+use self::query_parser::*;
+pub(crate) use self::query_utils::sql_string_list_pg;
+use self::query_utils::*;
+use self::vocab::*;
+pub(crate) use self::vocab::{EDGE_KIND_CALLS, EDGE_KIND_EXPORTS};
 
 #[cfg(test)]
 pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;

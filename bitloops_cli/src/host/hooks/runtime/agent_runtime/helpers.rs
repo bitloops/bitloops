@@ -1,13 +1,15 @@
+use super::*;
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
-struct FileChanges {
-    modified: Vec<String>,
-    new_files: Vec<String>,
-    deleted: Vec<String>,
+pub(super) struct FileChanges {
+    pub(super) modified: Vec<String>,
+    pub(super) new_files: Vec<String>,
+    pub(super) deleted: Vec<String>,
 }
 
-fn detect_transcript_modified_files(
+pub(super) fn detect_transcript_modified_files(
     transcript_path: &str,
     session_id: &str,
     transcript_offset: i64,
@@ -42,7 +44,7 @@ fn detect_transcript_modified_files(
 }
 
 /// Change detection from `git status --porcelain`.
-fn detect_file_changes(
+pub(super) fn detect_file_changes(
     repo_root: Option<&Path>,
     previously_untracked: Option<&[String]>,
 ) -> FileChanges {
@@ -102,7 +104,7 @@ fn detect_file_changes(
     }
 }
 
-fn merge_unique(mut base: Vec<String>, extra: Vec<String>) -> Vec<String> {
+pub(super) fn merge_unique(mut base: Vec<String>, extra: Vec<String>) -> Vec<String> {
     if extra.is_empty() {
         return base;
     }
@@ -115,7 +117,10 @@ fn merge_unique(mut base: Vec<String>, extra: Vec<String>) -> Vec<String> {
     base
 }
 
-fn filter_to_uncommitted_files(repo_root: Option<&Path>, files: Vec<String>) -> Vec<String> {
+pub(super) fn filter_to_uncommitted_files(
+    repo_root: Option<&Path>,
+    files: Vec<String>,
+) -> Vec<String> {
     if files.is_empty() {
         return files;
     }
@@ -179,7 +184,7 @@ fn filter_to_uncommitted_files(repo_root: Option<&Path>, files: Vec<String>) -> 
     filtered
 }
 
-fn filter_and_normalize_paths(files: &[String], base_path: &str) -> Vec<String> {
+pub(super) fn filter_and_normalize_paths(files: &[String], base_path: &str) -> Vec<String> {
     let mut result = Vec::new();
     for file in files {
         let rel = paths::to_relative_path(file, base_path);
@@ -196,7 +201,7 @@ fn filter_and_normalize_paths(files: &[String], base_path: &str) -> Vec<String> 
 
 // Test-only parser stubs: the live dispatch uses inline serde_json::from_str.
 #[cfg(test)]
-fn parse_task_hook_input(stdin: &str) -> Result<TaskHookInput> {
+pub(super) fn parse_task_hook_input(stdin: &str) -> Result<TaskHookInput> {
     if stdin.is_empty() {
         bail!("empty input");
     }
@@ -204,7 +209,7 @@ fn parse_task_hook_input(stdin: &str) -> Result<TaskHookInput> {
 }
 
 #[cfg(test)]
-fn parse_post_task_hook_input(stdin: &str) -> Result<PostTaskInput> {
+pub(super) fn parse_post_task_hook_input(stdin: &str) -> Result<PostTaskInput> {
     if stdin.is_empty() {
         bail!("empty input");
     }
@@ -212,21 +217,23 @@ fn parse_post_task_hook_input(stdin: &str) -> Result<PostTaskInput> {
 }
 
 #[cfg(test)]
-fn parse_subagent_checkpoint_hook_input(stdin: &str) -> Result<SubagentCheckpointHookInput> {
+pub(super) fn parse_subagent_checkpoint_hook_input(
+    stdin: &str,
+) -> Result<SubagentCheckpointHookInput> {
     if stdin.is_empty() {
         bail!("empty input");
     }
     serde_json::from_str(stdin).context("failed to parse JSON")
 }
 
-fn log_pre_task_hook_context(w: &mut dyn Write, input: &TaskHookInput) {
+pub(super) fn log_pre_task_hook_context(w: &mut dyn Write, input: &TaskHookInput) {
     let _ = writeln!(w, "[bitloops] PreToolUse[Task] hook invoked");
     let _ = writeln!(w, "  Session ID: {}", input.session_id);
     let _ = writeln!(w, "  Tool Use ID: {}", input.tool_use_id);
     let _ = writeln!(w, "  Transcript: {}", input.transcript_path);
 }
 
-fn log_post_task_hook_context(
+pub(super) fn log_post_task_hook_context(
     w: &mut dyn Write,
     input: &PostTaskInput,
     subagent_transcript_path: &str,
@@ -247,7 +254,7 @@ fn log_post_task_hook_context(
     }
 }
 
-fn todos_json_from_tool_input(tool_input: Option<&Value>) -> Option<Vec<u8>> {
+pub(super) fn todos_json_from_tool_input(tool_input: Option<&Value>) -> Option<Vec<u8>> {
     let todos = tool_input?.get("todos")?;
     serde_json::to_vec(todos).ok()
 }
@@ -255,28 +262,28 @@ fn todos_json_from_tool_input(tool_input: Option<&Value>) -> Option<Vec<u8>> {
 // Test-only: (in-progress extraction).
 // Live code uses extract_last_completed_todo_from_tool_input instead for PostTodo hooks.
 #[cfg(test)]
-fn extract_todo_content_from_tool_input(tool_input: Option<&Value>) -> String {
+pub(super) fn extract_todo_content_from_tool_input(tool_input: Option<&Value>) -> String {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return String::new();
     };
     crate::host::checkpoints::strategy::messages::extract_in_progress_todo(&todos_json)
 }
 
-fn count_todos_from_tool_input(tool_input: Option<&Value>) -> usize {
+pub(super) fn count_todos_from_tool_input(tool_input: Option<&Value>) -> usize {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return 0;
     };
     crate::host::checkpoints::strategy::messages::count_todos(&todos_json)
 }
 
-fn extract_last_completed_todo_from_tool_input(tool_input: Option<&Value>) -> String {
+pub(super) fn extract_last_completed_todo_from_tool_input(tool_input: Option<&Value>) -> String {
     let Some(todos_json) = todos_json_from_tool_input(tool_input) else {
         return String::new();
     };
     crate::host::checkpoints::strategy::messages::extract_last_completed_todo(&todos_json)
 }
 
-fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, String) {
+pub(super) fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, String) {
     let Some(input) = tool_input else {
         return (String::new(), String::new());
     };
@@ -293,7 +300,7 @@ fn parse_subagent_type_and_description(tool_input: Option<&Value>) -> (String, S
     (subagent_type, task_description)
 }
 
-fn resolve_subagent_transcript_path(
+pub(super) fn resolve_subagent_transcript_path(
     transcript_path: &str,
     session_id: &str,
     agent_id: &str,
@@ -316,7 +323,7 @@ fn resolve_subagent_transcript_path(
     }
 }
 
-fn next_incremental_sequence(
+pub(super) fn next_incremental_sequence(
     repo_root: Option<&Path>,
     session_id: &str,
     task_tool_use_id: &str,
@@ -339,16 +346,16 @@ fn next_incremental_sequence(
     (count as u32) + 1
 }
 
-fn truncate_prompt_for_storage(prompt: &str) -> String {
+pub(super) fn truncate_prompt_for_storage(prompt: &str) -> String {
     strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
-fn generate_commit_message(prompt: &str) -> String {
+pub(super) fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
 /// Returns current time formatted as RFC 3339 (e.g. `2024-01-15T10:30:00Z`).
-fn now_rfc3339() -> String {
+pub(super) fn now_rfc3339() -> String {
     // Use std::time to avoid adding a chrono dependency for now.
     // Format: seconds since epoch converted to a simple ISO 8601 timestamp.
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -363,7 +370,7 @@ fn now_rfc3339() -> String {
 }
 
 /// Minimal Unix → calendar conversion (no leap seconds, no timezone).
-fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+pub(super) fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let s = secs % 60;
     let mins = secs / 60;
     let mi = mins % 60;
@@ -397,12 +404,12 @@ fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     (year, mo, d, h, mi, s)
 }
 
-fn is_leap(y: u64) -> bool {
+pub(super) fn is_leap(y: u64) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 /// Best-effort list of untracked files from `git status --porcelain`.
-fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
+pub(super) fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
     let Some(root) = repo_root else {
         return vec![];
     };
@@ -426,7 +433,7 @@ fn detect_untracked_files(repo_root: Option<&Path>) -> Vec<String> {
         .collect()
 }
 
-fn git_status_porcelain(repo_root: &Path) -> Option<String> {
+pub(super) fn git_status_porcelain(repo_root: &Path) -> Option<String> {
     let output = Command::new("git")
         // Include all untracked files (not just directory placeholders)
         // so change detection captures paths like `src/auth.rs` instead of `src/`.
@@ -440,7 +447,7 @@ fn git_status_porcelain(repo_root: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn subagents_dir_for_session(transcript_path: &str, session_id: &str) -> String {
+pub(super) fn subagents_dir_for_session(transcript_path: &str, session_id: &str) -> String {
     if transcript_path.is_empty() || session_id.is_empty() {
         return String::new();
     }
@@ -453,7 +460,7 @@ fn subagents_dir_for_session(transcript_path: &str, session_id: &str) -> String 
 }
 
 /// Best-effort token usage calculation for stop hooks, including subagent usage.
-fn calculate_stop_token_usage(
+pub(super) fn calculate_stop_token_usage(
     transcript_path: &str,
     session_id: &str,
     transcript_offset: i64,

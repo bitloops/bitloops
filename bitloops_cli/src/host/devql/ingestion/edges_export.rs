@@ -1,6 +1,8 @@
+use super::*;
+
 // Export edge extraction for JS/TS and Rust.
 
-fn push_export_edge(
+pub(super) fn push_export_edge(
     col: &mut EdgeCollector,
     from_symbol_fqn: &str,
     target: EdgeTarget,
@@ -36,7 +38,7 @@ fn push_export_edge(
     });
 }
 
-fn resolve_js_ts_export_target(
+pub(super) fn resolve_js_ts_export_target(
     original_name: &str,
     source_ref: Option<&str>,
     local_targets: &HashMap<String, String>,
@@ -59,14 +61,20 @@ fn resolve_js_ts_export_target(
 
     if let Some(target_fqn) = local_targets.get(original_name) {
         return Some((
-            EdgeTarget { to_target_symbol_fqn: Some(target_fqn.clone()), to_symbol_ref: None },
+            EdgeTarget {
+                to_target_symbol_fqn: Some(target_fqn.clone()),
+                to_symbol_ref: None,
+            },
             Resolution::Local,
         ));
     }
 
     if let Some(symbol_ref) = imported_symbol_refs.get(original_name) {
         return Some((
-            EdgeTarget { to_target_symbol_fqn: None, to_symbol_ref: Some(symbol_ref.clone()) },
+            EdgeTarget {
+                to_target_symbol_fqn: None,
+                to_symbol_ref: Some(symbol_ref.clone()),
+            },
             Resolution::Import,
         ));
     }
@@ -74,7 +82,7 @@ fn resolve_js_ts_export_target(
     None
 }
 
-fn js_ts_exported_declaration_names(
+pub(super) fn js_ts_exported_declaration_names(
     declaration: tree_sitter::Node,
     content: &str,
 ) -> Vec<String> {
@@ -107,7 +115,7 @@ fn js_ts_exported_declaration_names(
     }
 }
 
-fn collect_js_ts_export_edges_recursive(
+pub(super) fn collect_js_ts_export_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -135,14 +143,12 @@ fn collect_js_ts_export_edges_recursive(
                 } else {
                     original_name.as_str()
                 };
-                if let Some((target, resolution)) =
-                    resolve_js_ts_export_target(
-                        &original_name,
-                        None,
-                        local_targets,
-                        imported_symbol_refs,
-                    )
-                {
+                if let Some((target, resolution)) = resolve_js_ts_export_target(
+                    &original_name,
+                    None,
+                    local_targets,
+                    imported_symbol_refs,
+                ) {
                     push_export_edge(
                         &mut EdgeCollector { out, seen },
                         path,
@@ -219,14 +225,12 @@ fn collect_js_ts_export_edges_recursive(
                             ExportForm::Named
                         };
 
-                        if let Some((target, resolution)) =
-                            resolve_js_ts_export_target(
-                                &original_name,
-                                source_ref.as_deref(),
-                                local_targets,
-                                imported_symbol_refs,
-                            )
-                        {
+                        if let Some((target, resolution)) = resolve_js_ts_export_target(
+                            &original_name,
+                            source_ref.as_deref(),
+                            local_targets,
+                            imported_symbol_refs,
+                        ) {
                             push_export_edge(
                                 &mut EdgeCollector { out, seen },
                                 path,
@@ -278,7 +282,7 @@ fn collect_js_ts_export_edges_recursive(
     }
 }
 
-fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String {
+pub(super) fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String {
     let segment = segment.trim();
     if segment.is_empty() {
         return prefix.unwrap_or_default().to_string();
@@ -298,7 +302,7 @@ fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String {
     }
 }
 
-fn rust_use_default_export_name(path: &str) -> Option<String> {
+pub(super) fn rust_use_default_export_name(path: &str) -> Option<String> {
     let path = path.trim();
     if path.is_empty() {
         return None;
@@ -313,7 +317,7 @@ fn rust_use_default_export_name(path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool {
+pub(super) fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).any(|child| {
         child.kind() == "visibility_modifier"
@@ -323,7 +327,7 @@ fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool {
     })
 }
 
-fn collect_rust_use_export_entries(
+pub(super) fn collect_rust_use_export_entries(
     node: tree_sitter::Node,
     content: &str,
     prefix: Option<&str>,
@@ -390,7 +394,7 @@ fn collect_rust_use_export_entries(
     }
 }
 
-fn resolve_rust_export_target(
+pub(super) fn resolve_rust_export_target(
     export_path: &str,
     local_targets: &HashMap<String, String>,
 ) -> Option<(EdgeTarget, Resolution)> {
@@ -409,7 +413,10 @@ fn resolve_rust_export_target(
         && let Some(target_fqn) = local_targets.get(&local_name)
     {
         return Some((
-            EdgeTarget { to_target_symbol_fqn: Some(target_fqn.clone()), to_symbol_ref: None },
+            EdgeTarget {
+                to_target_symbol_fqn: Some(target_fqn.clone()),
+                to_symbol_ref: None,
+            },
             Resolution::Local,
         ));
     }
@@ -424,12 +431,15 @@ fn resolve_rust_export_target(
     };
 
     Some((
-        EdgeTarget { to_target_symbol_fqn: None, to_symbol_ref: Some(export_path.to_string()) },
+        EdgeTarget {
+            to_target_symbol_fqn: None,
+            to_symbol_ref: Some(export_path.to_string()),
+        },
         resolution,
     ))
 }
 
-fn collect_rust_export_edges_recursive(
+pub(super) fn collect_rust_export_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -437,25 +447,27 @@ fn collect_rust_export_edges_recursive(
     seen: &mut HashSet<String>,
     out: &mut Vec<JsTsDependencyEdge>,
 ) {
-    if node.kind() == "use_declaration" && rust_use_is_public(node, content)
-        && let Some(argument) = node.child_by_field_name("argument") {
-            let mut entries = Vec::new();
-            collect_rust_use_export_entries(argument, content, None, &mut entries);
-            for entry in entries {
-                if let Some((target, resolution)) =
-                    resolve_rust_export_target(&entry.path, local_targets)
-                {
-                    push_export_edge(
-                        &mut EdgeCollector { out, seen },
-                        path,
-                        target,
-                        &entry.export_name,
-                        ExportForm::PubUse,
-                        resolution,
-                    );
-                }
+    if node.kind() == "use_declaration"
+        && rust_use_is_public(node, content)
+        && let Some(argument) = node.child_by_field_name("argument")
+    {
+        let mut entries = Vec::new();
+        collect_rust_use_export_entries(argument, content, None, &mut entries);
+        for entry in entries {
+            if let Some((target, resolution)) =
+                resolve_rust_export_target(&entry.path, local_targets)
+            {
+                push_export_edge(
+                    &mut EdgeCollector { out, seen },
+                    path,
+                    target,
+                    &entry.export_name,
+                    ExportForm::PubUse,
+                    resolution,
+                );
             }
         }
+    }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {

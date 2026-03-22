@@ -1,9 +1,11 @@
-fn checkpoint_id_path(id: &str) -> String {
+use super::*;
+
+pub(crate) fn checkpoint_id_path(id: &str) -> String {
     let (a, b) = checkpoint_dir_parts(id);
     if b.is_empty() { a } else { format!("{a}/{b}") }
 }
 
-fn read_checkpoint_session_metadata_from_branch(
+pub(crate) fn read_checkpoint_session_metadata_from_branch(
     repo_root: &Path,
     checkpoint_id: &str,
 ) -> serde_json::Value {
@@ -12,7 +14,7 @@ fn read_checkpoint_session_metadata_from_branch(
         .metadata
 }
 
-fn read_checkpoint_top_metadata_from_branch(
+pub(crate) fn read_checkpoint_top_metadata_from_branch(
     repo_root: &Path,
     checkpoint_id: &str,
 ) -> serde_json::Value {
@@ -23,7 +25,7 @@ fn read_checkpoint_top_metadata_from_branch(
 }
 
 #[test]
-fn checkpoint_id_methods() {
+pub(crate) fn checkpoint_id_methods() {
     let id = "a1b2c3d4e5f6".to_string();
     assert_eq!(id, "a1b2c3d4e5f6");
     assert!(
@@ -38,7 +40,7 @@ fn checkpoint_id_methods() {
 }
 
 #[test]
-fn generate_checkpoint_id_properties() {
+pub(crate) fn generate_checkpoint_id_properties() {
     let id = generate_checkpoint_id();
     assert!(
         !id.is_empty(),
@@ -52,7 +54,7 @@ fn generate_checkpoint_id_properties() {
 }
 
 #[test]
-fn checkpoint_id_path_cases() {
+pub(crate) fn checkpoint_id_path_cases() {
     let cases = [
         ("a1b2c3d4e5f6", "a1/b2c3d4e5f6"),
         ("abcdef123456", "ab/cdef123456"),
@@ -71,7 +73,7 @@ fn checkpoint_id_path_cases() {
 }
 
 #[test]
-fn checkpoint_type_values() {
+pub(crate) fn checkpoint_type_values() {
     assert_ne!(
         CheckpointType::Temporary,
         CheckpointType::Committed,
@@ -86,7 +88,7 @@ fn checkpoint_type_values() {
 }
 
 #[test]
-fn checkpoint_info_json_round_trip() {
+pub(crate) fn checkpoint_info_json_round_trip() {
     let original = CheckpointTopMetadata {
         cli_version: "0.0.3".to_string(),
         checkpoint_id: "a1b2c3d4e5f6".to_string(),
@@ -138,7 +140,7 @@ fn checkpoint_info_json_round_trip() {
 }
 
 #[test]
-fn read_committed_missing_token_usage() {
+pub(crate) fn read_committed_missing_token_usage() {
     let metadata_without_token_usage = serde_json::json!({
         "checkpoint_id": "def456abc123",
         "cli_version": env!("CARGO_PKG_VERSION"),
@@ -163,7 +165,7 @@ fn read_committed_missing_token_usage() {
 
 #[cfg(unix)]
 #[test]
-fn write_session_metadata_skips_symlink_transcript() {
+pub(crate) fn write_session_metadata_skips_symlink_transcript() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
@@ -184,7 +186,7 @@ fn write_session_metadata_skips_symlink_transcript() {
 }
 
 #[test]
-fn write_committed_agent_field() {
+pub(crate) fn write_committed_agent_field() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "ab1234567890";
@@ -241,7 +243,7 @@ fn write_committed_agent_field() {
 }
 
 #[test]
-fn write_temporary_deduplication() {
+pub(crate) fn write_temporary_deduplication() {
     with_git_env_cleared(|| {
         let dir = tempfile::tempdir().unwrap();
         let head = setup_git_repo(&dir);
@@ -321,7 +323,7 @@ fn write_temporary_deduplication() {
 }
 
 #[test]
-fn write_committed_branch_field() {
+pub(crate) fn write_committed_branch_field() {
     // On branch: expect branch field persisted.
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -411,4 +413,3 @@ fn write_committed_branch_field() {
         "branch should be absent/empty in detached HEAD metadata"
     );
 }
-

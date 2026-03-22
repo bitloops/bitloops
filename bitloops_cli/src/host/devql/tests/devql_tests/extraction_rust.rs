@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn extract_rust_artefacts_covers_phase1_kinds() {
     let content = r#"use std::fmt::Debug;

@@ -1,4 +1,6 @@
-fn setup_update_committed_fixture_with_sessions(
+use super::*;
+
+pub(crate) fn setup_update_committed_fixture_with_sessions(
     dir: &TempDir,
     checkpoint_id: &str,
     session_ids: &[&str],
@@ -42,13 +44,13 @@ fn setup_update_committed_fixture_with_sessions(
     }
 }
 
-fn setup_update_committed_fixture(dir: &TempDir) -> String {
+pub(crate) fn setup_update_committed_fixture(dir: &TempDir) -> String {
     let cp = "a1b2c3d4e5f6".to_string();
     setup_update_committed_fixture_with_sessions(dir, &cp, &["session-001"]);
     cp
 }
 
-fn read_update_fixture_file(
+pub(crate) fn read_update_fixture_file(
     dir: &TempDir,
     checkpoint_id: &str,
     session_index: usize,
@@ -81,7 +83,7 @@ fn read_update_fixture_file(
 }
 
 #[test]
-fn update_committed_replaces_transcript() {
+pub(crate) fn update_committed_replaces_transcript() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let full_transcript =
@@ -101,7 +103,7 @@ fn update_committed_replaces_transcript() {
 }
 
 #[test]
-fn update_committed_replaces_prompts() {
+pub(crate) fn update_committed_replaces_prompts() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let expected_prompts = "prompt 1\n\n---\n\nprompt 2\n\n---\n\nprompt 3";
@@ -127,7 +129,7 @@ fn update_committed_replaces_prompts() {
 }
 
 #[test]
-fn update_committed_replaces_context() {
+pub(crate) fn update_committed_replaces_context() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let expected_context = "updated context with full session info";
@@ -149,7 +151,7 @@ fn update_committed_replaces_context() {
 }
 
 #[test]
-fn update_committed_replaces_all_fields_together() {
+pub(crate) fn update_committed_replaces_all_fields_together() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let expected_transcript = "complete transcript\n";
@@ -175,7 +177,7 @@ fn update_committed_replaces_all_fields_together() {
 }
 
 #[test]
-fn update_committed_nonexistent_checkpoint() {
+pub(crate) fn update_committed_nonexistent_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let result = update_committed(
@@ -193,7 +195,7 @@ fn update_committed_nonexistent_checkpoint() {
 }
 
 #[test]
-fn update_committed_preserves_metadata() {
+pub(crate) fn update_committed_preserves_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let before = read_session_content(dir.path(), &cp, 0).unwrap();
@@ -217,7 +219,7 @@ fn update_committed_preserves_metadata() {
 }
 
 #[test]
-fn update_committed_multiple_checkpoints() {
+pub(crate) fn update_committed_multiple_checkpoints() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let cp1 = "a1b2c3d4e5f6".to_string();
@@ -251,7 +253,7 @@ fn update_committed_multiple_checkpoints() {
 }
 
 #[test]
-fn update_committed_updates_content_hash() {
+pub(crate) fn update_committed_updates_content_hash() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let old_hash = read_update_fixture_file(&dir, &cp, 0, paths::CONTENT_HASH_FILE_NAME);
@@ -280,7 +282,7 @@ fn update_committed_updates_content_hash() {
 }
 
 #[test]
-fn update_committed_empty_checkpoint_id() {
+pub(crate) fn update_committed_empty_checkpoint_id() {
     let dir = tempfile::tempdir().unwrap();
     let result = update_committed(
         dir.path(),
@@ -297,7 +299,7 @@ fn update_committed_empty_checkpoint_id() {
 }
 
 #[test]
-fn update_committed_falls_back_to_latest_session() {
+pub(crate) fn update_committed_falls_back_to_latest_session() {
     let dir = tempfile::tempdir().unwrap();
     let cp = "f1e2d3c4b5a6".to_string();
     setup_update_committed_fixture_with_sessions(&dir, &cp, &["session-001", "session-002"]);
@@ -328,7 +330,7 @@ fn update_committed_falls_back_to_latest_session() {
 }
 
 #[test]
-fn update_committed_summary_preserved() {
+pub(crate) fn update_committed_summary_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
     let before = read_committed(dir.path(), &cp).unwrap().unwrap();
@@ -352,13 +354,13 @@ fn update_committed_summary_preserved() {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct StateSnippet {
+pub(crate) struct StateSnippet {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     turn_checkpoint_ids: Vec<String>,
 }
 
 #[test]
-fn state_turn_checkpoint_ids_json() {
+pub(crate) fn state_turn_checkpoint_ids_json() {
     let original = StateSnippet {
         turn_checkpoint_ids: vec!["a1b2c3d4e5f6".to_string(), "b2c3d4e5f6a1".to_string()],
     };
@@ -372,7 +374,7 @@ fn state_turn_checkpoint_ids_json() {
 }
 
 #[test]
-fn update_committed_preserves_existing_author_metadata() {
+pub(crate) fn update_committed_preserves_existing_author_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let cp = setup_update_committed_fixture(&dir);
 
@@ -396,4 +398,3 @@ fn update_committed_preserves_existing_author_metadata() {
     assert_eq!(author.name, "Test");
     assert_eq!(author.email, "test@test.com");
 }
-

@@ -1,4 +1,6 @@
-fn create_checkpoint_metadata_dir(repo_root: &Path, session_id: &str) -> String {
+use super::*;
+
+pub(crate) fn create_checkpoint_metadata_dir(repo_root: &Path, session_id: &str) -> String {
     let metadata_dir = repo_root
         .join(".bitloops")
         .join("metadata")
@@ -12,7 +14,7 @@ fn create_checkpoint_metadata_dir(repo_root: &Path, session_id: &str) -> String 
     metadata_dir.to_string_lossy().to_string()
 }
 
-fn first_checkpoint_opts(
+pub(crate) fn first_checkpoint_opts(
     session_id: &str,
     base_commit: &str,
     metadata_dir_abs: &str,
@@ -33,7 +35,7 @@ fn first_checkpoint_opts(
     }
 }
 
-fn default_write_committed_opts(
+pub(crate) fn default_write_committed_opts(
     checkpoint_id: &str,
     session_id: &str,
     transcript: &str,
@@ -68,7 +70,7 @@ fn default_write_committed_opts(
 }
 
 #[test]
-fn read_session_content_nonexistent_checkpoint() {
+pub(crate) fn read_session_content_nonexistent_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     run_git(
@@ -91,7 +93,7 @@ fn read_session_content_nonexistent_checkpoint() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_captures_modified_tracked_files() {
+pub(crate) fn write_temporary_first_checkpoint_captures_modified_tracked_files() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
     let modified_content = "# Modified by User\n\nThis change was made before the agent started.\n";
@@ -114,7 +116,7 @@ fn write_temporary_first_checkpoint_captures_modified_tracked_files() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_captures_untracked_files() {
+pub(crate) fn write_temporary_first_checkpoint_captures_untracked_files() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
     let untracked_content = r#"{"key": "secret_value"}"#;
@@ -140,7 +142,7 @@ fn write_temporary_first_checkpoint_captures_untracked_files() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_excludes_gitignored_files() {
+pub(crate) fn write_temporary_first_checkpoint_excludes_gitignored_files() {
     let dir = tempfile::tempdir().unwrap();
     let _ = setup_git_repo(&dir);
     fs::write(dir.path().join(".gitignore"), "node_modules/\n").unwrap();
@@ -177,7 +179,7 @@ fn write_temporary_first_checkpoint_excludes_gitignored_files() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_user_and_agent_changes() {
+pub(crate) fn write_temporary_first_checkpoint_user_and_agent_changes() {
     with_git_env_cleared(|| {
         let dir = tempfile::tempdir().unwrap();
         let _ = setup_git_repo(&dir);
@@ -214,7 +216,7 @@ fn write_temporary_first_checkpoint_user_and_agent_changes() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_captures_user_deleted_files() {
+pub(crate) fn write_temporary_first_checkpoint_captures_user_deleted_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
     fs::write(dir.path().join("keep.txt"), "keep this").unwrap();
@@ -251,7 +253,7 @@ fn write_temporary_first_checkpoint_captures_user_deleted_files() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_captures_renamed_files() {
+pub(crate) fn write_temporary_first_checkpoint_captures_renamed_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
     fs::write(dir.path().join("old-name.txt"), "content").unwrap();
@@ -286,7 +288,7 @@ fn write_temporary_first_checkpoint_captures_renamed_files() {
 }
 
 #[test]
-fn write_temporary_first_checkpoint_filenames_with_spaces() {
+pub(crate) fn write_temporary_first_checkpoint_filenames_with_spaces() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
     fs::write(dir.path().join("simple.txt"), "simple").unwrap();
@@ -322,7 +324,7 @@ fn write_temporary_first_checkpoint_filenames_with_spaces() {
 }
 
 #[test]
-fn write_temporary_task_incremental_persists_metadata_and_payload() {
+pub(crate) fn write_temporary_task_incremental_persists_metadata_and_payload() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -351,7 +353,8 @@ fn write_temporary_task_incremental_persists_metadata_and_payload() {
     )
     .expect("write_temporary_task should persist incremental checkpoint");
 
-    let payload_path = ".bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoints/003-toolu_temp123.json";
+    let payload_path =
+        ".bitloops/metadata/temp-session/tasks/toolu_temp123/checkpoints/003-toolu_temp123.json";
     let payload_raw = run_git(
         dir.path(),
         &["show", &format!("{}:{payload_path}", result.commit_hash)],
@@ -414,13 +417,16 @@ fn write_temporary_task_incremental_persists_metadata_and_payload() {
     assert_eq!(row.0, 1);
     assert_eq!(row.1, Some(3));
     assert_eq!(row.2.as_deref(), Some("TodoWrite"));
-    assert_eq!(row.3.as_deref(), Some(r#"{"todo":"document dependencies"}"#));
+    assert_eq!(
+        row.3.as_deref(),
+        Some(r#"{"todo":"document dependencies"}"#)
+    );
     assert_eq!(row.4.as_deref(), Some("toolu_temp123"));
     assert_eq!(row.5.as_deref(), Some("agent1"));
 }
 
 #[test]
-fn write_committed_duplicate_session_id_updates_in_place() {
+pub(crate) fn write_committed_duplicate_session_id_updates_in_place() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "deda01234567";
@@ -499,7 +505,7 @@ fn write_committed_duplicate_session_id_updates_in_place() {
 }
 
 #[test]
-fn write_committed_duplicate_session_id_single_session() {
+pub(crate) fn write_committed_duplicate_session_id_single_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "dedb07654321";
@@ -543,7 +549,7 @@ fn write_committed_duplicate_session_id_single_session() {
 }
 
 #[test]
-fn write_committed_duplicate_session_id_reuses_index() {
+pub(crate) fn write_committed_duplicate_session_id_reuses_index() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "dedc0abcdef1";

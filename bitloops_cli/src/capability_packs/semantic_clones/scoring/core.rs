@@ -1,42 +1,44 @@
+use super::*;
+
 #[derive(Debug, Clone)]
-struct LexicalSignals {
-    score: f32,
-    name_match: f32,
-    signature_similarity: f32,
-    identifier_overlap: f32,
-    body_overlap: f32,
-    context_overlap: f32,
-    shared_body_tokens: Vec<String>,
-    shared_identifier_tokens: Vec<String>,
-    shared_context_tokens: Vec<String>,
+pub(super) struct LexicalSignals {
+    pub(super) score: f32,
+    pub(super) name_match: f32,
+    pub(super) signature_similarity: f32,
+    pub(super) identifier_overlap: f32,
+    pub(super) body_overlap: f32,
+    pub(super) context_overlap: f32,
+    pub(super) shared_body_tokens: Vec<String>,
+    pub(super) shared_identifier_tokens: Vec<String>,
+    pub(super) shared_context_tokens: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct StructuralSignals {
-    score: f32,
-    same_kind: f32,
-    same_parent_kind: f32,
-    path_score: f32,
-    call_score: f32,
-    dependency_score: f32,
-    shared_call_targets: Vec<String>,
-    shared_dependency_targets: Vec<String>,
+pub(super) struct StructuralSignals {
+    pub(super) score: f32,
+    pub(super) same_kind: f32,
+    pub(super) same_parent_kind: f32,
+    pub(super) path_score: f32,
+    pub(super) call_score: f32,
+    pub(super) dependency_score: f32,
+    pub(super) shared_call_targets: Vec<String>,
+    pub(super) shared_dependency_targets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct DerivedCloneSignals {
-    implementation_score: f32,
-    locality_score: f32,
-    clone_confidence: f32,
-    summary_similarity: f32,
-    same_file: bool,
-    same_container: bool,
-    shared_summary_tokens: Vec<String>,
-    locality_dominates: bool,
-    bias_warning: Option<String>,
+pub(super) struct DerivedCloneSignals {
+    pub(super) implementation_score: f32,
+    pub(super) locality_score: f32,
+    pub(super) clone_confidence: f32,
+    pub(super) summary_similarity: f32,
+    pub(super) same_file: bool,
+    pub(super) same_container: bool,
+    pub(super) shared_summary_tokens: Vec<String>,
+    pub(super) locality_dominates: bool,
+    pub(super) bias_warning: Option<String>,
 }
 
-fn semantic_similarity(
+pub(super) fn semantic_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> f32 {
@@ -64,7 +66,7 @@ fn semantic_similarity(
     ((cosine + 1.0) / 2.0).clamp(0.0, 1.0)
 }
 
-fn lexical_signals(
+pub(super) fn lexical_signals(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> LexicalSignals {
@@ -98,7 +100,7 @@ fn lexical_signals(
     }
 }
 
-fn structural_signals(
+pub(super) fn structural_signals(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
     name_match: f32,
@@ -137,7 +139,7 @@ fn structural_signals(
     }
 }
 
-fn derived_clone_signals(
+pub(super) fn derived_clone_signals(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
     semantic_score: f32,
@@ -187,7 +189,7 @@ fn derived_clone_signals(
     }
 }
 
-fn penalized_candidate_score(base_score: f32, derived: &DerivedCloneSignals) -> f32 {
+pub(super) fn penalized_candidate_score(base_score: f32, derived: &DerivedCloneSignals) -> f32 {
     if !derived.locality_dominates {
         return base_score;
     }

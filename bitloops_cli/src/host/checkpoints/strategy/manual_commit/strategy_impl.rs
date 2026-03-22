@@ -1,3 +1,5 @@
+use super::*;
+
 // ── Strategy trait impl ───────────────────────────────────────────────────────
 
 impl Strategy for ManualCommitStrategy {
@@ -88,7 +90,8 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let legacy_metadata_enabled = crate::host::checkpoints::session::legacy_local_backend_enabled();
+        let legacy_metadata_enabled =
+            crate::host::checkpoints::session::legacy_local_backend_enabled();
         let default_metadata_dir = if legacy_metadata_enabled {
             paths::session_metadata_dir_from_session_id(&ctx.session_id)
         } else {
@@ -197,7 +200,9 @@ impl Strategy for ManualCommitStrategy {
     /// Persists a task checkpoint as a temporary checkpoint tree.
     ///
     fn save_task_step(&self, ctx: &TaskStepContext) -> Result<()> {
-        use super::messages::{format_incremental_subject, format_subagent_end_message};
+        use crate::host::checkpoints::strategy::messages::{
+            format_incremental_subject, format_subagent_end_message,
+        };
 
         // Format commit message subject.
         let short_id = if ctx.tool_use_id.len() > 12 {
@@ -416,7 +421,7 @@ impl Strategy for ManualCommitStrategy {
     }
 }
 
-fn open_commit_checkpoint_mapping_db(
+pub(crate) fn open_commit_checkpoint_mapping_db(
     repo_root: &Path,
 ) -> Result<(crate::storage::SqliteConnectionPool, String)> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)
@@ -433,7 +438,7 @@ fn open_commit_checkpoint_mapping_db(
     Ok((sqlite, repo_id))
 }
 
-fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<bool> {
+pub(crate) fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) -> Result<bool> {
     use rusqlite::OptionalExtension;
 
     let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;

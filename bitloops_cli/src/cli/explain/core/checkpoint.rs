@@ -1,6 +1,8 @@
+use super::super::*;
+
 /// Builds a commit graph by running `git log` and parsing each line.
 /// When `limit` is 0 the walk is unlimited.
-fn build_commit_graph_from_git(
+pub(crate) fn build_commit_graph_from_git(
     repo_root: &std::path::Path,
     limit: usize,
 ) -> Result<Vec<CommitNode>> {
@@ -60,7 +62,10 @@ fn build_commit_graph_from_git(
 }
 
 /// Helper to convert `SessionContentView.metadata` (a JSON Value) into `CheckpointMetadata`.
-fn metadata_from_json(meta: &serde_json::Value, checkpoint_id: &str) -> CheckpointMetadata {
+pub(crate) fn metadata_from_json(
+    meta: &serde_json::Value,
+    checkpoint_id: &str,
+) -> CheckpointMetadata {
     let session_id = meta
         .get("session_id")
         .and_then(Value::as_str)
@@ -123,7 +128,7 @@ fn metadata_from_json(meta: &serde_json::Value, checkpoint_id: &str) -> Checkpoi
     }
 }
 
-fn token_usage_json_has_values(token_usage: &serde_json::Value) -> bool {
+pub(crate) fn token_usage_json_has_values(token_usage: &serde_json::Value) -> bool {
     let keys = [
         "input_tokens",
         "output_tokens",
@@ -144,7 +149,7 @@ fn token_usage_json_has_values(token_usage: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-fn token_usage_metadata_has_values(
+pub(crate) fn token_usage_metadata_has_values(
     token_usage: &crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata,
 ) -> bool {
     if token_usage.input_tokens > 0
@@ -165,7 +170,7 @@ fn token_usage_metadata_has_values(
 
 /// Converts the `"agent"` string stored in committed metadata to an `AgentType`.
 /// Uses canonical agent keys ("claude-code", "codex", "gemini", "opencode", "cursor").
-fn agent_type_from_str(s: &str) -> AgentType {
+pub(crate) fn agent_type_from_str(s: &str) -> AgentType {
     use crate::adapters::agents::{
         AGENT_TYPE_CODEX, AGENT_TYPE_CURSOR, AGENT_TYPE_GEMINI, AGENT_TYPE_OPEN_CODE,
     };
@@ -179,7 +184,7 @@ fn agent_type_from_str(s: &str) -> AgentType {
 }
 
 /// Parses a JSON summary value into `SummaryDetails`.
-fn parse_summary_details(v: &serde_json::Value) -> Option<SummaryDetails> {
+pub(crate) fn parse_summary_details(v: &serde_json::Value) -> Option<SummaryDetails> {
     // If null or not an object, return None.
     if !v.is_object() {
         return None;
@@ -447,7 +452,11 @@ pub fn generate_checkpoint_summary(
     let summary_json = serde_json::to_value(&summary)
         .map_err(|e| anyhow!("serializing generated summary: {e}"))?;
 
-    crate::host::checkpoints::strategy::manual_commit::update_summary(repo_root, checkpoint_id, summary_json)
+    crate::host::checkpoints::strategy::manual_commit::update_summary(
+        repo_root,
+        checkpoint_id,
+        summary_json,
+    )
 }
 
 // CLI-855 / CLI-858: formatting + transcript stubs

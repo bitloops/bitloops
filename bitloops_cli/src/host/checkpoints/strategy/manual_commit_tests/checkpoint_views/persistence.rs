@@ -1,5 +1,8 @@
+use super::*;
+use rusqlite::OptionalExtension;
+
 #[test]
-fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
+pub(crate) fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "919293949596";
@@ -69,8 +72,9 @@ fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
         "expected checkpoints row for write_committed"
     );
 
-    let content_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "db-session")
-        .expect("checkpoint_sessions row should exist");
+    let content_hash =
+        query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "db-session")
+            .expect("checkpoint_sessions row should exist");
     assert_eq!(
         content_hash,
         format!("sha256:{}", sha256_hex(transcript.as_bytes())),
@@ -100,7 +104,7 @@ fn write_committed_persists_checkpoint_sessions_and_blobs_in_sqlite() {
 }
 
 #[test]
-fn update_committed_updates_db_blob_and_content_hash() {
+pub(crate) fn update_committed_updates_db_blob_and_content_hash() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "929394959697";
@@ -114,8 +118,9 @@ fn update_committed_updates_db_blob_and_content_hash() {
     initial.context = Some(b"before context".to_vec());
     write_committed(dir.path(), initial).expect("initial write_committed");
 
-    let before_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
-        .expect("content hash before update");
+    let before_hash =
+        query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
+            .expect("content hash before update");
 
     let updated_transcript = "{\"type\":\"assistant\",\"message\":{\"content\":\"after\"}}\n";
     let update = update_committed(
@@ -134,8 +139,9 @@ fn update_committed_updates_db_blob_and_content_hash() {
         "update_committed should update DB/blob storage: {update:?}"
     );
 
-    let after_hash = query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
-        .expect("content hash after update");
+    let after_hash =
+        query_checkpoint_session_content_hash(dir.path(), checkpoint_id, "update-db-session")
+            .expect("content hash after update");
     assert_ne!(before_hash, after_hash, "content hash should be refreshed");
     assert_eq!(
         after_hash,
@@ -148,7 +154,8 @@ fn update_committed_updates_db_blob_and_content_hash() {
         transcript_blob.content_hash,
         format!("sha256:{}", sha256_hex(updated_transcript.as_bytes()))
     );
-    let transcript_payload = read_blob_payload_from_storage(dir.path(), &transcript_blob.storage_path);
+    let transcript_payload =
+        read_blob_payload_from_storage(dir.path(), &transcript_blob.storage_path);
     assert_eq!(
         String::from_utf8_lossy(&transcript_payload),
         updated_transcript
@@ -156,7 +163,7 @@ fn update_committed_updates_db_blob_and_content_hash() {
 }
 
 #[test]
-fn write_committed_records_local_backend_in_blob_row() {
+pub(crate) fn write_committed_records_local_backend_in_blob_row() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "949596979899";
@@ -183,7 +190,7 @@ fn write_committed_records_local_backend_in_blob_row() {
 }
 
 #[test]
-fn update_summary_persists_summary_in_checkpoint_sessions_table() {
+pub(crate) fn update_summary_persists_summary_in_checkpoint_sessions_table() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "939495969798";
@@ -214,7 +221,7 @@ fn update_summary_persists_summary_in_checkpoint_sessions_table() {
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
     let summary_json = sqlite
-        .with_connection(|conn| {
+        .with_connection(|conn| -> anyhow::Result<Option<Option<String>>> {
             conn.query_row(
                 "SELECT summary
                  FROM checkpoint_sessions
@@ -229,14 +236,13 @@ fn update_summary_persists_summary_in_checkpoint_sessions_table() {
         .expect("query checkpoint_sessions summary")
         .flatten()
         .expect("summary column should be populated");
-    let saved: serde_json::Value =
-        serde_json::from_str(&summary_json).expect("parse summary JSON");
+    let saved: serde_json::Value = serde_json::from_str(&summary_json).expect("parse summary JSON");
     assert_eq!(saved["intent"], "Persist summary in DB");
     assert_eq!(saved["outcome"], "Summary updated");
 }
 
 #[test]
-fn write_committed_three_sessions() {
+pub(crate) fn write_committed_three_sessions() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "515253545556";
@@ -314,7 +320,7 @@ fn write_committed_three_sessions() {
 }
 
 #[test]
-fn read_committed_nonexistent_checkpoint() {
+pub(crate) fn read_committed_nonexistent_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     run_git(

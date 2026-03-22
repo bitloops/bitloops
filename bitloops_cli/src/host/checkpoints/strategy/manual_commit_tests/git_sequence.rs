@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn files_overlap_with_content_modified_file() {
+pub(crate) fn files_overlap_with_content_modified_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -29,7 +31,7 @@ fn files_overlap_with_content_modified_file() {
 }
 
 #[test]
-fn files_overlap_with_content_new_file_content_match() {
+pub(crate) fn files_overlap_with_content_new_file_content_match() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -59,7 +61,7 @@ fn files_overlap_with_content_new_file_content_match() {
 }
 
 #[test]
-fn files_overlap_with_content_new_file_content_mismatch() {
+pub(crate) fn files_overlap_with_content_new_file_content_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -89,7 +91,7 @@ fn files_overlap_with_content_new_file_content_mismatch() {
 }
 
 #[test]
-fn files_overlap_with_content_file_not_in_commit() {
+pub(crate) fn files_overlap_with_content_file_not_in_commit() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -126,7 +128,7 @@ fn files_overlap_with_content_file_not_in_commit() {
 }
 
 #[test]
-fn files_overlap_with_content_deleted_file() {
+pub(crate) fn files_overlap_with_content_deleted_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -151,7 +153,7 @@ fn files_overlap_with_content_deleted_file() {
 }
 
 #[test]
-fn files_overlap_with_content_no_shadow_branch() {
+pub(crate) fn files_overlap_with_content_no_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -170,7 +172,7 @@ fn files_overlap_with_content_no_shadow_branch() {
 }
 
 #[test]
-fn files_with_remaining_agent_changes_file_not_committed() {
+pub(crate) fn files_with_remaining_agent_changes_file_not_committed() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -199,7 +201,7 @@ fn files_with_remaining_agent_changes_file_not_committed() {
 }
 
 #[test]
-fn files_with_remaining_agent_changes_fully_committed() {
+pub(crate) fn files_with_remaining_agent_changes_fully_committed() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -228,7 +230,7 @@ fn files_with_remaining_agent_changes_fully_committed() {
 }
 
 #[test]
-fn files_with_remaining_agent_changes_partial_commit() {
+pub(crate) fn files_with_remaining_agent_changes_partial_commit() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -257,7 +259,7 @@ fn files_with_remaining_agent_changes_partial_commit() {
 }
 
 #[test]
-fn files_with_remaining_agent_changes_no_shadow_branch() {
+pub(crate) fn files_with_remaining_agent_changes_no_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -279,7 +281,7 @@ fn files_with_remaining_agent_changes_no_shadow_branch() {
 }
 
 #[test]
-fn staged_files_overlap_with_content_modified_file() {
+pub(crate) fn staged_files_overlap_with_content_modified_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -304,7 +306,7 @@ fn staged_files_overlap_with_content_modified_file() {
 }
 
 #[test]
-fn staged_files_overlap_with_content_new_file_content_match() {
+pub(crate) fn staged_files_overlap_with_content_new_file_content_match() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -329,7 +331,7 @@ fn staged_files_overlap_with_content_new_file_content_match() {
 }
 
 #[test]
-fn staged_files_overlap_with_content_new_file_content_mismatch() {
+pub(crate) fn staged_files_overlap_with_content_new_file_content_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -354,7 +356,7 @@ fn staged_files_overlap_with_content_new_file_content_mismatch() {
 }
 
 #[test]
-fn staged_files_overlap_with_content_no_overlap() {
+pub(crate) fn staged_files_overlap_with_content_no_overlap() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -379,7 +381,7 @@ fn staged_files_overlap_with_content_no_overlap() {
 }
 
 #[test]
-fn staged_files_overlap_with_content_deleted_file() {
+pub(crate) fn staged_files_overlap_with_content_deleted_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -407,7 +409,7 @@ fn staged_files_overlap_with_content_deleted_file() {
 }
 
 #[test]
-fn test_extract_significant_lines() {
+pub(crate) fn test_extract_significant_lines() {
     let cases = vec![
         (
             "package main\n\nfunc hello() {\n\tfmt.Println(\"hello world\")\n\treturn\n}",
@@ -458,7 +460,7 @@ fn test_extract_significant_lines() {
 }
 
 #[test]
-fn test_has_significant_content_overlap() {
+pub(crate) fn test_has_significant_content_overlap() {
     let cases = vec![
         (
             "this is a significant line\nanother matching line here\nshort",
@@ -499,7 +501,7 @@ fn test_has_significant_content_overlap() {
 }
 
 #[test]
-fn test_trim_line() {
+pub(crate) fn test_trim_line() {
     let cases = vec![
         ("hello", "hello"),
         ("   hello", "hello"),
@@ -521,7 +523,7 @@ fn test_trim_line() {
 }
 
 #[test]
-fn is_git_sequence_operation_no_operation() {
+pub(crate) fn is_git_sequence_operation_no_operation() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     assert!(
@@ -531,7 +533,7 @@ fn is_git_sequence_operation_no_operation() {
 }
 
 #[test]
-fn is_git_sequence_operation_rebase_merge() {
+pub(crate) fn is_git_sequence_operation_rebase_merge() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
@@ -542,7 +544,7 @@ fn is_git_sequence_operation_rebase_merge() {
 }
 
 #[test]
-fn is_git_sequence_operation_rebase_apply() {
+pub(crate) fn is_git_sequence_operation_rebase_apply() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     fs::create_dir_all(dir.path().join(".git").join("rebase-apply")).unwrap();
@@ -553,7 +555,7 @@ fn is_git_sequence_operation_rebase_apply() {
 }
 
 #[test]
-fn is_git_sequence_operation_cherry_pick() {
+pub(crate) fn is_git_sequence_operation_cherry_pick() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     fs::write(dir.path().join(".git").join("CHERRY_PICK_HEAD"), "abc123").unwrap();
@@ -564,7 +566,7 @@ fn is_git_sequence_operation_cherry_pick() {
 }
 
 #[test]
-fn is_git_sequence_operation_revert() {
+pub(crate) fn is_git_sequence_operation_revert() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     fs::write(dir.path().join(".git").join("REVERT_HEAD"), "abc123").unwrap();
@@ -575,7 +577,7 @@ fn is_git_sequence_operation_revert() {
 }
 
 #[test]
-fn is_git_sequence_operation_worktree() {
+pub(crate) fn is_git_sequence_operation_worktree() {
     let (_parent, _main_repo, worktree_dir) = init_sequence_worktree_repo();
     assert!(
         !is_git_sequence_operation(&worktree_dir),
@@ -595,4 +597,3 @@ fn is_git_sequence_operation_worktree() {
         "worktree rebase state should be detected as sequence operation"
     );
 }
-

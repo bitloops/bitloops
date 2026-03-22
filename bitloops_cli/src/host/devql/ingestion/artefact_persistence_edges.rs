@@ -1,6 +1,8 @@
+use super::*;
+
 // Edge record building, DB row deserialization, and current state queries/mutations.
 
-fn build_historical_edge_records(
+pub(super) fn build_historical_edge_records(
     cfg: &DevqlConfig,
     blob_sha: &str,
     language: &str,
@@ -56,7 +58,7 @@ fn build_historical_edge_records(
     out
 }
 
-async fn persist_historical_edge(
+pub(super) async fn persist_historical_edge(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     blob_sha: &str,
@@ -93,7 +95,7 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLU
     relational.exec(&sql).await
 }
 
-fn current_artefact_state_record_from_row(
+pub(super) fn current_artefact_state_record_from_row(
     row: &serde_json::Map<String, Value>,
 ) -> Option<CurrentArtefactStateRecord> {
     let symbol_id = row
@@ -162,7 +164,7 @@ fn current_artefact_state_record_from_row(
     })
 }
 
-fn current_edge_state_record_from_row(
+pub(super) fn current_edge_state_record_from_row(
     row: &serde_json::Map<String, Value>,
 ) -> Option<CurrentEdgeStateRecord> {
     let edge_id = row
@@ -216,7 +218,10 @@ fn current_edge_state_record_from_row(
     Some(CurrentEdgeStateRecord { edge_id, record })
 }
 
-fn artefact_payload_equal(lhs: &PersistedArtefactRecord, rhs: &PersistedArtefactRecord) -> bool {
+pub(super) fn artefact_payload_equal(
+    lhs: &PersistedArtefactRecord,
+    rhs: &PersistedArtefactRecord,
+) -> bool {
     lhs.symbol_id == rhs.symbol_id
         && lhs.canonical_kind == rhs.canonical_kind
         && lhs.language_kind == rhs.language_kind
@@ -232,7 +237,7 @@ fn artefact_payload_equal(lhs: &PersistedArtefactRecord, rhs: &PersistedArtefact
         && lhs.content_hash == rhs.content_hash
 }
 
-fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeRecord) -> bool {
+pub(super) fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeRecord) -> bool {
     lhs.from_symbol_id == rhs.from_symbol_id
         && lhs.from_artefact_id == rhs.from_artefact_id
         && lhs.to_symbol_id == rhs.to_symbol_id
@@ -245,7 +250,7 @@ fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeRecord) -> b
         && lhs.metadata == rhs.metadata
 }
 
-async fn load_current_artefacts_for_path(
+pub(super) async fn load_current_artefacts_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -271,7 +276,7 @@ FROM artefacts_current WHERE repo_id = '{}' AND path = '{}'",
     Ok(out)
 }
 
-async fn load_current_outgoing_edges_for_path(
+pub(super) async fn load_current_outgoing_edges_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -296,7 +301,7 @@ FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
     Ok(out)
 }
 
-async fn delete_current_artefacts_for_path_symbols(
+pub(super) async fn delete_current_artefacts_for_path_symbols(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -316,7 +321,7 @@ async fn delete_current_artefacts_for_path_symbols(
     relational.exec(&sql).await
 }
 
-async fn delete_current_outgoing_edges_for_path(
+pub(super) async fn delete_current_outgoing_edges_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -329,7 +334,7 @@ async fn delete_current_outgoing_edges_for_path(
     relational.exec(&sql).await
 }
 
-async fn delete_current_outgoing_edges_for_ids(
+pub(super) async fn delete_current_outgoing_edges_for_ids(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     edge_ids: &HashSet<String>,
@@ -347,7 +352,7 @@ async fn delete_current_outgoing_edges_for_ids(
     relational.exec(&sql).await
 }
 
-async fn load_current_external_target_lookup(
+pub(super) async fn load_current_external_target_lookup(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -386,7 +391,7 @@ WHERE repo_id = '{}' AND path <> '{}' AND symbol_fqn IN ({})",
     Ok(out)
 }
 
-fn build_current_edge_records(
+pub(super) fn build_current_edge_records(
     cfg: &DevqlConfig,
     path: &str,
     language: &str,
@@ -459,7 +464,7 @@ fn build_current_edge_records(
     out
 }
 
-async fn upsert_current_edge(
+pub(super) async fn upsert_current_edge(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
@@ -515,7 +520,7 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXC
     relational.exec(&sql).await
 }
 
-async fn repair_inbound_current_edges(
+pub(super) async fn repair_inbound_current_edges(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     refreshed_symbol_ids: &HashSet<String>,

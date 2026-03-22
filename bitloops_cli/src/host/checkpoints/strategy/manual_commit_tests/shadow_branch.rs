@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn hash_worktree_id_is_six_chars() {
+pub(crate) fn hash_worktree_id_is_six_chars() {
     for worktree_id in ["", "test-123", "feature/auth-system"] {
         let got = sha256_hex(worktree_id.as_bytes());
         assert_eq!(
@@ -11,7 +13,7 @@ fn hash_worktree_id_is_six_chars() {
 }
 
 #[test]
-fn hash_worktree_id_is_deterministic() {
+pub(crate) fn hash_worktree_id_is_deterministic() {
     let id = "test-worktree";
     let h1 = sha256_hex(id.as_bytes());
     let h2 = sha256_hex(id.as_bytes());
@@ -19,7 +21,7 @@ fn hash_worktree_id_is_deterministic() {
 }
 
 #[test]
-fn hash_worktree_id_differs_for_different_inputs() {
+pub(crate) fn hash_worktree_id_differs_for_different_inputs() {
     let h1 = sha256_hex("worktree-a".as_bytes());
     let h2 = sha256_hex("worktree-b".as_bytes());
     assert_ne!(
@@ -30,7 +32,7 @@ fn hash_worktree_id_differs_for_different_inputs() {
 }
 
 #[test]
-fn shadow_branch_name_for_commit() {
+pub(crate) fn shadow_branch_name_for_commit() {
     let cases = [
         (
             "abc1234567890",
@@ -68,7 +70,7 @@ fn shadow_branch_name_for_commit() {
 }
 
 #[test]
-fn parse_shadow_branch_name_cases() {
+pub(crate) fn parse_shadow_branch_name_cases() {
     let cases = [
         ("bitloops/abc1234-e3b0c4", "abc1234", "e3b0c4", true),
         ("bitloops/abc1234", "abc1234", "", true),
@@ -92,7 +94,7 @@ fn parse_shadow_branch_name_cases() {
 }
 
 #[test]
-fn parse_shadow_branch_name_round_trip() {
+pub(crate) fn parse_shadow_branch_name_round_trip() {
     for (base_commit, worktree_id) in [
         ("abc1234567890", ""),
         ("abc1234567890", "test-worktree"),
@@ -112,7 +114,7 @@ fn parse_shadow_branch_name_round_trip() {
 }
 
 #[test]
-fn is_shadow_branch_cases() {
+pub(crate) fn is_shadow_branch_cases() {
     let cases = [
         ("bitloops/abc1234", true),
         ("bitloops/1234567", true),
@@ -146,7 +148,7 @@ fn is_shadow_branch_cases() {
 }
 
 #[test]
-fn list_shadow_branches_filters_expected_refs() {
+pub(crate) fn list_shadow_branches_filters_expected_refs() {
     let dir = tempfile::tempdir().unwrap();
     let _head = setup_git_repo(&dir);
 
@@ -170,7 +172,7 @@ fn list_shadow_branches_filters_expected_refs() {
 }
 
 #[test]
-fn list_shadow_branches_empty() {
+pub(crate) fn list_shadow_branches_empty() {
     let dir = tempfile::tempdir().unwrap();
     let _head = setup_git_repo(&dir);
 
@@ -179,7 +181,7 @@ fn list_shadow_branches_empty() {
 }
 
 #[test]
-fn delete_shadow_branches_existing() {
+pub(crate) fn delete_shadow_branches_existing() {
     let dir = tempfile::tempdir().unwrap();
     let _head = setup_git_repo(&dir);
     run_git(dir.path(), &["branch", "bitloops/abc1234-e3b0c4"]).unwrap();
@@ -200,7 +202,7 @@ fn delete_shadow_branches_existing() {
 }
 
 #[test]
-fn delete_shadow_branches_non_existent() {
+pub(crate) fn delete_shadow_branches_non_existent() {
     let dir = tempfile::tempdir().unwrap();
     let _head = setup_git_repo(&dir);
 
@@ -214,7 +216,7 @@ fn delete_shadow_branches_non_existent() {
 }
 
 #[test]
-fn delete_shadow_branches_empty() {
+pub(crate) fn delete_shadow_branches_empty() {
     let dir = tempfile::tempdir().unwrap();
     let _head = setup_git_repo(&dir);
 
@@ -224,7 +226,7 @@ fn delete_shadow_branches_empty() {
 }
 
 #[test]
-fn list_orphaned_session_states_recent_session_not_orphaned() {
+pub(crate) fn list_orphaned_session_states_recent_session_not_orphaned() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = LocalFileBackend::new(dir.path());
@@ -251,7 +253,7 @@ fn list_orphaned_session_states_recent_session_not_orphaned() {
 }
 
 #[test]
-fn list_orphaned_session_states_shadow_branch_matching() {
+pub(crate) fn list_orphaned_session_states_shadow_branch_matching() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = LocalFileBackend::new(dir.path());
@@ -290,4 +292,3 @@ fn list_orphaned_session_states_shadow_branch_matching() {
         "session with matching shadow branch should not be orphaned: {orphaned:?}"
     );
 }
-

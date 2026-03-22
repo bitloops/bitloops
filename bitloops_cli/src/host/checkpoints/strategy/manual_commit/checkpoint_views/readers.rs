@@ -1,3 +1,5 @@
+use super::*;
+
 pub fn update_summary(
     repo_root: &Path,
     checkpoint_id: &str,
@@ -12,7 +14,10 @@ pub fn update_summary(
     anyhow::bail!("checkpoint not found: {checkpoint_id}");
 }
 
-fn build_checkpoint_session_ref(checkpoint_id: &str, session_index: i64) -> CheckpointSessionRef {
+pub(crate) fn build_checkpoint_session_ref(
+    checkpoint_id: &str,
+    session_index: i64,
+) -> CheckpointSessionRef {
     let (a, b) = checkpoint_dir_parts(checkpoint_id);
     let base = format!("{a}/{b}/{session_index}");
     CheckpointSessionRef {
@@ -24,11 +29,11 @@ fn build_checkpoint_session_ref(checkpoint_id: &str, session_index: i64) -> Chec
     }
 }
 
-fn parse_json_string_array(raw: &str) -> Vec<String> {
+pub(crate) fn parse_json_string_array(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
 }
 
-fn read_checkpoint_blob_text(
+pub(crate) fn read_checkpoint_blob_text(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     session_index: i64,
@@ -49,7 +54,7 @@ fn read_checkpoint_blob_text(
     String::from_utf8_lossy(&bytes).to_string()
 }
 
-fn read_committed_from_db(
+pub(crate) fn read_committed_from_db(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
 ) -> Result<Option<CheckpointSummaryView>> {
@@ -76,8 +81,14 @@ fn read_committed_from_db(
         .optional()
         .map_err(anyhow::Error::from)
     })?;
-    let Some((strategy, branch, cli_version, checkpoints_count, files_touched_raw, token_usage_raw)) =
-        checkpoint_row
+    let Some((
+        strategy,
+        branch,
+        cli_version,
+        checkpoints_count,
+        files_touched_raw,
+        token_usage_raw,
+    )) = checkpoint_row
     else {
         return Ok(None);
     };
@@ -119,7 +130,7 @@ fn read_committed_from_db(
     Ok(Some(summary))
 }
 
-fn to_committed_info_from_db(
+pub(crate) fn to_committed_info_from_db(
     storage: &CheckpointStorageContext,
     summary: &CheckpointSummaryView,
 ) -> Result<CommittedInfo> {
@@ -189,7 +200,7 @@ fn to_committed_info_from_db(
     Ok(info)
 }
 
-fn read_session_content_from_db(
+pub(crate) fn read_session_content_from_db(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     session_index: usize,
@@ -210,7 +221,11 @@ fn read_session_content_from_db(
                AND s.session_index = ?2
                AND c.repo_id = ?3
              LIMIT 1",
-            rusqlite::params![checkpoint_id, session_index as i64, storage.repo_id.as_str()],
+            rusqlite::params![
+                checkpoint_id,
+                session_index as i64,
+                storage.repo_id.as_str()
+            ],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -286,8 +301,8 @@ fn read_session_content_from_db(
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()),
         transcript_path,
     };
-    let metadata_value =
-        serde_json::to_value(&metadata).context("serializing checkpoint session metadata from DB")?;
+    let metadata_value = serde_json::to_value(&metadata)
+        .context("serializing checkpoint session metadata from DB")?;
 
     let transcript = read_checkpoint_blob_text(
         storage,
@@ -378,7 +393,7 @@ pub fn read_committed(
 }
 
 #[allow(dead_code)]
-fn read_committed_with_ref(
+pub(crate) fn read_committed_with_ref(
     repo_root: &Path,
     read_ref: &str,
     checkpoint_id: &str,

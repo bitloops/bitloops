@@ -27,8 +27,8 @@ fn insert_commit_checkpoint_mapping(
     checkpoint_id: &str,
 ) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
-    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
-        .expect("open checkpoint sqlite");
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("open checkpoint sqlite");
     sqlite
         .initialise_checkpoint_schema()
         .expect("initialise checkpoint schema");
@@ -98,8 +98,8 @@ fn build_commit_graph_from_git_reads_checkpoint_from_db_mapping() {
     insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);
 
     let commits = build_commit_graph_from_git(repo.path(), 50).expect("build commit graph");
-    let associated = get_associated_commits(&commits, checkpoint_id, true)
-        .expect("resolve associated commits");
+    let associated =
+        get_associated_commits(&commits, checkpoint_id, true).expect("resolve associated commits");
 
     assert_eq!(associated.len(), 1, "expected commit mapped from SQLite");
     assert_eq!(associated[0].sha, commit_sha);

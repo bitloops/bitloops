@@ -1,4 +1,6 @@
-fn update_committed(repo_root: &Path, opts: UpdateCommittedOptions) -> Result<()> {
+use super::*;
+
+pub(crate) fn update_committed(repo_root: &Path, opts: UpdateCommittedOptions) -> Result<()> {
     if opts.checkpoint_id.is_empty() {
         anyhow::bail!("invalid update options: checkpoint ID is required");
     }
@@ -11,10 +13,15 @@ fn update_committed(repo_root: &Path, opts: UpdateCommittedOptions) -> Result<()
     Ok(())
 }
 
-fn update_committed_db_and_blobs(repo_root: &Path, opts: &UpdateCommittedOptions) -> Result<bool> {
+pub(crate) fn update_committed_db_and_blobs(
+    repo_root: &Path,
+    opts: &UpdateCommittedOptions,
+) -> Result<bool> {
     let storage = open_checkpoint_storage_context(repo_root)?;
-    let target_index = find_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id, &opts.session_id)?
-        .or(latest_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id)?);
+    let target_index =
+        find_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id, &opts.session_id)?.or(
+            latest_checkpoint_session_index(&storage.sqlite, &opts.checkpoint_id)?,
+        );
     let Some(session_index) = target_index else {
         return Ok(false);
     };

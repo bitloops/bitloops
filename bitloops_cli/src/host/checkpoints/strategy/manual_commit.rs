@@ -89,9 +89,15 @@ impl ManualCommitStrategy {
     }
 }
 
-include!("manual_commit/strategy_impl.rs");
-include!("manual_commit/strategy_helpers.rs");
-include!("manual_commit/support.rs");
+#[path = "manual_commit/strategy_helpers.rs"]
+mod strategy_helpers;
+#[path = "manual_commit/strategy_impl.rs"]
+mod strategy_impl;
+#[path = "manual_commit/support.rs"]
+mod support;
+
+pub(crate) use self::strategy_impl::*;
+pub use self::support::*;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

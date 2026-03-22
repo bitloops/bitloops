@@ -1,4 +1,6 @@
-fn extract_chat_messages_from_transcript(transcript: &str) -> Vec<Value> {
+use super::*;
+
+pub(super) fn extract_chat_messages_from_transcript(transcript: &str) -> Vec<Value> {
     let mut messages = Vec::new();
     for line in transcript.lines() {
         let trimmed = line.trim();
@@ -22,7 +24,7 @@ fn extract_chat_messages_from_transcript(transcript: &str) -> Vec<Value> {
     messages
 }
 
-fn extract_message_role(value: &Value) -> Option<String> {
+pub(super) fn extract_message_role(value: &Value) -> Option<String> {
     value
         .get("role")
         .and_then(Value::as_str)
@@ -33,7 +35,7 @@ fn extract_message_role(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn extract_message_text(value: &Value) -> Option<String> {
+pub(super) fn extract_message_text(value: &Value) -> Option<String> {
     value
         .get("message")
         .and_then(|message| message.get("content"))
@@ -42,7 +44,7 @@ fn extract_message_text(value: &Value) -> Option<String> {
         .or_else(|| value.get("text").and_then(flatten_text_value))
 }
 
-fn flatten_text_value(value: &Value) -> Option<String> {
+pub(super) fn flatten_text_value(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => {
             let trimmed = text.trim();
@@ -75,7 +77,7 @@ fn flatten_text_value(value: &Value) -> Option<String> {
     }
 }
 
-fn resolve_repo_id_for_query(cfg: &DevqlConfig, requested_repo: Option<&str>) -> String {
+pub(super) fn resolve_repo_id_for_query(cfg: &DevqlConfig, requested_repo: Option<&str>) -> String {
     let Some(repo) = requested_repo else {
         return cfg.repo.repo_id.clone();
     };
@@ -101,7 +103,7 @@ fn resolve_repo_id_for_query(cfg: &DevqlConfig, requested_repo: Option<&str>) ->
     deterministic_uuid(&format!("repo://{normalized}"))
 }
 
-fn sql_string_list_ch(values: &[String]) -> String {
+pub(super) fn sql_string_list_ch(values: &[String]) -> String {
     values
         .iter()
         .map(|value| format!("'{}'", esc_ch(value)))
@@ -117,7 +119,7 @@ pub(crate) fn sql_string_list_pg(values: &[String]) -> String {
         .join(",")
 }
 
-fn project_rows(rows: Vec<Value>, fields: &[String]) -> Vec<Value> {
+pub(super) fn project_rows(rows: Vec<Value>, fields: &[String]) -> Vec<Value> {
     if fields.is_empty() {
         return rows;
     }
@@ -148,7 +150,10 @@ fn project_rows(rows: Vec<Value>, fields: &[String]) -> Vec<Value> {
     projected
 }
 
-fn lookup_nested_field<'a>(obj: &'a Map<String, Value>, field: &str) -> Option<&'a Value> {
+pub(super) fn lookup_nested_field<'a>(
+    obj: &'a Map<String, Value>,
+    field: &str,
+) -> Option<&'a Value> {
     if !field.contains('.') {
         return obj.get(field);
     }

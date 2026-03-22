@@ -1,4 +1,6 @@
-async fn execute_clickhouse_pipeline(
+use super::*;
+
+pub(crate) async fn execute_clickhouse_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
 ) -> Result<Vec<Value>> {
@@ -53,7 +55,7 @@ async fn execute_clickhouse_pipeline(
     Ok(data.as_array().cloned().unwrap_or_default())
 }
 
-fn normalise_duckdb_event_row(row: Value) -> Value {
+pub(crate) fn normalise_duckdb_event_row(row: Value) -> Value {
     let Some(mut obj) = row.as_object().cloned() else {
         return row;
     };
@@ -73,7 +75,7 @@ fn normalise_duckdb_event_row(row: Value) -> Value {
     Value::Object(obj)
 }
 
-async fn execute_duckdb_pipeline(
+pub(crate) async fn execute_duckdb_pipeline(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,

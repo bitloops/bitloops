@@ -281,14 +281,22 @@ fn test_unresolved_call_edge(
     }
 }
 
-include!("devql_tests/core_and_ingestion.rs");
-include!("devql_tests/query_pipeline.rs");
-include!("devql_tests/query_executor.rs");
-include!("devql_tests/config_and_status.rs");
-include!("devql_tests/extraction_js_ts.rs");
-include!("devql_tests/extraction_rust.rs");
-include!("devql_tests/identity_and_schema.rs");
-include!("devql_tests/postgres_integration.rs");
+#[path = "devql_tests/config_and_status.rs"]
+mod config_and_status;
+#[path = "devql_tests/core_and_ingestion.rs"]
+mod core_and_ingestion;
+#[path = "devql_tests/extraction_js_ts.rs"]
+mod extraction_js_ts;
+#[path = "devql_tests/extraction_rust.rs"]
+mod extraction_rust;
+#[path = "devql_tests/identity_and_schema.rs"]
+mod identity_and_schema;
+#[path = "devql_tests/postgres_integration.rs"]
+mod postgres_integration;
+#[path = "devql_tests/query_executor.rs"]
+mod query_executor;
+#[path = "devql_tests/query_pipeline.rs"]
+mod query_pipeline;
 
 // --- CLI arg parsing and run() dispatch (moved from commands/devql.rs) ---
 
@@ -370,5 +378,7 @@ async fn devql_run_init_uses_default_sqlite_duckdb_after_repo_resolution() {
         "default DevQL backends should initialise after repo resolution: {result:#?}"
     );
 }
-include!("devql_tests/clones.rs");
-include!("devql_tests/semantic.rs");
+#[path = "devql_tests/clones.rs"]
+mod clones;
+#[path = "devql_tests/semantic.rs"]
+mod semantic;

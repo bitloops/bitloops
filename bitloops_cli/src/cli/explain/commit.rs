@@ -1,6 +1,8 @@
+use super::*;
+
 /// Format a Unix timestamp as a sortable string.
 /// Returns the decimal epoch seconds so that lexicographic sort == chronological sort.
-fn chrono_format(unix: i64) -> String {
+pub(super) fn chrono_format(unix: i64) -> String {
     if unix == 0 {
         return String::new();
     }
@@ -80,11 +82,11 @@ pub fn output_explain_content(content: &str, no_pager: bool) -> String {
     String::new()
 }
 
-fn is_default_branch(branch_name: &str) -> bool {
+pub(super) fn is_default_branch(branch_name: &str) -> bool {
     matches!(branch_name, "main" | "master")
 }
 
-fn truncate_description(input: &str, max_len: usize) -> String {
+pub(super) fn truncate_description(input: &str, max_len: usize) -> String {
     let len = input.chars().count();
     if len <= max_len {
         return input.to_string();
@@ -97,7 +99,7 @@ fn truncate_description(input: &str, max_len: usize) -> String {
     out
 }
 
-fn extract_user_prompt(value: &Value) -> Option<String> {
+pub(super) fn extract_user_prompt(value: &Value) -> Option<String> {
     if let Some(content) = value.get("content").and_then(Value::as_str) {
         return Some(crate::utils::text::strip_ide_context_tags(content));
     }
@@ -123,7 +125,7 @@ fn extract_user_prompt(value: &Value) -> Option<String> {
     }
 }
 
-fn extract_assistant_response(value: &Value) -> Option<String> {
+pub(super) fn extract_assistant_response(value: &Value) -> Option<String> {
     if let Some(content) = value.get("content").and_then(Value::as_str) {
         return Some(content.to_string());
     }
@@ -144,13 +146,14 @@ fn extract_assistant_response(value: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-fn commit_checkpoint_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
-    commit.checkpoints.iter().any(|(key, value)| {
-        key.eq_ignore_ascii_case(CHECKPOINT_KEY) && value == checkpoint_id
-    })
+pub(super) fn commit_checkpoint_matches(commit: &CommitNode, checkpoint_id: &str) -> bool {
+    commit
+        .checkpoints
+        .iter()
+        .any(|(key, value)| key.eq_ignore_ascii_case(CHECKPOINT_KEY) && value == checkpoint_id)
 }
 
-fn to_associated_commit(commit: &CommitNode) -> AssociatedCommit {
+pub(super) fn to_associated_commit(commit: &CommitNode) -> AssociatedCommit {
     let short_sha = if commit.sha.chars().count() > 7 {
         commit.sha.chars().take(7).collect()
     } else {

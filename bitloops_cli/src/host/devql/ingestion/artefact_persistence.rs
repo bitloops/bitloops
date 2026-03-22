@@ -1,26 +1,29 @@
+use super::*;
+
 // Top-level orchestration: refresh/upsert/delete current state and persist language artefacts.
 
-type LanguagePackArtefactExtractor = fn(&str, &str) -> Result<Vec<JsTsArtefact>>;
-type LanguagePackDependencyEdgeExtractor =
+pub(super) type LanguagePackArtefactExtractor = fn(&str, &str) -> Result<Vec<JsTsArtefact>>;
+pub(super) type LanguagePackDependencyEdgeExtractor =
     fn(&str, &str, &[JsTsArtefact]) -> Result<Vec<JsTsDependencyEdge>>;
-type LanguagePackFileDocstringExtractor = fn(&str) -> Option<String>;
-type LanguagePackExtraction = (Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>);
+pub(super) type LanguagePackFileDocstringExtractor = fn(&str) -> Option<String>;
+pub(super) type LanguagePackExtraction =
+    (Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>);
 
 // First-party runtime adapter for built-in language packs.
 #[derive(Debug, Clone, Copy)]
-struct BuiltInLanguagePackRuntime {
-    extract_artefacts: LanguagePackArtefactExtractor,
-    extract_dependency_edges: LanguagePackDependencyEdgeExtractor,
-    extract_file_docstring: LanguagePackFileDocstringExtractor,
+pub(super) struct BuiltInLanguagePackRuntime {
+    pub(super) extract_artefacts: LanguagePackArtefactExtractor,
+    pub(super) extract_dependency_edges: LanguagePackDependencyEdgeExtractor,
+    pub(super) extract_file_docstring: LanguagePackFileDocstringExtractor,
 }
 
-fn no_file_docstring(_: &str) -> Option<String> {
+pub(super) fn no_file_docstring(_: &str) -> Option<String> {
     None
 }
 
 // Runtime registry keyed by the host-registered language-pack descriptor id.
-fn built_in_language_pack_registry() -> &'static HashMap<&'static str, BuiltInLanguagePackRuntime>
-{
+pub(super) fn built_in_language_pack_registry()
+-> &'static HashMap<&'static str, BuiltInLanguagePackRuntime> {
     static BUILT_IN_LANGUAGE_PACKS: OnceLock<HashMap<&'static str, BuiltInLanguagePackRuntime>> =
         OnceLock::new();
     BUILT_IN_LANGUAGE_PACKS.get_or_init(|| {
@@ -45,11 +48,11 @@ fn built_in_language_pack_registry() -> &'static HashMap<&'static str, BuiltInLa
     })
 }
 
-fn resolve_built_in_language_pack(pack_id: &str) -> Option<BuiltInLanguagePackRuntime> {
+pub(super) fn resolve_built_in_language_pack(pack_id: &str) -> Option<BuiltInLanguagePackRuntime> {
     built_in_language_pack_registry().get(pack_id).copied()
 }
 
-fn resolve_built_in_language_pack_for_source(
+pub(super) fn resolve_built_in_language_pack_for_source(
     path: &str,
     language: &str,
 ) -> Option<BuiltInLanguagePackRuntime> {
@@ -58,7 +61,7 @@ fn resolve_built_in_language_pack_for_source(
         .and_then(resolve_built_in_language_pack)
 }
 
-fn extract_file_docstring_for_language_pack(
+pub(super) fn extract_file_docstring_for_language_pack(
     path: &str,
     language: &str,
     content: &str,
@@ -67,7 +70,7 @@ fn extract_file_docstring_for_language_pack(
         .and_then(|pack| (pack.extract_file_docstring)(content))
 }
 
-fn extract_language_pack_artefacts_and_edges(
+pub(super) fn extract_language_pack_artefacts_and_edges(
     cfg: &DevqlConfig,
     rev: &FileRevision<'_>,
     language: &str,
@@ -81,9 +84,7 @@ fn extract_language_pack_artefacts_and_edges(
     };
 
     let Some(pack) = resolve_built_in_language_pack(pack_id) else {
-        bail!(
-            "language `{language}` resolved to unsupported language pack `{pack_id}`"
-        );
+        bail!("language `{language}` resolved to unsupported language pack `{pack_id}`");
     };
 
     let items = (pack.extract_artefacts)(content, rev.path)?;
@@ -92,7 +93,7 @@ fn extract_language_pack_artefacts_and_edges(
     Ok(Some((items, edges, file_docstring)))
 }
 
-async fn refresh_current_state_for_path(
+pub(super) async fn refresh_current_state_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
@@ -205,7 +206,7 @@ async fn refresh_current_state_for_path(
     Ok(())
 }
 
-async fn upsert_current_state_for_content(
+pub(super) async fn upsert_current_state_for_content(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
@@ -218,23 +219,30 @@ async fn upsert_current_state_for_content(
         Some(content),
     );
 
-    let (items, dependency_edges, file_docstring) =
-        match extract_language_pack_artefacts_and_edges(cfg, rev, &file_artefact.language, content)
-        {
-            Ok(Some(value)) => value,
-            Ok(None) => (Vec::new(), Vec::new(), None),
-            Err(err) => {
-                log::warn!(
-                    "devql watcher extraction failed for `{}`; keeping file-level current state only: {err:#}",
-                    rev.path
-                );
-                (
-                    Vec::new(),
-                    Vec::new(),
-                    extract_file_docstring_for_language_pack(rev.path, &file_artefact.language, content),
-                )
-            }
-        };
+    let (items, dependency_edges, file_docstring) = match extract_language_pack_artefacts_and_edges(
+        cfg,
+        rev,
+        &file_artefact.language,
+        content,
+    ) {
+        Ok(Some(value)) => value,
+        Ok(None) => (Vec::new(), Vec::new(), None),
+        Err(err) => {
+            log::warn!(
+                "devql watcher extraction failed for `{}`; keeping file-level current state only: {err:#}",
+                rev.path
+            );
+            (
+                Vec::new(),
+                Vec::new(),
+                extract_file_docstring_for_language_pack(
+                    rev.path,
+                    &file_artefact.language,
+                    content,
+                ),
+            )
+        }
+    };
 
     let symbol_records =
         build_symbol_records(cfg, rev.path, rev.blob_sha, &file_artefact, &items, content);
@@ -250,7 +258,7 @@ async fn upsert_current_state_for_content(
     .await
 }
 
-async fn delete_current_state_for_path(
+pub(super) async fn delete_current_state_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     path: &str,
@@ -267,7 +275,7 @@ async fn delete_current_state_for_path(
     Ok(())
 }
 
-async fn upsert_language_artefacts(
+pub(super) async fn upsert_language_artefacts(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
@@ -284,8 +292,14 @@ async fn upsert_language_artefacts(
     )?
     .unwrap_or_default();
 
-    let symbol_records =
-        build_symbol_records(cfg, rev.path, rev.blob_sha, file_artefact, &items, &source_content);
+    let symbol_records = build_symbol_records(
+        cfg,
+        rev.path,
+        rev.blob_sha,
+        file_artefact,
+        &items,
+        &source_content,
+    );
     for record in &symbol_records {
         persist_historical_artefact(
             cfg,

@@ -1,4 +1,4 @@
-fn artefacts_upgrade_sql() -> &'static str {
+pub(crate) fn artefacts_upgrade_sql() -> &'static str {
     r#"
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS start_byte INTEGER;
 ALTER TABLE artefacts ADD COLUMN IF NOT EXISTS end_byte INTEGER;
@@ -26,7 +26,7 @@ WHERE symbol_id IS NOT NULL;
 "#
 }
 
-fn artefact_edges_hardening_sql() -> &'static str {
+pub(crate) fn artefact_edges_hardening_sql() -> &'static str {
     r#"
 ALTER TABLE artefact_edges ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
@@ -89,7 +89,7 @@ ON artefact_edges (
 "#
 }
 
-fn current_state_hardening_sql() -> &'static str {
+pub(crate) fn current_state_hardening_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS current_file_state (
     repo_id TEXT NOT NULL,
@@ -259,7 +259,7 @@ ON artefact_edges_current (
 "#
 }
 
-fn test_links_upgrade_sql() -> &'static str {
+pub(crate) fn test_links_upgrade_sql() -> &'static str {
     r#"
 ALTER TABLE test_links ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6;
 ALTER TABLE test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NOT NULL DEFAULT 'resolved';
@@ -283,7 +283,7 @@ ON workspace_revisions (repo_id, tree_hash);
 "#
 }
 
-fn edge_model_cleanup_postgres_sql() -> &'static str {
+pub(crate) fn edge_model_cleanup_postgres_sql() -> &'static str {
     r#"
 UPDATE artefact_edges
 SET edge_kind = 'extends'
@@ -317,7 +317,7 @@ WHERE metadata ->> 'import_form' IN ('module', 'use');
 "#
 }
 
-fn edge_model_cleanup_sqlite_sql() -> &'static str {
+pub(crate) fn edge_model_cleanup_sqlite_sql() -> &'static str {
     r#"
 UPDATE artefact_edges
 SET edge_kind = 'extends'

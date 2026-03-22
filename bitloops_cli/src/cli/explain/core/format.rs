@@ -1,3 +1,5 @@
+use super::super::*;
+
 pub fn format_checkpoint_output(
     summary: &CheckpointSummary,
     content: &SessionContent,
@@ -336,7 +338,10 @@ pub fn scope_transcript_for_checkpoint(
         .unwrap_or_else(|| full_transcript.to_vec()),
         // Claude Code and OpenCode use JSONL; offset is a line number.
         AgentType::Codex | AgentType::ClaudeCode | AgentType::Cursor | AgentType::OpenCode => {
-            crate::host::checkpoints::transcript::parse::slice_from_line(full_transcript, start_offset)
+            crate::host::checkpoints::transcript::parse::slice_from_line(
+                full_transcript,
+                start_offset,
+            )
         }
     }
 }

@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn write_committed_duplicate_session_id_clears_stale_files() {
+pub(crate) fn write_committed_duplicate_session_id_clears_stale_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "dedd0abcdef2";
@@ -65,7 +67,7 @@ fn write_committed_duplicate_session_id_clears_stale_files() {
 }
 
 #[test]
-fn write_committed_redacts_prompt_secrets() {
+pub(crate) fn write_committed_redacts_prompt_secrets() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef2";
@@ -92,7 +94,7 @@ fn write_committed_redacts_prompt_secrets() {
 }
 
 #[test]
-fn write_committed_redacts_transcript_secrets() {
+pub(crate) fn write_committed_redacts_transcript_secrets() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef1";
@@ -120,7 +122,7 @@ fn write_committed_redacts_transcript_secrets() {
 }
 
 #[test]
-fn write_committed_redacts_context_secrets() {
+pub(crate) fn write_committed_redacts_context_secrets() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef3";
@@ -147,7 +149,7 @@ fn write_committed_redacts_context_secrets() {
 }
 
 #[test]
-fn write_committed_cli_version_field() {
+pub(crate) fn write_committed_cli_version_field() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "b1c2d3e4f5a6";
@@ -168,7 +170,7 @@ fn write_committed_cli_version_field() {
 }
 
 #[test]
-fn copy_metadata_dir_redacts_secrets() {
+pub(crate) fn copy_metadata_dir_redacts_secrets() {
     let dir = tempfile::tempdir().unwrap();
     let metadata_dir = dir.path().join("metadata");
     fs::create_dir_all(&metadata_dir).unwrap();
@@ -212,13 +214,13 @@ fn copy_metadata_dir_redacts_secrets() {
 }
 
 #[test]
-fn redact_summary_nil() {
+pub(crate) fn redact_summary_nil() {
     let result = redact_summary(None).expect("redact_summary(nil) should not error");
     assert!(result.is_none(), "redact_summary(None) should return None");
 }
 
 #[test]
-fn redact_summary_with_secrets() {
+pub(crate) fn redact_summary_with_secrets() {
     let summary = Summary {
         intent: format!("Set API_KEY={HIGH_ENTROPY_SECRET}"),
         outcome: format!("Configured key {HIGH_ENTROPY_SECRET} successfully"),
@@ -293,7 +295,7 @@ fn redact_summary_with_secrets() {
 }
 
 #[test]
-fn redact_summary_no_secrets() {
+pub(crate) fn redact_summary_no_secrets() {
     let summary = Summary {
         intent: "Fix a bug".to_string(),
         outcome: "Bug fixed".to_string(),
@@ -321,7 +323,7 @@ fn redact_summary_no_secrets() {
 }
 
 #[test]
-fn redact_string_slice_nil_and_empty() {
+pub(crate) fn redact_string_slice_nil_and_empty() {
     let nil_result = redact_string_slice(None).expect("redact_string_slice(nil) should not error");
     assert!(nil_result.is_none(), "nil input should return None");
 
@@ -340,7 +342,7 @@ fn redact_string_slice_nil_and_empty() {
 }
 
 #[test]
-fn redact_code_learnings_nil_and_empty() {
+pub(crate) fn redact_code_learnings_nil_and_empty() {
     let nil_result =
         redact_code_learnings(None).expect("redact_code_learnings(nil) should not error");
     assert!(nil_result.is_none(), "nil input should return None");
@@ -360,7 +362,7 @@ fn redact_code_learnings_nil_and_empty() {
 }
 
 #[test]
-fn write_committed_redacts_summary_secrets() {
+pub(crate) fn write_committed_redacts_summary_secrets() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef7";
@@ -409,7 +411,7 @@ fn write_committed_redacts_summary_secrets() {
 }
 
 #[test]
-fn update_summary_redacts_secrets() {
+pub(crate) fn update_summary_redacts_secrets() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef8";
@@ -453,7 +455,7 @@ fn update_summary_redacts_secrets() {
 }
 
 #[test]
-fn write_committed_subagent_transcript_jsonl_fallback() {
+pub(crate) fn write_committed_subagent_transcript_jsonl_fallback() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "aabbccddeef9";
@@ -496,7 +498,7 @@ fn write_committed_subagent_transcript_jsonl_fallback() {
 }
 
 #[test]
-fn write_temporary_task_subagent_transcript_redacts_secrets() {
+pub(crate) fn write_temporary_task_subagent_transcript_redacts_secrets() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -569,7 +571,7 @@ fn write_temporary_task_subagent_transcript_redacts_secrets() {
 }
 
 #[test]
-fn add_directory_to_entries_path_traversal() {
+pub(crate) fn add_directory_to_entries_path_traversal() {
     let dir = tempfile::tempdir().unwrap();
     let metadata_dir = dir.path().join("metadata");
     let sub_dir = metadata_dir.join("sub");
@@ -593,7 +595,7 @@ fn add_directory_to_entries_path_traversal() {
 
 #[cfg(unix)]
 #[test]
-fn add_directory_to_entries_skips_symlinks() {
+pub(crate) fn add_directory_to_entries_skips_symlinks() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
@@ -623,7 +625,7 @@ fn add_directory_to_entries_skips_symlinks() {
 
 #[cfg(unix)]
 #[test]
-fn add_directory_to_entries_skips_symlinked_directories() {
+pub(crate) fn add_directory_to_entries_skips_symlinked_directories() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
@@ -652,4 +654,3 @@ fn add_directory_to_entries_skips_symlinked_directories() {
     );
     assert_eq!(entries.len(), 1, "only regular file should be present");
 }
-

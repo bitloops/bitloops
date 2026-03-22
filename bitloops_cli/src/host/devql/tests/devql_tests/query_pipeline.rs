@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn parse_devql_pipeline_basic() {
     let parsed = parse_devql_query(
@@ -382,12 +384,22 @@ async fn execute_relational_pipeline_reads_commit_asof_deps_from_historical_tabl
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![cfg.repo.repo_id.as_str(), "commit-old", "src/caller.ts", "blob-old"],
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "commit-old",
+            "src/caller.ts",
+            "blob-old"
+        ],
     )
     .expect("insert file_state for old commit");
     conn.execute(
         "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![cfg.repo.repo_id.as_str(), "commit-new", "src/caller.ts", "blob-new"],
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "commit-new",
+            "src/caller.ts",
+            "blob-new"
+        ],
     )
     .expect("insert file_state for new commit");
 
@@ -577,10 +589,16 @@ async fn execute_relational_pipeline_scopes_commit_asof_artefacts_by_path_when_b
     git_ok(dir.path(), &["commit", "-m", "add shared files"]);
 
     let commit_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
-    let shared_blob = git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")]);
+    let shared_blob = git_ok(
+        dir.path(),
+        &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")],
+    );
     assert_eq!(
         shared_blob,
-        git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")])
+        git_ok(
+            dir.path(),
+            &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")]
+        )
     );
 
     let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
@@ -683,10 +701,16 @@ async fn execute_relational_pipeline_scopes_commit_asof_deps_by_path_when_blob_i
     git_ok(dir.path(), &["commit", "-m", "add shared files"]);
 
     let commit_sha = git_ok(dir.path(), &["rev-parse", "HEAD"]);
-    let shared_blob = git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")]);
+    let shared_blob = git_ok(
+        dir.path(),
+        &["rev-parse", &format!("{commit_sha}:src/shared-a.ts")],
+    );
     assert_eq!(
         shared_blob,
-        git_ok(dir.path(), &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")])
+        git_ok(
+            dir.path(),
+            &["rev-parse", &format!("{commit_sha}:src/shared-b.ts")]
+        )
     );
 
     let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
@@ -1308,10 +1332,9 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
 
 #[test]
 fn parse_devql_tests_stage_basic() {
-    let parsed = parse_devql_query(
-        r#"repo("r")->file("src/lib.rs")->artefacts(kind:"function")->tests()"#,
-    )
-    .unwrap();
+    let parsed =
+        parse_devql_query(r#"repo("r")->file("src/lib.rs")->artefacts(kind:"function")->tests()"#)
+            .unwrap();
     assert!(parsed.has_artefacts_stage);
     assert_eq!(parsed.registered_stages.len(), 1);
     assert_eq!(parsed.registered_stages[0].stage_name, "tests");
@@ -1354,9 +1377,15 @@ fn parse_devql_internal_core_test_links_stage_with_args() {
         parsed.test_harness_core_test_links.artefact_id.as_deref(),
         Some("artefact::a_1")
     );
-    assert_eq!(parsed.test_harness_core_test_links.min_confidence, Some(0.5));
     assert_eq!(
-        parsed.test_harness_core_test_links.linkage_source.as_deref(),
+        parsed.test_harness_core_test_links.min_confidence,
+        Some(0.5)
+    );
+    assert_eq!(
+        parsed
+            .test_harness_core_test_links
+            .linkage_source
+            .as_deref(),
         Some("static_analysis")
     );
     assert_eq!(parsed.limit, 7);
@@ -1665,17 +1694,13 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
         .expect("should have covering_tests");
     assert_eq!(covering_tests.len(), 1);
     assert_eq!(
-        covering_tests[0]
-            .get("test_name")
-            .and_then(Value::as_str),
+        covering_tests[0].get("test_name").and_then(Value::as_str),
         Some("test_create_user")
     );
 
     let summary = rows[0].get("summary").expect("should have summary");
     assert_eq!(
-        summary
-            .get("total_covering_tests")
-            .and_then(Value::as_i64),
+        summary.get("total_covering_tests").and_then(Value::as_i64),
         Some(1)
     );
 }
@@ -1890,9 +1915,7 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     }
 
     // Insert branch coverage hits
-    for (line, branch_id, covered, hit_count) in
-        [(48, 0, 1, 3), (48, 1, 0, 0)]
-    {
+    for (line, branch_id, covered, hit_count) in [(48, 0, 1, 3), (48, 1, 0, 0)] {
         conn.execute(
             "INSERT INTO coverage_hits (
                 capture_id, production_artefact_id, file_path, line, branch_id, covered, hit_count
@@ -1937,14 +1960,8 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         artefact.get("artefact_id").and_then(Value::as_str),
         Some("artefact::create_user")
     );
-    assert_eq!(
-        artefact.get("start_line").and_then(Value::as_i64),
-        Some(42)
-    );
-    assert_eq!(
-        artefact.get("end_line").and_then(Value::as_i64),
-        Some(89)
-    );
+    assert_eq!(artefact.get("start_line").and_then(Value::as_i64), Some(42));
+    assert_eq!(artefact.get("end_line").and_then(Value::as_i64), Some(89));
 
     // Verify coverage
     let coverage = rows[0].get("coverage").expect("should have coverage");
@@ -1952,20 +1969,36 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         coverage.get("coverage_source").and_then(Value::as_str),
         Some("lcov")
     );
-    assert!(coverage.get("line_data_available").and_then(Value::as_bool).unwrap_or(false));
-    assert!(coverage.get("branch_data_available").and_then(Value::as_bool).unwrap_or(false));
+    assert!(
+        coverage
+            .get("line_data_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    );
+    assert!(
+        coverage
+            .get("branch_data_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    );
 
     let line_pct = coverage
         .get("line_coverage_pct")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    assert!((line_pct - 60.0).abs() < 0.1, "expected ~60% line coverage, got {line_pct}");
+    assert!(
+        (line_pct - 60.0).abs() < 0.1,
+        "expected ~60% line coverage, got {line_pct}"
+    );
 
     let branch_pct = coverage
         .get("branch_coverage_pct")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    assert!((branch_pct - 50.0).abs() < 0.1, "expected ~50% branch coverage, got {branch_pct}");
+    assert!(
+        (branch_pct - 50.0).abs() < 0.1,
+        "expected ~50% branch coverage, got {branch_pct}"
+    );
 
     let uncovered = coverage
         .get("uncovered_lines")
@@ -1980,8 +2013,18 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         .and_then(Value::as_array)
         .expect("should have branches");
     assert_eq!(branches.len(), 2);
-    assert!(branches[0].get("covered").and_then(Value::as_bool).unwrap_or(false));
-    assert!(!branches[1].get("covered").and_then(Value::as_bool).unwrap_or(true));
+    assert!(
+        branches[0]
+            .get("covered")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    );
+    assert!(
+        !branches[1]
+            .get("covered")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    );
 
     // Verify summary
     let summary = rows[0].get("summary").expect("should have summary");
@@ -1990,7 +2033,9 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         Some(2)
     );
     assert_eq!(
-        summary.get("uncovered_branch_count").and_then(Value::as_i64),
+        summary
+            .get("uncovered_branch_count")
+            .and_then(Value::as_i64),
         Some(1)
     );
     assert_eq!(

@@ -1,3 +1,5 @@
+use super::*;
+
 /// Look up the session_id for a given commit SHA via commit_checkpoints → checkpoint_sessions.
 pub fn lookup_session_id_for_commit(repo_root: &Path, commit_sha: &str) -> Result<Option<String>> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
@@ -24,7 +26,9 @@ pub fn lookup_session_id_for_commit(repo_root: &Path, commit_sha: &str) -> Resul
     })
 }
 
-pub fn read_commit_checkpoint_mappings(repo_root: &Path) -> Result<std::collections::HashMap<String, String>> {
+pub fn read_commit_checkpoint_mappings(
+    repo_root: &Path,
+) -> Result<std::collections::HashMap<String, String>> {
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
     let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path)
         .context("opening SQLite database for commit-checkpoint mappings")?;

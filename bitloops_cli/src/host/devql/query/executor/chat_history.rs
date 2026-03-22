@@ -1,4 +1,6 @@
-async fn blob_shas_changed_in_events(
+use super::*;
+
+pub(crate) async fn blob_shas_changed_in_events(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     relational: &RelationalStorage,
@@ -93,7 +95,7 @@ async fn blob_shas_changed_in_events(
         .collect())
 }
 
-async fn attach_chat_history_to_artefacts(
+pub(crate) async fn attach_chat_history_to_artefacts(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     relational: &RelationalStorage,
@@ -174,7 +176,7 @@ async fn attach_chat_history_to_artefacts(
     Ok(out)
 }
 
-async fn commit_shas_for_artefact_blob(
+pub(crate) async fn commit_shas_for_artefact_blob(
     relational: &RelationalStorage,
     repo_id: &str,
     path: &str,
@@ -201,7 +203,7 @@ async fn commit_shas_for_artefact_blob(
         .collect())
 }
 
-async fn checkpoint_events_for_commits(
+pub(crate) async fn checkpoint_events_for_commits(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     repo_id: &str,
@@ -284,7 +286,7 @@ async fn checkpoint_events_for_commits(
     }
 }
 
-fn session_chat_payload(
+pub(crate) fn session_chat_payload(
     cfg: &DevqlConfig,
     checkpoint_id: &str,
     session_id: &str,

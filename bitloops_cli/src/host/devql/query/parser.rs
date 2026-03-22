@@ -1,42 +1,45 @@
+use super::*;
+use anyhow::{anyhow, bail};
+
 // Query filter types (defined here; used by query_parser, query_executor, deps_query).
 
 #[derive(Debug, Clone, Default)]
-struct ParsedDevqlQuery {
-    repo: Option<String>,
-    as_of: Option<AsOfSelector>,
-    file: Option<String>,
-    files_path: Option<String>,
-    artefacts: ArtefactFilter,
-    clones: CloneFilter,
-    checkpoints: CheckpointFilter,
-    telemetry: TelemetryFilter,
-    deps: DepsFilter,
-    has_artefacts_stage: bool,
-    has_clones_stage: bool,
-    has_deps_stage: bool,
-    has_checkpoints_stage: bool,
-    has_telemetry_stage: bool,
-    has_chat_history_stage: bool,
-    has_test_harness_core_test_links_stage: bool,
-    has_test_harness_core_line_coverage_stage: bool,
-    has_test_harness_core_branch_coverage_stage: bool,
-    has_test_harness_core_coverage_metadata_stage: bool,
-    test_harness_core_test_links: TestHarnessCoreTestLinksFilter,
-    test_harness_core_line_coverage: TestHarnessCoreArtefactFilter,
-    test_harness_core_branch_coverage: TestHarnessCoreArtefactFilter,
-    registered_stages: Vec<RegisteredStageCall>,
-    limit: usize,
-    select_fields: Vec<String>,
+pub(super) struct ParsedDevqlQuery {
+    pub(super) repo: Option<String>,
+    pub(super) as_of: Option<AsOfSelector>,
+    pub(super) file: Option<String>,
+    pub(super) files_path: Option<String>,
+    pub(super) artefacts: ArtefactFilter,
+    pub(super) clones: CloneFilter,
+    pub(super) checkpoints: CheckpointFilter,
+    pub(super) telemetry: TelemetryFilter,
+    pub(super) deps: DepsFilter,
+    pub(super) has_artefacts_stage: bool,
+    pub(super) has_clones_stage: bool,
+    pub(super) has_deps_stage: bool,
+    pub(super) has_checkpoints_stage: bool,
+    pub(super) has_telemetry_stage: bool,
+    pub(super) has_chat_history_stage: bool,
+    pub(super) has_test_harness_core_test_links_stage: bool,
+    pub(super) has_test_harness_core_line_coverage_stage: bool,
+    pub(super) has_test_harness_core_branch_coverage_stage: bool,
+    pub(super) has_test_harness_core_coverage_metadata_stage: bool,
+    pub(super) test_harness_core_test_links: TestHarnessCoreTestLinksFilter,
+    pub(super) test_harness_core_line_coverage: TestHarnessCoreArtefactFilter,
+    pub(super) test_harness_core_branch_coverage: TestHarnessCoreArtefactFilter,
+    pub(super) registered_stages: Vec<RegisteredStageCall>,
+    pub(super) limit: usize,
+    pub(super) select_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct RegisteredStageCall {
-    stage_name: String,
-    args: BTreeMap<String, String>,
+pub(super) struct RegisteredStageCall {
+    pub(super) stage_name: String,
+    pub(super) args: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
-enum AsOfSelector {
+pub(super) enum AsOfSelector {
     Ref(String),
     Commit(String),
     SaveCurrent,
@@ -44,50 +47,50 @@ enum AsOfSelector {
 }
 
 #[derive(Debug, Clone, Default)]
-struct ArtefactFilter {
-    kind: Option<String>,
-    symbol_fqn: Option<String>,
-    lines: Option<(i32, i32)>,
-    agent: Option<String>,
-    since: Option<String>,
+pub(super) struct ArtefactFilter {
+    pub(super) kind: Option<String>,
+    pub(super) symbol_fqn: Option<String>,
+    pub(super) lines: Option<(i32, i32)>,
+    pub(super) agent: Option<String>,
+    pub(super) since: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct CloneFilter {
-    relation_kind: Option<String>,
-    min_score: Option<f32>,
+pub(super) struct CloneFilter {
+    pub(super) relation_kind: Option<String>,
+    pub(super) min_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct CheckpointFilter {
-    agent: Option<String>,
-    since: Option<String>,
+pub(super) struct CheckpointFilter {
+    pub(super) agent: Option<String>,
+    pub(super) since: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct TelemetryFilter {
-    event_type: Option<String>,
-    agent: Option<String>,
-    since: Option<String>,
+pub(super) struct TelemetryFilter {
+    pub(super) event_type: Option<String>,
+    pub(super) agent: Option<String>,
+    pub(super) since: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct TestHarnessCoreArtefactFilter {
-    artefact_id: Option<String>,
+pub(super) struct TestHarnessCoreArtefactFilter {
+    pub(super) artefact_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct TestHarnessCoreTestLinksFilter {
-    artefact_id: Option<String>,
-    min_confidence: Option<f64>,
-    linkage_source: Option<String>,
+pub(super) struct TestHarnessCoreTestLinksFilter {
+    pub(super) artefact_id: Option<String>,
+    pub(super) min_confidence: Option<f64>,
+    pub(super) linkage_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct DepsFilter {
-    kind: Option<DepsKind>,
-    direction: DepsDirection,
-    include_unresolved: bool,
+pub(super) struct DepsFilter {
+    pub(super) kind: Option<DepsKind>,
+    pub(super) direction: DepsDirection,
+    pub(super) include_unresolved: bool,
 }
 
 impl Default for DepsFilter {
@@ -100,7 +103,7 @@ impl Default for DepsFilter {
     }
 }
 
-fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
+pub(super) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
     let mut parsed = ParsedDevqlQuery {
         limit: 100,
         ..Default::default()
@@ -316,12 +319,16 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             parsed.test_harness_core_test_links.min_confidence = args
                 .get("min_confidence")
                 .map(|value| {
-                    value.parse::<f64>().map(|parsed| parsed.clamp(0.0, 1.0)).map_err(
-                        |_| anyhow!("__core_test_links(min_confidence:...) must be numeric"),
-                    )
+                    value
+                        .parse::<f64>()
+                        .map(|parsed| parsed.clamp(0.0, 1.0))
+                        .map_err(|_| {
+                            anyhow!("__core_test_links(min_confidence:...) must be numeric")
+                        })
                 })
                 .transpose()?;
-            parsed.test_harness_core_test_links.linkage_source = args.get("linkage_source").cloned();
+            parsed.test_harness_core_test_links.linkage_source =
+                args.get("linkage_source").cloned();
             continue;
         }
 
@@ -351,8 +358,7 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         {
             let args = parse_named_args(inner)?;
             parsed.has_test_harness_core_branch_coverage_stage = true;
-            parsed.test_harness_core_branch_coverage.artefact_id =
-                args.get("artefact_id").cloned();
+            parsed.test_harness_core_branch_coverage.artefact_id = args.get("artefact_id").cloned();
             continue;
         }
 
@@ -377,12 +383,12 @@ fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
     Ok(parsed)
 }
 
-fn validate_deps_filter(deps: &DepsFilter) -> Result<()> {
+pub(super) fn validate_deps_filter(deps: &DepsFilter) -> Result<()> {
     let _ = deps;
     Ok(())
 }
 
-fn parse_named_args(input: &str) -> Result<BTreeMap<String, String>> {
+pub(super) fn parse_named_args(input: &str) -> Result<BTreeMap<String, String>> {
     let mut args = BTreeMap::new();
     if input.trim().is_empty() {
         return Ok(args);
@@ -433,7 +439,7 @@ fn parse_named_args(input: &str) -> Result<BTreeMap<String, String>> {
     Ok(args)
 }
 
-fn parse_single_quoted_or_double(input: &str) -> Result<String> {
+pub(super) fn parse_single_quoted_or_double(input: &str) -> Result<String> {
     let s = input.trim();
     if s.len() < 2 {
         bail!("expected quoted string, got: {input}")
@@ -446,7 +452,7 @@ fn parse_single_quoted_or_double(input: &str) -> Result<String> {
     bail!("expected quoted string, got: {input}")
 }
 
-fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
+pub(super) fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
     let Some((start, end)) = lines.split_once("..") else {
         bail!("invalid lines range: {lines}")
     };
@@ -464,7 +470,7 @@ fn parse_lines_range(lines: &str) -> Result<(i32, i32)> {
     Ok((start, end))
 }
 
-fn parse_registered_stage(stage: &str) -> Result<Option<RegisteredStageCall>> {
+pub(super) fn parse_registered_stage(stage: &str) -> Result<Option<RegisteredStageCall>> {
     let Some(open_idx) = stage.find('(') else {
         return Ok(None);
     };

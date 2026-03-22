@@ -1,4 +1,6 @@
-fn summary_similarity(
+use super::*;
+
+pub(super) fn summary_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> (f32, Vec<String>) {
@@ -7,7 +9,7 @@ fn summary_similarity(
     jaccard_with_shared(&source_tokens, &target_tokens)
 }
 
-fn summary_tokens(summary: &str) -> Vec<String> {
+pub(super) fn summary_tokens(summary: &str) -> Vec<String> {
     summary
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter_map(|token| {
@@ -21,7 +23,7 @@ fn summary_tokens(summary: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn filter_signal_tokens(tokens: Vec<String>) -> Vec<String> {
+pub(super) fn filter_signal_tokens(tokens: Vec<String>) -> Vec<String> {
     tokens
         .into_iter()
         .filter(|token| is_informative_signal_token(token))
@@ -29,11 +31,11 @@ fn filter_signal_tokens(tokens: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn is_informative_signal_token(token: &str) -> bool {
+pub(super) fn is_informative_signal_token(token: &str) -> bool {
     token.len() >= 3 && token.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
-fn container_identity(symbol_fqn: &str) -> Option<String> {
+pub(super) fn container_identity(symbol_fqn: &str) -> Option<String> {
     let segments = symbol_fqn
         .split("::")
         .map(str::trim)
@@ -46,11 +48,11 @@ fn container_identity(symbol_fqn: &str) -> Option<String> {
     Some(segments[..segments.len() - 1].join("::"))
 }
 
-fn bool_score(value: bool) -> f32 {
+pub(super) fn bool_score(value: bool) -> f32 {
     if value { 1.0 } else { 0.0 }
 }
 
-fn build_clone_input_hash(
+pub(super) fn build_clone_input_hash(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> String {
@@ -80,25 +82,25 @@ fn build_clone_input_hash(
     )
 }
 
-fn compatible_kind_score(left: &str, right: &str) -> f32 {
+pub(super) fn compatible_kind_score(left: &str, right: &str) -> f32 {
     if same_clone_kind(left, right) {
         return 1.0;
     }
     0.0
 }
 
-fn same_clone_kind(left: &str, right: &str) -> bool {
+pub(super) fn same_clone_kind(left: &str, right: &str) -> bool {
     left.trim().eq_ignore_ascii_case(right.trim())
 }
 
-fn is_meaningful_clone_candidate(input: &SymbolCloneCandidateInput) -> bool {
+pub(super) fn is_meaningful_clone_candidate(input: &SymbolCloneCandidateInput) -> bool {
     if input.canonical_kind.eq_ignore_ascii_case("import") {
         return false;
     }
     true
 }
 
-fn signature_similarity(
+pub(super) fn signature_similarity(
     source: &SymbolCloneCandidateInput,
     target: &SymbolCloneCandidateInput,
 ) -> f32 {
@@ -110,7 +112,7 @@ fn signature_similarity(
     }
 }
 
-fn name_match_score(left: &str, right: &str) -> f32 {
+pub(super) fn name_match_score(left: &str, right: &str) -> f32 {
     if left.is_empty() || right.is_empty() {
         return 0.0;
     }
@@ -135,7 +137,7 @@ fn name_match_score(left: &str, right: &str) -> f32 {
     }
 }
 
-fn path_similarity(left: &str, right: &str) -> f32 {
+pub(super) fn path_similarity(left: &str, right: &str) -> f32 {
     let left_segments = left
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -160,7 +162,7 @@ fn path_similarity(left: &str, right: &str) -> f32 {
     shared as f32 / left_segments.len().max(right_segments.len()) as f32
 }
 
-fn jaccard_with_shared(left: &[String], right: &[String]) -> (f32, Vec<String>) {
+pub(super) fn jaccard_with_shared(left: &[String], right: &[String]) -> (f32, Vec<String>) {
     let left_set = left
         .iter()
         .map(|value| value.trim())
@@ -195,11 +197,11 @@ fn jaccard_with_shared(left: &[String], right: &[String]) -> (f32, Vec<String>) 
     )
 }
 
-fn normalized_body_hash(input: &SymbolCloneCandidateInput) -> String {
+pub(super) fn normalized_body_hash(input: &SymbolCloneCandidateInput) -> String {
     sha256_hex(&input.normalized_body_tokens.join("|"))
 }
 
-fn normalized_signature_hash(input: &SymbolCloneCandidateInput) -> String {
+pub(super) fn normalized_signature_hash(input: &SymbolCloneCandidateInput) -> String {
     sha256_hex(
         &json!({
             "kind": input.canonical_kind,
@@ -210,7 +212,7 @@ fn normalized_signature_hash(input: &SymbolCloneCandidateInput) -> String {
     )
 }
 
-fn is_experimental_path(path: &str) -> bool {
+pub(super) fn is_experimental_path(path: &str) -> bool {
     let normalized = path.to_ascii_lowercase();
     normalized.contains("/experimental/")
         || normalized.contains("/playground/")
@@ -218,7 +220,7 @@ fn is_experimental_path(path: &str) -> bool {
         || normalized.contains("/fixtures/")
 }
 
-fn sha256_hex(input: &str) -> String {
+pub(super) fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {

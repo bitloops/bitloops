@@ -1,6 +1,8 @@
+use super::*;
+
 // Checkpoint and commit row persistence: mapping, event insertion, upserts.
 
-async fn ensure_repository_row(
+pub(super) async fn ensure_repository_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
 ) -> Result<()> {
@@ -16,18 +18,18 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
     relational.exec(&sql).await
 }
 
-fn default_branch_name(repo_root: &Path) -> String {
+pub(super) fn default_branch_name(repo_root: &Path) -> String {
     run_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .unwrap_or_else(|_| "main".to_string())
 }
 
-fn collect_checkpoint_commit_map(
+pub(super) fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
     collect_checkpoint_commit_map_from_db(repo_root)
 }
 
-fn collect_checkpoint_commit_map_from_db(
+pub(super) fn collect_checkpoint_commit_map_from_db(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
     let mappings = read_commit_checkpoint_mappings(repo_root)?;
@@ -54,7 +56,11 @@ fn collect_checkpoint_commit_map_from_db(
     Ok(out)
 }
 
-fn is_newer_commit_sha(repo_root: &Path, existing_sha: &str, candidate_sha: &str) -> bool {
+pub(super) fn is_newer_commit_sha(
+    repo_root: &Path,
+    existing_sha: &str,
+    candidate_sha: &str,
+) -> bool {
     if existing_sha == candidate_sha {
         return false;
     }
@@ -67,7 +73,11 @@ fn is_newer_commit_sha(repo_root: &Path, existing_sha: &str, candidate_sha: &str
     candidate_sha > existing_sha
 }
 
-fn commit_is_ancestor_of(repo_root: &Path, ancestor_sha: &str, descendant_sha: &str) -> bool {
+pub(super) fn commit_is_ancestor_of(
+    repo_root: &Path,
+    ancestor_sha: &str,
+    descendant_sha: &str,
+) -> bool {
     run_git(
         repo_root,
         &["merge-base", "--is-ancestor", ancestor_sha, descendant_sha],
@@ -75,7 +85,7 @@ fn commit_is_ancestor_of(repo_root: &Path, ancestor_sha: &str, descendant_sha: &
     .is_ok()
 }
 
-fn checkpoint_commit_info_from_sha(
+pub(super) fn checkpoint_commit_info_from_sha(
     repo_root: &Path,
     commit_sha: &str,
 ) -> Option<CheckpointCommitInfo> {
@@ -85,12 +95,7 @@ fn checkpoint_commit_info_from_sha(
 
     let raw = run_git(
         repo_root,
-        &[
-            "show",
-            "-s",
-            "--format=%ct%x1f%an%x1f%ae%x1f%s",
-            commit_sha,
-        ],
+        &["show", "-s", "--format=%ct%x1f%an%x1f%ae%x1f%s", commit_sha],
     )
     .ok()?;
 
@@ -113,12 +118,12 @@ fn checkpoint_commit_info_from_sha(
 }
 
 #[derive(Debug, Clone)]
-struct CheckpointEventsStore {
+pub(super) struct CheckpointEventsStore {
     inner: CheckpointEventsStoreInner,
 }
 
 #[derive(Debug, Clone)]
-enum CheckpointEventsStoreInner {
+pub(super) enum CheckpointEventsStoreInner {
     ClickHouse {
         endpoint: String,
         user: Option<String>,
@@ -158,15 +163,14 @@ impl CheckpointEventsStore {
                     "SELECT event_id FROM checkpoint_events WHERE repo_id = '{}' FORMAT JSON",
                     esc_ch(repo_id)
                 );
-                let raw = run_clickhouse_sql_http(
-                    endpoint,
-                    user.as_deref(),
-                    password.as_deref(),
-                    &sql,
-                )
-                .await?;
+                let raw =
+                    run_clickhouse_sql_http(endpoint, user.as_deref(), password.as_deref(), &sql)
+                        .await?;
                 let parsed: Value = serde_json::from_str(raw.trim()).with_context(|| {
-                    format!("parsing ClickHouse JSON response: {}", truncate_for_error(&raw))
+                    format!(
+                        "parsing ClickHouse JSON response: {}",
+                        truncate_for_error(&raw)
+                    )
                 })?;
                 let mut out = HashSet::new();
                 if let Some(rows) = parsed.get("data").and_then(Value::as_array) {
@@ -264,7 +268,7 @@ WHERE NOT EXISTS (SELECT 1 FROM checkpoint_events WHERE event_id = '{event_id}')
     }
 }
 
-fn checkpoint_event_time_rfc3339(
+pub(super) fn checkpoint_event_time_rfc3339(
     cp: &CommittedInfo,
     commit_info: Option<&CheckpointCommitInfo>,
 ) -> String {
@@ -283,7 +287,7 @@ fn checkpoint_event_time_rfc3339(
         .unwrap_or_else(|_| "0".to_string())
 }
 
-async fn fetch_existing_checkpoint_event_ids(
+pub(super) async fn fetch_existing_checkpoint_event_ids(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
 ) -> Result<HashSet<String>> {
@@ -292,7 +296,7 @@ async fn fetch_existing_checkpoint_event_ids(
         .await
 }
 
-async fn insert_checkpoint_event(
+pub(super) async fn insert_checkpoint_event(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     cp: &CommittedInfo,
@@ -304,7 +308,7 @@ async fn insert_checkpoint_event(
         .await
 }
 
-async fn upsert_commit_row(
+pub(super) async fn upsert_commit_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     cp: &CommittedInfo,

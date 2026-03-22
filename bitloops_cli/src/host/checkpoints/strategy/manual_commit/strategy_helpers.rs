@@ -1,7 +1,9 @@
+use super::*;
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 impl ManualCommitStrategy {
-    fn initialize_or_refresh_session(
+    pub(crate) fn initialize_or_refresh_session(
         &self,
         session_id: &str,
         agent_type: &str,
@@ -110,7 +112,7 @@ impl ManualCommitStrategy {
         }
     }
 
-    fn finalize_all_turn_checkpoints(&self, state: &mut SessionState) {
+    pub(crate) fn finalize_all_turn_checkpoints(&self, state: &mut SessionState) {
         if state.turn_checkpoint_ids.is_empty() {
             return;
         }
@@ -150,7 +152,7 @@ impl ManualCommitStrategy {
 
     /// Condenses session work into committed checkpoint rows/blobs.
     ///
-    fn condense_session(
+    pub(crate) fn condense_session(
         &self,
         state: &mut SessionState,
         checkpoint_id: &str,
@@ -180,12 +182,13 @@ impl ManualCommitStrategy {
             new_head,
             &committed_touched,
         );
-        let transcript_content = if crate::host::checkpoints::session::legacy_local_backend_enabled() {
-            read_transcript_from_disk(&self.repo_root, &state.session_id)
-        } else {
-            None
-        }
-        .or_else(|| {
+        let transcript_content =
+            if crate::host::checkpoints::session::legacy_local_backend_enabled() {
+                read_transcript_from_disk(&self.repo_root, &state.session_id)
+            } else {
+                None
+            }
+            .or_else(|| {
                 if state.transcript_path.trim().is_empty() {
                     return None;
                 }
@@ -217,8 +220,12 @@ impl ManualCommitStrategy {
                 crate::config::settings::load_settings(&self.repo_root).unwrap_or_default();
             if settings.is_summarize_enabled() && !transcript_content.is_empty() {
                 let summarize_agent = match state.agent_type.as_str() {
-                    s if s == AGENT_TYPE_GEMINI => crate::host::checkpoints::summarize::AgentType::Gemini,
-                    s if s == AGENT_TYPE_OPEN_CODE => crate::host::checkpoints::summarize::AgentType::OpenCode,
+                    s if s == AGENT_TYPE_GEMINI => {
+                        crate::host::checkpoints::summarize::AgentType::Gemini
+                    }
+                    s if s == AGENT_TYPE_OPEN_CODE => {
+                        crate::host::checkpoints::summarize::AgentType::OpenCode
+                    }
                     s if s == AGENT_TYPE_CLAUDE_CODE || s == AGENT_TYPE_CODEX => {
                         crate::host::checkpoints::summarize::AgentType::ClaudeCode
                     }
@@ -313,7 +320,7 @@ impl ManualCommitStrategy {
     }
 
     /// Applies the formal GitCommit transition and returns emitted actions.
-    fn apply_git_commit_transition(
+    pub(crate) fn apply_git_commit_transition(
         &self,
         state: &mut SessionState,
         is_rebase_in_progress: bool,
@@ -336,7 +343,7 @@ impl ManualCommitStrategy {
 
     /// Updates `base_commit` to HEAD for all active sessions.
     #[allow(dead_code)]
-    fn update_base_commit_for_active_sessions(&self) -> Result<()> {
+    pub(crate) fn update_base_commit_for_active_sessions(&self) -> Result<()> {
         let Some(head) = try_head_hash(&self.repo_root)? else {
             return Ok(());
         };

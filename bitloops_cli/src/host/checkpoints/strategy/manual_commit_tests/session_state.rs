@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
+pub(crate) fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -51,7 +53,7 @@ fn save_step_persists_temporary_checkpoint_without_shadow_branch() {
 }
 
 #[test]
-fn save_step_checkpoint_tree_has_modified_file() {
+pub(crate) fn save_step_checkpoint_tree_has_modified_file() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -97,7 +99,7 @@ fn save_step_checkpoint_tree_has_modified_file() {
 }
 
 #[test]
-fn save_step_skips_when_no_changes() {
+pub(crate) fn save_step_skips_when_no_changes() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -145,7 +147,7 @@ fn save_step_skips_when_no_changes() {
 }
 
 #[test]
-fn save_step_increments_step_count() {
+pub(crate) fn save_step_increments_step_count() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -188,7 +190,7 @@ fn save_step_increments_step_count() {
 }
 
 #[test]
-fn save_step_sets_base_commit() {
+pub(crate) fn save_step_sets_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -227,7 +229,7 @@ fn save_step_sets_base_commit() {
 }
 
 #[test]
-fn save_task_step_keeps_existing_base_commit_without_shadow_migration() {
+pub(crate) fn save_task_step_keeps_existing_base_commit_without_shadow_migration() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -270,7 +272,7 @@ fn save_task_step_keeps_existing_base_commit_without_shadow_migration() {
 }
 
 #[test]
-fn initialize_session_sets_pending_prompt_attribution() {
+pub(crate) fn initialize_session_sets_pending_prompt_attribution() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let strategy = ManualCommitStrategy::new(dir.path());
@@ -295,7 +297,7 @@ fn initialize_session_sets_pending_prompt_attribution() {
 }
 
 #[test]
-fn initialize_session_keeps_existing_base_commit_without_shadow_migration() {
+pub(crate) fn initialize_session_keeps_existing_base_commit_without_shadow_migration() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
 
@@ -333,7 +335,7 @@ fn initialize_session_keeps_existing_base_commit_without_shadow_migration() {
 }
 
 #[test]
-fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_hash() {
+pub(crate) fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_hash() {
     let dir = tempfile::tempdir().unwrap();
     let base_commit = setup_git_repo(&dir);
     let session_id = "attr-latest-temp-tree";
@@ -380,7 +382,7 @@ fn initialize_session_prompt_attribution_uses_latest_temporary_checkpoint_tree_h
 }
 
 #[test]
-fn save_step_consumes_pending_prompt_attribution() {
+pub(crate) fn save_step_consumes_pending_prompt_attribution() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     fs::write(dir.path().join("tracked.txt"), "line1\nline2\n").unwrap();
@@ -437,7 +439,7 @@ fn save_step_consumes_pending_prompt_attribution() {
 
 // New test: save_step includes transcript in the temporary checkpoint tree.
 #[test]
-fn save_step_includes_transcript_in_checkpoint_tree() {
+pub(crate) fn save_step_includes_transcript_in_checkpoint_tree() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -500,7 +502,7 @@ fn save_step_includes_transcript_in_checkpoint_tree() {
 
 // New test: save_step with untracked directory does not crash.
 #[test]
-fn save_step_with_untracked_dir_does_not_crash() {
+pub(crate) fn save_step_with_untracked_dir_does_not_crash() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -545,7 +547,7 @@ fn save_step_with_untracked_dir_does_not_crash() {
 }
 
 #[test]
-fn save_step_no_head_is_noop() {
+pub(crate) fn save_step_no_head_is_noop() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
 

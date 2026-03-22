@@ -1,17 +1,19 @@
+use super::*;
+
 // JS/TS artefact extraction via tree-sitter.
 
-struct JsTsArtefactDescriptor<'a> {
+pub(super) struct JsTsArtefactDescriptor<'a> {
     language_kind: &'a str,
     name: &'a str,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,
 }
 
-fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
+pub(super) fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
     Ok(extract_js_ts_artefacts_treesitter(content, path)?.unwrap_or_default())
 }
 
-fn extract_js_ts_artefacts_treesitter(
+pub(super) fn extract_js_ts_artefacts_treesitter(
     content: &str,
     path: &str,
 ) -> Result<Option<Vec<JsTsArtefact>>> {
@@ -48,7 +50,10 @@ fn extract_js_ts_artefacts_treesitter(
     }
 
     crate::telemetry::logging::warn(
-        &crate::telemetry::logging::with_component(crate::telemetry::logging::background(), "devql"),
+        &crate::telemetry::logging::with_component(
+            crate::telemetry::logging::background(),
+            "devql",
+        ),
         "devql parse failure fallback",
         &[
             crate::telemetry::logging::string_attr("path", path),
@@ -60,7 +65,7 @@ fn extract_js_ts_artefacts_treesitter(
     Ok(None)
 }
 
-fn collect_js_ts_nodes_recursive(
+pub(super) fn collect_js_ts_nodes_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -201,7 +206,7 @@ fn collect_js_ts_nodes_recursive(
     }
 }
 
-fn push_js_ts_artefact(
+pub(super) fn push_js_ts_artefact(
     out: &mut Vec<JsTsArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
     node: tree_sitter::Node,
@@ -248,7 +253,7 @@ fn push_js_ts_artefact(
     });
 }
 
-fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
+pub(super) fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
     let mut modifiers = Vec::new();
     let mut current = node;
     let mut wrappers = Vec::new();
@@ -268,7 +273,7 @@ fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String
     modifiers
 }
 
-fn collect_js_ts_wrapper_modifiers(
+pub(super) fn collect_js_ts_wrapper_modifiers(
     wrapper: tree_sitter::Node,
     child: tree_sitter::Node,
     content: &str,
@@ -288,7 +293,7 @@ fn collect_js_ts_wrapper_modifiers(
     }
 }
 
-fn collect_js_ts_inline_modifiers(
+pub(super) fn collect_js_ts_inline_modifiers(
     node: tree_sitter::Node,
     content: &str,
     modifiers: &mut Vec<String>,
@@ -310,7 +315,7 @@ fn collect_js_ts_inline_modifiers(
     }
 }
 
-fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(super) fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Option<String> {
     let kind = node.kind();
     let text = node.utf8_text(content.as_bytes()).ok()?.trim();
     let modifier = match kind {
@@ -323,7 +328,7 @@ fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Option<String>
     Some(modifier.to_ascii_lowercase())
 }
 
-fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option<String>) {
+pub(super) fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option<String>) {
     let Some(modifier) = modifier.as_ref() else {
         return;
     };
@@ -332,7 +337,7 @@ fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option<String>) {
     }
 }
 
-fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(super) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return None;
@@ -397,7 +402,7 @@ fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) -> Option<Str
     .filter(|doc| !doc.trim().is_empty())
 }
 
-fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
+pub(super) fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
     let mut anchor_line = node.start_position().row as i32 + 1;
     let mut current = node;
 
@@ -420,7 +425,7 @@ fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
     anchor_line
 }
 
-fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
+pub(super) fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
     lines
         .iter()
         .map(|line| {
@@ -435,7 +440,7 @@ fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
         .to_string()
 }
 
-fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
+pub(super) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
     let mut normalized = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let mut text = line.trim().to_string();
@@ -460,7 +465,7 @@ fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
     normalized.join("\n").trim().to_string()
 }
 
-fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
+pub(super) fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
     let mut current = Some(node);
     while let Some(cursor) = current {
         let Some(parent) = cursor.parent() else {
@@ -468,7 +473,9 @@ fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
         };
         match parent.kind() {
             "program" => return true,
-            "export_statement" | "ambient_declaration" | "lexical_declaration"
+            "export_statement"
+            | "ambient_declaration"
+            | "lexical_declaration"
             | "variable_declaration" => {
                 current = Some(parent);
             }

@@ -1,7 +1,9 @@
+use super::*;
+
 // Artefact symbol identity helpers: normalisation, semantic IDs, and the
 // legacy regex-based function extractor (test-only).
 
-fn normalize_identity_fragment(input: &str) -> String {
+pub(super) fn normalize_identity_fragment(input: &str) -> String {
     let normalized = input
         .chars()
         .filter(|ch| !ch.is_whitespace())
@@ -13,17 +15,17 @@ fn normalize_identity_fragment(input: &str) -> String {
     }
 }
 
-fn has_positional_identity_name(name: &str) -> bool {
+pub(super) fn has_positional_identity_name(name: &str) -> bool {
     name.rsplit_once('@')
         .map(|(_, suffix)| !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit()))
         .unwrap_or(false)
 }
 
-fn source_path_from_symbol_fqn(symbol_fqn: &str) -> &str {
+pub(super) fn source_path_from_symbol_fqn(symbol_fqn: &str) -> &str {
     symbol_fqn.split("::").next().unwrap_or(symbol_fqn)
 }
 
-fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
+pub(super) fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
     if has_positional_identity_name(&item.name) {
         normalize_identity_fragment(&identity_signature_for_artefact(item))
     } else {
@@ -31,7 +33,7 @@ fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
     }
 }
 
-fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
+pub(super) fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
     let mut signature = item.signature.clone();
     let mut modifiers = item
         .modifiers
@@ -50,7 +52,10 @@ fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
     signature
 }
 
-fn structural_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Option<&str>) -> String {
+pub(super) fn structural_symbol_id_for_artefact(
+    item: &JsTsArtefact,
+    parent_symbol_id: Option<&str>,
+) -> String {
     deterministic_uuid(&format!(
         "{}|{}|{}|{}|{}|{}",
         source_path_from_symbol_fqn(&item.symbol_fqn),
@@ -62,17 +67,20 @@ fn structural_symbol_id_for_artefact(item: &JsTsArtefact, parent_symbol_id: Opti
     ))
 }
 
-fn file_symbol_id(path: &str) -> String {
+pub(super) fn file_symbol_id(path: &str) -> String {
     deterministic_uuid(&format!("{path}|file"))
 }
 
-fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
+pub(super) fn revision_artefact_id(repo_id: &str, blob_sha: &str, symbol_id: &str) -> String {
     let provenance = CanonicalProvenanceRef::for_blob(repo_id, blob_sha);
-    deterministic_uuid(&format!("{}|{symbol_id}", provenance.artefact_identity_scope()))
+    deterministic_uuid(&format!(
+        "{}|{symbol_id}",
+        provenance.artefact_identity_scope()
+    ))
 }
 
 #[cfg(test)]
-fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
+pub(super) fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtefact>> {
     let function_decl = Regex::new(
         r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     )?;

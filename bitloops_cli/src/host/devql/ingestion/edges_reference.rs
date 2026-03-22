@@ -1,6 +1,8 @@
+use super::*;
+
 // Reference edge extraction for JS/TS and Rust.
 
-fn collect_js_ts_reference_edges_recursive(
+pub(super) fn collect_js_ts_reference_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     ctx: &ReferenceCtx,
@@ -49,7 +51,7 @@ fn collect_js_ts_reference_edges_recursive(
     }
 }
 
-fn collect_rust_reference_edges_recursive(
+pub(super) fn collect_rust_reference_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     ctx: &ReferenceCtx,

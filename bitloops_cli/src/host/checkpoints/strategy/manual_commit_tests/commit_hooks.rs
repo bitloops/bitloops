@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn get_git_author_from_repo_global_fallback() {
+pub(crate) fn get_git_author_from_repo_global_fallback() {
     let home = tempfile::tempdir().unwrap();
     with_env_vars(
         &[
@@ -31,7 +33,7 @@ fn get_git_author_from_repo_global_fallback() {
 }
 
 #[test]
-fn get_git_author_from_repo_no_config() {
+pub(crate) fn get_git_author_from_repo_no_config() {
     let home = tempfile::tempdir().unwrap();
     with_env_vars(
         &[
@@ -57,7 +59,7 @@ fn get_git_author_from_repo_no_config() {
 }
 
 #[test]
-fn prepare_commit_msg_is_noop_even_with_active_session() {
+pub(crate) fn prepare_commit_msg_is_noop_even_with_active_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -87,7 +89,7 @@ fn prepare_commit_msg_is_noop_even_with_active_session() {
 }
 
 #[test]
-fn prepare_commit_msg_skips_merge() {
+pub(crate) fn prepare_commit_msg_skips_merge() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -108,7 +110,7 @@ fn prepare_commit_msg_skips_merge() {
 }
 
 #[test]
-fn prepare_commit_msg_is_noop_for_amend_source() {
+pub(crate) fn prepare_commit_msg_is_noop_for_amend_source() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -126,7 +128,7 @@ fn prepare_commit_msg_is_noop_for_amend_source() {
 }
 
 #[test]
-fn prepare_commit_msg_noop_no_session() {
+pub(crate) fn prepare_commit_msg_noop_no_session() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -146,7 +148,7 @@ fn prepare_commit_msg_noop_no_session() {
 }
 
 #[test]
-fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps() {
+pub(crate) fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -175,7 +177,7 @@ fn prepare_commit_msg_is_noop_for_idle_sessions_without_pending_steps() {
 }
 
 #[test]
-fn commit_msg_is_noop_for_checkpoint_only_message() {
+pub(crate) fn commit_msg_is_noop_for_checkpoint_only_message() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -191,7 +193,7 @@ fn commit_msg_is_noop_for_checkpoint_only_message() {
 }
 
 #[test]
-fn commit_msg_is_noop_for_real_message() {
+pub(crate) fn commit_msg_is_noop_for_real_message() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 

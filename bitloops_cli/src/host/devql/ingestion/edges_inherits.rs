@@ -1,6 +1,8 @@
+use super::*;
+
 // Extension edge extraction for JS/TS (extends) and Rust (supertraits).
 
-fn collect_js_ts_extends_edges_recursive(
+pub(super) fn collect_js_ts_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,
@@ -103,7 +105,7 @@ fn collect_js_ts_extends_edges_recursive(
     }
 }
 
-fn collect_rust_extends_edges_recursive(
+pub(super) fn collect_rust_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,

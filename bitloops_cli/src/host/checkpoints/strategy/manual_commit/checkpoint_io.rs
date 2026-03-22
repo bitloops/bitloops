@@ -1,4 +1,11 @@
-include!("checkpoint_io/types.rs");
-include!("checkpoint_io/committed.rs");
-include!("checkpoint_io/temporary.rs");
-include!("checkpoint_io/update.rs");
+use super::*;
+
+mod committed;
+mod temporary;
+mod types;
+mod update;
+
+pub(crate) use self::committed::*;
+pub(crate) use self::temporary::*;
+pub use self::types::*;
+pub(crate) use self::update::*;

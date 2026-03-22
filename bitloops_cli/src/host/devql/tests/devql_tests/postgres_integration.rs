@@ -1,3 +1,5 @@
+use super::*;
+
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
 async fn artefact_edges_constraints_and_dedup_work_in_postgres() {

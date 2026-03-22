@@ -1,4 +1,6 @@
-fn normalise_relational_result_row(row: Value) -> Value {
+use super::*;
+
+pub(crate) fn normalise_relational_result_row(row: Value) -> Value {
     let Some(mut obj) = row.as_object().cloned() else {
         return row;
     };

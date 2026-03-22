@@ -1,6 +1,8 @@
+use super::*;
+
 // JS/TS dependency edge extraction (imports, calls, references, extends, exports).
 
-fn extract_js_ts_dependency_edges(
+pub(super) fn extract_js_ts_dependency_edges(
     content: &str,
     path: &str,
     artefacts: &[JsTsArtefact],
@@ -183,7 +185,10 @@ fn extract_js_ts_dependency_edges(
                 value_targets: &value_targets,
                 imported_symbol_refs: &imported_symbol_refs,
             },
-            &mut EdgeCollector { out: &mut edges, seen: &mut seen_references },
+            &mut EdgeCollector {
+                out: &mut edges,
+                seen: &mut seen_references,
+            },
         );
         collect_js_ts_extends_edges_recursive(
             root,

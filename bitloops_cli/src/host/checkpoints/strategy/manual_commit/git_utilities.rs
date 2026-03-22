@@ -1,9 +1,11 @@
+use super::*;
+
 // ── Git utilities ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 use crate::test_support::process_state::git_command;
 
-fn new_git_command() -> Command {
+pub(crate) fn new_git_command() -> Command {
     #[cfg(test)]
     {
         git_command()
@@ -50,7 +52,7 @@ pub fn run_git_env(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Res
     Ok(stdout.trim().to_string())
 }
 
-fn should_preserve_stdout(args: &[&str]) -> bool {
+pub(crate) fn should_preserve_stdout(args: &[&str]) -> bool {
     if args.first() != Some(&"show") {
         return false;
     }
@@ -60,13 +62,13 @@ fn should_preserve_stdout(args: &[&str]) -> bool {
 }
 
 /// Returns the full SHA of HEAD.
-fn head_hash(repo_root: &Path) -> Result<String> {
+pub(crate) fn head_hash(repo_root: &Path) -> Result<String> {
     run_git(repo_root, &["rev-parse", "HEAD"])
 }
 
 /// Returns `Some(HEAD)` when available, `None` when the repo has no commits yet.
 /// Any other git error is returned.
-fn try_head_hash(repo_root: &Path) -> Result<Option<String>> {
+pub(crate) fn try_head_hash(repo_root: &Path) -> Result<Option<String>> {
     match head_hash(repo_root) {
         Ok(h) => Ok(Some(h)),
         Err(e) if is_missing_head_error(&e) => Ok(None),
@@ -75,7 +77,7 @@ fn try_head_hash(repo_root: &Path) -> Result<Option<String>> {
 }
 
 /// Detects git errors that mean "HEAD does not exist yet" (fresh repo, no commits).
-fn is_missing_head_error(err: &anyhow::Error) -> bool {
+pub(crate) fn is_missing_head_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
     msg.contains("ambiguous argument 'HEAD'")
         || msg.contains("unknown revision or path not in the working tree")
@@ -87,7 +89,7 @@ fn is_missing_head_error(err: &anyhow::Error) -> bool {
 /// Includes the worktree hash suffix even for the main worktree
 /// (`worktree_id == ""`), producing the deterministic empty-string hash `e3b0c4`.
 ///
-fn shadow_branch_ref(base_commit: &str, worktree_id: &str) -> String {
+pub(crate) fn shadow_branch_ref(base_commit: &str, worktree_id: &str) -> String {
     let short = &base_commit[..base_commit.len().min(7)];
     let wt_hash = sha256_hex(worktree_id.as_bytes());
     format!("refs/heads/bitloops/{short}-{}", &wt_hash[..6])
@@ -100,7 +102,7 @@ fn shadow_branch_ref(base_commit: &str, worktree_id: &str) -> String {
 /// - `refs/heads/bitloops/<commit>-<worktree_hash>`
 /// - `bitloops/<commit>`
 /// - `bitloops/<commit>-<worktree_hash>`
-fn parse_shadow_branch_name(branch_name: &str) -> (String, String, bool) {
+pub(crate) fn parse_shadow_branch_name(branch_name: &str) -> (String, String, bool) {
     let suffix = if let Some(s) = branch_name.strip_prefix("refs/heads/bitloops/") {
         s
     } else if let Some(s) = branch_name.strip_prefix("bitloops/") {
@@ -122,10 +124,10 @@ pub struct CleanupItem {
     pub reason: String,
 }
 
-const SESSION_GRACE_PERIOD_SECS: u64 = 10 * 60;
+pub(crate) const SESSION_GRACE_PERIOD_SECS: u64 = 10 * 60;
 
 /// Matches bitloops/* shadow branches for cleanup.
-fn is_shadow_branch(branch_name: &str) -> bool {
+pub(crate) fn is_shadow_branch(branch_name: &str) -> bool {
     if branch_name == paths::METADATA_BRANCH_NAME {
         return false;
     }
@@ -140,7 +142,7 @@ fn is_shadow_branch(branch_name: &str) -> bool {
         || (worktree_hash.len() == 6 && worktree_hash.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-fn list_shadow_branches(repo_root: &Path) -> Result<Vec<String>> {
+pub(crate) fn list_shadow_branches(repo_root: &Path) -> Result<Vec<String>> {
     let refs = run_git(
         repo_root,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
@@ -155,7 +157,10 @@ fn list_shadow_branches(repo_root: &Path) -> Result<Vec<String>> {
     Ok(branches)
 }
 
-fn delete_shadow_branches(repo_root: &Path, branches: &[String]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn delete_shadow_branches(
+    repo_root: &Path,
+    branches: &[String],
+) -> (Vec<String>, Vec<String>) {
     if branches.is_empty() {
         return (vec![], vec![]);
     }
@@ -177,7 +182,7 @@ fn delete_shadow_branches(repo_root: &Path, branches: &[String]) -> (Vec<String>
     (deleted, failed)
 }
 
-fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
+pub(crate) fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
     let backend = create_session_backend_or_local(repo_root.to_path_buf());
     let states = backend.list_sessions()?;
     if states.is_empty() {
@@ -191,7 +196,8 @@ fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<CleanupItem>> {
         .filter(|sid| !sid.is_empty())
         .collect();
 
-    let legacy_shadow_branches_enabled = crate::host::checkpoints::session::legacy_local_backend_enabled();
+    let legacy_shadow_branches_enabled =
+        crate::host::checkpoints::session::legacy_local_backend_enabled();
     let shadow_branch_set: std::collections::HashSet<String> = if legacy_shadow_branches_enabled {
         list_shadow_branches(repo_root)
             .unwrap_or_default()
@@ -257,7 +263,7 @@ pub fn list_orphaned_session_states_for_cleanup(repo_root: &Path) -> Result<Vec<
     list_orphaned_session_states(repo_root)
 }
 
-fn expected_shadow_branch_short_name(base_commit: &str, worktree_id: &str) -> String {
+pub(crate) fn expected_shadow_branch_short_name(base_commit: &str, worktree_id: &str) -> String {
     if base_commit.is_empty() {
         return String::new();
     }
@@ -267,14 +273,14 @@ fn expected_shadow_branch_short_name(base_commit: &str, worktree_id: &str) -> St
         .to_string()
 }
 
-fn started_recently(started_at: &str, now_secs: u64, grace_period_secs: u64) -> bool {
+pub(crate) fn started_recently(started_at: &str, now_secs: u64, grace_period_secs: u64) -> bool {
     let Some(started_secs) = parse_timestamp_to_unix(started_at) else {
         return false;
     };
     now_secs.saturating_sub(started_secs) < grace_period_secs
 }
 
-fn parse_timestamp_to_unix(input: &str) -> Option<u64> {
+pub(crate) fn parse_timestamp_to_unix(input: &str) -> Option<u64> {
     let s = input.trim();
     if s.is_empty() {
         return None;
@@ -285,7 +291,7 @@ fn parse_timestamp_to_unix(input: &str) -> Option<u64> {
     parse_rfc3339_basic(s)
 }
 
-fn parse_rfc3339_basic(input: &str) -> Option<u64> {
+pub(crate) fn parse_rfc3339_basic(input: &str) -> Option<u64> {
     let (date, time_with_tz) = input.split_once('T')?;
     let mut date_parts = date.split('-');
     let year: i32 = date_parts.next()?.parse().ok()?;
@@ -328,7 +334,7 @@ fn parse_rfc3339_basic(input: &str) -> Option<u64> {
     }
 }
 
-fn ymd_hms_to_unix(
+pub(crate) fn ymd_hms_to_unix(
     year: i32,
     month: u32,
     day: u32,
@@ -359,7 +365,7 @@ fn ymd_hms_to_unix(
         .checked_add(second as u64)
 }
 
-fn days_in_month(year: i32, month: u32) -> Option<u32> {
+pub(crate) fn days_in_month(year: i32, month: u32) -> Option<u32> {
     let days = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -370,19 +376,19 @@ fn days_in_month(year: i32, month: u32) -> Option<u32> {
     Some(days)
 }
 
-fn is_leap_year(year: i32) -> bool {
+pub(crate) fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 /// Computes a lowercase hex SHA256 digest of `data`.
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(data);
     format!("{hash:x}")
 }
 
 /// Returns a 12-char lowercase hex checkpoint ID derived from a UUID v4.
-fn generate_checkpoint_id() -> String {
+pub(crate) fn generate_checkpoint_id() -> String {
     let id = uuid::Uuid::new_v4().simple().to_string();
     id[..12].to_string()
 }
@@ -398,7 +404,7 @@ pub(crate) fn checkpoint_dir_parts(id: &str) -> (String, String) {
 }
 
 /// Wrapper that owns a temp-index path and deletes the file on drop.
-struct TempIndexPath(PathBuf);
+pub(crate) struct TempIndexPath(PathBuf);
 
 impl TempIndexPath {
     fn new() -> Self {
@@ -543,7 +549,9 @@ pub(crate) fn build_tree_with_explicit_paths(
 }
 
 /// Returns `(modified, new_files, deleted)` from `git status --porcelain`.
-fn working_tree_changes(repo_root: &Path) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
+pub(crate) fn working_tree_changes(
+    repo_root: &Path,
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let output = new_git_command()
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .current_dir(repo_root)
@@ -642,7 +650,7 @@ fn working_tree_changes(repo_root: &Path) -> Result<(Vec<String>, Vec<String>, V
 }
 
 /// Merges `new_files` into `existing`, deduplicating.
-fn merge_files_touched(existing: &mut Vec<String>, new_files: &[String]) {
+pub(crate) fn merge_files_touched(existing: &mut Vec<String>, new_files: &[String]) {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = existing.iter().cloned().collect();
     for f in new_files {
@@ -653,7 +661,7 @@ fn merge_files_touched(existing: &mut Vec<String>, new_files: &[String]) {
     }
 }
 
-fn collect_untracked_files_at_start(repo_root: &Path) -> Vec<String> {
+pub(crate) fn collect_untracked_files_at_start(repo_root: &Path) -> Vec<String> {
     run_git(repo_root, &["ls-files", "--others", "--exclude-standard"])
         .map(|out| {
             out.lines()
@@ -665,11 +673,11 @@ fn collect_untracked_files_at_start(repo_root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn truncate_prompt_for_storage(prompt: &str) -> String {
+pub(crate) fn truncate_prompt_for_storage(prompt: &str) -> String {
     strings::truncate_runes(&strings::collapse_whitespace(prompt), 100, "...")
 }
 
-fn generate_context_from_prompts(prompts: &[String]) -> String {
+pub(crate) fn generate_context_from_prompts(prompts: &[String]) -> String {
     if prompts.is_empty() {
         return String::new();
     }

@@ -1,11 +1,15 @@
-struct CheckpointStorageContext {
-    sqlite: crate::storage::SqliteConnectionPool,
-    blob_store: Box<dyn crate::storage::blob::BlobStore>,
-    blob_backend: String,
-    repo_id: String,
+use super::*;
+
+pub(crate) struct CheckpointStorageContext {
+    pub(crate) sqlite: crate::storage::SqliteConnectionPool,
+    pub(crate) blob_store: Box<dyn crate::storage::blob::BlobStore>,
+    pub(crate) blob_backend: String,
+    pub(crate) repo_id: String,
 }
 
-fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorageContext> {
+pub(crate) fn open_checkpoint_storage_context(
+    repo_root: &Path,
+) -> Result<CheckpointStorageContext> {
     let cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for committed checkpoints")?;
     let sqlite_path = resolve_temporary_checkpoint_sqlite_path(repo_root)?;
@@ -31,7 +35,7 @@ fn open_checkpoint_storage_context(repo_root: &Path) -> Result<CheckpointStorage
     })
 }
 
-fn find_checkpoint_session_index(
+pub(crate) fn find_checkpoint_session_index(
     sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
     session_id: &str,
@@ -53,7 +57,7 @@ fn find_checkpoint_session_index(
     })
 }
 
-fn latest_checkpoint_session_index(
+pub(crate) fn latest_checkpoint_session_index(
     sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
 ) -> Result<Option<i64>> {
@@ -74,7 +78,7 @@ fn latest_checkpoint_session_index(
     })
 }
 
-fn resolve_checkpoint_session_index_for_write(
+pub(crate) fn resolve_checkpoint_session_index_for_write(
     sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
     session_id: &str,
@@ -85,7 +89,7 @@ fn resolve_checkpoint_session_index_for_write(
     Ok(latest_checkpoint_session_index(sqlite, checkpoint_id)?.map_or(0, |idx| idx + 1))
 }
 
-fn aggregate_checkpoint_metadata_from_db(
+pub(crate) fn aggregate_checkpoint_metadata_from_db(
     sqlite: &crate::storage::SqliteConnectionPool,
     checkpoint_id: &str,
 ) -> Result<(u32, Vec<String>, Option<TokenUsageMetadata>)> {
@@ -130,18 +134,25 @@ fn aggregate_checkpoint_metadata_from_db(
     ))
 }
 
-fn upsert_checkpoint_blob(
+pub(crate) fn upsert_checkpoint_blob(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     session_index: i64,
     blob_type: crate::storage::blob::BlobType,
     payload: &[u8],
 ) -> Result<String> {
-    let key = crate::storage::blob::build_blob_key(&storage.repo_id, checkpoint_id, session_index, blob_type);
-    storage
-        .blob_store
-        .write(&key, payload)
-        .with_context(|| format!("writing {} blob for checkpoint {checkpoint_id}", blob_type.as_str()))?;
+    let key = crate::storage::blob::build_blob_key(
+        &storage.repo_id,
+        checkpoint_id,
+        session_index,
+        blob_type,
+    );
+    storage.blob_store.write(&key, payload).with_context(|| {
+        format!(
+            "writing {} blob for checkpoint {checkpoint_id}",
+            blob_type.as_str()
+        )
+    })?;
 
     let content_hash = format!("sha256:{}", sha256_hex(payload));
     let reference = crate::storage::blob::CheckpointBlobReference::new(
@@ -158,7 +169,7 @@ fn upsert_checkpoint_blob(
     Ok(content_hash)
 }
 
-fn upsert_checkpoint_session_row(
+pub(crate) fn upsert_checkpoint_session_row(
     storage: &CheckpointStorageContext,
     session_index: i64,
     session_meta: &CommittedMetadata,
@@ -250,7 +261,7 @@ fn upsert_checkpoint_session_row(
     })
 }
 
-fn upsert_checkpoint_row(
+pub(crate) fn upsert_checkpoint_row(
     storage: &CheckpointStorageContext,
     checkpoint_id: &str,
     strategy: &str,
@@ -301,7 +312,7 @@ fn upsert_checkpoint_row(
     })
 }
 
-fn persist_committed_checkpoint_db_and_blobs(
+pub(crate) fn persist_committed_checkpoint_db_and_blobs(
     repo_root: &Path,
     opts: &WriteCommittedOptions,
     session_meta: &CommittedMetadata,
@@ -372,18 +383,19 @@ fn persist_committed_checkpoint_db_and_blobs(
     )
 }
 
-fn update_checkpoint_session_summary_in_db(
+pub(crate) fn update_checkpoint_session_summary_in_db(
     repo_root: &Path,
     checkpoint_id: &str,
     summary: &serde_json::Value,
 ) -> Result<bool> {
     let storage = open_checkpoint_storage_context(repo_root)?;
-    let Some(session_index) = latest_checkpoint_session_index(&storage.sqlite, checkpoint_id)? else {
+    let Some(session_index) = latest_checkpoint_session_index(&storage.sqlite, checkpoint_id)?
+    else {
         return Ok(false);
     };
 
-    let summary_json =
-        serde_json::to_string(summary).context("serializing summary for checkpoint_sessions row")?;
+    let summary_json = serde_json::to_string(summary)
+        .context("serializing summary for checkpoint_sessions row")?;
     storage.sqlite.with_connection(|conn| {
         conn.execute(
             "UPDATE checkpoint_sessions
@@ -404,7 +416,7 @@ fn update_checkpoint_session_summary_in_db(
     Ok(true)
 }
 
-fn write_committed(repo_root: &Path, opts: WriteCommittedOptions) -> Result<()> {
+pub(crate) fn write_committed(repo_root: &Path, opts: WriteCommittedOptions) -> Result<()> {
     if opts.checkpoint_id.is_empty() {
         anyhow::bail!("invalid checkpoint options: checkpoint ID is required");
     }

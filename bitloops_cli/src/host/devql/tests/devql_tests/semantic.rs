@@ -1,3 +1,5 @@
+use super::*;
+
 #[tokio::test]
 async fn init_sqlite_schema_creates_symbol_embeddings_table() {
     let temp = tempdir().expect("temp dir");

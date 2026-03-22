@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn extract_js_ts_functions_detects_basic_function() {
     let content = r#"export function hello() {

@@ -307,6 +307,10 @@ pub struct CheckpointGroup {
 
 const COMMIT_SCAN_LIMIT: usize = 500;
 
-include!("explain/core.rs");
-include!("explain/branch.rs");
-include!("explain/commit.rs");
+mod branch;
+mod commit;
+mod core;
+
+pub(crate) use self::branch::*;
+pub(crate) use self::commit::*;
+pub(crate) use self::core::*;

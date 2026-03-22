@@ -1,4 +1,7 @@
-async fn execute_relational_pipeline(
+use super::*;
+use anyhow::anyhow;
+
+pub(crate) async fn execute_relational_pipeline(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
@@ -21,8 +24,10 @@ async fn execute_relational_pipeline(
     }
 
     if parsed.has_test_harness_core_coverage_metadata_stage {
-        return execute_relational_core_coverage_metadata_pipeline(cfg, parsed, relational, &repo_id)
-            .await;
+        return execute_relational_core_coverage_metadata_pipeline(
+            cfg, parsed, relational, &repo_id,
+        )
+        .await;
     }
 
     if parsed.has_clones_stage {
@@ -48,7 +53,7 @@ async fn execute_relational_pipeline(
     Ok(rows)
 }
 
-async fn execute_relational_core_test_links_pipeline(
+pub(crate) async fn execute_relational_core_test_links_pipeline(
     parsed: &ParsedDevqlQuery,
     relational: &RelationalStorage,
     repo_id: &str,
@@ -64,9 +69,16 @@ async fn execute_relational_core_test_links_pipeline(
         format!("tl.production_artefact_id = '{}'", esc_pg(artefact_id)),
     ];
     if let Some(min_confidence) = parsed.test_harness_core_test_links.min_confidence {
-        where_clauses.push(format!("tl.confidence >= {}", min_confidence.clamp(0.0, 1.0)));
+        where_clauses.push(format!(
+            "tl.confidence >= {}",
+            min_confidence.clamp(0.0, 1.0)
+        ));
     }
-    if let Some(linkage_source) = parsed.test_harness_core_test_links.linkage_source.as_deref() {
+    if let Some(linkage_source) = parsed
+        .test_harness_core_test_links
+        .linkage_source
+        .as_deref()
+    {
         where_clauses.push(format!("tl.link_source = '{}'", esc_pg(linkage_source)));
     }
 
@@ -88,7 +100,7 @@ LIMIT {}",
     query_relational_rows_or_empty_on_missing_tables(relational, &sql).await
 }
 
-async fn execute_relational_core_line_coverage_pipeline(
+pub(crate) async fn execute_relational_core_line_coverage_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     relational: &RelationalStorage,
@@ -122,7 +134,7 @@ ORDER BY ch.line",
     query_relational_rows_or_empty_on_missing_tables(relational, &sql).await
 }
 
-async fn execute_relational_core_branch_coverage_pipeline(
+pub(crate) async fn execute_relational_core_branch_coverage_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     relational: &RelationalStorage,
@@ -158,7 +170,7 @@ ORDER BY ch.line, ch.branch_id",
     query_relational_rows_or_empty_on_missing_tables(relational, &sql).await
 }
 
-async fn execute_relational_core_coverage_metadata_pipeline(
+pub(crate) async fn execute_relational_core_coverage_metadata_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     relational: &RelationalStorage,
@@ -186,7 +198,7 @@ LIMIT 1",
     query_relational_rows_or_empty_on_missing_tables(relational, &sql).await
 }
 
-async fn query_relational_rows_or_empty_on_missing_tables(
+pub(crate) async fn query_relational_rows_or_empty_on_missing_tables(
     relational: &RelationalStorage,
     sql: &str,
 ) -> Result<Vec<Value>> {
@@ -200,7 +212,7 @@ async fn query_relational_rows_or_empty_on_missing_tables(
     }
 }
 
-fn is_missing_relation_error(err: &anyhow::Error) -> bool {
+pub(crate) fn is_missing_relation_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string().to_ascii_lowercase();
         message.contains("no such table")
@@ -209,7 +221,7 @@ fn is_missing_relation_error(err: &anyhow::Error) -> bool {
     })
 }
 
-async fn build_relational_artefacts_query(
+pub(crate) async fn build_relational_artefacts_query(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
@@ -311,7 +323,7 @@ LIMIT {}",
     Ok(sql)
 }
 
-async fn execute_relational_clones_pipeline(
+pub(crate) async fn execute_relational_clones_pipeline(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
@@ -327,7 +339,7 @@ async fn execute_relational_clones_pipeline(
         .collect::<Vec<_>>())
 }
 
-async fn build_relational_clones_query(
+pub(crate) async fn build_relational_clones_query(
     cfg: &DevqlConfig,
     events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
@@ -404,7 +416,7 @@ LIMIT {}",
     ))
 }
 
-async fn execute_relational_deps_pipeline(
+pub(crate) async fn execute_relational_deps_pipeline(
     cfg: &DevqlConfig,
     parsed: &ParsedDevqlQuery,
     relational: &RelationalStorage,

@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn condense_session_files_touched_fallback_empty_state() {
+pub(crate) fn condense_session_files_touched_fallback_empty_state() {
     let dir = tempfile::tempdir().unwrap();
     let base_head = setup_git_repo(&dir);
 
@@ -39,7 +41,7 @@ fn condense_session_files_touched_fallback_empty_state() {
     );
 }
 #[test]
-fn condense_session_files_touched_no_fallback_no_overlap() {
+pub(crate) fn condense_session_files_touched_no_fallback_no_overlap() {
     let dir = tempfile::tempdir().unwrap();
     let base_head = setup_git_repo(&dir);
 
@@ -86,7 +88,7 @@ fn condense_session_files_touched_no_fallback_no_overlap() {
 
 // Committed session metadata keeps turn/transcript start fields and token usage.
 #[test]
-fn condense_session_writes_turn_and_transcript_start_metadata() {
+pub(crate) fn condense_session_writes_turn_and_transcript_start_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let base_head = setup_git_repo(&dir);
 
@@ -147,7 +149,7 @@ fn condense_session_writes_turn_and_transcript_start_metadata() {
 }
 
 #[test]
-fn update_summary_updates_session_metadata() {
+pub(crate) fn update_summary_updates_session_metadata() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "f1e2d3c4b5a6";
@@ -218,7 +220,7 @@ fn update_summary_updates_session_metadata() {
 }
 
 #[test]
-fn update_summary_not_found() {
+pub(crate) fn update_summary_not_found() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let result = update_summary(
@@ -238,7 +240,7 @@ fn update_summary_not_found() {
 }
 
 #[test]
-fn list_committed_reads_db_entries_without_metadata_branch() {
+pub(crate) fn list_committed_reads_db_entries_without_metadata_branch() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "abcdef123456";
@@ -285,7 +287,7 @@ fn list_committed_reads_db_entries_without_metadata_branch() {
 }
 
 #[test]
-fn get_checkpoint_author_no_sessions_branch() {
+pub(crate) fn get_checkpoint_author_no_sessions_branch() {
     let dir = tempfile::tempdir().unwrap();
     let init = git_command()
         .args(["init"])
@@ -306,7 +308,7 @@ fn get_checkpoint_author_no_sessions_branch() {
 }
 
 #[test]
-fn get_checkpoint_author_returns_author() {
+pub(crate) fn get_checkpoint_author_returns_author() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let checkpoint_id = "a1b2c3d4e5f6";
@@ -355,7 +357,7 @@ fn get_checkpoint_author_returns_author() {
 }
 
 #[test]
-fn get_checkpoint_author_not_found() {
+pub(crate) fn get_checkpoint_author_not_found() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let result = get_checkpoint_author(dir.path(), "ffffffffffff");
@@ -369,7 +371,7 @@ fn get_checkpoint_author_not_found() {
 }
 
 #[test]
-fn write_committed_multiple_sessions_same_checkpoint() {
+pub(crate) fn write_committed_multiple_sessions_same_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let checkpoint_id = "a1a2a3a4a5a6";

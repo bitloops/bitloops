@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn extract_chat_messages_from_transcript_parses_jsonl() {
     let transcript = r#"{"type":"user","message":{"content":"Fix index.ts"}}

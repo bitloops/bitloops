@@ -1,3 +1,5 @@
+use super::*;
+
 // ── Checkpoint metadata structs ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -16,11 +18,11 @@ pub struct TokenUsageMetadata {
     pub subagent_tokens: Option<Box<TokenUsageMetadata>>,
 }
 
-fn canonicalize_agent_type(agent: &str) -> String {
+pub(crate) fn canonicalize_agent_type(agent: &str) -> String {
     canonical_agent_key(agent)
 }
 
-fn token_usage_from_options(
+pub(crate) fn token_usage_from_options(
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     api_call_count: Option<u64>,
@@ -36,7 +38,7 @@ fn token_usage_from_options(
     })
 }
 
-fn aggregate_token_usage(
+pub(crate) fn aggregate_token_usage(
     existing: Option<TokenUsageMetadata>,
     incoming: Option<TokenUsageMetadata>,
 ) -> Option<TokenUsageMetadata> {
@@ -61,23 +63,23 @@ fn aggregate_token_usage(
 
 #[cfg(test)]
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct CheckpointTopMetadata {
+pub(crate) struct CheckpointTopMetadata {
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    cli_version: String,
+    pub(crate) cli_version: String,
     #[serde(default)]
-    checkpoint_id: String,
+    pub(crate) checkpoint_id: String,
     #[serde(default)]
-    strategy: String,
+    pub(crate) strategy: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    branch: String,
+    pub(crate) branch: String,
     #[serde(default)]
-    checkpoints_count: u32,
+    pub(crate) checkpoints_count: u32,
     #[serde(default)]
-    files_touched: Vec<String>,
+    pub(crate) files_touched: Vec<String>,
     #[serde(default)]
-    sessions: Vec<CheckpointSessionRef>,
+    pub(crate) sessions: Vec<CheckpointSessionRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    token_usage: Option<TokenUsageMetadata>,
+    pub(crate) token_usage: Option<TokenUsageMetadata>,
 }
 
 /// Per-session metadata written to `<cp[:2]>/<cp[2:]>/0/metadata.json`.
@@ -120,14 +122,14 @@ pub(crate) struct CommittedMetadata {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum CheckpointType {
+pub(crate) enum CheckpointType {
     #[default]
     Temporary,
     Committed,
 }
 
 #[allow(dead_code)]
-fn checkpoint_type_for_ref(reference: &str) -> CheckpointType {
+pub(crate) fn checkpoint_type_for_ref(reference: &str) -> CheckpointType {
     if reference.ends_with(paths::METADATA_BRANCH_NAME) {
         return CheckpointType::Committed;
     }
@@ -143,84 +145,84 @@ fn checkpoint_type_for_ref(reference: &str) -> CheckpointType {
 }
 
 #[derive(Debug, Clone)]
-struct UpdateCommittedOptions {
-    checkpoint_id: String,
-    session_id: String,
-    transcript: Option<Vec<u8>>,
-    prompts: Option<Vec<String>>,
-    context: Option<Vec<u8>>,
-    agent: String,
+pub(crate) struct UpdateCommittedOptions {
+    pub(crate) checkpoint_id: String,
+    pub(crate) session_id: String,
+    pub(crate) transcript: Option<Vec<u8>>,
+    pub(crate) prompts: Option<Vec<String>>,
+    pub(crate) context: Option<Vec<u8>>,
+    pub(crate) agent: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct WriteCommittedOptions {
-    checkpoint_id: String,
-    session_id: String,
-    strategy: String,
-    agent: String,
-    transcript: Vec<u8>,
-    prompts: Option<Vec<String>>,
-    context: Option<Vec<u8>>,
-    checkpoints_count: u32,
-    files_touched: Vec<String>,
-    token_usage_input: Option<u64>,
-    token_usage_output: Option<u64>,
-    token_usage_api_call_count: Option<u64>,
-    turn_id: String,
-    transcript_identifier_at_start: String,
-    checkpoint_transcript_start: i64,
-    token_usage: Option<TokenUsageMetadata>,
-    initial_attribution: Option<serde_json::Value>,
-    author_name: String,
-    author_email: String,
-    summary: Option<serde_json::Value>,
-    is_task: bool,
-    tool_use_id: String,
-    agent_id: String,
-    transcript_path: String,
-    subagent_transcript_path: String,
+pub(crate) struct WriteCommittedOptions {
+    pub(crate) checkpoint_id: String,
+    pub(crate) session_id: String,
+    pub(crate) strategy: String,
+    pub(crate) agent: String,
+    pub(crate) transcript: Vec<u8>,
+    pub(crate) prompts: Option<Vec<String>>,
+    pub(crate) context: Option<Vec<u8>>,
+    pub(crate) checkpoints_count: u32,
+    pub(crate) files_touched: Vec<String>,
+    pub(crate) token_usage_input: Option<u64>,
+    pub(crate) token_usage_output: Option<u64>,
+    pub(crate) token_usage_api_call_count: Option<u64>,
+    pub(crate) turn_id: String,
+    pub(crate) transcript_identifier_at_start: String,
+    pub(crate) checkpoint_transcript_start: i64,
+    pub(crate) token_usage: Option<TokenUsageMetadata>,
+    pub(crate) initial_attribution: Option<serde_json::Value>,
+    pub(crate) author_name: String,
+    pub(crate) author_email: String,
+    pub(crate) summary: Option<serde_json::Value>,
+    pub(crate) is_task: bool,
+    pub(crate) tool_use_id: String,
+    pub(crate) agent_id: String,
+    pub(crate) transcript_path: String,
+    pub(crate) subagent_transcript_path: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct WriteTemporaryOptions {
-    session_id: String,
-    base_commit: String,
-    step_number: u32,
-    modified_files: Vec<String>,
-    new_files: Vec<String>,
-    deleted_files: Vec<String>,
-    metadata_dir: String,
-    metadata_dir_abs: String,
-    commit_message: String,
-    author_name: String,
-    author_email: String,
-    is_first_checkpoint: bool,
+pub(crate) struct WriteTemporaryOptions {
+    pub(crate) session_id: String,
+    pub(crate) base_commit: String,
+    pub(crate) step_number: u32,
+    pub(crate) modified_files: Vec<String>,
+    pub(crate) new_files: Vec<String>,
+    pub(crate) deleted_files: Vec<String>,
+    pub(crate) metadata_dir: String,
+    pub(crate) metadata_dir_abs: String,
+    pub(crate) commit_message: String,
+    pub(crate) author_name: String,
+    pub(crate) author_email: String,
+    pub(crate) is_first_checkpoint: bool,
 }
 
 #[derive(Debug, Clone, Default)]
-struct WriteTemporaryResult {
-    skipped: bool,
-    commit_hash: String,
+pub(crate) struct WriteTemporaryResult {
+    pub(crate) skipped: bool,
+    pub(crate) commit_hash: String,
 }
 
 #[derive(Debug, Clone, Default)]
-struct WriteTemporaryTaskOptions {
-    session_id: String,
-    base_commit: String,
-    step_number: u32,
-    tool_use_id: String,
-    agent_id: String,
-    modified_files: Vec<String>,
-    new_files: Vec<String>,
-    deleted_files: Vec<String>,
-    transcript_path: String,
-    subagent_transcript_path: String,
-    checkpoint_uuid: String,
-    is_incremental: bool,
-    incremental_sequence: u32,
-    incremental_type: String,
-    incremental_data: String,
-    commit_message: String,
-    author_name: String,
-    author_email: String,
+pub(crate) struct WriteTemporaryTaskOptions {
+    pub(crate) session_id: String,
+    pub(crate) base_commit: String,
+    pub(crate) step_number: u32,
+    pub(crate) tool_use_id: String,
+    pub(crate) agent_id: String,
+    pub(crate) modified_files: Vec<String>,
+    pub(crate) new_files: Vec<String>,
+    pub(crate) deleted_files: Vec<String>,
+    pub(crate) transcript_path: String,
+    pub(crate) subagent_transcript_path: String,
+    pub(crate) checkpoint_uuid: String,
+    pub(crate) is_incremental: bool,
+    pub(crate) incremental_sequence: u32,
+    pub(crate) incremental_type: String,
+    pub(crate) incremental_data: String,
+    pub(crate) commit_message: String,
+    pub(crate) author_name: String,
+    pub(crate) author_email: String,
 }

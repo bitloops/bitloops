@@ -1,8 +1,10 @@
+use super::*;
+
 // ── Git sequence detection ────────────────────────────────────────────────────
 
 /// Returns `true` if git is currently in a rebase, cherry-pick, or revert operation.
 ///
-fn is_git_sequence_operation(repo_root: &Path) -> bool {
+pub(crate) fn is_git_sequence_operation(repo_root: &Path) -> bool {
     let git_dir = match run_git(repo_root, &["rev-parse", "--git-dir"]) {
         Ok(d) => {
             let p = Path::new(d.trim());
@@ -22,13 +24,13 @@ fn is_git_sequence_operation(repo_root: &Path) -> bool {
 }
 
 #[cfg(test)]
-fn has_overlapping_files(staged_files: &[String], files_touched: &[String]) -> bool {
+pub(crate) fn has_overlapping_files(staged_files: &[String], files_touched: &[String]) -> bool {
     let touched: std::collections::HashSet<&str> =
         files_touched.iter().map(String::as_str).collect();
     staged_files.iter().any(|f| touched.contains(f.as_str()))
 }
 
-fn subtract_files_by_name(
+pub(crate) fn subtract_files_by_name(
     files_touched: &[String],
     committed_files: &std::collections::HashSet<String>,
 ) -> Vec<String> {
@@ -39,7 +41,7 @@ fn subtract_files_by_name(
         .collect()
 }
 
-fn files_changed_in_commit(
+pub(crate) fn files_changed_in_commit(
     repo_root: &Path,
     commit_hash: &str,
 ) -> Result<std::collections::HashSet<String>> {
@@ -71,7 +73,7 @@ fn files_changed_in_commit(
         .collect())
 }
 
-fn calculate_session_initial_attribution(
+pub(crate) fn calculate_session_initial_attribution(
     repo_root: &Path,
     state: &SessionState,
     session_tree_hash: Option<&str>,
@@ -121,7 +123,9 @@ fn calculate_session_initial_attribution(
     }))
 }
 
-fn to_strategy_prompt_attribution(pa: &SessionPromptAttribution) -> StrategyPromptAttribution {
+pub(crate) fn to_strategy_prompt_attribution(
+    pa: &SessionPromptAttribution,
+) -> StrategyPromptAttribution {
     StrategyPromptAttribution {
         checkpoint_number: pa.checkpoint_number,
         user_lines_added: pa.user_lines_added,
@@ -132,19 +136,25 @@ fn to_strategy_prompt_attribution(pa: &SessionPromptAttribution) -> StrategyProm
     }
 }
 
-fn load_tree_snapshot(repo_root: &Path, commit: &str) -> Option<TreeSnapshot> {
+pub(crate) fn load_tree_snapshot(repo_root: &Path, commit: &str) -> Option<TreeSnapshot> {
     let tree_ref = format!("{commit}^{{tree}}");
     load_tree_snapshot_from_treeish(repo_root, &tree_ref)
 }
 
-fn load_tree_snapshot_from_tree_hash(repo_root: &Path, tree_hash: &str) -> Option<TreeSnapshot> {
+pub(crate) fn load_tree_snapshot_from_tree_hash(
+    repo_root: &Path,
+    tree_hash: &str,
+) -> Option<TreeSnapshot> {
     if tree_hash.trim().is_empty() {
         return None;
     }
     load_tree_snapshot_from_treeish(repo_root, tree_hash)
 }
 
-fn load_tree_snapshot_from_treeish(repo_root: &Path, treeish: &str) -> Option<TreeSnapshot> {
+pub(crate) fn load_tree_snapshot_from_treeish(
+    repo_root: &Path,
+    treeish: &str,
+) -> Option<TreeSnapshot> {
     let listed = run_git(repo_root, &["ls-tree", "-r", "--name-only", treeish]).ok()?;
 
     let mut files: Vec<(String, String)> = Vec::new();
@@ -170,7 +180,7 @@ fn load_tree_snapshot_from_treeish(repo_root: &Path, treeish: &str) -> Option<Tr
 }
 
 #[cfg(test)]
-fn resolve_commit(repo_root: &Path, rev: &str) -> Option<String> {
+pub(crate) fn resolve_commit(repo_root: &Path, rev: &str) -> Option<String> {
     run_git(
         repo_root,
         &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
@@ -178,17 +188,19 @@ fn resolve_commit(repo_root: &Path, rev: &str) -> Option<String> {
     .ok()
 }
 
-fn file_hash_in_tree(repo_root: &Path, rev: &str, file_path: &str) -> Option<String> {
+pub(crate) fn file_hash_in_tree(repo_root: &Path, rev: &str, file_path: &str) -> Option<String> {
     run_git(repo_root, &["rev-parse", &format!("{rev}:{file_path}")]).ok()
 }
 
 #[cfg(test)]
-fn read_blob_content(repo_root: &Path, blob_hash: &str) -> Option<String> {
+pub(crate) fn read_blob_content(repo_root: &Path, blob_hash: &str) -> Option<String> {
     run_git(repo_root, &["cat-file", "-p", blob_hash]).ok()
 }
 
 #[cfg(test)]
-fn staged_index_hashes(repo_root: &Path) -> Option<std::collections::HashMap<String, String>> {
+pub(crate) fn staged_index_hashes(
+    repo_root: &Path,
+) -> Option<std::collections::HashMap<String, String>> {
     let out = run_git(repo_root, &["ls-files", "--stage"]).ok()?;
     let mut hashes = std::collections::HashMap::new();
     for line in out.lines() {
@@ -209,7 +221,7 @@ fn staged_index_hashes(repo_root: &Path) -> Option<std::collections::HashMap<Str
 }
 
 #[cfg(test)]
-fn files_overlap_with_content(
+pub(crate) fn files_overlap_with_content(
     repo_root: &Path,
     shadow_branch_name: &str,
     head_commit: &str,
@@ -263,7 +275,7 @@ fn files_overlap_with_content(
 }
 
 #[cfg(test)]
-fn staged_files_overlap_with_content(
+pub(crate) fn staged_files_overlap_with_content(
     repo_root: &Path,
     shadow_branch_name: &str,
     staged_files: &[String],
@@ -322,7 +334,7 @@ fn staged_files_overlap_with_content(
     false
 }
 
-fn files_with_remaining_agent_changes_from_tree(
+pub(crate) fn files_with_remaining_agent_changes_from_tree(
     repo_root: &Path,
     session_tree_hash: Option<&str>,
     head_commit: &str,
@@ -367,7 +379,7 @@ fn files_with_remaining_agent_changes_from_tree(
 }
 
 #[cfg(test)]
-fn files_with_remaining_agent_changes(
+pub(crate) fn files_with_remaining_agent_changes(
     repo_root: &Path,
     shadow_branch_name: &str,
     head_commit: &str,
@@ -413,7 +425,7 @@ fn files_with_remaining_agent_changes(
 }
 
 #[cfg(test)]
-fn has_significant_content_overlap(staged_content: &str, shadow_content: &str) -> bool {
+pub(crate) fn has_significant_content_overlap(staged_content: &str, shadow_content: &str) -> bool {
     let shadow_lines = extract_significant_lines(shadow_content);
     let staged_lines = extract_significant_lines(staged_content);
     if shadow_lines.is_empty() || staged_lines.is_empty() {
@@ -439,7 +451,7 @@ fn has_significant_content_overlap(staged_content: &str, shadow_content: &str) -
 }
 
 #[cfg(test)]
-fn extract_significant_lines(content: &str) -> std::collections::HashSet<String> {
+pub(crate) fn extract_significant_lines(content: &str) -> std::collections::HashSet<String> {
     let mut lines = std::collections::HashSet::new();
     for line in content.lines() {
         let trimmed = trim_line(line);
@@ -451,13 +463,13 @@ fn extract_significant_lines(content: &str) -> std::collections::HashSet<String>
 }
 
 #[cfg(test)]
-fn trim_line(line: &str) -> String {
+pub(crate) fn trim_line(line: &str) -> String {
     line.trim_matches(|c| c == ' ' || c == '\t').to_string()
 }
 
 // ── Timestamp helper ──────────────────────────────────────────────────────────
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -475,7 +487,7 @@ fn now_rfc3339() -> String {
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{frac}Z")
 }
 
-fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+pub(crate) fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let s = secs % 60;
     let mins = secs / 60;
     let mi = mins % 60;
@@ -505,23 +517,26 @@ fn unix_to_ymdhms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     (year, mo, remaining + 1, h, mi, s)
 }
 
-fn is_leap(y: u64) -> bool {
+pub(crate) fn is_leap(y: u64) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
-fn is_zero_i64(value: &i64) -> bool {
+pub(crate) fn is_zero_i64(value: &i64) -> bool {
     *value == 0
 }
 
-fn is_false(value: &bool) -> bool {
+pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }
 
-fn non_negative_i32_to_u64(value: i32) -> u64 {
+pub(crate) fn non_negative_i32_to_u64(value: i32) -> u64 {
     if value <= 0 { 0 } else { value as u64 }
 }
 
-fn accumulate_token_usage(existing: Option<TokenUsage>, incoming: &TokenUsage) -> TokenUsage {
+pub(crate) fn accumulate_token_usage(
+    existing: Option<TokenUsage>,
+    incoming: &TokenUsage,
+) -> TokenUsage {
     let mut combined = existing.unwrap_or_default();
     combined.input_tokens += incoming.input_tokens;
     combined.cache_creation_tokens += incoming.cache_creation_tokens;
@@ -542,7 +557,7 @@ fn accumulate_token_usage(existing: Option<TokenUsage>, incoming: &TokenUsage) -
     combined
 }
 
-fn token_usage_metadata_from_runtime(usage: &TokenUsage) -> TokenUsageMetadata {
+pub(crate) fn token_usage_metadata_from_runtime(usage: &TokenUsage) -> TokenUsageMetadata {
     TokenUsageMetadata {
         input_tokens: non_negative_i32_to_u64(usage.input_tokens),
         cache_creation_tokens: non_negative_i32_to_u64(usage.cache_creation_tokens),
@@ -556,7 +571,7 @@ fn token_usage_metadata_from_runtime(usage: &TokenUsage) -> TokenUsageMetadata {
     }
 }
 
-fn calculate_token_usage_from_transcript(
+pub(crate) fn calculate_token_usage_from_transcript(
     transcript: &str,
     checkpoint_transcript_start: i64,
 ) -> Option<TokenUsageMetadata> {

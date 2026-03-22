@@ -1,6 +1,8 @@
+use super::*;
+
 // Rust artefact extraction via tree-sitter.
 
-fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
+pub(super) fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser
@@ -25,11 +27,11 @@ fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>
     Ok(out)
 }
 
-fn extract_rust_file_docstring(content: &str) -> Option<String> {
+pub(super) fn extract_rust_file_docstring(content: &str) -> Option<String> {
     extract_rust_inner_docstring_from_lines(content.lines().collect::<Vec<_>>().as_slice(), 0)
 }
 
-fn collect_rust_nodes_recursive(
+pub(super) fn collect_rust_nodes_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -264,7 +266,7 @@ fn collect_rust_nodes_recursive(
     }
 }
 
-fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
+pub(super) fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
     let prefix_end = node
         .child_by_field_name("name")
         .map(|child| child.start_byte())
@@ -308,7 +310,7 @@ fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String>
     modifiers
 }
 
-fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(super) fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
     let outer = extract_rust_outer_docstring(node, content);
     if node.kind() != "mod_item" {
         return outer;
@@ -324,7 +326,10 @@ fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<Stri
     combine_docstrings(outer, inner)
 }
 
-fn extract_rust_outer_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(super) fn extract_rust_outer_docstring(
+    node: tree_sitter::Node,
+    content: &str,
+) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return None;
@@ -378,7 +383,10 @@ fn extract_rust_outer_docstring(node: tree_sitter::Node, content: &str) -> Optio
     }
 }
 
-fn extract_rust_inner_docstring_from_lines(lines: &[&str], start_line_idx: usize) -> Option<String> {
+pub(super) fn extract_rust_inner_docstring_from_lines(
+    lines: &[&str],
+    start_line_idx: usize,
+) -> Option<String> {
     let mut idx = start_line_idx;
     while idx < lines.len() && lines[idx].trim().is_empty() {
         idx += 1;
@@ -420,7 +428,7 @@ fn extract_rust_inner_docstring_from_lines(lines: &[&str], start_line_idx: usize
     }
 }
 
-fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> String {
+pub(super) fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> String {
     lines
         .iter()
         .map(|line| line.trim().trim_start_matches(prefix).trim())
@@ -430,7 +438,7 @@ fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> String {
         .to_string()
 }
 
-fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> String {
+pub(super) fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> String {
     let mut normalized = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let mut text = line.trim().to_string();
@@ -450,7 +458,7 @@ fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> String {
     normalized.join("\n").trim().to_string()
 }
 
-fn combine_docstrings(first: Option<String>, second: Option<String>) -> Option<String> {
+pub(super) fn combine_docstrings(first: Option<String>, second: Option<String>) -> Option<String> {
     match (first, second) {
         (Some(first), Some(second)) if !first.is_empty() && !second.is_empty() => {
             Some(format!("{first}\n\n{second}"))

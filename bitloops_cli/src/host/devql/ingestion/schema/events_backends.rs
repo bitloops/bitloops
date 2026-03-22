@@ -1,4 +1,6 @@
-async fn init_clickhouse_schema(cfg: &DevqlConfig) -> Result<()> {
+use super::*;
+
+pub(crate) async fn init_clickhouse_schema(cfg: &DevqlConfig) -> Result<()> {
     let sql = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
     event_id String,
@@ -24,7 +26,7 @@ ORDER BY (repo_id, event_time, event_id)
     Ok(())
 }
 
-async fn init_duckdb_schema(events_cfg: &EventsBackendConfig) -> Result<()> {
+pub(crate) async fn init_duckdb_schema(events_cfg: &EventsBackendConfig) -> Result<()> {
     let sql = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
     event_id VARCHAR PRIMARY KEY,

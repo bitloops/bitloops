@@ -1,3 +1,5 @@
+use super::*;
+
 #[test]
 fn sql_helpers_escape_nullable_and_json_values() {
     assert_eq!(sql_nullable_text(None), "NULL");
@@ -287,15 +289,16 @@ fn build_current_edge_records_resolve_local_and_external_targets() {
 
 #[test]
 fn incoming_revision_is_newer_prefers_revision_kind_then_timestamp_then_sha() {
-    let state = |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
-        CurrentFileRevisionRecord {
-            revision_kind: TemporalRevisionKind::from_str(revision_kind)
-                .expect("test revision kind should be valid"),
-            revision_id: revision_id.to_string(),
-            blob_sha: "blob".to_string(),
-            updated_at_unix,
-        }
-    };
+    let state =
+        |_commit_sha: &str, revision_kind: &str, revision_id: &str, updated_at_unix: i64| {
+            CurrentFileRevisionRecord {
+                revision_kind: TemporalRevisionKind::from_str(revision_kind)
+                    .expect("test revision kind should be valid"),
+                revision_id: revision_id.to_string(),
+                blob_sha: "blob".to_string(),
+                updated_at_unix,
+            }
+        };
     assert!(incoming_revision_is_newer(
         None,
         TemporalRevisionKind::Commit,
@@ -436,8 +439,10 @@ async fn upsert_current_state_only_revises_changed_symbol_when_siblings_are_unch
     let sqlite_path = temp.path().join("relational.db");
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let path = "src/sample.ts";
-    let initial = "export function alpha() {\n  return 1;\n}\n\nexport function beta() {\n  return 2;\n}\n";
-    let updated = "export function alpha() {\n  return 9;\n}\n\nexport function beta() {\n  return 2;\n}\n";
+    let initial =
+        "export function alpha() {\n  return 1;\n}\n\nexport function beta() {\n  return 2;\n}\n";
+    let updated =
+        "export function alpha() {\n  return 9;\n}\n\nexport function beta() {\n  return 2;\n}\n";
 
     upsert_current_state_for_content(
         &cfg,
@@ -512,9 +517,9 @@ async fn upsert_current_state_revises_shifted_sibling_when_lines_move() {
     let sqlite_path = temp.path().join("relational.db");
     let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
     let path = "src/sample.ts";
-    let initial = "export function alpha() {\n  return 1;\n}\n\nexport function beta() {\n  return 2;\n}\n";
-    let updated =
-        "export function alpha() {\n  const next = 1;\n  return next;\n}\n\nexport function beta() {\n  return 2;\n}\n";
+    let initial =
+        "export function alpha() {\n  return 1;\n}\n\nexport function beta() {\n  return 2;\n}\n";
+    let updated = "export function alpha() {\n  const next = 1;\n  return next;\n}\n\nexport function beta() {\n  return 2;\n}\n";
 
     upsert_current_state_for_content(
         &cfg,
@@ -869,12 +874,7 @@ fn collect_checkpoint_commit_map_reads_commit_checkpoints_table() {
 
     git_ok(
         repo.path(),
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "checkpoint via DB",
-        ],
+        &["commit", "--allow-empty", "-m", "checkpoint via DB"],
     );
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     insert_commit_checkpoint_mapping(repo.path(), &commit_sha, checkpoint_id);

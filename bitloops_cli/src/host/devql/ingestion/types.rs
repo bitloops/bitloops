@@ -1,94 +1,100 @@
+use super::*;
+
 // Shared types used across ingestion modules.
 
 #[derive(Debug, Clone, Default)]
-struct IngestionCounters {
-    checkpoints_processed: usize,
-    events_inserted: usize,
-    artefacts_upserted: usize,
-    checkpoints_without_commit: usize,
-    temporary_rows_promoted: usize,
-    semantic_feature_rows_upserted: usize,
-    semantic_feature_rows_skipped: usize,
-    symbol_embedding_rows_upserted: usize,
-    symbol_embedding_rows_skipped: usize,
-    symbol_clone_edges_upserted: usize,
-    symbol_clone_sources_scored: usize,
+pub(super) struct IngestionCounters {
+    pub(super) checkpoints_processed: usize,
+    pub(super) events_inserted: usize,
+    pub(super) artefacts_upserted: usize,
+    pub(super) checkpoints_without_commit: usize,
+    pub(super) temporary_rows_promoted: usize,
+    pub(super) semantic_feature_rows_upserted: usize,
+    pub(super) semantic_feature_rows_skipped: usize,
+    pub(super) symbol_embedding_rows_upserted: usize,
+    pub(super) symbol_embedding_rows_skipped: usize,
+    pub(super) symbol_clone_edges_upserted: usize,
+    pub(super) symbol_clone_sources_scored: usize,
 }
 
 #[derive(Debug, Clone)]
-struct CheckpointCommitInfo {
-    commit_sha: String,
-    commit_unix: i64,
-    author_name: String,
-    author_email: String,
-    subject: String,
+pub(super) struct CheckpointCommitInfo {
+    pub(super) commit_sha: String,
+    pub(super) commit_unix: i64,
+    pub(super) author_name: String,
+    pub(super) author_email: String,
+    pub(super) subject: String,
 }
 
 #[derive(Debug, Clone)]
-struct FileArtefactRow {
-    artefact_id: String,
-    symbol_id: String,
-    language: String,
-    end_line: i32,
-    end_byte: i32,
+pub(super) struct FileArtefactRow {
+    pub(super) artefact_id: String,
+    pub(super) symbol_id: String,
+    pub(super) language: String,
+    pub(super) end_line: i32,
+    pub(super) end_byte: i32,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
-struct FunctionArtefact {
-    name: String,
-    start_line: i32,
-    end_line: i32,
-    start_byte: i32,
-    end_byte: i32,
-    signature: String,
+pub(super) struct FunctionArtefact {
+    pub(super) name: String,
+    pub(super) start_line: i32,
+    pub(super) end_line: i32,
+    pub(super) start_byte: i32,
+    pub(super) end_byte: i32,
+    pub(super) signature: String,
 }
 
 #[derive(Debug, Clone)]
-struct JsTsArtefact {
-    canonical_kind: Option<String>,
-    language_kind: String,
-    name: String,
-    symbol_fqn: String,
-    parent_symbol_fqn: Option<String>,
-    start_line: i32,
-    end_line: i32,
-    start_byte: i32,
-    end_byte: i32,
-    signature: String,
-    modifiers: Vec<String>,
-    docstring: Option<String>,
+pub(super) struct JsTsArtefact {
+    pub(super) canonical_kind: Option<String>,
+    pub(super) language_kind: String,
+    pub(super) name: String,
+    pub(super) symbol_fqn: String,
+    pub(super) parent_symbol_fqn: Option<String>,
+    pub(super) start_line: i32,
+    pub(super) end_line: i32,
+    pub(super) start_byte: i32,
+    pub(super) end_byte: i32,
+    pub(super) signature: String,
+    pub(super) modifiers: Vec<String>,
+    pub(super) docstring: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct EdgeMetadata(Value);
+pub(super) struct EdgeMetadata(pub(super) Value);
 
 impl EdgeMetadata {
-    fn none() -> Self {
+    pub(super) fn none() -> Self {
         Self(json!({}))
     }
 
-    fn import(import_form: ImportForm) -> Self {
+    pub(super) fn import(import_form: ImportForm) -> Self {
         Self(json!({
             "import_form": import_form.as_str(),
         }))
     }
 
-    fn call(call_form: CallForm, resolution: Resolution) -> Self {
+    pub(super) fn call(call_form: CallForm, resolution: Resolution) -> Self {
         Self(json!({
             "call_form": call_form.as_str(),
             "resolution": resolution.as_str(),
         }))
     }
 
-    fn reference(ref_kind: RefKind, resolution: Resolution) -> Self {
+    pub(super) fn reference(ref_kind: RefKind, resolution: Resolution) -> Self {
         Self(json!({
             "ref_kind": ref_kind.as_str(),
             "resolution": resolution.as_str(),
         }))
     }
 
-    fn export(export_name: String, export_form: ExportForm, resolution: Resolution) -> Self {
+    pub(super) fn export(
+        export_name: String,
+        export_form: ExportForm,
+        resolution: Resolution,
+    ) -> Self {
         Self(json!({
             "export_name": export_name,
             "export_form": export_form.as_str(),
@@ -96,7 +102,7 @@ impl EdgeMetadata {
         }))
     }
 
-    fn to_value(&self) -> Value {
+    pub(super) fn to_value(&self) -> Value {
         self.0.clone()
     }
 }
@@ -110,18 +116,18 @@ impl std::ops::Deref for EdgeMetadata {
 }
 
 #[derive(Debug, Clone)]
-struct JsTsDependencyEdge {
-    edge_kind: EdgeKind,
-    from_symbol_fqn: String,
-    to_target_symbol_fqn: Option<String>,
-    to_symbol_ref: Option<String>,
-    start_line: Option<i32>,
-    end_line: Option<i32>,
-    metadata: EdgeMetadata,
+pub(super) struct JsTsDependencyEdge {
+    pub(super) edge_kind: EdgeKind,
+    pub(super) from_symbol_fqn: String,
+    pub(super) to_target_symbol_fqn: Option<String>,
+    pub(super) to_symbol_ref: Option<String>,
+    pub(super) start_line: Option<i32>,
+    pub(super) end_line: Option<i32>,
+    pub(super) metadata: EdgeMetadata,
 }
 
 #[derive(Debug)]
-struct RustUseExportEntry {
-    path: String,
-    export_name: String,
+pub(super) struct RustUseExportEntry {
+    pub(super) path: String,
+    pub(super) export_name: String,
 }

@@ -1,5 +1,7 @@
+use super::*;
+
 #[test]
-fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
+pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -55,7 +57,7 @@ fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
 
 // New test: post_commit creates full checkpoint structure.
 #[test]
-fn post_commit_creates_full_checkpoint_structure() {
+pub(crate) fn post_commit_creates_full_checkpoint_structure() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
 
@@ -102,7 +104,7 @@ fn post_commit_creates_full_checkpoint_structure() {
 }
 
 #[test]
-fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
+pub(crate) fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -135,7 +137,7 @@ fn post_commit_without_checkpoint_condenses_pending_session_and_maps_head() {
 }
 
 #[test]
-fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
+pub(crate) fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
     let dir = tempfile::tempdir().unwrap();
     let initial_head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -185,7 +187,7 @@ fn post_commit_squash_commit_condenses_pending_session_and_maps_head() {
 }
 
 #[test]
-fn post_commit_without_checkpoint_updates_active_base_commit() {
+pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -230,7 +232,7 @@ fn post_commit_without_checkpoint_updates_active_base_commit() {
 }
 
 #[test]
-fn post_commit_skips_already_mapped_head() {
+pub(crate) fn post_commit_skips_already_mapped_head() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -279,7 +281,7 @@ fn post_commit_skips_already_mapped_head() {
 }
 
 #[test]
-fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
+pub(crate) fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
     let dir = tempfile::tempdir().unwrap();
     let head_before = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -324,7 +326,7 @@ fn post_commit_without_checkpoint_updates_active_base_commit_during_rebase() {
 }
 
 #[test]
-fn extract_user_prompts_supports_nested_message_and_human_type() {
+pub(crate) fn extract_user_prompts_supports_nested_message_and_human_type() {
     let jsonl = r#"{"type":"user","message":{"content":[{"type":"text","text":"Create index.html"},{"type":"tool_result","tool_use_id":"x"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}
 {"type":"human","message":{"content":"Add styles"}}
@@ -335,7 +337,7 @@ not-json"#;
 }
 
 #[test]
-fn extract_summary_supports_nested_message_content() {
+pub(crate) fn extract_summary_supports_nested_message_content() {
     let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"first summary"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"final summary"},{"type":"tool_use","name":"Edit","input":{"file_path":"a.txt"}}]}}"#;
 
@@ -344,7 +346,7 @@ fn extract_summary_supports_nested_message_content() {
 }
 
 #[test]
-fn write_session_metadata_writes_prompt_and_summary_for_nested_claude_jsonl() {
+pub(crate) fn write_session_metadata_writes_prompt_and_summary_for_nested_claude_jsonl() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("transcript.jsonl");
     let jsonl = r#"{"type":"user","message":{"content":[{"type":"text","text":"Create test file"}]}}
@@ -388,7 +390,7 @@ fn write_session_metadata_writes_prompt_and_summary_for_nested_claude_jsonl() {
 }
 
 #[test]
-fn pre_push_is_noop_even_when_checkpoints_branch_exists() {
+pub(crate) fn pre_push_is_noop_even_when_checkpoints_branch_exists() {
     let base = tempfile::tempdir().unwrap();
     let origin_dir = base.path().join("origin.git");
     let work_dir = base.path().join("work");
@@ -449,28 +451,28 @@ fn pre_push_is_noop_even_when_checkpoints_branch_exists() {
     );
 }
 
-fn commit_file(repo_root: &Path, filename: &str, content: &str) {
+pub(crate) fn commit_file(repo_root: &Path, filename: &str, content: &str) {
     fs::write(repo_root.join(filename), content).unwrap();
     git_ok(repo_root, &["add", filename]);
     git_ok(repo_root, &["commit", "-m", "test commit"]);
 }
 
 #[test]
-fn shadow_strategy_direct_instantiation() {
+pub(crate) fn shadow_strategy_direct_instantiation() {
     let dir = tempfile::tempdir().unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     assert_eq!(strategy.name(), "manual-commit");
 }
 
 #[test]
-fn shadow_strategy_description() {
+pub(crate) fn shadow_strategy_description() {
     let dir = tempfile::tempdir().unwrap();
     let strategy = ManualCommitStrategy::new(dir.path());
     assert_eq!(strategy.name(), "manual-commit");
 }
 
 #[test]
-fn shadow_strategy_validate_repository() {
+pub(crate) fn shadow_strategy_validate_repository() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     assert!(
@@ -480,7 +482,7 @@ fn shadow_strategy_validate_repository() {
 }
 
 #[test]
-fn shadow_strategy_validate_repository_not_git_repo() {
+pub(crate) fn shadow_strategy_validate_repository_not_git_repo() {
     let dir = tempfile::tempdir().unwrap();
     assert!(
         run_git(dir.path(), &["rev-parse", "--is-inside-work-tree"]).is_err(),
@@ -489,7 +491,7 @@ fn shadow_strategy_validate_repository_not_git_repo() {
 }
 
 #[test]
-fn post_commit_active_session_condenses_immediately() {
+pub(crate) fn post_commit_active_session_condenses_immediately() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -529,7 +531,7 @@ fn post_commit_active_session_condenses_immediately() {
 }
 
 #[test]
-fn post_commit_active_session_records_turn_checkpoint_ids() {
+pub(crate) fn post_commit_active_session_records_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -559,7 +561,7 @@ fn post_commit_active_session_records_turn_checkpoint_ids() {
 }
 
 #[test]
-fn post_commit_idle_session_condenses() {
+pub(crate) fn post_commit_idle_session_condenses() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -586,7 +588,7 @@ fn post_commit_idle_session_condenses() {
 }
 
 #[test]
-fn post_commit_rebase_during_active_skips_transition() {
+pub(crate) fn post_commit_rebase_during_active_skips_transition() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -618,7 +620,7 @@ fn post_commit_rebase_during_active_skips_transition() {
 }
 
 #[test]
-fn post_commit_files_touched_resets_after_condensation() {
+pub(crate) fn post_commit_files_touched_resets_after_condensation() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -643,7 +645,7 @@ fn post_commit_files_touched_resets_after_condensation() {
 }
 
 #[test]
-fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
+pub(crate) fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -700,7 +702,7 @@ fn handle_turn_end_finalizes_and_clears_turn_checkpoint_ids() {
 }
 
 #[test]
-fn subtract_files_compat() {
+pub(crate) fn subtract_files_compat() {
     let files_touched = vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()];
     let committed_files = std::collections::HashSet::from(["a.rs".to_string(), "c.rs".to_string()]);
     let remaining = subtract_files_by_name(&files_touched, &committed_files);
@@ -708,7 +710,7 @@ fn subtract_files_compat() {
 }
 
 #[test]
-fn files_changed_in_commit_compat() {
+pub(crate) fn files_changed_in_commit_compat() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     fs::write(dir.path().join("changed.rs"), "package changed").unwrap();
@@ -720,7 +722,7 @@ fn files_changed_in_commit_compat() {
 }
 
 #[test]
-fn files_changed_in_commit_initial_commit_compat() {
+pub(crate) fn files_changed_in_commit_initial_commit_compat() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
     fs::write(dir.path().join("initial.rs"), "package initial").unwrap();
@@ -732,7 +734,7 @@ fn files_changed_in_commit_initial_commit_compat() {
 }
 
 #[test]
-fn save_step_empty_base_commit_recovery() {
+pub(crate) fn save_step_empty_base_commit_recovery() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -763,7 +765,7 @@ fn save_step_empty_base_commit_recovery() {
 }
 
 #[test]
-fn save_step_uses_ctx_agent_type_when_no_session_state() {
+pub(crate) fn save_step_uses_ctx_agent_type_when_no_session_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let strategy = ManualCommitStrategy::new(dir.path());
@@ -792,7 +794,7 @@ fn save_step_uses_ctx_agent_type_when_no_session_state() {
 }
 
 #[test]
-fn save_step_uses_ctx_agent_type_when_partial_state() {
+pub(crate) fn save_step_uses_ctx_agent_type_when_partial_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let backend = session_backend(dir.path());
@@ -829,7 +831,7 @@ fn save_step_uses_ctx_agent_type_when_partial_state() {
 }
 
 #[test]
-fn post_commit_no_head_is_noop() {
+pub(crate) fn post_commit_no_head_is_noop() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
 
@@ -842,7 +844,7 @@ fn post_commit_no_head_is_noop() {
 }
 
 #[test]
-fn update_base_commit_no_head_is_noop() {
+pub(crate) fn update_base_commit_no_head_is_noop() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);
 

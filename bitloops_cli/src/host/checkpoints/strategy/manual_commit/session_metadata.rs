@@ -1,3 +1,5 @@
+use super::*;
+
 // ── Session metadata helpers ──────────────────────────────────────────────────
 
 /// Writes a snapshot of the session transcript to `.bitloops/metadata/<session_id>/`.
@@ -8,7 +10,7 @@
 ///
 /// Returns the list of repo-relative paths written (for inclusion in the shadow branch tree).
 ///
-fn write_session_metadata(
+pub(crate) fn write_session_metadata(
     repo_root: &Path,
     session_id: &str,
     transcript_path: &str,
@@ -75,7 +77,7 @@ fn write_session_metadata(
 }
 
 /// Retries transcript reads briefly to handle asynchronous transcript flushing.
-fn read_transcript_with_retry(transcript_path: &str) -> Option<String> {
+pub(crate) fn read_transcript_with_retry(transcript_path: &str) -> Option<String> {
     use std::thread::sleep;
     use std::time::{Duration, Instant};
 
@@ -92,7 +94,7 @@ fn read_transcript_with_retry(transcript_path: &str) -> Option<String> {
 }
 
 /// Falls back to reading the transcript from the metadata directory on disk.
-fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<String> {
+pub(crate) fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<String> {
     let path = repo_root
         .join(paths::session_metadata_dir_from_session_id(session_id))
         .join(paths::TRANSCRIPT_FILE_NAME);
@@ -104,7 +106,7 @@ fn read_transcript_from_disk(repo_root: &Path, session_id: &str) -> Option<Strin
 /// Each line of a Claude Code transcript is a JSON object. We look for lines
 /// where `role == "user"` and extract `content` as text.
 ///
-fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
+pub(crate) fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
     let mut prompts = Vec::new();
     for line in jsonl.lines() {
         let line = line.trim();
@@ -128,12 +130,12 @@ fn extract_user_prompts_from_jsonl(jsonl: &str) -> Vec<String> {
     prompts
 }
 
-fn is_user_role(role: Option<&str>) -> bool {
+pub(crate) fn is_user_role(role: Option<&str>) -> bool {
     matches!(role, Some("user") | Some("human") | Some("user.message"))
 }
 
 /// Extracts the last assistant text block as a session summary.
-fn extract_summary_from_jsonl(jsonl: &str) -> String {
+pub(crate) fn extract_summary_from_jsonl(jsonl: &str) -> String {
     let mut last_summary = String::new();
     for line in jsonl.lines() {
         let line = line.trim();
@@ -160,7 +162,7 @@ fn extract_summary_from_jsonl(jsonl: &str) -> String {
     last_summary
 }
 
-fn transcript_line_role(val: &serde_json::Value) -> Option<&str> {
+pub(crate) fn transcript_line_role(val: &serde_json::Value) -> Option<&str> {
     val.get("message")
         .and_then(|m| m.get("role"))
         .and_then(|r| r.as_str())
@@ -168,7 +170,7 @@ fn transcript_line_role(val: &serde_json::Value) -> Option<&str> {
         .or_else(|| val.get("type").and_then(|r| r.as_str()))
 }
 
-fn transcript_line_content(val: &serde_json::Value) -> Option<&serde_json::Value> {
+pub(crate) fn transcript_line_content(val: &serde_json::Value) -> Option<&serde_json::Value> {
     let message_content = val.get("message").and_then(|m| m.get("content"));
     if message_content.is_some() {
         return message_content;
@@ -187,7 +189,7 @@ fn transcript_line_content(val: &serde_json::Value) -> Option<&serde_json::Value
         .or_else(|| val.get("content"))
 }
 
-fn content_to_text(content: &serde_json::Value) -> String {
+pub(crate) fn content_to_text(content: &serde_json::Value) -> String {
     match content {
         serde_json::Value::String(s) => s.trim().to_string(),
         serde_json::Value::Array(arr) => arr
@@ -207,31 +209,8 @@ fn content_to_text(content: &serde_json::Value) -> String {
     }
 }
 
-#[cfg(test)]
-mod session_metadata_inline_tests {
-    use super::{extract_summary_from_jsonl, extract_user_prompts_from_jsonl};
-
-    #[test]
-    fn extract_user_prompts_supports_copilot_user_message_payloads() {
-        let jsonl = r#"{"type":"user.message","data":{"content":"Create hello.txt"}}
-{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
-"#;
-        assert_eq!(
-            extract_user_prompts_from_jsonl(jsonl),
-            vec!["Create hello.txt", "Refactor parser"]
-        );
-    }
-
-    #[test]
-    fn extract_summary_supports_copilot_assistant_messages() {
-        let jsonl = r#"{"type":"assistant.message","data":{"content":"Created hello.txt"}}
-"#;
-        assert_eq!(extract_summary_from_jsonl(jsonl), "Created hello.txt");
-    }
-}
-
 /// Builds a context markdown file mirroring the lifecycle output structure.
-fn build_context_md(
+pub(crate) fn build_context_md(
     session_id: &str,
     commit_message: &str,
     prompts: &[String],
@@ -259,7 +238,29 @@ fn build_context_md(
 }
 
 /// Generates a commit message from a user prompt.
-fn generate_commit_message(prompt: &str) -> String {
+pub(crate) fn generate_commit_message(prompt: &str) -> String {
     commit_message::generate_commit_message(prompt)
 }
 
+#[cfg(test)]
+mod session_metadata_inline_tests {
+    use super::{extract_summary_from_jsonl, extract_user_prompts_from_jsonl};
+
+    #[test]
+    fn extract_user_prompts_supports_copilot_user_message_payloads() {
+        let jsonl = r#"{"type":"user.message","data":{"content":"Create hello.txt"}}
+{"type":"user.message","data":{"content":"","transformedContent":"Refactor parser"}}
+"#;
+        assert_eq!(
+            extract_user_prompts_from_jsonl(jsonl),
+            vec!["Create hello.txt", "Refactor parser"]
+        );
+    }
+
+    #[test]
+    fn extract_summary_supports_copilot_assistant_messages() {
+        let jsonl = r#"{"type":"assistant.message","data":{"content":"Created hello.txt"}}
+"#;
+        assert_eq!(extract_summary_from_jsonl(jsonl), "Created hello.txt");
+    }
+}
