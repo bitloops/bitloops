@@ -15,8 +15,8 @@ This uses `rust-lang/cfg-if` because it is small and quick to re-run.
 
 For Ruff-specific flows, keep these alongside this quickstart:
 
-- [quickstart_ruff_bitloops_devql.md](/Users/markos/code/bitloops/bitloops/bitloops_cli/docs/test_harness/quickstart_ruff_bitloops_devql.md)
-- [quickstart_ruff_fixture.md](/Users/markos/code/bitloops/bitloops/bitloops_cli/docs/test_harness/quickstart_ruff_fixture.md)
+- [quickstart_ruff_bitloops_devql.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_bitloops_devql.md)
+- [quickstart_ruff_fixture.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_fixture.md)
 
 ## Prerequisites
 
@@ -31,7 +31,7 @@ For Ruff-specific flows, keep these alongside this quickstart:
 ```bash
 cd /Users/markos/code/bitloops/bitloops
 
-cargo install --path ./bitloops_cli --force
+cargo install --path ./bitloops --force
 
 export PATH="$HOME/.cargo/bin:$PATH"
 

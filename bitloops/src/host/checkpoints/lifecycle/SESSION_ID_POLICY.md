@@ -10,7 +10,7 @@ Bitloops uses a **strict-first, fallback-at-tail** session ID policy for lifecyc
 
 This policy is centralised in:
 
-- `bitloops_cli/src/engine/lifecycle/mod.rs`
+- `bitloops/src/engine/lifecycle/mod.rs`
   - `SessionIdPolicy`
   - `apply_session_id_policy(...)`
   - `UNKNOWN_SESSION_ID`

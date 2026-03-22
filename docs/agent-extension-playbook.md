@@ -1,20 +1,20 @@
-# Agent Adapter Phase 3 Extension Playbook
+# Agent Adapter Extension Playbook
 
 ## Purpose
 
-This playbook explains how to extend the Phase 3 adapter model with package-shaped adapters, richer runtime semantics, and host-owned policy/provenance controls.
+This playbook explains how to extend the adapter model with package-shaped adapters, richer runtime semantics, and host-owned policy/provenance controls.
 
 It is based on the current implementation in:
 
-- `bitloops_cli/src/engine/agent/adapters/types.rs`
-- `bitloops_cli/src/engine/agent/adapters/registry.rs`
-- `bitloops_cli/src/engine/agent/canonical/mod.rs`
-- `bitloops_cli/src/engine/agent/policy.rs`
-- `bitloops_cli/src/engine/lifecycle/mod.rs`
+- `bitloops/src/engine/agent/adapters/types.rs`
+- `bitloops/src/engine/agent/adapters/registry.rs`
+- `bitloops/src/engine/agent/canonical/mod.rs`
+- `bitloops/src/engine/agent/policy.rs`
+- `bitloops/src/engine/lifecycle/mod.rs`
 
-## Phase 3 model summary
+## model summary
 
-Phase 3 introduces five extension surfaces:
+introduces five extension surfaces:
 
 1. Package-ready adapter metadata and lifecycle boundaries.
 2. Deterministic package discovery and validation diagnostics.
@@ -51,7 +51,7 @@ Validation is deterministic through `validate_package_metadata()` and returns st
 
 ## Discovery and validation flow
 
-Use the registry-owned Phase 3 flow:
+Use the registry-owned flow:
 
 1. `discover_packages()`
 2. `package_discovery_reports()`
@@ -79,7 +79,7 @@ Keep protocol mechanics in family/profile descriptors and package concerns in pa
 
 ## Rich canonical runtime semantics
 
-Use `CanonicalContractCompatibility` and related Phase 3 types:
+Use `CanonicalContractCompatibility` and related types:
 
 - `CanonicalStreamEvent`
 - `CanonicalProgressUpdate`
@@ -138,7 +138,7 @@ When adding a new packaged adapter or runtime extension:
    - provenance propagation across request/response/failure
    - audit records include decision and correlation context
 5. Warning-free quality gate:
-   - `cargo clippy --manifest-path bitloops_cli/Cargo.toml --lib --tests -- -D warnings`
+   - `cargo clippy --manifest-path bitloops/Cargo.toml --lib --tests -- -D warnings`
 
 ## Worked examples from current code
 

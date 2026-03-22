@@ -1,16 +1,16 @@
 use clap::Parser;
 
-pub use bitloops_cli::adapters;
-pub use bitloops_cli::api;
-pub use bitloops_cli::capability_packs;
-pub use bitloops_cli::cli;
-pub use bitloops_cli::config;
-pub use bitloops_cli::git;
-pub use bitloops_cli::host;
-pub use bitloops_cli::models;
-pub use bitloops_cli::storage;
-pub use bitloops_cli::telemetry;
-pub use bitloops_cli::utils;
+pub use bitloops::adapters;
+pub use bitloops::api;
+pub use bitloops::capability_packs;
+pub use bitloops::cli;
+pub use bitloops::config;
+pub use bitloops::git;
+pub use bitloops::host;
+pub use bitloops::models;
+pub use bitloops::storage;
+pub use bitloops::telemetry;
+pub use bitloops::utils;
 
 #[cfg(test)]
 #[allow(dead_code)]

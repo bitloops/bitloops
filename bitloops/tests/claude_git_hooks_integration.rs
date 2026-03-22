@@ -1,9 +1,9 @@
 mod test_command_support;
 
-use bitloops_cli::host::checkpoints::session::phase::SessionPhase;
-use bitloops_cli::host::checkpoints::session::state::{PrePromptState, SessionState};
-use bitloops_cli::host::checkpoints::session::{SessionBackend, create_session_backend_or_local};
-use bitloops_cli::host::checkpoints::strategy::manual_commit::{
+use bitloops::host::checkpoints::session::phase::SessionPhase;
+use bitloops::host::checkpoints::session::state::{PrePromptState, SessionState};
+use bitloops::host::checkpoints::session::{SessionBackend, create_session_backend_or_local};
+use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
 use serde_json::Value;
@@ -117,19 +117,19 @@ fn session_backend(repo: &Path) -> Box<dyn SessionBackend> {
 }
 
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops_cli::config::resolve_store_backend_config_for_repo(repo_root)
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
     if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops_cli::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
             .expect("resolve configured sqlite path")
     } else {
-        bitloops_cli::utils::paths::default_relational_db_path(repo_root)
+        bitloops::utils::paths::default_relational_db_path(repo_root)
     }
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {
     let sqlite =
-        bitloops_cli::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
             .expect("create relational sqlite file");
     sqlite
         .initialise_checkpoint_schema()

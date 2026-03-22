@@ -1,6 +1,6 @@
 mod test_command_support;
 
-use bitloops_cli::host::checkpoints::strategy::manual_commit::{
+use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
 use std::env;

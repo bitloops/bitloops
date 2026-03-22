@@ -26,4 +26,4 @@ ref/
 .bitloops/
 .cursor/
 .claude/
-bitloops_cli/.fastembed_cache
+bitloops/.fastembed_cache

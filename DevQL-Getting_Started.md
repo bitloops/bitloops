@@ -19,6 +19,7 @@ Current runtime adapters are:
 - Blob: `local` (default), `s3`, and `gcs`
 
 Important:
+
 - The configuration shape is non-backwards-compatible with legacy `devql.*` keys.
 - Store paths default to repo-local `.bitloops/stores/*` locations.
 - Database files are expected to be created during `bitloops init`.
@@ -71,11 +72,13 @@ Create `<repo>/.bitloops/config.json`:
 ```
 
 What this does:
+
 - Uses `sqlite` for relational data and `duckdb` for event data.
 - Uses local filesystem blob storage.
 - Uses repo-local paths for all stores.
 
 If you omit file paths:
+
 - SQLite defaults to `<repo>/.bitloops/stores/relational/relational.db`
 - DuckDB defaults to `<repo>/.bitloops/stores/event/events.duckdb`
 - Local blob store defaults to `<repo>/.bitloops/stores/blob`
@@ -105,6 +108,7 @@ cargo run -- init --agent claude-code
 ```
 
 What this does:
+
 - Creates and initialises local store files/directories for configured providers.
 - For default local stores, this creates:
   - `.bitloops/stores/relational/relational.db`
@@ -128,6 +132,7 @@ cargo run -- devql connection-status
 ```
 
 What this does:
+
 - Runs a connectivity check against configured logical backends.
 - Prints a `DB Status` table with statuses:
   - `Connected`
@@ -155,6 +160,7 @@ cargo run -- devql init
 ```
 
 What this does:
+
 - Creates DevQL schema for configured providers.
 - With defaults, this initialises SQLite relational DevQL tables and DuckDB `checkpoint_events` table.
 
@@ -165,6 +171,7 @@ cargo run -- devql ingest
 ```
 
 What this does:
+
 - Reads committed checkpoints from the repo.
 - Writes checkpoint events to the configured event backend (`duckdb` by default, or `clickhouse`).
 - Writes repository/commit/file/artefact rows to the configured relational backend (`sqlite` by default, or `postgres`).
@@ -189,7 +196,7 @@ cargo run -- devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
 Artefacts query at a ref:
 
 ```bash
-cargo run -- devql query 'repo("bitloops-cli")->asOf(ref:"main")->file("bitloops_cli/src/main.rs")->artefacts()->limit(20)'
+cargo run -- devql query 'repo("bitloops-cli")->asOf(ref:"main")->file("bitloops/src/main.rs")->artefacts()->limit(20)'
 ```
 
 Artefacts changed by a specific agent:
@@ -217,6 +224,7 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 ```
 
 What this does:
+
 - Parses the DevQL pipeline.
 - Routes checkpoint/telemetry stages to configured event backend (`duckdb` or `clickhouse`).
 - Routes artefact stages to configured relational backend (`sqlite` or `postgres`).
@@ -245,6 +253,7 @@ cargo run -- dashboard --no-open
 ```
 
 What this does:
+
 - On startup, checks DB health for configured backends.
 - Uses the same `DB Status` table/status semantics as `--connection-status`.
 - Keeps live health checks for configured adapters while dashboard runs.

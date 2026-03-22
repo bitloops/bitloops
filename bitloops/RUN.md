@@ -1,11 +1,15 @@
-# Build (from the bitloops_cli directory)
+# Build (from the bitloops directory)
 
-cd /Users/markos/code/bitloops/cli/bitloops_cli
+cd /Users/markos/code/bitloops/cli/bitloops
 
 # Required once per environment: build-time dashboard URL config
+
 cp config/dashboard_urls.template.json config/dashboard_urls.json
+
 # edit config/dashboard_urls.json with real values
+
 # build script validation runs during check/build
+
 cargo check
 
 cargo build
@@ -13,8 +17,8 @@ cargo build
 # Then run it from ANY directory
 
 cd /path/to/some-other-repo
-/Users/markos/code/bitloops/cli/bitloops_cli/target/debug/bitloops init
-/Users/markos/code/bitloops/cli/bitloops_cli/target/debug/bitloops enable
+/Users/markos/code/bitloops/cli/bitloops/target/debug/bitloops init
+/Users/markos/code/bitloops/cli/bitloops/target/debug/bitloops enable
 
 # OR INSTEAD, BETTER
 

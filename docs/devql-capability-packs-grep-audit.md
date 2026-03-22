@@ -13,32 +13,32 @@ From repo root (`bitloops/`):
 ```bash
 # Knowledge gateways: should NOT appear under test_harness
 rg 'knowledge_relational|knowledge_documents|KnowledgeRelational|KnowledgeDocument' \
-  bitloops_cli/src/capability_packs/test_harness
+  bitloops/src/capability_packs/test_harness
 
 # Direct DB drivers in capability pack trees
 rg 'rusqlite|SqliteConnectionPool|sqlx|duckdb::|Connection::open' \
-  bitloops_cli/src/capability_packs/test_harness
+  bitloops/src/capability_packs/test_harness
 rg 'rusqlite|SqliteConnectionPool|sqlx|duckdb::' \
-  bitloops_cli/src/capability_packs/knowledge
+  bitloops/src/capability_packs/knowledge
 # Expect matches only under knowledge/storage/ and #[cfg(test)] in services.rs
 
 # Ingestion: semantic clones vs test harness surfaces
 rg -i 'semantic_clone|symbol_clone|test_harness|test_links|coverage|linkage' \
-  bitloops_cli/src/host/devql/ingestion --glob '*.rs'
+  bitloops/src/host/devql/ingestion --glob '*.rs'
 
 # Broader: who touches test_links / symbol_clone_edges
-rg 'test_links' bitloops_cli --glob '*.rs'
-rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
+rg 'test_links' bitloops --glob '*.rs'
+rg 'symbol_clone_edges' bitloops --glob '*.rs'
 ```
 
 ---
 
 ## 2. `capability_packs/test_harness` — Knowledge gateways & raw SQL
 
-| Check | Result |
-|--------|--------|
+| Check                                                                                          | Result                                                |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `knowledge_relational` / `knowledge_documents` / `KnowledgeRelational*` / `KnowledgeDocument*` | **No matches** in `capability_packs/test_harness/**`. |
-| `rusqlite`, `SqliteConnectionPool`, `sqlx`, `duckdb::`, `Connection::open` | **No matches** in `capability_packs/test_harness/**`. |
+| `rusqlite`, `SqliteConnectionPool`, `sqlx`, `duckdb::`, `Connection::open`                     | **No matches** in `capability_packs/test_harness/**`. |
 
 **Interpretation:** The Test Harness **capability pack module** does not call Knowledge gateways or open SQLite/DuckDB directly. Query-time behaviour is delegated to core DevQL via **`__core_test_links`** (see `stages/tests.rs` → `build_core_test_links_query` + `execute_devql_subquery`).
 
@@ -48,21 +48,21 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ## 3. `capability_packs/knowledge` — `knowledge_*` context usage
 
-| Location | `knowledge_relational` / `knowledge_documents` |
-|----------|--------------------------------------------------|
-| `knowledge/migrations/initial.rs` | Yes — migration uses gateways (expected). |
-| `knowledge/refs.rs` | Yes — resolution helpers (expected). |
-| `knowledge/services.rs` | Yes — main pack services (expected). |
-| `knowledge/services.rs` (tests) | Test doubles implementing trait (expected). |
+| Location                                             | `knowledge_relational` / `knowledge_documents`          |
+| ---------------------------------------------------- | ------------------------------------------------------- |
+| `knowledge/migrations/initial.rs`                    | Yes — migration uses gateways (expected).               |
+| `knowledge/refs.rs`                                  | Yes — resolution helpers (expected).                    |
+| `knowledge/services.rs`                              | Yes — main pack services (expected).                    |
+| `knowledge/services.rs` (tests)                      | Test doubles implementing trait (expected).             |
 | Other knowledge files (ingesters, stages, health, …) | Use context/services; gateway names concentrated above. |
 
 **Direct SQLite / DuckDB / pool usage:**
 
-| Path | Notes |
-|------|--------|
+| Path                                     | Notes                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
 | `knowledge/storage/sqlite_relational.rs` | **rusqlite** + `SqliteConnectionPool` — **gateway implementation** (expected location). |
-| `knowledge/storage/duckdb_documents.rs` | **duckdb::Connection** — **gateway implementation** (expected). |
-| `knowledge/services.rs` (`#[cfg(test)]`) | Constructs `SqliteKnowledgeRelationalStore` for tests. |
+| `knowledge/storage/duckdb_documents.rs`  | **duckdb::Connection** — **gateway implementation** (expected).                         |
+| `knowledge/services.rs` (`#[cfg(test)]`) | Constructs `SqliteKnowledgeRelationalStore` for tests.                                  |
 
 **Update (2026-03-21):** Removed dead **`knowledge/plugin.rs`**, **`knowledge/providers/`** (thin wrappers around `engine::adapters::connectors`), and orphan **`knowledge/tests.rs`**. CLI and integration tests use **`DevqlCapabilityHost`** / **`KnowledgeServices`** + BDD harness only.
 
@@ -74,14 +74,14 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ### 4.1 Semantic clones (pack-owned pipeline)
 
-| File | Role |
-|------|------|
-| `capability_packs/semantic_clones/stage_semantic_features.rs` | Stage 1: **`symbol_semantics`** / **`symbol_features`** DDL init, pre-stage loaders, upsert orchestration. |
-| `capability_packs/semantic_clones/stage_embeddings.rs` | Stage 2: **`symbol_embeddings`** DDL init, upsert orchestration, **`ensure_semantic_embeddings_schema`**. |
-| `capability_packs/semantic_clones/pipeline.rs` | Stage 3: **`rebuild_symbol_clone_edges`**, candidate load, delete/insert **`symbol_clone_edges`**, SQLite/Postgres DDL for clone tables (`ensure_semantic_clones_schema`). |
-| `capability_packs/semantic_clones/schema.rs` | Canonical **`symbol_clone_edges`** DDL strings (shared with migrations + pipeline). |
-| `ingestion/schema/relational_initialisation.rs` | Relational bootstrap calls **`init_*_schema`** on stages 1–2 and **`pipeline::init_postgres_semantic_clones_schema`** (Postgres + SQLite base paths). |
-| `ingestion/types.rs` | Counters: `symbol_clone_edges_upserted`, `symbol_clone_sources_scored`. |
+| File                                                          | Role                                                                                                                                                                       |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capability_packs/semantic_clones/stage_semantic_features.rs` | Stage 1: **`symbol_semantics`** / **`symbol_features`** DDL init, pre-stage loaders, upsert orchestration.                                                                 |
+| `capability_packs/semantic_clones/stage_embeddings.rs`        | Stage 2: **`symbol_embeddings`** DDL init, upsert orchestration, **`ensure_semantic_embeddings_schema`**.                                                                  |
+| `capability_packs/semantic_clones/pipeline.rs`                | Stage 3: **`rebuild_symbol_clone_edges`**, candidate load, delete/insert **`symbol_clone_edges`**, SQLite/Postgres DDL for clone tables (`ensure_semantic_clones_schema`). |
+| `capability_packs/semantic_clones/schema.rs`                  | Canonical **`symbol_clone_edges`** DDL strings (shared with migrations + pipeline).                                                                                        |
+| `ingestion/schema/relational_initialisation.rs`               | Relational bootstrap calls **`init_*_schema`** on stages 1–2 and **`pipeline::init_postgres_semantic_clones_schema`** (Postgres + SQLite base paths).                      |
+| `ingestion/types.rs`                                          | Counters: `symbol_clone_edges_upserted`, `symbol_clone_sources_scored`.                                                                                                    |
 
 **Cross-callers:**
 
@@ -91,10 +91,10 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ### 4.2 Test harness / `test_links` (thin in `ingestion/`)
 
-| File | Role |
-|------|------|
-| `ingestion/schema/relational_initialisation.rs` | Postgres path runs **`test_links_upgrade_sql()`** (adds `confidence`, `linkage_status`). |
-| `ingestion/schema/relational_postgres_migrations.rs` | **`test_links_upgrade_sql`** definition. |
+| File                                                 | Role                                                                                     |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `ingestion/schema/relational_initialisation.rs`      | Postgres path runs **`test_links_upgrade_sql()`** (adds `confidence`, `linkage_status`). |
+| `ingestion/schema/relational_postgres_migrations.rs` | **`test_links_upgrade_sql`** definition.                                                 |
 
 **No** `test_links` SELECT/INSERT/DELETE inside `devql/ingestion/**` beyond these migrations.
 
@@ -108,11 +108,11 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ### 4.3 Cross-feature bleed
 
-| Concern | In `devql/ingestion`? |
-|---------|------------------------|
-| Semantic clones SQL mixed into test_links DDL | **No** — separate modules/strings. |
-| test_links DDL mixed into semantic clones pipeline | **No** (clone DDL in **`capability_packs/semantic_clones/schema.rs`** / **`pipeline.rs`**). |
-| Single function touching both tables | **Not found** in `ingestion/`; `relational_initialisation.rs` orchestrates **both** init paths sequentially (shared bootstrap file only). |
+| Concern                                            | In `devql/ingestion`?                                                                                                                     |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Semantic clones SQL mixed into test_links DDL      | **No** — separate modules/strings.                                                                                                        |
+| test_links DDL mixed into semantic clones pipeline | **No** (clone DDL in **`capability_packs/semantic_clones/schema.rs`** / **`pipeline.rs`**).                                               |
+| Single function touching both tables               | **Not found** in `ingestion/`; `relational_initialisation.rs` orchestrates **both** init paths sequentially (shared bootstrap file only). |
 
 ---
 
@@ -135,15 +135,15 @@ rg 'symbol_clone_edges' bitloops_cli --glob '*.rs'
 
 ```bash
 # Fail if test_harness pack starts touching knowledge stores
-rg 'knowledge_relational|knowledge_documents' bitloops_cli/src/capability_packs/test_harness && exit 1
+rg 'knowledge_relational|knowledge_documents' bitloops/src/capability_packs/test_harness && exit 1
 
 # Fail if test_harness pack opens DB drivers directly
-rg 'rusqlite|SqliteConnectionPool|duckdb::' bitloops_cli/src/capability_packs/test_harness && exit 1
+rg 'rusqlite|SqliteConnectionPool|duckdb::' bitloops/src/capability_packs/test_harness && exit 1
 
 # Optional: flag new ingestion writers for symbol_clone_edges outside persistence module
-rg 'symbol_clone_edges' bitloops_cli/src/host/devql/ingestion --glob '*.rs'
+rg 'symbol_clone_edges' bitloops/src/host/devql/ingestion --glob '*.rs'
 ```
 
 ---
 
-*Companion to [devql-capability-packs-implementation-gaps.md](./devql-capability-packs-implementation-gaps.md).*
+_Companion to [devql-capability-packs-implementation-gaps.md](./devql-capability-packs-implementation-gaps.md)._

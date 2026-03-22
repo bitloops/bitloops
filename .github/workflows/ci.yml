@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - "bitloops_cli/**"
+      - "bitloops/**"
       - "scripts/check-rust-file-size.sh"
       - ".github/workflows/ci.yml"
 
@@ -31,7 +31,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Compile test targets
-        run: cargo test --manifest-path bitloops_cli/Cargo.toml --no-run
+        run: cargo test --manifest-path bitloops/Cargo.toml --no-run
 
   build-matrix:
     name: Build smoke ${{ matrix.target }}
@@ -81,31 +81,31 @@ jobs:
 
       - name: Build (musl targets)
         if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
-        run: cross build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+        run: cross build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }}
 
       - name: Build (non-musl targets)
         if: ${{ !contains(matrix.target, 'unknown-linux-musl') }}
-        run: cargo build --release --manifest-path bitloops_cli/Cargo.toml --target ${{ matrix.target }}
+        run: cargo build --release --manifest-path bitloops/Cargo.toml --target ${{ matrix.target }}
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-musl'
-        run: ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
+        run: ./bitloops/target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Linux arm64 via qemu)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: qemu-aarch64 ./bitloops_cli/target/${{ matrix.target }}/release/bitloops --version
+        run: qemu-aarch64 ./bitloops/target/${{ matrix.target }}/release/bitloops --version
 
       - name: Smoke test (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          & "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe" --version
+          & "bitloops/target/${{ matrix.target }}/release/bitloops.exe" --version
 
       - name: Validate Windows arm64 build output
         if: matrix.target == 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
-          $path = "bitloops_cli/target/${{ matrix.target }}/release/bitloops.exe"
+          $path = "bitloops/target/${{ matrix.target }}/release/bitloops.exe"
           if (-not (Test-Path $path)) {
             throw "Missing expected binary: $path"
           }

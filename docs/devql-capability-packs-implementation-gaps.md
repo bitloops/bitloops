@@ -13,6 +13,7 @@ This document captures an architecture review of first-party capability packs ag
 **Related:** [Grep-driven boundary audit](./devql-capability-packs-grep-audit.md) (Knowledge vs Test Harness capability modules, `devql/ingestion` table access).
 
 **Update (2026-03-22, Layered Extension Architecture restructuring):** The codebase has been restructured per CLI-1426. Key path changes:
+
 - `engine/` → `host/` (Core Host substrate)
 - `engine/devql/capabilities/{knowledge,semantic_clones,test_harness}/` → `capability_packs/{knowledge,semantic_clones,test_harness}/` (top-level Layer 1)
 - `engine/semantic_clones/` + `engine/semantic_embeddings/` + `engine/semantic_features/` → consolidated into `capability_packs/semantic_clones/{scoring,embeddings,features}/`
@@ -27,7 +28,7 @@ This document captures an architecture review of first-party capability packs ag
 - `commands/` → `cli/` (Presentation)
 - `server/dashboard/` → `api/` (Presentation)
 
-See [architecture-review.md](../bitloops_cli/docs/architecture-review.md) for the full rationale and mapping.
+See [architecture-review.md](../bitloops/docs/architecture-review.md) for the full rationale and mapping.
 
 **Target boundaries (core ↔ packs, timeouts, optional cross-pack grants):** [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md). Implemented in-repo (2026-03-20): `HostInvocationPolicy` + `with_timeout` on stage/ingester dispatch; `execute_devql_subquery` wall-clock limit via `DevqlSubqueryOptions::subquery_timeout`; `host.cross_pack_access` grants **or** descriptor `dependencies` for registered-stage composition; `devql_relational_scoped` binds DevQL relational to the invoking ingester capability id; default `host` config block in `build_capability_config_root`.
 
@@ -135,15 +136,15 @@ Risk: other packs or core paths opening the **same files** with ad hoc SQL inste
 
 ## Summary: recommended order
 
-| Order | Topic | Core action |
-|------|--------|-------------|
-| 1 | Dual pack models | **Done (SC):** Semantic Clones on `DevqlCapabilityHost` only; extension host does not register SC. Residual: K+TH still dual-registered (extension + DevQL). |
-| 2 | Context surface area | **Done:** core vs **`Knowledge*Context`** for stages/ingesters (**`register_knowledge_*`**) and for migrations (**`CapabilityMigrationContext`** vs **`KnowledgeMigrationContext`**, **`MigrationRunner::Core` / `Knowledge`**) |
-| 3 | Test Harness depth | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain |
-| 4 | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented |
-| 5 | Knowledge hygiene | **Done (this pass):** module docs; provenance (`capability_version` / `api_version`, add vs refresh, host **`ingester_id`**); removed dead plugin/providers/orphan tests. **Ongoing:** review discipline (gateways + config view); optional trace id |
-| 6 | Observability | **Done:** `bitloops devql packs` (+ `--with-extensions` for `CoreExtensionHost`, JSON wrap only with that flag); clearer error prefixes on host paths |
+| Order | Topic                     | Core action                                                                                                                                                                                                                                          |
+| ----- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Dual pack models          | **Done (SC):** Semantic Clones on `DevqlCapabilityHost` only; extension host does not register SC. Residual: K+TH still dual-registered (extension + DevQL).                                                                                         |
+| 2     | Context surface area      | **Done:** core vs **`Knowledge*Context`** for stages/ingesters (**`register_knowledge_*`**) and for migrations (**`CapabilityMigrationContext`** vs **`KnowledgeMigrationContext`**, **`MigrationRunner::Core` / `Knowledge`**)                      |
+| 3     | Test Harness depth        | **Done:** coverage + linkage + classification + summaries ingesters + `testlens ingest-tests` / coverage via `invoke_ingester`; gated stages remain                                                                                                  |
+| 4     | Semantic Clones structure | **Done:** stages 1–2 in `stage_semantic_features` / `stage_embeddings`; stage 3 in `pipeline`; ingest triggers `semantic_clones.rebuild`; Postgres bootstrap + SQLite migrations split documented                                                    |
+| 5     | Knowledge hygiene         | **Done (this pass):** module docs; provenance (`capability_version` / `api_version`, add vs refresh, host **`ingester_id`**); removed dead plugin/providers/orphan tests. **Ongoing:** review discipline (gateways + config view); optional trace id |
+| 6     | Observability             | **Done:** `bitloops devql packs` (+ `--with-extensions` for `CoreExtensionHost`, JSON wrap only with that flag); clearer error prefixes on host paths                                                                                                |
 
 ---
 
-*Generated from an internal codebase review; update this file as gaps are closed.*
+_Generated from an internal codebase review; update this file as gaps are closed._

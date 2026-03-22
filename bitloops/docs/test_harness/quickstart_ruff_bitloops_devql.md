@@ -12,6 +12,7 @@ Use it when you want to:
 - continue later with `bitloops testlens`
 
 Historical note:
+
 - the old in-repo Ruff fixture snapshot was removed with `TestLens`
 - this replacement quickstart uses a fresh local Ruff clone instead
 
@@ -39,7 +40,7 @@ It does not scan the whole Ruff workspace from scratch. It materializes producti
 From `/Users/markos/code/bitloops/bitloops`:
 
 ```bash
-cargo install --path ./bitloops_cli --force
+cargo install --path ./bitloops --force
 export PATH="$HOME/.cargo/bin:$PATH"
 
 bitloops --version
@@ -172,7 +173,7 @@ You want these to be non-zero:
 
 Once DevQL has materialized the production rows you need, continue with:
 
-- [quickstart_ruff_fixture.md](/Users/markos/code/bitloops/bitloops/bitloops_cli/docs/test_harness/quickstart_ruff_fixture.md)
+- [quickstart_ruff_fixture.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_fixture.md)
 
 That flow picks up from `bitloops testlens ingest-tests`.
 

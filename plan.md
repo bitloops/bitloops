@@ -25,8 +25,8 @@ Primary BDD scope (first pass):
 
 The active Knowledge capability path is:
 
-1. CLI command parsing in `bitloops_cli/src/commands/devql.rs`
-2. `run_knowledge_*_via_host` in `bitloops_cli/src/engine/devql/capabilities/knowledge/cli.rs`
+1. CLI command parsing in `bitloops/src/commands/devql.rs`
+2. `run_knowledge_*_via_host` in `bitloops/src/engine/devql/capabilities/knowledge/cli.rs`
 3. `DevqlCapabilityHost::invoke_ingester(...)`
 4. ingesters registered in `knowledge/register.rs`:
    - `knowledge.add`
@@ -72,8 +72,8 @@ The active Knowledge capability path is:
 
 Strong helper/test logic already exists in Knowledge test code (scenario matrix for most CLI-1432 cases), especially in:
 
-- `bitloops_cli/src/engine/devql/capabilities/knowledge/tests.rs` (flow matrix + helpers)
-- `bitloops_cli/src/engine/devql/capabilities/knowledge/services.rs` test module (stub connector + runtime context)
+- `bitloops/src/engine/devql/capabilities/knowledge/tests.rs` (flow matrix + helpers)
+- `bitloops/src/engine/devql/capabilities/knowledge/services.rs` test module (stub connector + runtime context)
 
 Reusable assets already present:
 
@@ -129,7 +129,7 @@ without network calls and without brittle CLI stdout parsing.
 
 Create:
 
-- `bitloops_cli/src/engine/devql/tests/knowledge_support.rs`
+- `bitloops/src/engine/devql/tests/knowledge_support.rs`
 
 Move/extract from existing Knowledge tests into this module:
 
@@ -147,7 +147,7 @@ Move/extract from existing Knowledge tests into this module:
 Code skeleton:
 
 ```rust
-// bitloops_cli/src/engine/devql/tests/knowledge_support.rs
+// bitloops/src/engine/devql/tests/knowledge_support.rs
 pub(super) async fn run_add_flow(
     services: &KnowledgeServices,
     ctx: &mut TestRuntimeContext,
@@ -187,9 +187,9 @@ Current file is monolithic: `tests/cucumber_steps.rs`.
 
 Refactor to:
 
-- `bitloops_cli/src/engine/devql/tests/cucumber_steps/mod.rs`
-- `bitloops_cli/src/engine/devql/tests/cucumber_steps/core.rs` (existing non-knowledge steps)
-- `bitloops_cli/src/engine/devql/tests/cucumber_steps/knowledge.rs` (new)
+- `bitloops/src/engine/devql/tests/cucumber_steps/mod.rs`
+- `bitloops/src/engine/devql/tests/cucumber_steps/core.rs` (existing non-knowledge steps)
+- `bitloops/src/engine/devql/tests/cucumber_steps/knowledge.rs` (new)
 
 Update `devql/mod.rs` path include:
 
@@ -201,7 +201,7 @@ mod cucumber_steps;
 
 ### 4.3 Extend Cucumber world with Knowledge state
 
-Update `bitloops_cli/src/engine/devql/tests/cucumber_world.rs`.
+Update `bitloops/src/engine/devql/tests/cucumber_world.rs`.
 
 Add fields:
 
@@ -228,7 +228,7 @@ Add reset/init methods:
 
 Create:
 
-- `bitloops_cli/src/engine/devql/tests/cucumber_steps/knowledge.rs`
+- `bitloops/src/engine/devql/tests/cucumber_steps/knowledge.rs`
 
 Step groups:
 
@@ -252,7 +252,7 @@ pub(super) fn register(collection: Collection<DevqlBddWorld>) -> Collection<Devq
 
 ## Phase 2: Feature files (BDD scenarios)
 
-Place under `bitloops_cli/src/engine/devql/tests/features/`:
+Place under `bitloops/src/engine/devql/tests/features/`:
 
 1. `knowledge_add.feature`
 2. `knowledge_add_commit.feature`
@@ -402,13 +402,13 @@ Avoid re-testing internal serialization minutiae already covered by unit tests.
 Local validation loop:
 
 ```bash
-cargo test -p bitloops_cli devql_bdd_features_pass
+cargo test -p bitloops devql_bdd_features_pass
 ```
 
 Then focused full capability tests (if needed):
 
 ```bash
-cargo test -p bitloops_cli knowledge
+cargo test -p bitloops knowledge
 ```
 
 Expected guardrails:

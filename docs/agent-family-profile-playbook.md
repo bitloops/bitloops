@@ -5,7 +5,7 @@ For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-pla
 ## Purpose
 
 This guide explains when to add a **protocol family**, when to add a **target profile**, and when to add both.
-It is grounded in the Phase 2 implementation in `bitloops_cli/src/engine/agent/adapters.rs` and lifecycle routing in `bitloops_cli/src/engine/lifecycle/adapters.rs`.
+It is grounded in the Phase 2 implementation in `bitloops/src/engine/agent/adapters.rs` and lifecycle routing in `bitloops/src/engine/lifecycle/adapters.rs`.
 
 ## Core Terms
 

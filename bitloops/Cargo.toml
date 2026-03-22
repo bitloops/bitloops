@@ -1,5 +1,5 @@
 [package]
-name = "bitloops_cli"
+name = "bitloops"
 version = "0.1.0"
 edition = "2024"
 

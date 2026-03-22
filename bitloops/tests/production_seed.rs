@@ -2,7 +2,7 @@ mod test_harness_support;
 
 use std::fs;
 
-use bitloops_cli::storage::init::init_database;
+use bitloops::storage::init::init_database;
 use rusqlite::{Connection, params};
 use tempfile::tempdir;
 use test_harness_support::production_seed::seed_production_artefacts_for_repo;

@@ -39,28 +39,28 @@ fn init_repo(repo: &Path) {
 }
 
 fn ensure_dashboard_store_files(repo_root: &Path) {
-    let cfg = bitloops_cli::config::resolve_store_backend_config_for_repo(repo_root)
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
 
-    if cfg.relational.provider == bitloops_cli::config::RelationalProvider::Sqlite {
+    if cfg.relational.provider == bitloops::config::RelationalProvider::Sqlite {
         let sqlite_path = if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            bitloops_cli::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
                 .expect("resolve configured sqlite path")
         } else {
-            bitloops_cli::utils::paths::default_relational_db_path(repo_root)
+            bitloops::utils::paths::default_relational_db_path(repo_root)
         };
-        let sqlite = bitloops_cli::storage::SqliteConnectionPool::connect(sqlite_path)
+        let sqlite = bitloops::storage::SqliteConnectionPool::connect(sqlite_path)
             .expect("create relational sqlite file");
         sqlite
             .initialise_checkpoint_schema()
             .expect("initialise checkpoint schema");
     }
 
-    if cfg.events.provider == bitloops_cli::config::EventsProvider::DuckDb {
+    if cfg.events.provider == bitloops::config::EventsProvider::DuckDb {
         let duckdb_path = if let Some(path) = cfg.events.duckdb_path.as_deref() {
-            bitloops_cli::config::resolve_duckdb_db_path_for_repo(repo_root, Some(path))
+            bitloops::config::resolve_duckdb_db_path_for_repo(repo_root, Some(path))
         } else {
-            bitloops_cli::utils::paths::default_events_db_path(repo_root)
+            bitloops::utils::paths::default_events_db_path(repo_root)
         };
         if let Some(parent) = duckdb_path.parent()
             && !parent.as_os_str().is_empty()

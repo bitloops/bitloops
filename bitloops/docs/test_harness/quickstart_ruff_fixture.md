@@ -5,6 +5,7 @@ Last updated: 2026-03-19
 This restores the old Ruff workspace quickstart after the `TestLens` migration.
 
 Historical note:
+
 - the old filename is preserved because other notes referenced it
 - the old in-repo Ruff snapshot is gone
 - this replacement quickstart uses a fresh real Ruff clone plus `bitloops testlens`
@@ -21,7 +22,7 @@ Run the migrated Bitloops test harness against Ruff so you can:
 
 Complete the DevQL setup first:
 
-- [quickstart_ruff_bitloops_devql.md](/Users/markos/code/bitloops/bitloops/bitloops_cli/docs/test_harness/quickstart_ruff_bitloops_devql.md)
+- [quickstart_ruff_bitloops_devql.md](/Users/markos/code/bitloops/bitloops/bitloops/docs/test_harness/quickstart_ruff_bitloops_devql.md)
 
 Assume:
 

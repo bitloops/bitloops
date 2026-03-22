@@ -494,7 +494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "bitloops_cli"
+name = "bitloops"
 version = "0.1.0"
 dependencies = [
  "anyhow",

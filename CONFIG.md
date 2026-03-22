@@ -237,9 +237,9 @@ Manifest resolution order:
 | `BITLOOPS_TELEMETRY_DISTINCT_ID`          | Explicit distinct ID override.                                      |
 | `BITLOOPS_TELEMETRY_FORCE_NO_DISTINCT_ID` | Any non-empty value disables distinct ID generation.                |
 
-## 4) Build-time dashboard URL config (`bitloops_cli/config/dashboard_urls.json`)
+## 4) Build-time dashboard URL config (`bitloops/config/dashboard_urls.json`)
 
-Used at build time by `bitloops_cli/build.rs` to compile dashboard bundle URL defaults into the binary.
+Used at build time by `bitloops/build.rs` to compile dashboard bundle URL defaults into the binary.
 
 Expected keys:
 
@@ -250,13 +250,13 @@ Expected keys:
 
 Template file:
 
-- `bitloops_cli/config/dashboard_urls.template.json`
+- `bitloops/config/dashboard_urls.template.json`
 
-If this file is missing or invalid, `cargo check` or `cargo build` in `bitloops_cli/` fails fast with guidance.
+If this file is missing or invalid, `cargo check` or `cargo build` in `bitloops/` fails fast with guidance.
 
 ## 5) Optional build metadata env vars
 
-These are consumed by `bitloops_cli/build.rs` and embedded into CLI version output:
+These are consumed by `bitloops/build.rs` and embedded into CLI version output:
 
 - `BITLOOPS_BUILD_VERSION`
 - `BITLOOPS_BUILD_COMMIT`

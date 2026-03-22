@@ -2,7 +2,7 @@
 
 ## Build locally
 
-Run from the `bitloops_cli/` directory:
+Run from the `bitloops/` directory:
 
 ```bash
 # One-time local setup for build-time dashboard URL embedding
@@ -37,13 +37,13 @@ bash scripts/setup-hooks.sh
 This configures git to use the versioned hooks in `.githooks/` (local `core.hooksPath` only — not committed):
 
 - `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
-- `pre-push`: strict coverage non-regression check via `./bitloops_cli/scripts/coverage-baseline-check.sh check`
+- `pre-push`: strict coverage non-regression check via `./bitloops/scripts/coverage-baseline-check.sh check`
 
 These hooks do **not** run `bitloops enable` or call the Bitloops CLI. Developing this repo does not require installing Bitloops in your working tree. If you want session/checkpoint git integration here, run `bitloops enable` separately (it manages `.git/hooks` or merges with your hooks setup — see CLI docs).
 
 ## Testing
 
-Run from the `bitloops_cli/` directory:
+Run from the `bitloops/` directory:
 
 ```bash
 # Test type aliases
@@ -96,7 +96,7 @@ Coverage outputs:
 
 - HTML: `target/llvm-cov-html/html/index.html`
 - LCOV: `target/llvm-cov.info`
-- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops_cli/`)
+- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops/`)
 
 Coverage gate policy:
 
@@ -107,7 +107,7 @@ Coverage gate policy:
 
 When baseline changes are intentional:
 
-- Run `./scripts/coverage-baseline-check.sh update` from `bitloops_cli/`.
+- Run `./scripts/coverage-baseline-check.sh update` from `bitloops/`.
 - Commit the appended baseline history entries with your code changes.
 - If baseline decreases, include a short justification in the PR description.
 
