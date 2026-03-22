@@ -1,4 +1,4 @@
-#[path = "semantic_features.rs"]
+#[path = "features/semantic_features.rs"]
 mod core;
 
 pub use core::{

@@ -4,10 +4,10 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
-use crate::config::AtlassianProviderConfig;
-use crate::engine::devql::capabilities::knowledge::{
+use crate::capability_packs::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
+use crate::config::AtlassianProviderConfig;
 
 use super::types::{
     BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
@@ -162,7 +162,7 @@ pub(crate) fn build_confluence_record(
 pub(crate) fn build_confluence_document(
     parsed: &ParsedKnowledgeUrl,
     payload: Value,
-) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+) -> Result<crate::capability_packs::knowledge::FetchedKnowledgeDocument> {
     Ok(build_confluence_record(parsed, payload)?.into())
 }
 
@@ -196,9 +196,8 @@ mod tests {
 
     fn parsed_page() -> ParsedKnowledgeUrl {
         ParsedKnowledgeUrl {
-            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Confluence,
-            source_kind:
-                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::ConfluencePage,
+            provider: crate::capability_packs::knowledge::KnowledgeProvider::Confluence,
+            source_kind: crate::capability_packs::knowledge::KnowledgeSourceKind::ConfluencePage,
             canonical_external_id:
                 "confluence://bitloops.atlassian.net/wiki/spaces/ADCP/pages/438337548".to_string(),
             canonical_url:

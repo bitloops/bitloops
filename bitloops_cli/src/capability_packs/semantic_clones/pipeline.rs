@@ -20,8 +20,8 @@ use crate::engine::devql::{
 };
 
 use super::ensure_semantic_embeddings_schema;
-use crate::engine::semantic_clones;
-use crate::engine::semantic_features as semantic;
+use super::features as semantic;
+use super::scoring;
 
 use super::schema::{semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql};
 
@@ -49,7 +49,7 @@ async fn ensure_semantic_clones_schema(relational: &RelationalStorage) -> Result
 pub(crate) async fn rebuild_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
-) -> Result<semantic_clones::SymbolCloneBuildResult> {
+) -> Result<scoring::SymbolCloneBuildResult> {
     ensure_semantic_clones_schema(relational).await?;
     ensure_semantic_embeddings_schema(relational).await?;
     let candidates = load_symbol_clone_candidate_inputs(relational, repo_id).await?;
@@ -67,7 +67,7 @@ pub(crate) async fn rebuild_symbol_clone_edges(
 async fn load_symbol_clone_candidate_inputs(
     relational: &RelationalStorage,
     repo_id: &str,
-) -> Result<Vec<semantic_clones::SymbolCloneCandidateInput>> {
+) -> Result<Vec<scoring::SymbolCloneCandidateInput>> {
     let churn_by_symbol_id = load_symbol_churn_counts(relational, repo_id).await?;
     let call_targets_by_symbol_id = load_symbol_call_targets(relational, repo_id).await?;
     let dependency_targets_by_symbol_id =
@@ -89,7 +89,7 @@ async fn load_symbol_clone_candidate_inputs(
             continue;
         }
 
-        candidates.push(semantic_clones::SymbolCloneCandidateInput {
+        candidates.push(scoring::SymbolCloneCandidateInput {
             repo_id: row
                 .get("repo_id")
                 .and_then(Value::as_str)
@@ -290,7 +290,7 @@ async fn delete_repo_symbol_clone_edges(
 
 async fn persist_symbol_clone_edges(
     relational: &RelationalStorage,
-    rows: &[semantic_clones::SymbolCloneEdgeRow],
+    rows: &[scoring::SymbolCloneEdgeRow],
 ) -> Result<()> {
     for row in rows {
         let explanation_expr = sql_json_value(relational, &row.explanation_json);

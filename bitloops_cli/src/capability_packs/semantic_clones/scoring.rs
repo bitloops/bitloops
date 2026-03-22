@@ -251,13 +251,13 @@ fn build_symbol_clone_edge(
 }
 
 // scoring: signal structs and score computation
-include!("scoring.rs");
+include!("scoring/core.rs");
 // classification: relation-kind predicates
-include!("classification.rs");
+include!("scoring/classification.rs");
 // explanation: build_explanation, limiting signals, confidence band
-include!("explanation.rs");
+include!("scoring/explanation.rs");
 // utils: jaccard, hashing, token helpers, path/name similarity
-include!("utils.rs");
+include!("scoring/utils.rs");
 
 #[cfg(test)]
 mod tests {

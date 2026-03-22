@@ -16,7 +16,7 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::devql::capabilities::semantic_clones::types::{
+    use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
     };
     use crate::engine::devql::capability_host::{IngesterRegistration, QueryExample, SchemaModule};

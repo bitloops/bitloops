@@ -8,11 +8,11 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::adapters::model_providers::embeddings::EmbeddingProvider;
+use crate::capability_packs::semantic_clones::embeddings;
+use crate::capability_packs::semantic_clones::features as semantic;
 use crate::engine::devql::{
     RelationalStorage, esc_pg, postgres_exec, sql_string_list_pg, sqlite_exec_path_allow_create,
 };
-use crate::engine::semantic_embeddings;
-use crate::engine::semantic_features as semantic;
 
 fn semantic_embeddings_postgres_schema_sql() -> &'static str {
     r#"
@@ -80,8 +80,8 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     relational: &RelationalStorage,
     inputs: &[semantic::SemanticFeatureInput],
     embedding_provider: Arc<dyn EmbeddingProvider>,
-) -> Result<semantic_embeddings::SymbolEmbeddingIngestionStats> {
-    let mut stats = semantic_embeddings::SymbolEmbeddingIngestionStats::default();
+) -> Result<embeddings::SymbolEmbeddingIngestionStats> {
+    let mut stats = embeddings::SymbolEmbeddingIngestionStats::default();
     if inputs.is_empty() {
         return Ok(stats);
     }
@@ -94,15 +94,13 @@ pub(crate) async fn upsert_symbol_embedding_rows(
         .collect::<Vec<_>>();
     let summary_by_artefact_id = load_semantic_summary_map(relational, &artefact_ids).await?;
     let embedding_inputs =
-        semantic_embeddings::build_symbol_embedding_inputs(inputs, &summary_by_artefact_id);
+        embeddings::build_symbol_embedding_inputs(inputs, &summary_by_artefact_id);
 
     for input in embedding_inputs {
-        let next_input_hash = semantic_embeddings::build_symbol_embedding_input_hash(
-            &input,
-            embedding_provider.as_ref(),
-        );
+        let next_input_hash =
+            embeddings::build_symbol_embedding_input_hash(&input, embedding_provider.as_ref());
         let state = load_symbol_embedding_index_state(relational, &input.artefact_id).await?;
-        if !semantic_embeddings::symbol_embeddings_require_reindex(&state, &next_input_hash) {
+        if !embeddings::symbol_embeddings_require_reindex(&state, &next_input_hash) {
             stats.skipped += 1;
             continue;
         }
@@ -110,7 +108,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
         let input = input.clone();
         let embedding_provider = Arc::clone(&embedding_provider);
         let row = tokio::task::spawn_blocking(move || {
-            semantic_embeddings::build_symbol_embedding_row(&input, embedding_provider.as_ref())
+            embeddings::build_symbol_embedding_row(&input, embedding_provider.as_ref())
         })
         .await
         .context("building semantic embedding row on blocking worker")??;
@@ -135,7 +133,7 @@ pub(crate) async fn ensure_semantic_embeddings_schema(
 async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
-) -> Result<semantic_embeddings::SymbolEmbeddingIndexState> {
+) -> Result<embeddings::SymbolEmbeddingIndexState> {
     let rows = relational
         .query_rows(&build_symbol_embedding_index_state_sql(artefact_id))
         .await?;
@@ -170,7 +168,7 @@ async fn load_semantic_summary_map(
 
 async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
-    row: &semantic_embeddings::SymbolEmbeddingRow,
+    row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
     let sql = match relational {
         RelationalStorage::Postgres(_) => build_postgres_symbol_embedding_persist_sql(row)?,
@@ -190,12 +188,12 @@ WHERE artefact_id = '{artefact_id}'",
 
 fn parse_symbol_embedding_index_state_rows(
     rows: &[Value],
-) -> semantic_embeddings::SymbolEmbeddingIndexState {
+) -> embeddings::SymbolEmbeddingIndexState {
     let Some(row) = rows.first() else {
-        return semantic_embeddings::SymbolEmbeddingIndexState::default();
+        return embeddings::SymbolEmbeddingIndexState::default();
     };
 
-    semantic_embeddings::SymbolEmbeddingIndexState {
+    embeddings::SymbolEmbeddingIndexState {
         embedding_hash: row
             .get("embedding_hash")
             .and_then(Value::as_str)
@@ -213,7 +211,7 @@ WHERE artefact_id IN ({})",
 }
 
 fn build_postgres_symbol_embedding_persist_sql(
-    row: &semantic_embeddings::SymbolEmbeddingRow,
+    row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
     let embedding_expr = sql_vector_string(&row.embedding)?;
     Ok(format!(
@@ -232,7 +230,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
 }
 
 fn build_sqlite_symbol_embedding_persist_sql(
-    row: &semantic_embeddings::SymbolEmbeddingRow,
+    row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
     let embedding_json = sql_json_string(&row.embedding)?;
     Ok(format!(
@@ -305,10 +303,7 @@ mod semantic_embedding_persistence_tests {
     #[test]
     fn semantic_embedding_state_parser_defaults_and_reads_hash() {
         let empty = parse_symbol_embedding_index_state_rows(&[]);
-        assert_eq!(
-            empty,
-            semantic_embeddings::SymbolEmbeddingIndexState::default()
-        );
+        assert_eq!(empty, embeddings::SymbolEmbeddingIndexState::default());
 
         let rows = vec![json!({ "embedding_hash": "hash-1" })];
         let parsed = parse_symbol_embedding_index_state_rows(&rows);
@@ -317,36 +312,34 @@ mod semantic_embedding_persistence_tests {
 
     #[test]
     fn semantic_embedding_postgres_persist_sql_contains_vector_literal() {
-        let sql =
-            build_postgres_symbol_embedding_persist_sql(&semantic_embeddings::SymbolEmbeddingRow {
-                artefact_id: "artefact-1".to_string(),
-                repo_id: "repo-1".to_string(),
-                blob_sha: "blob-1".to_string(),
-                provider: "voyage".to_string(),
-                model: "voyage-code-3".to_string(),
-                dimension: 3,
-                embedding_input_hash: "hash-1".to_string(),
-                embedding: vec![0.1, -0.2, 0.3],
-            })
-            .expect("persist sql");
+        let sql = build_postgres_symbol_embedding_persist_sql(&embeddings::SymbolEmbeddingRow {
+            artefact_id: "artefact-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            provider: "voyage".to_string(),
+            model: "voyage-code-3".to_string(),
+            dimension: 3,
+            embedding_input_hash: "hash-1".to_string(),
+            embedding: vec![0.1, -0.2, 0.3],
+        })
+        .expect("persist sql");
         assert!(sql.contains("INSERT INTO symbol_embeddings"));
         assert!(sql.contains("'[0.1,-0.2,0.3]'::vector"));
     }
 
     #[test]
     fn semantic_embedding_sqlite_persist_sql_contains_json_literal() {
-        let sql =
-            build_sqlite_symbol_embedding_persist_sql(&semantic_embeddings::SymbolEmbeddingRow {
-                artefact_id: "artefact-1".to_string(),
-                repo_id: "repo-1".to_string(),
-                blob_sha: "blob-1".to_string(),
-                provider: "local".to_string(),
-                model: "jinaai/jina-embeddings-v2-base-code".to_string(),
-                dimension: 3,
-                embedding_input_hash: "hash-1".to_string(),
-                embedding: vec![0.1, -0.2, 0.3],
-            })
-            .expect("persist sql");
+        let sql = build_sqlite_symbol_embedding_persist_sql(&embeddings::SymbolEmbeddingRow {
+            artefact_id: "artefact-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            provider: "local".to_string(),
+            model: "jinaai/jina-embeddings-v2-base-code".to_string(),
+            dimension: 3,
+            embedding_input_hash: "hash-1".to_string(),
+            embedding: vec![0.1, -0.2, 0.3],
+        })
+        .expect("persist sql");
         assert!(sql.contains("INSERT INTO symbol_embeddings"));
         assert!(sql.contains("'[0.1,-0.2,0.3]'"));
         assert!(!sql.contains("::vector"));

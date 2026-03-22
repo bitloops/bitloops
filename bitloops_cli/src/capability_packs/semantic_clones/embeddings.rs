@@ -7,7 +7,9 @@ use crate::adapters::model_providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
     default_embedding_provider, embedding_provider_requires_api_key,
 };
-use crate::engine::semantic_features::{SemanticFeatureInput, render_dependency_context};
+use crate::capability_packs::semantic_clones::features::{
+    SemanticFeatureInput, render_dependency_context,
+};
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
@@ -126,7 +128,11 @@ pub fn build_symbol_embedding_inputs(
 ) -> Vec<SymbolEmbeddingInput> {
     inputs
         .iter()
-        .filter(|input| crate::engine::semantic_features::is_semantic_enrichment_candidate(input))
+        .filter(|input| {
+            crate::capability_packs::semantic_clones::features::is_semantic_enrichment_candidate(
+                input,
+            )
+        })
         .filter_map(|input| {
             let summary = summary_by_artefact_id
                 .get(&input.artefact_id)?

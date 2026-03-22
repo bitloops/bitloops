@@ -4,15 +4,15 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
+use crate::capability_packs::knowledge::storage::{
+    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+};
 use crate::config::{
     ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
     resolve_store_backend_config_for_repo,
 };
 use crate::engine::devql::RelationalStorage;
 use crate::engine::devql::RepoIdentity;
-use crate::engine::devql::capabilities::knowledge::storage::{
-    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-};
 use crate::storage::SqliteConnectionPool;
 
 use super::config_view::CapabilityConfigView;

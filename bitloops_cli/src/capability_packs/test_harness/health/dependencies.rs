@@ -76,9 +76,9 @@ mod tests {
     use crate::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
+    use crate::capability_packs::knowledge::ParsedKnowledgeUrl;
     use crate::config::ProviderConfig;
     use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl;
     use crate::engine::devql::capability_host::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::StoreHealthGateway;
     use anyhow::Result;

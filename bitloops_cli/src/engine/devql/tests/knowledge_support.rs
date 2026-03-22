@@ -11,23 +11,23 @@ use tempfile::TempDir;
 use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
+use crate::capability_packs::knowledge::services::KnowledgeServices;
+use crate::capability_packs::knowledge::url::parse_knowledge_url;
+use crate::capability_packs::knowledge::{
+    AssociateKnowledgeResult, IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeProvider,
+};
+use crate::capability_packs::knowledge::{
+    storage::{
+        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+    },
+    types::KnowledgePayloadData,
+};
 use crate::config::{
     AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
     EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig,
 };
 use crate::engine::devql::RepoIdentity;
-use crate::engine::devql::capabilities::knowledge::services::KnowledgeServices;
-use crate::engine::devql::capabilities::knowledge::url::parse_knowledge_url;
-use crate::engine::devql::capabilities::knowledge::{
-    AssociateKnowledgeResult, IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeProvider,
-};
-use crate::engine::devql::capabilities::knowledge::{
-    storage::{
-        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-    },
-    types::KnowledgePayloadData,
-};
 use crate::engine::devql::capability_host::CapabilityConfigView;
 use crate::engine::devql::capability_host::contexts::{
     CapabilityExecutionContext, CapabilityIngestContext, KnowledgeIngestContext,
@@ -61,16 +61,13 @@ impl StubKnowledgeAdapter {
 }
 
 impl KnowledgeConnectorAdapter for StubKnowledgeAdapter {
-    fn can_handle(
-        &self,
-        parsed: &crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
-    ) -> bool {
+    fn can_handle(&self, parsed: &crate::capability_packs::knowledge::ParsedKnowledgeUrl) -> bool {
         parsed.provider == self.provider
     }
 
     fn fetch<'a>(
         &'a self,
-        parsed: &'a crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
+        parsed: &'a crate::capability_packs::knowledge::ParsedKnowledgeUrl,
         _ctx: &'a dyn ConnectorContext,
     ) -> crate::adapters::connectors::types::BoxFuture<'a, Result<ExternalKnowledgeRecord>> {
         Box::pin(async move {
@@ -134,7 +131,7 @@ impl ConnectorContext for StubConnectorRegistry {
 impl ConnectorRegistry for StubConnectorRegistry {
     fn knowledge_adapter_for(
         &self,
-        parsed: &crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
+        parsed: &crate::capability_packs::knowledge::ParsedKnowledgeUrl,
     ) -> Result<&dyn KnowledgeConnectorAdapter> {
         match parsed.provider {
             KnowledgeProvider::Github => Ok(&self.github),
@@ -669,7 +666,7 @@ fn normalize_provider_name(raw: &str) -> &'static str {
 }
 
 fn build_record(
-    parsed: &crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
+    parsed: &crate::capability_packs::knowledge::ParsedKnowledgeUrl,
     title: &str,
     body: &str,
     updated_at: &str,

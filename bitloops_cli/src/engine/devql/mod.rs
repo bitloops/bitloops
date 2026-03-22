@@ -8,6 +8,13 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
+use crate::capability_packs::semantic_clones::embeddings;
+use crate::capability_packs::semantic_clones::features as semantic;
+use crate::capability_packs::semantic_clones::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
+    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+};
 use crate::config::{
     EventsBackendConfig, EventsProvider, RelationalBackendConfig, RelationalProvider,
     StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
@@ -17,23 +24,15 @@ use crate::engine::capability_packs::builtin::semantic_clones as semantic_clones
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };
-use crate::engine::devql::capabilities::semantic_clones::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
-};
 use crate::engine::extensions::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
-use crate::engine::semantic_embeddings;
-use crate::engine::semantic_features as semantic;
 use crate::engine::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
     read_session_content, run_git,
 };
 use crate::utils::terminal::print_db_status_table;
 
-pub mod capabilities;
 pub mod capability_host;
 pub(crate) mod identity;
 
@@ -426,7 +425,7 @@ fn clickhouse_endpoint(url: &str, database: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RelationalDialect {
+pub enum RelationalDialect {
     Postgres,
     Sqlite,
 }
@@ -458,21 +457,21 @@ impl RelationalStorage {
         }
     }
 
-    fn dialect(&self) -> RelationalDialect {
+    pub fn dialect(&self) -> RelationalDialect {
         match self {
             Self::Postgres(_) => RelationalDialect::Postgres,
             Self::Sqlite { .. } => RelationalDialect::Sqlite,
         }
     }
 
-    async fn exec(&self, sql: &str) -> Result<()> {
+    pub async fn exec(&self, sql: &str) -> Result<()> {
         match self {
             Self::Postgres(client) => postgres_exec(client, sql).await,
             Self::Sqlite { path } => sqlite_exec_path(path, sql).await,
         }
     }
 
-    async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
+    pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
         match self {
             Self::Postgres(client) => pg_query_rows(client, sql).await,
             Self::Sqlite { path } => sqlite_query_rows_path(path, sql).await,
@@ -512,8 +511,8 @@ fn semantic_provider_config(cfg: &DevqlConfig) -> semantic::SemanticSummaryProvi
     }
 }
 
-fn embedding_provider_config(cfg: &DevqlConfig) -> semantic_embeddings::EmbeddingProviderConfig {
-    semantic_embeddings::EmbeddingProviderConfig {
+fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProviderConfig {
+    embeddings::EmbeddingProviderConfig {
         embedding_provider: cfg.embedding_provider.clone(),
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
@@ -942,7 +941,7 @@ include!("deps_query.rs");
 include!("db_utils.rs");
 
 #[cfg(test)]
-pub(crate) use capabilities::semantic_clones::pipeline::rebuild_symbol_clone_edges;
+pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
 
 #[cfg(test)]
 fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+use crate::capability_packs as capabilities;
 use crate::engine::devql::RelationalStorage;
 use crate::engine::devql::RepoIdentity;
-use crate::engine::devql::capabilities;
 
 use super::config_view::CapabilityConfigView;
 use super::descriptor::CapabilityDescriptor;

@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::engine::devql::capabilities::knowledge::{
+use crate::capability_packs::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, KnowledgeSourceKind, ParsedKnowledgeUrl,
 };
 
@@ -158,7 +158,7 @@ pub(crate) fn build_github_record(
 pub(crate) fn build_github_document(
     parsed: &ParsedKnowledgeUrl,
     payload: Value,
-) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+) -> Result<crate::capability_packs::knowledge::FetchedKnowledgeDocument> {
     Ok(build_github_record(parsed, payload)?.into())
 }
 
@@ -194,9 +194,8 @@ mod tests {
 
     fn parsed_issue() -> ParsedKnowledgeUrl {
         ParsedKnowledgeUrl {
-            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Github,
-            source_kind:
-                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::GithubIssue,
+            provider: crate::capability_packs::knowledge::KnowledgeProvider::Github,
+            source_kind: crate::capability_packs::knowledge::KnowledgeSourceKind::GithubIssue,
             canonical_external_id: "github://bitloops/bitloops/issues/42".to_string(),
             canonical_url: "https://github.com/bitloops/bitloops/issues/42".to_string(),
             provider_site: Some("https://github.com".to_string()),
@@ -210,8 +209,7 @@ mod tests {
 
     fn parsed_pull_request() -> ParsedKnowledgeUrl {
         ParsedKnowledgeUrl {
-            source_kind:
-                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::GithubPullRequest,
+            source_kind: crate::capability_packs::knowledge::KnowledgeSourceKind::GithubPullRequest,
             canonical_external_id: "github://bitloops/bitloops/pull/1370".to_string(),
             canonical_url: "https://github.com/bitloops/bitloops/pull/1370".to_string(),
             provider_site: Some("https://github.com".to_string()),

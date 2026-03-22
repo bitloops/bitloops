@@ -2,10 +2,10 @@ use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::config::AtlassianProviderConfig;
-use crate::engine::devql::capabilities::knowledge::{
+use crate::capability_packs::knowledge::{
     KnowledgeLocator, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
+use crate::config::AtlassianProviderConfig;
 
 use super::types::{
     BoxFuture, ConnectorContext, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
@@ -159,7 +159,7 @@ pub(crate) fn build_jira_record(
 pub(crate) fn build_jira_document(
     parsed: &ParsedKnowledgeUrl,
     payload: Value,
-) -> Result<crate::engine::devql::capabilities::knowledge::FetchedKnowledgeDocument> {
+) -> Result<crate::capability_packs::knowledge::FetchedKnowledgeDocument> {
     Ok(build_jira_record(parsed, payload)?.into())
 }
 
@@ -217,9 +217,8 @@ mod tests {
 
     fn parsed_issue() -> ParsedKnowledgeUrl {
         ParsedKnowledgeUrl {
-            provider: crate::engine::devql::capabilities::knowledge::KnowledgeProvider::Jira,
-            source_kind:
-                crate::engine::devql::capabilities::knowledge::KnowledgeSourceKind::JiraIssue,
+            provider: crate::capability_packs::knowledge::KnowledgeProvider::Jira,
+            source_kind: crate::capability_packs::knowledge::KnowledgeSourceKind::JiraIssue,
             canonical_external_id: "jira://bitloops.atlassian.net/browse/CLI-1370".to_string(),
             canonical_url: "https://bitloops.atlassian.net/browse/CLI-1370".to_string(),
             provider_site: Some("https://bitloops.atlassian.net".to_string()),

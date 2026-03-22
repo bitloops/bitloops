@@ -1,8 +1,6 @@
 use super::*;
 use crate::app::test_mapping::model::DiscoveryIssue;
-use crate::engine::devql::capabilities::knowledge::{
-    AssociateKnowledgeResult, IngestKnowledgeResult,
-};
+use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::engine::devql::knowledge_support::KnowledgeBddHarness;
 use crate::models::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
 use serde_json::Value;

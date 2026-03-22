@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::app::commands::{ingest_coverage_batch, ingest_results};
-use crate::engine::devql::capabilities::test_harness::types::{
+use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
 use crate::engine::devql::capability_host::DevqlCapabilityHost;

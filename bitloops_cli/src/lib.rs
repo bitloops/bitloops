@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod app;
 pub mod branding;
+pub mod capability_packs;
 pub mod commands;
 pub mod config;
 pub mod engine;

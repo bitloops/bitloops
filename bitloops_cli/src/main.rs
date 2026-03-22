@@ -2,6 +2,7 @@ use clap::Parser;
 
 pub use bitloops_cli::adapters;
 pub use bitloops_cli::app;
+pub use bitloops_cli::capability_packs;
 pub use bitloops_cli::config;
 pub use bitloops_cli::engine;
 pub use bitloops_cli::git;

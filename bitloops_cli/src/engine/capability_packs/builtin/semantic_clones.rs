@@ -4,16 +4,16 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::adapters::model_providers::embeddings::EmbeddingProvider;
+use crate::capability_packs::semantic_clones::embeddings::{self, EmbeddingProviderConfig};
+use crate::capability_packs::semantic_clones::features::{
+    self as semantic, PreStageArtefactRow, PreStageDependencyRow, SemanticFeatureInput,
+    SemanticSummaryProvider, SemanticSummaryProviderConfig,
+};
+use crate::capability_packs::semantic_clones::scoring;
 use crate::engine::extensions::{
     CapabilityDescriptor, CapabilityIngesterContribution, CapabilityPackDescriptor,
     CapabilityQueryExampleContribution, CapabilitySchemaModuleContribution,
     CapabilityStageContribution, ExtensionCompatibility,
-};
-use crate::engine::semantic_clones;
-use crate::engine::semantic_embeddings::{self, EmbeddingProviderConfig};
-use crate::engine::semantic_features::{
-    self as semantic, PreStageArtefactRow, PreStageDependencyRow, SemanticFeatureInput,
-    SemanticSummaryProvider, SemanticSummaryProviderConfig,
 };
 
 pub const SEMANTIC_CLONES_CAPABILITY_PACK_ID: &str = "semantic-clones-capability-pack";
@@ -73,7 +73,7 @@ pub fn build_symbol_embedding_provider(
     repo_root: Option<&Path>,
 ) -> Result<Option<Arc<dyn EmbeddingProvider>>> {
     Ok(
-        semantic_embeddings::build_symbol_embedding_provider(config, repo_root)?
+        embeddings::build_symbol_embedding_provider(config, repo_root)?
             .map(Arc::<dyn EmbeddingProvider>::from),
     )
 }
@@ -91,9 +91,9 @@ pub fn build_semantic_feature_inputs(
 }
 
 pub fn build_symbol_clone_edges(
-    inputs: &[semantic_clones::SymbolCloneCandidateInput],
-) -> semantic_clones::SymbolCloneBuildResult {
-    semantic_clones::build_symbol_clone_edges(inputs)
+    inputs: &[scoring::SymbolCloneCandidateInput],
+) -> scoring::SymbolCloneBuildResult {
+    scoring::build_symbol_clone_edges(inputs)
 }
 
 #[cfg(test)]

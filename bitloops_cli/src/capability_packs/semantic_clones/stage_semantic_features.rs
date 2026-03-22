@@ -6,10 +6,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::capability_packs::semantic_clones::features as semantic;
 use crate::engine::devql::{
     RelationalDialect, RelationalStorage, esc_pg, postgres_exec, sqlite_exec_path_allow_create,
 };
-use crate::engine::semantic_features as semantic;
 
 fn semantic_features_postgres_schema_sql() -> &'static str {
     r#"

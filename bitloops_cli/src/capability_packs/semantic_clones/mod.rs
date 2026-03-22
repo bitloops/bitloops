@@ -1,4 +1,6 @@
 pub mod descriptor;
+pub mod embeddings;
+pub mod features;
 pub mod health;
 pub mod ingesters;
 pub mod migrations;
@@ -8,6 +10,7 @@ pub mod query_examples;
 pub mod register;
 pub mod schema;
 pub mod schema_module;
+pub mod scoring;
 pub mod types;
 
 mod stage_embeddings;

@@ -3,10 +3,10 @@ use std::pin::Pin;
 
 use serde_json::Value;
 
-use crate::config::ProviderConfig;
-use crate::engine::devql::capabilities::knowledge::{
+use crate::capability_packs::knowledge::{
     FetchedKnowledgeDocument, KnowledgePayloadData, ParsedKnowledgeUrl,
 };
+use crate::config::ProviderConfig;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

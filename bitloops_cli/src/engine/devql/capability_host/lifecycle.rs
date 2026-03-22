@@ -70,11 +70,11 @@ pub fn run_health_checks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProviderConfig;
-    use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capabilities::knowledge::storage::{
+    use crate::capability_packs::knowledge::storage::{
         DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
     };
+    use crate::config::ProviderConfig;
+    use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::contexts::{
         CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,

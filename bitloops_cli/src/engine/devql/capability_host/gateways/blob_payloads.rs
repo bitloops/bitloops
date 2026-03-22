@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::engine::devql::capabilities::knowledge::storage::KnowledgePayloadRef;
+use crate::capability_packs::knowledge::storage::KnowledgePayloadRef;
 
 pub trait BlobPayloadGateway: Send + Sync {
     fn write_payload(

@@ -100,7 +100,7 @@ fn create_duckdb_db(path: &Path) {
 }
 
 fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
-    use crate::engine::devql::capabilities::semantic_clones::schema::semantic_clones_sqlite_schema_sql;
+    use crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql;
     let conn = rusqlite::Connection::open(path).expect("open sqlite for clone DDL");
     conn.execute_batch(semantic_clones_sqlite_schema_sql())
         .expect("apply symbol_clone_edges DDL");

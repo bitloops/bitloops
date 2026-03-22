@@ -328,12 +328,12 @@ mod tests {
     use crate::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
-    use crate::config::ProviderConfig;
-    use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capabilities::knowledge::storage::{
+    use crate::capability_packs::knowledge::storage::{
         KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgePayloadRef,
         KnowledgeRelationAssertionRow, KnowledgeSourceRow,
     };
+    use crate::config::ProviderConfig;
+    use crate::engine::devql::RepoIdentity;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::{
         BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
@@ -358,7 +358,7 @@ mod tests {
     impl ConnectorRegistry for EmptyConnectorRegistry {
         fn knowledge_adapter_for(
             &self,
-            _parsed: &crate::engine::devql::capabilities::knowledge::ParsedKnowledgeUrl,
+            _parsed: &crate::capability_packs::knowledge::ParsedKnowledgeUrl,
         ) -> Result<&dyn KnowledgeConnectorAdapter> {
             Err(anyhow!(
                 "connector lookup should not be called in refs tests"

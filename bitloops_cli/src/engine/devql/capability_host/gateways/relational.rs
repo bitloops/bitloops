@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::engine::devql::capabilities::knowledge::storage::{
+use crate::capability_packs::knowledge::storage::{
     KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
 };
 

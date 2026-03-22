@@ -37,7 +37,7 @@ pub fn register_test_harness_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::devql::capabilities::test_harness::types::{
+    use crate::capability_packs::test_harness::types::{
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
         TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID, TEST_HARNESS_COVERAGE_STAGE_ID,
         TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_SUMMARIES_INGESTER_ID,

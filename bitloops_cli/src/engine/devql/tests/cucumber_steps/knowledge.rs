@@ -65,7 +65,7 @@ fn normalize_expected_id(world: &DevqlBddWorld, raw: &str) -> String {
 
 fn remember_ingest_ids(
     world: &mut DevqlBddWorld,
-    ingest: &crate::engine::devql::capabilities::knowledge::IngestKnowledgeResult,
+    ingest: &crate::capability_packs::knowledge::IngestKnowledgeResult,
 ) {
     world.remember_id("item_id", ingest.knowledge_item_id.clone());
     world.remember_id("version_id", ingest.knowledge_item_version_id.clone());
@@ -667,15 +667,12 @@ fn then_all_source_rows_stamped_for(
             assert_eq!(value["capability"], Value::String("knowledge".to_string()));
             assert_eq!(
                 value["capability_version"],
-                json!(
-                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
-                        .version
-                )
+                json!(crate::capability_packs::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR.version)
             );
             assert_eq!(
                 value["api_version"],
                 json!(
-                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                    crate::capability_packs::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
                         .api_version
                 )
             );
@@ -710,15 +707,12 @@ fn then_all_item_rows_stamped_for(
             assert_eq!(value["capability"], Value::String("knowledge".to_string()));
             assert_eq!(
                 value["capability_version"],
-                json!(
-                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
-                        .version
-                )
+                json!(crate::capability_packs::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR.version)
             );
             assert_eq!(
                 value["api_version"],
                 json!(
-                    crate::engine::devql::capabilities::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
+                    crate::capability_packs::knowledge::descriptor::KNOWLEDGE_DESCRIPTOR
                         .api_version
                 )
             );

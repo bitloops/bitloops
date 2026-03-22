@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::engine::devql::capabilities::knowledge::storage::KnowledgeDocumentVersionRow;
+use crate::capability_packs::knowledge::storage::KnowledgeDocumentVersionRow;
 
 /// Host document (columnar) store port. Default implementation backs Knowledge pack payloads on
 /// the events DuckDB path; access remains through this gateway, not ad hoc DuckDB usage from packs.

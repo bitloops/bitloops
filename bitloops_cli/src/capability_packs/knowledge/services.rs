@@ -445,15 +445,15 @@ mod tests {
     use crate::adapters::connectors::{
         ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
+    use crate::capability_packs::knowledge::storage::{
+        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+    };
+    use crate::capability_packs::knowledge::url::parse_knowledge_url;
     use crate::config::{
         BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
         ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
     };
     use crate::engine::devql::RepoIdentity;
-    use crate::engine::devql::capabilities::knowledge::storage::{
-        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-    };
-    use crate::engine::devql::capabilities::knowledge::url::parse_knowledge_url;
     use crate::engine::devql::capability_host::config_view::CapabilityConfigView;
     use crate::engine::devql::capability_host::gateways::{
         BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,

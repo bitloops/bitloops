@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
-use crate::engine::devql::capabilities::knowledge::{
+use crate::capability_packs::knowledge::{
     run_knowledge_add_via_host, run_knowledge_associate_via_host, run_knowledge_refresh_via_host,
     run_knowledge_versions_via_host,
 };

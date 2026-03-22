@@ -22,12 +22,12 @@ impl IngesterHandler for SymbolCloneRebuildIngester {
                 .devql_relational_scoped(SEMANTIC_CLONES_CAPABILITY_ID)
                 .context("scoped DevQL relational for semantic clone rebuild")?;
             let repo_id = ctx.repo().repo_id.clone();
-            let build = crate::engine::devql::capabilities::semantic_clones::pipeline::rebuild_symbol_clone_edges(
-                relational,
-                &repo_id,
-            )
-            .await
-            .context("rebuilding symbol clone edges")?;
+            let build =
+                crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
+                    relational, &repo_id,
+                )
+                .await
+                .context("rebuilding symbol clone edges")?;
             Ok(IngestResult::new(
                 json!({
                     "symbol_clone_edges_upserted": build.edges.len(),
