@@ -6,10 +6,7 @@ use anyhow::Result;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::contexts::{
-    CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
-    KnowledgeIngestContext,
-};
+use super::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
 use super::descriptor::CapabilityDescriptor;
 use super::health::CapabilityHealthCheck;
 use super::migrations::CapabilityMigration;
@@ -35,13 +32,6 @@ pub trait CapabilityRegistrar {
 
     fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()>;
 
-    fn register_knowledge_stage(&mut self, stage: KnowledgeStageRegistration) -> Result<()>;
-
-    fn register_knowledge_ingester(
-        &mut self,
-        ingester: KnowledgeIngesterRegistration,
-    ) -> Result<()>;
-
     fn register_schema_module(&mut self, module: SchemaModule) -> Result<()>;
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()>;
@@ -60,22 +50,6 @@ pub trait IngesterHandler: Send + Sync {
         &'a self,
         request: IngestRequest,
         ctx: &'a mut dyn CapabilityIngestContext,
-    ) -> BoxFuture<'a, Result<IngestResult>>;
-}
-
-pub trait KnowledgeStage: Send + Sync {
-    fn execute<'a>(
-        &'a self,
-        request: StageRequest,
-        ctx: &'a mut dyn KnowledgeExecutionContext,
-    ) -> BoxFuture<'a, Result<StageResponse>>;
-}
-
-pub trait KnowledgeIngester: Send + Sync {
-    fn ingest<'a>(
-        &'a self,
-        request: IngestRequest,
-        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> BoxFuture<'a, Result<IngestResult>>;
 }
 
@@ -220,48 +194,6 @@ impl IngesterRegistration {
         capability_id: &'static str,
         ingester_name: &'static str,
         handler: Arc<dyn IngesterHandler>,
-    ) -> Self {
-        Self {
-            capability_id,
-            ingester_name,
-            handler,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct KnowledgeStageRegistration {
-    pub capability_id: &'static str,
-    pub stage_name: &'static str,
-    pub handler: Arc<dyn KnowledgeStage>,
-}
-
-impl KnowledgeStageRegistration {
-    pub fn new(
-        capability_id: &'static str,
-        stage_name: &'static str,
-        handler: Arc<dyn KnowledgeStage>,
-    ) -> Self {
-        Self {
-            capability_id,
-            stage_name,
-            handler,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct KnowledgeIngesterRegistration {
-    pub capability_id: &'static str,
-    pub ingester_name: &'static str,
-    pub handler: Arc<dyn KnowledgeIngester>,
-}
-
-impl KnowledgeIngesterRegistration {
-    pub fn new(
-        capability_id: &'static str,
-        ingester_name: &'static str,
-        handler: Arc<dyn KnowledgeIngester>,
     ) -> Self {
         Self {
             capability_id,

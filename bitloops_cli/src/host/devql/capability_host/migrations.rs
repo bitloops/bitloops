@@ -1,13 +1,12 @@
 use anyhow::Result;
 
-use super::contexts::{CapabilityMigrationContext, KnowledgeMigrationContext};
+use super::contexts::CapabilityMigrationContext;
 
 #[derive(Debug, Clone, Copy)]
 pub enum MigrationRunner {
-    /// DevQL relational SQLite DDL / repo-only work (semantic_clones, test_harness, …).
+    /// Pack migration that receives a `CapabilityMigrationContext` (with optional relational /
+    /// document gateways via the `relational()` / `documents()` methods).
     Core(fn(&mut dyn CapabilityMigrationContext) -> Result<()>),
-    /// Knowledge relational + document schema (`capabilities/knowledge/storage`).
-    Knowledge(fn(&mut dyn KnowledgeMigrationContext) -> Result<()>),
 }
 
 #[derive(Debug, Clone, Copy)]

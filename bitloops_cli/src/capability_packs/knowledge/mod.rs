@@ -6,8 +6,8 @@
 //!   [`storage`] and opened by the DevQL host / extension wiring (`LocalCapabilityRuntime`,
 //!   pack registration). Production pack logic should use [`crate::host::devql::capability_host::gateways`]
 //!   (`RelationalGateway`, `DocumentStoreGateway`, `BlobPayloadGateway`) via
-//!   [`KnowledgeIngestContext`](crate::host::devql::capability_host::KnowledgeIngestContext) /
-//!   [`KnowledgeExecutionContext`](crate::host::devql::capability_host::KnowledgeExecutionContext),
+//!   [`CapabilityIngestContext`](crate::host::devql::capability_host::CapabilityIngestContext) /
+//!   [`CapabilityExecutionContext`](crate::host::devql::capability_host::CapabilityExecutionContext),
 //!   not ad hoc connections to knowledge store files.
 //! - **Repo config** for capability behaviour should be read through
 //!   [`CapabilityConfigView`](crate::host::devql::capability_host::CapabilityConfigView)

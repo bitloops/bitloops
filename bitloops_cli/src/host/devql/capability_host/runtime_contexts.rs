@@ -18,8 +18,7 @@ use crate::storage::SqliteConnectionPool;
 use super::config_view::CapabilityConfigView;
 use super::contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
-    CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
-    KnowledgeMigrationContext,
+    CapabilityMigrationContext,
 };
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
@@ -195,15 +194,13 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
     fn graph(&self) -> &dyn CanonicalGraphGateway {
         self.graph
     }
-}
 
-impl KnowledgeExecutionContext for LocalCapabilityRuntime<'_> {
-    fn relational(&self) -> &dyn RelationalGateway {
-        self.relational
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        Some(self.relational)
     }
 
-    fn documents(&self) -> &dyn DocumentStoreGateway {
-        self.documents
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        Some(self.documents)
     }
 }
 
@@ -250,15 +247,13 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
     fn invoking_ingester_id(&self) -> Option<&str> {
         self.invoking_ingester_id
     }
-}
 
-impl KnowledgeIngestContext for LocalCapabilityRuntime<'_> {
-    fn relational(&self) -> &dyn RelationalGateway {
-        self.relational
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        Some(self.relational)
     }
 
-    fn documents(&self) -> &dyn DocumentStoreGateway {
-        self.documents
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        Some(self.documents)
     }
 }
 
@@ -292,15 +287,13 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
             .context("applying DevQL SQLite DDL")?;
         Ok(())
     }
-}
 
-impl KnowledgeMigrationContext for LocalCapabilityRuntime<'_> {
-    fn relational(&self) -> &dyn RelationalGateway {
-        self.relational
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        Some(self.relational)
     }
 
-    fn documents(&self) -> &dyn DocumentStoreGateway {
-        self.documents
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        Some(self.documents)
     }
 }
 

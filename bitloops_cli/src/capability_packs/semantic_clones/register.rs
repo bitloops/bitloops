@@ -42,20 +42,6 @@ mod tests {
             Ok(())
         }
 
-        fn register_knowledge_stage(
-            &mut self,
-            _stage: crate::host::devql::capability_host::KnowledgeStageRegistration,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        fn register_knowledge_ingester(
-            &mut self,
-            _ingester: crate::host::devql::capability_host::KnowledgeIngesterRegistration,
-        ) -> Result<()> {
-            Ok(())
-        }
-
         fn register_schema_module(&mut self, module: SchemaModule) -> Result<()> {
             self.schema_modules.push(module);
             Ok(())

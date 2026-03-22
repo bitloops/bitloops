@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::host::devql::capability_host::{
-    KnowledgeExecutionContext, KnowledgeStage, StageRequest, StageResponse,
+    CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
 };
 
 use super::super::services::KnowledgeServices;
@@ -16,11 +16,11 @@ impl KnowledgeStageHandler {
     }
 }
 
-impl KnowledgeStage for KnowledgeStageHandler {
+impl StageHandler for KnowledgeStageHandler {
     fn execute<'a>(
         &'a self,
         request: StageRequest,
-        ctx: &'a mut dyn KnowledgeExecutionContext,
+        ctx: &'a mut dyn CapabilityExecutionContext,
     ) -> crate::host::devql::capability_host::BoxFuture<'a, anyhow::Result<StageResponse>> {
         Box::pin(async move {
             let repo = ctx.repo().clone();

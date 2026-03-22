@@ -30,7 +30,7 @@ use crate::config::{
 use crate::host::devql::RepoIdentity;
 use crate::host::devql::capability_host::CapabilityConfigView;
 use crate::host::devql::capability_host::contexts::{
-    CapabilityExecutionContext, CapabilityIngestContext, KnowledgeIngestContext,
+    CapabilityExecutionContext, CapabilityIngestContext,
 };
 use crate::host::devql::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
@@ -215,15 +215,13 @@ impl CapabilityIngestContext for TestRuntimeContext {
     fn provenance(&self) -> &dyn ProvenanceBuilder {
         &self.provenance
     }
-}
 
-impl KnowledgeIngestContext for TestRuntimeContext {
-    fn relational(&self) -> &dyn RelationalGateway {
-        &self.relational
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        Some(&self.relational)
     }
 
-    fn documents(&self) -> &dyn DocumentStoreGateway {
-        &self.documents
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        Some(&self.documents)
     }
 }
 

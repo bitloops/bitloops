@@ -17,11 +17,11 @@ pub fn register_knowledge_pack(
     services: Arc<KnowledgeServices>,
     registrar: &mut dyn CapabilityRegistrar,
 ) -> Result<()> {
-    registrar.register_knowledge_ingester(build_knowledge_add_ingester(services.clone()))?;
-    registrar.register_knowledge_ingester(build_knowledge_associate_ingester(services.clone()))?;
-    registrar.register_knowledge_ingester(build_knowledge_refresh_ingester(services.clone()))?;
-    registrar.register_knowledge_ingester(build_knowledge_versions_ingester(services.clone()))?;
-    registrar.register_knowledge_stage(build_knowledge_stage(services))?;
+    registrar.register_ingester(build_knowledge_add_ingester(services.clone()))?;
+    registrar.register_ingester(build_knowledge_associate_ingester(services.clone()))?;
+    registrar.register_ingester(build_knowledge_refresh_ingester(services.clone()))?;
+    registrar.register_ingester(build_knowledge_versions_ingester(services.clone()))?;
+    registrar.register_stage(build_knowledge_stage(services))?;
     registrar.register_schema_module(KNOWLEDGE_SCHEMA_MODULE)?;
     registrar.register_query_examples(KNOWLEDGE_QUERY_EXAMPLES)?;
     Ok(())
@@ -50,23 +50,6 @@ mod tests {
         }
 
         fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
-            self.ingesters
-                .push((ingester.capability_id, ingester.ingester_name));
-            Ok(())
-        }
-
-        fn register_knowledge_stage(
-            &mut self,
-            stage: crate::host::devql::capability_host::KnowledgeStageRegistration,
-        ) -> Result<()> {
-            self.stages.push((stage.capability_id, stage.stage_name));
-            Ok(())
-        }
-
-        fn register_knowledge_ingester(
-            &mut self,
-            ingester: crate::host::devql::capability_host::KnowledgeIngesterRegistration,
-        ) -> Result<()> {
             self.ingesters
                 .push((ingester.capability_id, ingester.ingester_name));
             Ok(())

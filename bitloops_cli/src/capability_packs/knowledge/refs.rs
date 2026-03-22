@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::host::devql::capability_host::KnowledgeIngestContext;
+use crate::host::devql::capability_host::CapabilityIngestContext;
 use crate::host::strategy::manual_commit::run_git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +111,7 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
 }
 
 pub fn resolve_source_ref(
-    ctx: &dyn KnowledgeIngestContext,
+    ctx: &dyn CapabilityIngestContext,
     raw: &str,
 ) -> Result<ResolvedKnowledgeSourceRef> {
     match parse_knowledge_ref(raw)? {
@@ -121,12 +121,14 @@ pub fn resolve_source_ref(
         } => {
             let item = ctx
                 .relational()
+                .expect("knowledge pack requires relational gateway")
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| format!("knowledge item `{knowledge_item_id}` not found"))?;
 
             if let Some(source_knowledge_item_version_id) = knowledge_item_version_id {
                 let version = ctx
                     .documents()
+                    .expect("knowledge pack requires documents gateway")
                     .find_knowledge_item_version(&source_knowledge_item_version_id)?
                     .with_context(|| {
                         format!(
@@ -167,11 +169,12 @@ pub fn resolve_source_ref(
             );
             let version = ctx
                 .documents()
+                .expect("knowledge pack requires documents gateway")
                 .find_knowledge_item_version(&knowledge_item_version_id)?
                 .with_context(|| {
                     format!("knowledge item version `{knowledge_item_version_id}` not found")
                 })?;
-            ctx.relational()
+            ctx.relational().expect("knowledge pack requires relational gateway")
                 .find_item_by_id(&ctx.repo().repo_id, &version.knowledge_item_id)?
                 .with_context(|| {
                     format!(
@@ -198,7 +201,7 @@ pub fn resolve_source_ref(
 }
 
 pub fn resolve_target_ref(
-    ctx: &dyn KnowledgeIngestContext,
+    ctx: &dyn CapabilityIngestContext,
     raw: &str,
 ) -> Result<ResolvedKnowledgeTargetRef> {
     match parse_knowledge_ref(raw)? {
@@ -211,6 +214,7 @@ pub fn resolve_target_ref(
         } => {
             let item = ctx
                 .relational()
+                .expect("knowledge pack requires relational gateway")
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| {
                     format!("target knowledge item `{knowledge_item_id}` not found")
@@ -219,6 +223,7 @@ pub fn resolve_target_ref(
             if let Some(target_version_id) = knowledge_item_version_id {
                 let version = ctx
                     .documents()
+                    .expect("knowledge pack requires documents gateway")
                     .find_knowledge_item_version(&target_version_id)?
                     .with_context(|| {
                         format!("target knowledge item version `{target_version_id}` not found")
@@ -251,6 +256,7 @@ pub fn resolve_target_ref(
         KnowledgeRef::Checkpoint { checkpoint_id } => {
             let resolved = ctx
                 .relational()
+                .expect("knowledge pack requires relational gateway")
                 .resolve_checkpoint_id(&ctx.repo().repo_id, &checkpoint_id)?;
             Ok(ResolvedKnowledgeTargetRef::Checkpoint {
                 checkpoint_id: resolved,
@@ -270,6 +276,7 @@ pub fn resolve_target_ref(
 
             let exists = ctx
                 .relational()
+                .expect("knowledge pack requires relational gateway")
                 .artefact_exists(&ctx.repo().repo_id, trimmed)?;
             if !exists {
                 bail!("artefact `{trimmed}` not found");
@@ -334,11 +341,11 @@ mod tests {
     };
     use crate::config::ProviderConfig;
     use crate::host::devql::RepoIdentity;
+    use crate::host::devql::capability_host::CapabilityIngestContext;
     use crate::host::devql::capability_host::config_view::CapabilityConfigView;
     use crate::host::devql::capability_host::gateways::{
         BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
     };
-    use crate::host::devql::capability_host::{CapabilityIngestContext, KnowledgeIngestContext};
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
     use super::*;
@@ -558,15 +565,13 @@ mod tests {
         fn provenance(&self) -> &dyn ProvenanceBuilder {
             &self.provenance
         }
-    }
 
-    impl KnowledgeIngestContext for RefTestContext {
-        fn relational(&self) -> &dyn RelationalGateway {
-            &self.relational
+        fn relational(&self) -> Option<&dyn RelationalGateway> {
+            Some(&self.relational)
         }
 
-        fn documents(&self) -> &dyn DocumentStoreGateway {
-            &self.documents
+        fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+            Some(&self.documents)
         }
     }
 

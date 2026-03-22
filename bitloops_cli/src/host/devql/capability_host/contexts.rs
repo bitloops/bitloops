@@ -14,12 +14,17 @@ pub trait CapabilityExecutionContext: Send {
     fn repo(&self) -> &RepoIdentity;
     fn repo_root(&self) -> &Path;
     fn graph(&self) -> &dyn CanonicalGraphGateway;
-}
 
-/// Knowledge pack relational + document stores. Only knowledge stages/handlers use this trait.
-pub trait KnowledgeExecutionContext: CapabilityExecutionContext {
-    fn relational(&self) -> &dyn RelationalGateway;
-    fn documents(&self) -> &dyn DocumentStoreGateway;
+    /// Capability-scoped relational gateway. Returns `None` when the host runtime was not
+    /// configured with a relational store for this context (e.g. non-Knowledge packs today).
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        None
+    }
+
+    /// Capability-scoped document store gateway. Returns `None` when unavailable.
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        None
+    }
 }
 
 pub trait CapabilityIngestContext: Send {
@@ -48,6 +53,17 @@ pub trait CapabilityIngestContext: Send {
         None
     }
 
+    /// Capability-scoped relational gateway. Returns `None` when the host runtime was not
+    /// configured with a relational store for this context.
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        None
+    }
+
+    /// Capability-scoped document store gateway. Returns `None` when unavailable.
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        None
+    }
+
     /// DevQL relational store only when `capability_id` matches the active ingester invocation.
     fn devql_relational_scoped(
         &self,
@@ -72,12 +88,6 @@ pub trait CapabilityIngestContext: Send {
     }
 }
 
-/// Knowledge pack relational + document stores on ingest paths. Only knowledge ingesters use this trait.
-pub trait KnowledgeIngestContext: CapabilityIngestContext {
-    fn relational(&self) -> &dyn RelationalGateway;
-    fn documents(&self) -> &dyn DocumentStoreGateway;
-}
-
 /// Migration context for packs that only touch the **DevQL relational** store (e.g. SQLite DDL via
 /// [`apply_devql_sqlite_ddl`](CapabilityMigrationContext::apply_devql_sqlite_ddl)).
 ///
@@ -90,13 +100,17 @@ pub trait CapabilityMigrationContext: Send {
     /// Applies DDL to the DevQL SQLite relational file when the backend is SQLite. No-op for
     /// Postgres (pack tables are ensured via `devql init` / relational bootstrap).
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()>;
-}
 
-/// Knowledge pack migrations that initialise the **knowledge** relational + DuckDB document stores.
-/// Extends [`CapabilityMigrationContext`] (same runtime implements both).
-pub trait KnowledgeMigrationContext: CapabilityMigrationContext {
-    fn relational(&self) -> &dyn RelationalGateway;
-    fn documents(&self) -> &dyn DocumentStoreGateway;
+    /// Capability-scoped relational gateway. Returns `None` when the host runtime was not
+    /// configured with a relational store for this migration context.
+    fn relational(&self) -> Option<&dyn RelationalGateway> {
+        None
+    }
+
+    /// Capability-scoped document store gateway. Returns `None` when unavailable.
+    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+        None
+    }
 }
 
 pub trait CapabilityHealthContext: Send + Sync {

@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 
-use super::contexts::{CapabilityMigrationContext, KnowledgeMigrationContext};
+use super::contexts::CapabilityMigrationContext;
 use super::descriptor::CapabilityDescriptor;
 use super::health::{CapabilityHealthCheck, CapabilityHealthResult};
 use super::migrations::{CapabilityMigration, MigrationRunner};
@@ -43,14 +43,13 @@ pub fn register_pack(
     pack.register(registrar)
 }
 
-pub fn run_migrations<M: KnowledgeMigrationContext>(
+pub fn run_migrations<M: CapabilityMigrationContext>(
     migrations: &[CapabilityMigration],
     ctx: &mut M,
 ) -> Result<()> {
     for migration in migrations {
         match migration.run {
             MigrationRunner::Core(f) => f(ctx as &mut dyn CapabilityMigrationContext)?,
-            MigrationRunner::Knowledge(f) => f(ctx as &mut dyn KnowledgeMigrationContext)?,
         }
     }
     Ok(())
@@ -78,7 +77,7 @@ mod tests {
     use crate::host::devql::capability_host::config_view::CapabilityConfigView;
     use crate::host::devql::capability_host::contexts::{
         CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
-        CapabilityMigrationContext, KnowledgeMigrationContext,
+        CapabilityMigrationContext,
     };
     use crate::host::devql::capability_host::gateways::{
         ConnectorRegistry, DocumentStoreGateway, RelationalGateway, StoreHealthGateway,
@@ -89,8 +88,7 @@ mod tests {
     use crate::host::devql::capability_host::migrations::{CapabilityMigration, MigrationRunner};
     use crate::host::devql::capability_host::registrar::{
         BoxFuture, CapabilityPack, CapabilityRegistrar, IngesterHandler, IngesterRegistration,
-        KnowledgeIngesterRegistration, KnowledgeStageRegistration, QueryExample, SchemaModule,
-        StageHandler, StageRegistration, StageRequest, StageResponse,
+        QueryExample, SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
     };
     use crate::host::devql::capability_host::runtime_contexts::LocalStoreHealthGateway;
     use crate::storage::SqliteConnectionPool;
@@ -153,19 +151,6 @@ mod tests {
         }
 
         fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()> {
-            self.ingesters.push(ingester.ingester_name);
-            Ok(())
-        }
-
-        fn register_knowledge_stage(&mut self, stage: KnowledgeStageRegistration) -> Result<()> {
-            self.stages.push(stage.stage_name);
-            Ok(())
-        }
-
-        fn register_knowledge_ingester(
-            &mut self,
-            ingester: KnowledgeIngesterRegistration,
-        ) -> Result<()> {
             self.ingesters.push(ingester.ingester_name);
             Ok(())
         }
@@ -298,15 +283,13 @@ mod tests {
         fn apply_devql_sqlite_ddl(&self, _sql: &str) -> Result<()> {
             Ok(())
         }
-    }
 
-    impl KnowledgeMigrationContext for MigrationContext {
-        fn relational(&self) -> &dyn RelationalGateway {
-            &self.relational
+        fn relational(&self) -> Option<&dyn RelationalGateway> {
+            Some(&self.relational)
         }
 
-        fn documents(&self) -> &dyn DocumentStoreGateway {
-            &self.documents
+        fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
+            Some(&self.documents)
         }
     }
 
@@ -437,10 +420,10 @@ mod tests {
 
     #[test]
     fn run_migrations_executes_in_order() {
-        fn first(ctx: &mut dyn KnowledgeMigrationContext) -> Result<()> {
+        fn first(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
             let log_path = ctx.repo_root().join("migrations.log");
-            ctx.relational().initialise_schema()?;
-            ctx.documents().initialise_schema()?;
+            ctx.relational().expect("relational").initialise_schema()?;
+            ctx.documents().expect("documents").initialise_schema()?;
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -465,7 +448,7 @@ mod tests {
                 capability_id: "knowledge",
                 version: "1",
                 description: "first",
-                run: MigrationRunner::Knowledge(first),
+                run: MigrationRunner::Core(first),
             },
             CapabilityMigration {
                 capability_id: "knowledge",

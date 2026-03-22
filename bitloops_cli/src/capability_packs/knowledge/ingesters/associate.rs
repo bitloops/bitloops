@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::host::devql::capability_host::{
-    IngestRequest, IngestResult, KnowledgeIngestContext, KnowledgeIngester,
+    CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
 
 use super::super::services::KnowledgeServices;
@@ -27,11 +27,11 @@ impl KnowledgeAssociateIngester {
     }
 }
 
-impl KnowledgeIngester for KnowledgeAssociateIngester {
+impl IngesterHandler for KnowledgeAssociateIngester {
     fn ingest<'a>(
         &'a self,
         request: IngestRequest,
-        ctx: &'a mut dyn KnowledgeIngestContext,
+        ctx: &'a mut dyn CapabilityIngestContext,
     ) -> super::super::types::BoxFuture<'a, Result<IngestResult>> {
         Box::pin(async move {
             let input: KnowledgeAssociateInput = request.parse_json()?;
