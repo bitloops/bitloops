@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use tokio_postgres::{NoTls, config::SslMode};
 
 use crate::capability_packs::semantic_clones::embeddings;
+use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
@@ -20,7 +21,6 @@ use crate::config::{
     StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
     resolve_store_embedding_config, resolve_store_semantic_config,
 };
-use crate::host::capability_packs::builtin::semantic_clones as semantic_clones_pack;
 use crate::host::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
 };

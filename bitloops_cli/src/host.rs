@@ -1,4 +1,3 @@
-pub mod capability_packs;
 pub mod db_status;
 pub mod devql;
 pub mod extensions;

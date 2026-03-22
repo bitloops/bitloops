@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio_postgres::Client;
 
-use crate::host::capability_packs::builtin::semantic_clones as semantic_clones_pack;
+use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::host::devql::{
     EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, RelationalStorage, esc_pg, postgres_exec, sql_json_value,
     sql_now, sqlite_exec_path_allow_create,
