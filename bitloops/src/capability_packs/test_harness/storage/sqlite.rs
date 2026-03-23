@@ -19,7 +19,7 @@ use crate::capability_packs::test_harness::storage::{
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
-    ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    ListedArtefactRecord, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
     TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
@@ -58,59 +58,6 @@ impl SqliteTestHarnessRepository {
 }
 
 impl TestHarnessRepository for SqliteTestHarnessRepository {
-    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT repo_id FROM commits WHERE commit_sha = ?1 LIMIT 1")
-            .context("failed preparing repo lookup query")?;
-        let repo_id: String = stmt
-            .query_row(params![commit_sha], |row| row.get(0))
-            .with_context(|| {
-                format!(
-                    "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` for Bitloops-backed stores or `testlens ingest-production-artefacts` in prototype mode)",
-                    commit_sha
-                )
-            })?;
-        Ok(repo_id)
-    }
-
-    fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                r#"
-SELECT DISTINCT a.artefact_id, a.symbol_id, COALESCE(a.symbol_fqn, ''), a.path, a.start_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = ?1
-  AND a.canonical_kind IN ('function', 'method', 'class')
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-            )
-            .context("failed preparing production artefact query")?;
-
-        let rows = stmt
-            .query_map(params![commit_sha], |row| {
-                Ok(ProductionArtefact {
-                    artefact_id: row.get(0)?,
-                    symbol_id: row.get(1)?,
-                    symbol_fqn: row.get::<_, String>(2)?,
-                    path: row.get(3)?,
-                    start_line: row.get(4)?,
-                })
-            })
-            .context("failed querying production artefacts")?;
-
-        let mut artefacts = Vec::new();
-        for row in rows {
-            artefacts.push(row.context("failed decoding production artefact row")?);
-        }
-        Ok(artefacts)
-    }
-
     fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
         let mut stmt = self
             .conn
@@ -141,46 +88,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
             scenarios.push(row.context("failed decoding test scenario row")?);
         }
         Ok(scenarios)
-    }
-
-    fn load_artefacts_for_file_lines(
-        &self,
-        commit_sha: &str,
-        file_path: &str,
-    ) -> Result<Vec<(String, i64, i64)>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                r#"
-SELECT DISTINCT a.artefact_id, a.start_line, a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = ?1
-  AND a.canonical_kind != 'file'
-  AND (fs.path = ?2 OR ?2 LIKE '%' || fs.path)
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-            )
-            .context("failed preparing artefacts-for-file query")?;
-
-        let rows = stmt
-            .query_map(params![commit_sha, file_path], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })
-            .context("failed querying artefacts for file")?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row.context("failed mapping artefact-for-file row")?);
-        }
-        Ok(result)
     }
 
     fn replace_production_artefacts(

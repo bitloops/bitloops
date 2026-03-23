@@ -57,10 +57,9 @@ impl PostgresTestHarnessRepository {
     ) -> Result<T> {
         self.postgres.with_client(operation)
     }
-}
 
-impl TestHarnessRepository for PostgresTestHarnessRepository {
-    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
+    #[allow(dead_code)]
+    pub fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
         let commit_sha = commit_sha.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
@@ -82,7 +81,8 @@ impl TestHarnessRepository for PostgresTestHarnessRepository {
         })
     }
 
-    fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
+    #[allow(dead_code)]
+    pub fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
         let commit_sha = commit_sha.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
@@ -119,39 +119,8 @@ ORDER BY a.path ASC, a.start_line ASC
         })
     }
 
-    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
-        let commit_sha = commit_sha.to_string();
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let rows = client
-                    .query(
-                        r#"
-SELECT ts.scenario_id, ts.path, COALESCE(s.name, ''), ts.name
-FROM test_scenarios ts
-LEFT JOIN test_suites s ON s.suite_id = ts.suite_id
-WHERE ts.commit_sha = $1
-ORDER BY ts.path ASC, ts.start_line ASC
-"#,
-                        &[&commit_sha],
-                    )
-                    .await
-                    .context("failed querying test scenarios")?;
-
-                rows.into_iter()
-                    .map(|row| {
-                        Ok(ResolvedTestScenarioRecord {
-                            scenario_id: get(&row, 0, "scenario_id")?,
-                            path: get(&row, 1, "path")?,
-                            suite_name: get(&row, 2, "suite_name")?,
-                            test_name: get(&row, 3, "test_name")?,
-                        })
-                    })
-                    .collect()
-            })
-        })
-    }
-
-    fn load_artefacts_for_file_lines(
+    #[allow(dead_code)]
+    pub fn load_artefacts_for_file_lines(
         &self,
         commit_sha: &str,
         file_path: &str,
@@ -186,6 +155,40 @@ ORDER BY a.path ASC, a.start_line ASC
                             get_i64(&row, 2, "start_line")?,
                             get_i64(&row, 3, "end_line")?,
                         ))
+                    })
+                    .collect()
+            })
+        })
+    }
+}
+
+impl TestHarnessRepository for PostgresTestHarnessRepository {
+    fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>> {
+        let commit_sha = commit_sha.to_string();
+        self.with_client(move |client| {
+            Box::pin(async move {
+                let rows = client
+                    .query(
+                        r#"
+SELECT ts.scenario_id, ts.path, COALESCE(s.name, ''), ts.name
+FROM test_scenarios ts
+LEFT JOIN test_suites s ON s.suite_id = ts.suite_id
+WHERE ts.commit_sha = $1
+ORDER BY ts.path ASC, ts.start_line ASC
+"#,
+                        &[&commit_sha],
+                    )
+                    .await
+                    .context("failed querying test scenarios")?;
+
+                rows.into_iter()
+                    .map(|row| {
+                        Ok(ResolvedTestScenarioRecord {
+                            scenario_id: get(&row, 0, "scenario_id")?,
+                            path: get(&row, 1, "path")?,
+                            suite_name: get(&row, 2, "suite_name")?,
+                            test_name: get(&row, 3, "test_name")?,
+                        })
                     })
                     .collect()
             })

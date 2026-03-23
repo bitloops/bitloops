@@ -69,15 +69,14 @@ pub fn run_health_checks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability_packs::knowledge::storage::{
-        DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-    };
+    use crate::capability_packs::knowledge::storage::DuckdbKnowledgeDocumentStore;
     use crate::config::ProviderConfig;
     use crate::host::capability_host::config_view::CapabilityConfigView;
     use crate::host::capability_host::contexts::{
         CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
         CapabilityMigrationContext,
     };
+    use crate::host::capability_host::gateways::SqliteRelationalGateway;
     use crate::host::capability_host::gateways::{
         ConnectorRegistry, DocumentStoreGateway, RelationalGateway, StoreHealthGateway,
     };
@@ -262,7 +261,7 @@ mod tests {
         _temp: TempDir,
         repo_root: PathBuf,
         repo: RepoIdentity,
-        relational: SqliteKnowledgeRelationalStore,
+        relational: SqliteRelationalGateway,
         documents: DuckdbKnowledgeDocumentStore,
     }
 
@@ -346,7 +345,7 @@ mod tests {
     fn make_migration_context() -> MigrationContext {
         let temp = make_repo_root();
         let repo_root = prepare_repo_root(&temp);
-        let relational = SqliteKnowledgeRelationalStore::new(
+        let relational = SqliteRelationalGateway::new(
             SqliteConnectionPool::connect(paths::default_relational_db_path(&repo_root))
                 .expect("sqlite pool"),
         );

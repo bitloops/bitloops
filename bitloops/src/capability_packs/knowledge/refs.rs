@@ -328,7 +328,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use anyhow::{Result, anyhow};
+    use anyhow::{Result, anyhow, bail};
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
@@ -476,6 +476,31 @@ mod tests {
 
         fn artefact_exists(&self, _repo_id: &str, artefact_id: &str) -> Result<bool> {
             Ok(*self.artefacts.get(artefact_id).unwrap_or(&false))
+        }
+
+        fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
+            bail!(
+                "FakeRelationalGateway: load_repo_id_for_commit not implemented (commit {commit_sha})"
+            )
+        }
+
+        fn load_production_artefacts(
+            &self,
+            commit_sha: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            bail!(
+                "FakeRelationalGateway: load_production_artefacts not implemented (commit {commit_sha})"
+            )
+        }
+
+        fn load_artefacts_for_file_lines(
+            &self,
+            commit_sha: &str,
+            file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            bail!(
+                "FakeRelationalGateway: load_artefacts_for_file_lines not implemented (commit {commit_sha}, file {file_path})"
+            )
         }
     }
 

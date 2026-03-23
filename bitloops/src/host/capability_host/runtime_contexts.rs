@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
 use crate::capability_packs::knowledge::storage::{
-    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore,
 };
 use crate::config::{
     ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
@@ -22,7 +22,8 @@ use super::contexts::{
 };
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
-    DocumentStoreGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
+    DocumentStoreGateway, ProvenanceBuilder, RelationalGateway, SqliteRelationalGateway,
+    StoreHealthGateway,
 };
 
 pub struct LocalCapabilityRuntimeResources {
@@ -31,7 +32,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub config_root: Value,
     pub backends: StoreBackendConfig,
     pub provider_config: ProviderConfig,
-    pub relational: SqliteKnowledgeRelationalStore,
+    pub relational: SqliteRelationalGateway,
     pub documents: DuckdbKnowledgeDocumentStore,
     pub blob_payloads: BlobKnowledgePayloadStore,
     pub connectors: BuiltinConnectorRegistry,
@@ -48,8 +49,7 @@ impl LocalCapabilityRuntimeResources {
         let sqlite_path = backends
             .relational
             .resolve_sqlite_db_path_for_repo(repo_root)?;
-        let relational =
-            SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
+        let relational = SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path)?);
         let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
         let blob_payloads = BlobKnowledgePayloadStore::from_backend_config(repo_root, &backends)?;
         let connectors = BuiltinConnectorRegistry::new(provider_config.clone())?;

@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::models::TestRunRecord;
 
 #[derive(Debug, Deserialize)]
@@ -42,10 +43,11 @@ pub struct IngestResultsSummary {
 
 pub fn execute(
     repository: &mut impl TestHarnessRepository,
+    relational: &dyn RelationalGateway,
     jest_json_path: &Path,
     commit_sha: &str,
 ) -> Result<IngestResultsSummary> {
-    let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
+    let repo_id = relational.load_repo_id_for_commit(commit_sha)?;
     let scenarios = repository.load_test_scenarios(commit_sha)?;
     let scenario_map = build_scenario_map(scenarios);
 

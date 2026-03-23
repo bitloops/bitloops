@@ -5,10 +5,12 @@ use super::SqliteTestHarnessRepository;
 use crate::capability_packs::test_harness::storage::{
     TestHarnessQueryRepository, TestHarnessRepository,
 };
+use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
     ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
 };
+use crate::storage::SqliteConnectionPool;
 use crate::storage::init::init_database;
 
 struct SampleBatch<'a> {
@@ -42,7 +44,9 @@ fn load_repo_id_for_commit_supports_workspace_crate_paths() {
         }))
         .expect("replace production artefacts");
 
-    let repo_id = repository
+    let relational =
+        SqliteRelationalGateway::new(SqliteConnectionPool::connect(db_path).expect("sqlite pool"));
+    let repo_id = relational
         .load_repo_id_for_commit("commit-workspace")
         .expect("load repo id");
     assert_eq!(repo_id, "ruff-workspace");
@@ -68,7 +72,9 @@ fn load_production_artefacts_includes_workspace_crate_functions() {
         }))
         .expect("replace production artefacts");
 
-    let artefacts = repository
+    let relational =
+        SqliteRelationalGateway::new(SqliteConnectionPool::connect(db_path).expect("sqlite pool"));
+    let artefacts = relational
         .load_production_artefacts("commit-workspace")
         .expect("load production artefacts");
     assert_eq!(artefacts.len(), 1);

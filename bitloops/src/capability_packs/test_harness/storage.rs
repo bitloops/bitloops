@@ -9,11 +9,10 @@ use anyhow::Result;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
-    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
-    StageCoveringTestRecord, StageLineCoverageRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord,
+    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
+    StageLineCoverageRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
 };
 
 pub mod dispatch;
@@ -21,14 +20,9 @@ pub mod postgres;
 pub mod schema;
 pub mod sqlite;
 
-/// Narrow coverage gateway: subset of TestHarnessRepository used by coverage ingest paths.
+/// Narrow coverage gateway: write-side subset of TestHarnessRepository used by coverage ingest paths.
+/// Host-owned reads (repo resolution, artefact lookup) have moved to `RelationalGateway`.
 pub trait TestHarnessCoverageGateway: Send {
-    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
-    fn load_artefacts_for_file_lines(
-        &self,
-        commit_sha: &str,
-        file_path: &str,
-    ) -> Result<Vec<(String, i64, i64)>>;
     fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()>;
     fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()>;
     fn insert_coverage_diagnostics(
@@ -39,14 +33,7 @@ pub trait TestHarnessCoverageGateway: Send {
 }
 
 pub trait TestHarnessRepository {
-    fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String>;
-    fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>>;
-    fn load_artefacts_for_file_lines(
-        &self,
-        commit_sha: &str,
-        file_path: &str,
-    ) -> Result<Vec<(String, i64, i64)>>;
 
     fn replace_production_artefacts(&mut self, batch: &ProductionIngestionBatch) -> Result<()>;
     fn replace_test_discovery(

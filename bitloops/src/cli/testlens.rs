@@ -243,8 +243,11 @@ async fn run_ingest_coverage_batch(
 }
 
 fn run_ingest_results(repo_root: &Path, args: &TestLensIngestResultsArgs) -> Result<()> {
+    let sqlite_path = paths::default_relational_db_path(repo_root);
+    let pool = crate::storage::SqliteConnectionPool::connect(sqlite_path)?;
+    let relational = crate::host::capability_host::gateways::SqliteRelationalGateway::new(pool);
     let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let summary = results::execute(&mut repository, &args.jest_json, &args.commit)?;
+    let summary = results::execute(&mut repository, &relational, &args.jest_json, &args.commit)?;
     results::print_summary(&args.commit, &summary);
     Ok(())
 }

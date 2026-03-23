@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::models::{CoverageDiagnosticRecord, CoverageHitRecord};
 
 #[derive(Debug, Deserialize)]
@@ -33,7 +33,7 @@ struct Segment {
 }
 
 pub fn ingest_llvm_json(
-    store: &dyn TestHarnessCoverageGateway,
+    relational: &dyn RelationalGateway,
     json_path: &Path,
     commit_sha: &str,
     repo_id: &str,
@@ -52,7 +52,7 @@ pub fn ingest_llvm_json(
     for data in &export.data {
         for file in &data.files {
             let line_hits = extract_line_hits(&file.segments);
-            let artefacts = store.load_artefacts_for_file_lines(commit_sha, &file.filename)?;
+            let artefacts = relational.load_artefacts_for_file_lines(commit_sha, &file.filename)?;
 
             if artefacts.is_empty() {
                 diagnostics.push(CoverageDiagnosticRecord {

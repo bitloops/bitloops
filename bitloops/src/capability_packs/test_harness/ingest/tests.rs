@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::capability_packs::test_harness::mapping;
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::models::{TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord};
 
 #[derive(Debug, Clone)]
@@ -26,11 +27,12 @@ pub struct IngestTestsSummary {
 
 pub fn execute(
     repository: &mut impl TestHarnessRepository,
+    relational: &dyn RelationalGateway,
     repo_dir: &Path,
     commit_sha: &str,
 ) -> Result<IngestTestsSummary> {
-    let repo_id = repository.load_repo_id_for_commit(commit_sha)?;
-    let production = repository.load_production_artefacts(commit_sha)?;
+    let repo_id = relational.load_repo_id_for_commit(commit_sha)?;
+    let production = relational.load_production_artefacts(commit_sha)?;
     let started_at = chrono::Utc::now().to_rfc3339();
     let mapping = mapping::execute(&repo_id, repo_dir, commit_sha, &production)?;
     let finished_at = chrono::Utc::now().to_rfc3339();
