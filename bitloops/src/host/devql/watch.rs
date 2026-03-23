@@ -10,17 +10,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Args, Parser};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use sha2::{Digest, Sha256};
 
 #[path = "capture.rs"]
 mod capture;
 
 const WATCHER_PID_FILE_NAME: &str = "devql-watcher.pid";
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
-
-/// Bump this whenever the DevQL SQLite schema changes in a way that requires a watcher restart.
-/// The version is written alongside the PID into the pid file so that `ensure_watcher_running`
-/// can detect a mismatch and automatically kill + restart the old process.
-pub(crate) const WATCHER_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -57,13 +53,15 @@ pub fn watcher_pid_file(repo_root: &Path) -> PathBuf {
 
 pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
     let pid_file = watcher_pid_file(repo_root);
+    let restart_token = current_watcher_restart_token()?;
     if let Some(entry) = read_pid_file(&pid_file)?
         && process_is_running(entry.pid)
     {
-        if entry.schema_version == Some(WATCHER_SCHEMA_VERSION) {
+        if entry.restart_token.as_deref() == Some(restart_token.as_str()) {
             return Ok(());
         }
-        // Schema version mismatch — kill the stale watcher so the new one runs schema init.
+        // Restart token mismatch means a different binary is now serving watcher work.
+        // Kill the stale watcher so the new process can re-run startup schema init.
         kill_process(entry.pid);
     }
 
@@ -86,10 +84,7 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
         .with_context(|| format!("spawning DevQL watcher for {}", repo_root.display()))?;
 
     ensure_watcher_pid_parent_dir(&pid_file)?;
-    fs::write(
-        &pid_file,
-        format!("{}\n{}", child.id(), WATCHER_SCHEMA_VERSION),
-    )
+    fs::write(&pid_file, format!("{}\n{}", child.id(), restart_token))
     .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
 
     Ok(())
@@ -279,9 +274,9 @@ fn ensure_watcher_pid_parent_dir(pid_file: &Path) -> Result<()> {
 
 pub(crate) struct PidFileEntry {
     pub(crate) pid: u32,
-    /// `None` when the pid file was written by an older build that did not include a version line.
-    /// A `None` version is treated as a mismatch, triggering a watcher restart.
-    pub(crate) schema_version: Option<u32>,
+    /// `None` when the pid file was written by an older build that did not include a restart token.
+    /// A missing token is treated as a mismatch, triggering a watcher restart.
+    pub(crate) restart_token: Option<String>,
 }
 
 fn read_pid_file(pid_file: &Path) -> Result<Option<PidFileEntry>> {
@@ -299,10 +294,14 @@ fn read_pid_file(pid_file: &Path) -> Result<Option<PidFileEntry>> {
         Some(pid) => pid,
         None => return Ok(None),
     };
-    let schema_version = lines.next().and_then(|l| l.trim().parse::<u32>().ok());
+    let restart_token = lines
+        .next()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string);
     Ok(Some(PidFileEntry {
         pid,
-        schema_version,
+        restart_token,
     }))
 }
 
@@ -361,29 +360,40 @@ fn process_is_running(pid: u32) -> bool {
 struct WatcherPidGuard {
     pid_file: PathBuf,
     pid: u32,
+    restart_token: String,
 }
 
 impl WatcherPidGuard {
     fn acquire(pid_file: PathBuf) -> Result<Self> {
         ensure_watcher_pid_parent_dir(&pid_file)?;
         let pid = std::process::id();
-        fs::write(&pid_file, format!("{pid}\n{WATCHER_SCHEMA_VERSION}"))
+        let restart_token = current_watcher_restart_token()?;
+        fs::write(&pid_file, format!("{pid}\n{restart_token}"))
             .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
-        Ok(Self { pid_file, pid })
+        Ok(Self {
+            pid_file,
+            pid,
+            restart_token,
+        })
     }
 }
 
 impl Drop for WatcherPidGuard {
     fn drop(&mut self) {
-        let current_pid = fs::read_to_string(&self.pid_file).ok().and_then(|data| {
-            data.lines()
-                .next()
-                .and_then(|l| l.trim().parse::<u32>().ok())
-        });
-        if current_pid == Some(self.pid) {
+        let entry = read_pid_file(&self.pid_file).ok().flatten();
+        if entry.as_ref().map(|entry| entry.pid) == Some(self.pid)
+            && entry.and_then(|entry| entry.restart_token) == Some(self.restart_token.clone())
+        {
             let _ = fs::remove_file(&self.pid_file);
         }
     }
+}
+
+fn current_watcher_restart_token() -> Result<String> {
+    let current_exe = std::env::current_exe().context("resolving current executable for watcher")?;
+    let bytes = fs::read(&current_exe)
+        .with_context(|| format!("reading watcher executable {}", current_exe.display()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 async fn wait_for_shutdown_signal() {
@@ -451,20 +461,20 @@ mod tests {
             .expect("entry present");
         assert_eq!(entry.pid, 12345);
         assert!(
-            entry.schema_version.is_none(),
-            "single-line file should yield no schema_version"
+            entry.restart_token.is_none(),
+            "single-line file should yield no restart_token"
         );
     }
 
     #[test]
-    fn read_pid_file_parses_versioned_two_line_format() {
+    fn read_pid_file_parses_two_line_format_with_restart_token() {
         let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, "99\n1\n");
+        let pid_file = write_pid_file(&dir, "99\ntoken-123\n");
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_eq!(entry.pid, 99);
-        assert_eq!(entry.schema_version, Some(1));
+        assert_eq!(entry.restart_token.as_deref(), Some("token-123"));
     }
 
     #[test]
@@ -479,35 +489,32 @@ mod tests {
     }
 
     #[test]
-    fn read_pid_file_accepts_missing_schema_version_line() {
-        // File with pid but no trailing newline or version line
+    fn read_pid_file_accepts_missing_restart_token_line() {
+        // File with pid but no trailing newline or restart token line
         let dir = TempDir::new().expect("temp dir");
         let pid_file = write_pid_file(&dir, "42");
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_eq!(entry.pid, 42);
-        assert!(entry.schema_version.is_none());
+        assert!(entry.restart_token.is_none());
     }
 
     #[test]
-    fn read_pid_file_ignores_non_numeric_schema_version() {
+    fn read_pid_file_keeps_non_numeric_restart_token() {
         let dir = TempDir::new().expect("temp dir");
         let pid_file = write_pid_file(&dir, "77\nbad-version\n");
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_eq!(entry.pid, 77);
-        assert!(
-            entry.schema_version.is_none(),
-            "non-numeric version should parse as None"
-        );
+        assert_eq!(entry.restart_token.as_deref(), Some("bad-version"));
     }
 
     // ── WatcherPidGuard ───────────────────────────────────────────────────────
 
     #[test]
-    fn pid_guard_writes_versioned_pid_file() {
+    fn pid_guard_writes_pid_file_with_restart_token() {
         let dir = TempDir::new().expect("temp dir");
         let pid_file = dir.path().join("devql-watcher.pid");
         {
@@ -515,11 +522,10 @@ mod tests {
             let content = fs::read_to_string(&pid_file).expect("read pid file");
             let mut lines = content.lines();
             let pid_str = lines.next().expect("pid line");
-            let version_str = lines.next().expect("version line");
+            let restart_token = lines.next().expect("restart token line");
             let pid: u32 = pid_str.parse().expect("pid is numeric");
-            let version: u32 = version_str.parse().expect("version is numeric");
             assert_eq!(pid, std::process::id());
-            assert_eq!(version, WATCHER_SCHEMA_VERSION);
+            assert!(!restart_token.is_empty(), "restart token should not be empty");
         }
         // Guard dropped — file should be cleaned up
         assert!(
@@ -534,7 +540,7 @@ mod tests {
         let pid_file = dir.path().join("devql-watcher.pid");
         let guard = WatcherPidGuard::acquire(pid_file.clone()).expect("acquire guard");
         // Overwrite with a different pid so the guard's ownership check fails
-        fs::write(&pid_file, "99999\n1\n").expect("overwrite pid file");
+        fs::write(&pid_file, "99999\ndifferent-token\n").expect("overwrite pid file");
         drop(guard);
         // File should still exist because the guard saw a different pid
         assert!(
@@ -543,12 +549,12 @@ mod tests {
         );
     }
 
-    // ── schema version written by ensure_watcher_running ─────────────────────
+    // ── restart token written by ensure_watcher_running ──────────────────────
 
     #[test]
-    fn ensure_watcher_running_pid_file_contains_current_schema_version() {
+    fn ensure_watcher_running_pid_file_contains_current_restart_token() {
         // We can't easily spawn a real watcher in a unit test, but we CAN verify that
-        // `WatcherPidGuard::acquire` encodes the right version, which is the same path
+        // `WatcherPidGuard::acquire` encodes the right restart token, which is the same path
         // used by the spawned watcher process.
         let dir = TempDir::new().expect("temp dir");
         let pid_file = dir.path().join("devql-watcher.pid");
@@ -557,63 +563,55 @@ mod tests {
             .expect("read ok")
             .expect("entry present");
         assert_eq!(
-            entry.schema_version,
-            Some(WATCHER_SCHEMA_VERSION),
-            "pid file written by WatcherPidGuard must carry WATCHER_SCHEMA_VERSION"
+            entry.restart_token,
+            Some(current_watcher_restart_token().expect("restart token")),
+            "pid file written by WatcherPidGuard must carry the current restart token"
         );
     }
 
-    // ── schema_version mismatch detection ────────────────────────────────────
+    // ── restart token mismatch detection ─────────────────────────────────────
 
     #[test]
-    fn legacy_pid_file_schema_version_is_none_triggering_restart_logic() {
-        // Simulate an old pid file with no version line.
-        // ensure_watcher_running checks `entry.schema_version == Some(WATCHER_SCHEMA_VERSION)`.
-        // A None version must NOT equal Some(WATCHER_SCHEMA_VERSION), so restart is triggered.
+    fn legacy_pid_file_restart_token_is_none_triggering_restart_logic() {
+        // Simulate an old pid file with no restart token line.
         let dir = TempDir::new().expect("temp dir");
         let pid_file = write_pid_file(&dir, "12345\n");
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_ne!(
-            entry.schema_version,
-            Some(WATCHER_SCHEMA_VERSION),
-            "legacy pid file (no version) must not match current schema version"
+            entry.restart_token,
+            Some(current_watcher_restart_token().expect("restart token")),
+            "legacy pid file (no token) must not match current restart token"
         );
     }
 
     #[test]
-    fn stale_schema_version_in_pid_file_does_not_match_current() {
-        // Simulate a pid file written by a binary with WATCHER_SCHEMA_VERSION = 0.
+    fn stale_restart_token_in_pid_file_does_not_match_current() {
         let dir = TempDir::new().expect("temp dir");
-        let stale_version = WATCHER_SCHEMA_VERSION.saturating_sub(1);
-        // If WATCHER_SCHEMA_VERSION is already 0 this test is a no-op by design.
-        if stale_version == WATCHER_SCHEMA_VERSION {
-            return;
-        }
-        let pid_file = write_pid_file(&dir, &format!("12345\n{stale_version}\n"));
+        let pid_file = write_pid_file(&dir, "12345\nstale-token\n");
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_ne!(
-            entry.schema_version,
-            Some(WATCHER_SCHEMA_VERSION),
-            "stale version {stale_version} must not match WATCHER_SCHEMA_VERSION {}",
-            WATCHER_SCHEMA_VERSION
+            entry.restart_token,
+            Some(current_watcher_restart_token().expect("restart token")),
+            "stale restart token must not match current restart token"
         );
     }
 
     #[test]
-    fn current_schema_version_matches_watcher_constant() {
+    fn current_restart_token_matches_runtime_value() {
         let dir = TempDir::new().expect("temp dir");
-        let pid_file = write_pid_file(&dir, &format!("1\n{WATCHER_SCHEMA_VERSION}\n"));
+        let token = current_watcher_restart_token().expect("restart token");
+        let pid_file = write_pid_file(&dir, &format!("1\n{token}\n"));
         let entry = read_pid_file(&pid_file)
             .expect("read ok")
             .expect("entry present");
         assert_eq!(
-            entry.schema_version,
-            Some(WATCHER_SCHEMA_VERSION),
-            "correctly versioned pid file must match WATCHER_SCHEMA_VERSION"
+            entry.restart_token,
+            Some(token),
+            "correctly tokened pid file must match current restart token"
         );
     }
 }
