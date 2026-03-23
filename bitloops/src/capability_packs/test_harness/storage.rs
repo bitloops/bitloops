@@ -10,8 +10,10 @@ use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
-    ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
+    TestScenarioRecord, TestSuiteRecord,
 };
 
 pub mod dispatch;
@@ -102,6 +104,35 @@ pub trait TestHarnessQueryRepository {
     ) -> Result<Option<CoverageSummaryRecord>>;
 
     fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts>;
+
+    fn load_stage_covering_tests(
+        &self,
+        repo_id: &str,
+        production_artefact_id: &str,
+        min_confidence: Option<f64>,
+        linkage_source: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StageCoveringTestRecord>>;
+
+    fn load_stage_line_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageLineCoverageRecord>>;
+
+    fn load_stage_branch_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageBranchCoverageRecord>>;
+
+    fn load_stage_coverage_metadata(
+        &self,
+        repo_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Option<StageCoverageMetadataRecord>>;
 }
 
 pub use dispatch::{BitloopsTestHarnessRepository, init_schema_for_repo, open_repository_for_repo};

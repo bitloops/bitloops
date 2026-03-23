@@ -2,6 +2,7 @@
 // owns SQL statements, transactions, and row mapping for write workflows.
 
 mod lists;
+mod stage_serving;
 #[cfg(test)]
 mod tests;
 mod writes;
@@ -19,14 +20,21 @@ use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ListedArtefactRecord, ProductionArtefact, QueriedArtefactRecord, ResolvedTestScenarioRecord,
-    TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
-    derive_test_classification,
+    StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
+    StageLineCoverageRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
+    TestScenarioRecord, TestSuiteRecord, derive_test_classification,
 };
 use crate::storage::init::open_existing_database;
 
 use self::lists::{
     load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
+};
+use self::stage_serving::{
+    load_stage_branch_coverage as load_stage_branch_coverage_conn,
+    load_stage_coverage_metadata as load_stage_coverage_metadata_conn,
+    load_stage_covering_tests as load_stage_covering_tests_conn,
+    load_stage_line_coverage as load_stage_line_coverage_conn,
 };
 use self::writes::{
     clear_existing_production_data, clear_existing_test_discovery_data, table_exists,
@@ -876,5 +884,49 @@ WHERE cc.commit_sha = ?1
                 commit_sha,
             )?,
         })
+    }
+
+    fn load_stage_covering_tests(
+        &self,
+        repo_id: &str,
+        production_artefact_id: &str,
+        min_confidence: Option<f64>,
+        linkage_source: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StageCoveringTestRecord>> {
+        load_stage_covering_tests_conn(
+            &self.conn,
+            repo_id,
+            production_artefact_id,
+            min_confidence,
+            linkage_source,
+            limit,
+        )
+    }
+
+    fn load_stage_line_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageLineCoverageRecord>> {
+        load_stage_line_coverage_conn(&self.conn, repo_id, artefact_id, commit_sha)
+    }
+
+    fn load_stage_branch_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageBranchCoverageRecord>> {
+        load_stage_branch_coverage_conn(&self.conn, repo_id, artefact_id, commit_sha)
+    }
+
+    fn load_stage_coverage_metadata(
+        &self,
+        repo_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Option<StageCoverageMetadataRecord>> {
+        load_stage_coverage_metadata_conn(&self.conn, repo_id, commit_sha)
     }
 }

@@ -11,8 +11,10 @@ use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
-    ResolvedTestScenarioRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
+    TestScenarioRecord, TestSuiteRecord,
 };
 use crate::storage::init::init_test_domain_database;
 
@@ -322,6 +324,79 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.load_test_harness_commit_counts(commit_sha),
             Self::Postgres(repository) => repository.load_test_harness_commit_counts(commit_sha),
+        }
+    }
+
+    fn load_stage_covering_tests(
+        &self,
+        repo_id: &str,
+        production_artefact_id: &str,
+        min_confidence: Option<f64>,
+        linkage_source: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StageCoveringTestRecord>> {
+        match self {
+            Self::Sqlite(repository) => repository.load_stage_covering_tests(
+                repo_id,
+                production_artefact_id,
+                min_confidence,
+                linkage_source,
+                limit,
+            ),
+            Self::Postgres(repository) => repository.load_stage_covering_tests(
+                repo_id,
+                production_artefact_id,
+                min_confidence,
+                linkage_source,
+                limit,
+            ),
+        }
+    }
+
+    fn load_stage_line_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageLineCoverageRecord>> {
+        match self {
+            Self::Sqlite(repository) => {
+                repository.load_stage_line_coverage(repo_id, artefact_id, commit_sha)
+            }
+            Self::Postgres(repository) => {
+                repository.load_stage_line_coverage(repo_id, artefact_id, commit_sha)
+            }
+        }
+    }
+
+    fn load_stage_branch_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageBranchCoverageRecord>> {
+        match self {
+            Self::Sqlite(repository) => {
+                repository.load_stage_branch_coverage(repo_id, artefact_id, commit_sha)
+            }
+            Self::Postgres(repository) => {
+                repository.load_stage_branch_coverage(repo_id, artefact_id, commit_sha)
+            }
+        }
+    }
+
+    fn load_stage_coverage_metadata(
+        &self,
+        repo_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Option<StageCoverageMetadataRecord>> {
+        match self {
+            Self::Sqlite(repository) => {
+                repository.load_stage_coverage_metadata(repo_id, commit_sha)
+            }
+            Self::Postgres(repository) => {
+                repository.load_stage_coverage_metadata(repo_id, commit_sha)
+            }
         }
     }
 }

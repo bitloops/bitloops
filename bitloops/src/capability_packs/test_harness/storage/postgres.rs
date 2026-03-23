@@ -1,4 +1,6 @@
+mod commit_counts;
 mod helpers;
+mod stage_serving;
 #[cfg(test)]
 mod tests;
 
@@ -16,9 +18,11 @@ use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
-    ResolvedTestScenarioRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestClassificationRecord,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts,
+    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
@@ -872,61 +876,86 @@ ORDER BY ch.line, ch.branch_id
         let commit_sha = commit_sha.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
-                async fn cnt(
-                    client: &mut tokio_postgres::Client,
-                    sql: &str,
-                    commit_sha: &str,
-                ) -> Result<u64> {
-                    let row = client
-                        .query_one(sql, &[&commit_sha])
-                        .await
-                        .context("test harness commit count query")?;
-                    let n: i64 = row.get(0);
-                    Ok(n.max(0) as u64)
-                }
+                commit_counts::load_test_harness_commit_counts(client, &commit_sha).await
+            })
+        })
+    }
 
-                Ok(TestHarnessCommitCounts {
-                    test_suites: cnt(
-                        client,
-                        "SELECT COUNT(*)::bigint FROM test_suites WHERE commit_sha = $1",
-                        &commit_sha,
-                    )
-                    .await?,
-                    test_scenarios: cnt(
-                        client,
-                        "SELECT COUNT(*)::bigint FROM test_scenarios WHERE commit_sha = $1",
-                        &commit_sha,
-                    )
-                    .await?,
-                    test_links: cnt(
-                        client,
-                        "SELECT COUNT(*)::bigint FROM test_links WHERE commit_sha = $1",
-                        &commit_sha,
-                    )
-                    .await?,
-                    test_classifications: cnt(
-                        client,
-                        "SELECT COUNT(*)::bigint FROM test_classifications WHERE commit_sha = $1",
-                        &commit_sha,
-                    )
-                    .await?,
-                    coverage_captures: cnt(
-                        client,
-                        "SELECT COUNT(*)::bigint FROM coverage_captures WHERE commit_sha = $1",
-                        &commit_sha,
-                    )
-                    .await?,
-                    coverage_hits: cnt(
-                        client,
-                        r#"
-SELECT COUNT(*)::bigint FROM coverage_hits ch
-JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
-WHERE cc.commit_sha = $1
-"#,
-                        &commit_sha,
-                    )
-                    .await?,
-                })
+    fn load_stage_covering_tests(
+        &self,
+        repo_id: &str,
+        production_artefact_id: &str,
+        min_confidence: Option<f64>,
+        linkage_source: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StageCoveringTestRecord>> {
+        let repo_id = repo_id.to_string();
+        let production_artefact_id = production_artefact_id.to_string();
+        let linkage_source_owned = linkage_source.map(str::to_string);
+        self.with_client(move |client| {
+            Box::pin(async move {
+                stage_serving::load_stage_covering_tests(
+                    client,
+                    repo_id,
+                    production_artefact_id,
+                    linkage_source_owned,
+                    min_confidence,
+                    limit,
+                )
+                .await
+            })
+        })
+    }
+
+    fn load_stage_line_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageLineCoverageRecord>> {
+        let repo_id = repo_id.to_string();
+        let artefact_id = artefact_id.to_string();
+        let commit_sha = commit_sha.map(str::to_string);
+        self.with_client(move |client| {
+            Box::pin(async move {
+                stage_serving::load_stage_line_coverage(client, repo_id, artefact_id, commit_sha)
+                    .await
+            })
+        })
+    }
+
+    fn load_stage_branch_coverage(
+        &self,
+        repo_id: &str,
+        artefact_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Vec<StageBranchCoverageRecord>> {
+        let repo_id = repo_id.to_string();
+        let artefact_id = artefact_id.to_string();
+        let commit_sha = commit_sha.map(str::to_string);
+        self.with_client(move |client| {
+            Box::pin(async move {
+                stage_serving::load_stage_branch_coverage(
+                    client,
+                    repo_id,
+                    artefact_id,
+                    commit_sha,
+                )
+                .await
+            })
+        })
+    }
+
+    fn load_stage_coverage_metadata(
+        &self,
+        repo_id: &str,
+        commit_sha: Option<&str>,
+    ) -> Result<Option<StageCoverageMetadataRecord>> {
+        let repo_id = repo_id.to_string();
+        let commit_sha = commit_sha.map(str::to_string);
+        self.with_client(move |client| {
+            Box::pin(async move {
+                stage_serving::load_stage_coverage_metadata(client, repo_id, commit_sha).await
             })
         })
     }
