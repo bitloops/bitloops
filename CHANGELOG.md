@@ -42,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Fixed DevQL interface to query from the correct table depending on the query.
 - Fixed workspace revisions being persisted twice for a single change.
 - DB schema definitions now include a content hash so the schema watcher detects changes automatically, removing the need for a manual restart.
+- Edges deduplication in case of references
 
 ## [0.0.10] - 2026-03-12
 
