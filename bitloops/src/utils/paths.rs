@@ -183,7 +183,6 @@ pub fn open_repository() -> Result<PathBuf> {
 /// Falls back to git root when no marker is found between `start` and the
 /// filesystem root (spec §10.1).
 pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
-    // Stub: delegates to git root only. Does not yet implement .bitloops walk.
     let mut dir = if start.is_absolute() {
         start.to_path_buf()
     } else {
@@ -191,6 +190,20 @@ pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
             .map_err(|e| anyhow!("cannot determine current directory: {e}"))?
             .join(start)
     };
+
+    // First pass: walk up looking for .bitloops/ marker.
+    let mut search = dir.clone();
+    loop {
+        if search.join(BITLOOPS_DIR).is_dir() {
+            return Ok(search);
+        }
+        match search.parent() {
+            Some(parent) if parent != search => search = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+
+    // Fallback: walk up looking for .git (git root).
     loop {
         if dir.join(".git").exists() {
             return Ok(dir);
