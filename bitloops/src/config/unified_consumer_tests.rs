@@ -313,3 +313,53 @@ fn watch_from_unified_merges_across_json_layers() {
         "poll fallback from project should override default"
     );
 }
+
+// ---------------------------------------------------------------------------
+// H. Provider-less store backend from unified config (spec §5.1, CLI-1480)
+//
+// These tests assert the target API where provider enums are removed and
+// backend availability is derived from connection-string presence.
+// They MUST fail against the current codebase (proving the gap).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn store_backend_from_unified_has_postgres_when_dsn_present() {
+    let settings = UnifiedSettings {
+        stores: Some(json!({
+            "relational": { "postgres_dsn": "postgres://localhost/db" },
+            "events": { "clickhouse_url": "http://ch:8123" }
+        })),
+        ..Default::default()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
+
+    assert!(
+        cfg.relational.has_postgres(),
+        "postgres_dsn present → has_postgres"
+    );
+    assert!(
+        cfg.events.has_clickhouse(),
+        "clickhouse_url present → has_clickhouse"
+    );
+}
+
+#[test]
+fn store_backend_from_unified_defaults_have_no_remote_capabilities() {
+    let settings = UnifiedSettings::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
+
+    assert!(
+        !cfg.relational.has_postgres(),
+        "default should not have postgres"
+    );
+    assert!(
+        !cfg.events.has_clickhouse(),
+        "default should not have clickhouse"
+    );
+    assert!(
+        !cfg.blobs.has_remote(),
+        "default should not have remote blob"
+    );
+}
