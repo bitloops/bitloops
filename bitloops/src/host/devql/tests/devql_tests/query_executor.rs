@@ -25,9 +25,8 @@ fn executor_test_cfg() -> DevqlConfig {
     }
 }
 
-fn executor_events_cfg(provider: EventsProvider) -> EventsBackendConfig {
+fn executor_events_cfg() -> EventsBackendConfig {
     EventsBackendConfig {
-        provider,
         duckdb_path: None,
         clickhouse_url: None,
         clickhouse_user: None,
@@ -154,7 +153,6 @@ async fn execute_duckdb_pipeline_reads_telemetry_rows() {
     let cfg = executor_test_cfg();
     let parsed = parse_devql_query("telemetry()").expect("parsed devql query");
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -229,7 +227,6 @@ async fn checkpoint_events_for_commits_reads_duckdb_rows() {
     .await;
     let cfg = executor_test_cfg();
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -294,7 +291,6 @@ async fn blob_shas_changed_in_events_reads_duckdb_and_sqlite_stores() {
     .await;
     let cfg = executor_test_cfg();
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -325,7 +321,7 @@ async fn attach_chat_history_to_artefacts_uses_empty_history_when_blob_is_missin
 
     let rows = attach_chat_history_to_artefacts(
         &cfg,
-        &executor_events_cfg(EventsProvider::DuckDb),
+        &executor_events_cfg(),
         &relational,
         "repo-1",
         vec![json!({

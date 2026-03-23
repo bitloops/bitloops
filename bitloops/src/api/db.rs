@@ -566,8 +566,8 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
     };
 
     let mut pools = DashboardDbPools {
-        relational_provider: cfg.backends.relational.provider,
-        events_provider: cfg.backends.events.provider,
+        relational_provider: cfg.backends.relational.provider(),
+        events_provider: cfg.backends.events.provider(),
         relational: None,
         clickhouse: None,
         duckdb: None,

@@ -87,8 +87,7 @@ impl BlobPayloadGateway for BlobKnowledgePayloadStore {
 mod tests {
     use super::*;
     use crate::config::{
-        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
-        RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
+        BlobStorageConfig, EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig,
     };
     use std::fs;
     use tempfile::TempDir;
@@ -100,7 +99,6 @@ mod tests {
         fs::create_dir_all(&repo_root).expect("repo root");
         let backends = StoreBackendConfig {
             relational: RelationalBackendConfig {
-                provider: RelationalProvider::Sqlite,
                 sqlite_path: Some(
                     temp.path()
                         .join("relational.db")
@@ -110,7 +108,6 @@ mod tests {
                 postgres_dsn: None,
             },
             events: EventsBackendConfig {
-                provider: EventsProvider::DuckDb,
                 duckdb_path: Some(
                     temp.path()
                         .join("events.duckdb")
@@ -123,7 +120,6 @@ mod tests {
                 clickhouse_database: None,
             },
             blobs: BlobStorageConfig {
-                provider: BlobStorageProvider::Local,
                 local_path: Some(temp.path().join("blobs").to_string_lossy().to_string()),
                 s3_bucket: None,
                 s3_region: None,

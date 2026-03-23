@@ -8,7 +8,7 @@ pub(crate) async fn blob_shas_changed_in_events(
     agent: Option<&str>,
     since: Option<&str>,
 ) -> Result<Vec<String>> {
-    let commit_shas = match events_cfg.provider {
+    let commit_shas = match events_cfg.provider() {
         EventsProvider::ClickHouse => {
             let mut conditions = vec![
                 format!("repo_id = '{}'", esc_ch(repo_id)),
@@ -214,7 +214,7 @@ pub(crate) async fn checkpoint_events_for_commits(
         return Ok(vec![]);
     }
 
-    match events_cfg.provider {
+    match events_cfg.provider() {
         EventsProvider::ClickHouse => {
             let path_candidates = build_path_candidates(path);
             let path_has_clause = if path_candidates.is_empty() {

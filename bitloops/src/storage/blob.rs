@@ -120,7 +120,7 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
 }
 
 pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
-    match cfg.provider {
+    match cfg.provider() {
         BlobStorageProvider::Local => Ok(ResolvedBlobStore {
             store: Box::new(LocalBlobStore::from_config(cfg)?),
             backend: "local",
@@ -144,7 +144,7 @@ pub fn create_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
-    match cfg.provider {
+    match cfg.provider() {
         BlobStorageProvider::Local => {
             let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
                 .context("resolving local blob store path for repository")?;
@@ -287,9 +287,8 @@ mod tests {
     use crate::storage::SqliteConnectionPool;
     use tempfile::TempDir;
 
-    fn test_blob_config(provider: BlobStorageProvider, local_path: String) -> BlobStorageConfig {
+    fn test_blob_config(local_path: String) -> BlobStorageConfig {
         BlobStorageConfig {
-            provider,
             local_path: Some(local_path),
             s3_bucket: None,
             s3_region: None,
@@ -307,39 +306,23 @@ mod tests {
     }
 
     #[test]
-    fn create_blob_store_returns_error_when_s3_config_invalid() {
+    fn create_blob_store_dispatches_to_s3_when_bucket_set() {
         let temp = TempDir::new().expect("temp dir");
-        let cfg = test_blob_config(
-            BlobStorageProvider::S3,
-            temp.path().to_string_lossy().to_string(),
-        );
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
 
-        let err = match create_blob_store_with_backend(&cfg) {
-            Ok(_) => panic!("invalid S3 config must fail"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("initialising S3 blob storage backend")
-        );
+        let resolved = create_blob_store_with_backend(&cfg).expect("S3 dispatch should succeed");
+        assert_eq!(resolved.backend, "s3");
     }
 
     #[test]
-    fn create_blob_store_returns_error_when_gcs_config_invalid() {
+    fn create_blob_store_dispatches_to_gcs_when_bucket_set() {
         let temp = TempDir::new().expect("temp dir");
-        let cfg = test_blob_config(
-            BlobStorageProvider::Gcs,
-            temp.path().to_string_lossy().to_string(),
-        );
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.gcs_bucket = Some("test-bucket".to_string());
 
-        let err = match create_blob_store_with_backend(&cfg) {
-            Ok(_) => panic!("invalid GCS config must fail"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("initialising GCS blob storage backend")
-        );
+        let resolved = create_blob_store_with_backend(&cfg).expect("GCS dispatch should succeed");
+        assert_eq!(resolved.backend, "gcs");
     }
 
     #[test]

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use crate::utils::paths;
 
 use super::constants::BITLOOPS_CONFIG_RELATIVE_PATH;
-use super::types::{BlobStorageProvider, EventsProvider, RelationalProvider};
 
 pub(super) fn current_repo_root_or_cwd_result() -> Result<PathBuf> {
     paths::repo_root()
@@ -192,33 +191,6 @@ fn expand_tilde_path(raw: &str) -> PathBuf {
     }
 
     PathBuf::from(trimmed)
-}
-
-pub(super) fn parse_relational_provider(raw: &str) -> Result<RelationalProvider> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "sqlite" => Ok(RelationalProvider::Sqlite),
-        "postgres" | "postgresql" => Ok(RelationalProvider::Postgres),
-        other => bail!("unsupported relational provider `{other}` (supported: sqlite, postgres)"),
-    }
-}
-
-pub(super) fn parse_events_provider(raw: &str) -> Result<EventsProvider> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "duckdb" => Ok(EventsProvider::DuckDb),
-        "clickhouse" => Ok(EventsProvider::ClickHouse),
-        other => {
-            bail!("unsupported events provider `{other}` (supported: duckdb, clickhouse)")
-        }
-    }
-}
-
-pub(super) fn parse_blob_storage_provider(raw: &str) -> Result<BlobStorageProvider> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "local" => Ok(BlobStorageProvider::Local),
-        "s3" => Ok(BlobStorageProvider::S3),
-        "gcs" => Ok(BlobStorageProvider::Gcs),
-        other => bail!("unsupported blob provider `{other}` (supported: local, s3, gcs)"),
-    }
 }
 
 pub(super) fn resolve_required_provider_string<F>(

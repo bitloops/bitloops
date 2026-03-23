@@ -4,10 +4,10 @@ use super::*;
 fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
     let cfg = resolve_store_backend_config_for_tests(StoreFileConfig::default()).expect("cfg");
 
-    assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
-    assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
-    assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
-    assert_eq!(cfg.blobs.local_path, None);
+    assert!(!cfg.relational.has_postgres());
+    assert!(!cfg.events.has_clickhouse());
+    assert!(!cfg.blobs.has_remote());
+    assert!(cfg.blobs.local_path.is_some(), "local_path should default");
     assert_eq!(cfg.blobs.s3_bucket, None);
     assert_eq!(cfg.blobs.gcs_bucket, None);
 }
@@ -35,8 +35,8 @@ fn backend_config_reads_store_blocks_from_repo_config_shape() {
     let file_cfg = StoreFileConfig::from_json_value(&value);
 
     let cfg = resolve_store_backend_config_for_tests(file_cfg).expect("cfg");
-    assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
-    assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+    assert!(cfg.relational.has_postgres());
+    assert!(cfg.events.has_clickhouse());
     assert_eq!(
         cfg.relational.postgres_dsn.as_deref(),
         Some("postgres://u:p@localhost:5432/bitloops")
@@ -46,29 +46,12 @@ fn backend_config_reads_store_blocks_from_repo_config_shape() {
         Some("http://localhost:8123")
     );
     assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
-    assert_eq!(cfg.blobs.provider, BlobStorageProvider::Gcs);
+    assert!(cfg.blobs.has_remote());
     assert_eq!(cfg.blobs.gcs_bucket.as_deref(), Some("bucket-a"));
     assert_eq!(
         cfg.blobs.gcs_credentials_path.as_deref(),
         Some("/tmp/gcs.json")
     );
-}
-
-#[test]
-fn backend_config_rejects_invalid_provider_values() {
-    let value = serde_json::json!({
-        "stores": {
-            "relational": { "provider": "mysql" },
-            "event": { "provider": "kafka" }
-        }
-    });
-    let file_cfg = StoreFileConfig::from_json_value(&value);
-
-    let err =
-        resolve_store_backend_config_for_tests(file_cfg).expect_err("invalid providers must fail");
-
-    let message = err.to_string();
-    assert!(message.contains("unsupported"));
 }
 
 #[test]
@@ -98,14 +81,14 @@ fn backend_config_resolves_from_current_repo_root() {
     let _guard = enter_process_state(Some(temp.path()), &[]);
     let cfg = resolve_store_backend_config().expect("backend config");
 
-    assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
+    assert!(cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.postgres_dsn.as_deref(),
         Some("postgres://u:p@localhost:5432/bitloops")
     );
-    assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+    assert!(cfg.events.has_clickhouse());
     assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
-    assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
+    assert!(!cfg.blobs.has_remote());
     assert_eq!(cfg.blobs.local_path.as_deref(), Some("data/blobs"));
 }
 
@@ -167,14 +150,14 @@ fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
 
     with_cwd(temp.path(), || {
         let cfg = resolve_store_backend_config().expect("store backend config");
-        assert_eq!(cfg.relational.provider, RelationalProvider::Postgres);
+        assert!(cfg.relational.has_postgres());
         assert_eq!(
             cfg.relational.postgres_dsn.as_deref(),
             Some("postgres://user:pass@localhost:5432/bitloops")
         );
-        assert_eq!(cfg.events.provider, EventsProvider::ClickHouse);
+        assert!(cfg.events.has_clickhouse());
         assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
-        assert_eq!(cfg.blobs.provider, BlobStorageProvider::Local);
+        assert!(!cfg.blobs.has_remote());
         assert_eq!(cfg.blobs.local_path.as_deref(), Some("tmp/blobs"));
     });
 }
@@ -199,12 +182,12 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
     );
 
     let cfg = resolve_store_backend_config_for_repo(temp.path()).expect("store backend config");
-    assert_eq!(cfg.relational.provider, RelationalProvider::Sqlite);
+    assert!(!cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
         Some("data/devql.sqlite")
     );
-    assert_eq!(cfg.events.provider, EventsProvider::DuckDb);
+    assert!(!cfg.events.has_clickhouse());
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
         Some("data/events.duckdb")

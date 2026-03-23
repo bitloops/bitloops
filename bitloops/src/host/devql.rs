@@ -269,7 +269,7 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
         .context("resolving DevQL backend config for `devql init`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql init").await?;
 
-    match backends.events.provider {
+    match backends.events.provider() {
         EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
         EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
     }
@@ -298,7 +298,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         Some(&cfg.repo_root),
     )?;
     if init {
-        match backends.events.provider {
+        match backends.events.provider() {
             EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
             EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
         }

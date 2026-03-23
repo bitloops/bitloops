@@ -8,15 +8,13 @@ use crate::utils::paths;
 use super::constants::*;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
-    normalize_sqlite_path, parse_blob_storage_provider, parse_events_provider,
-    parse_relational_provider, read_non_empty_env, resolve_configured_path,
+    normalize_sqlite_path, read_non_empty_env, resolve_configured_path,
     resolve_required_provider_string, user_home_dir,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
-    EventsProvider, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
-    RelationalProvider, StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig,
-    StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, GithubProviderConfig,
+    ProviderConfig, RelationalBackendConfig, StoreBackendConfig, StoreEmbeddingConfig,
+    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 use super::unified_config::{
     UnifiedSettings, load_effective_config, resolve_dashboard_from_unified,
@@ -112,44 +110,34 @@ pub fn resolve_blob_local_path_for_repo(
     }
 }
 
+/// Default relative paths for local backends (resolved against repo_root at use-time).
+const DEFAULT_SQLITE_PATH: &str = ".bitloops/stores/relational/relational.db";
+const DEFAULT_DUCKDB_PATH: &str = ".bitloops/stores/event/events.duckdb";
+const DEFAULT_BLOB_LOCAL_PATH: &str = ".bitloops/stores/blob";
+
 pub(crate) fn resolve_store_backend_config_with(
     file_cfg: StoreFileConfig,
 ) -> Result<StoreBackendConfig> {
-    let relational_provider = if let Some(raw) = file_cfg.relational_provider {
-        parse_relational_provider(&raw)?
-    } else {
-        RelationalProvider::Sqlite
-    };
-
-    let events_provider = if let Some(raw) = file_cfg.events_provider {
-        parse_events_provider(&raw)?
-    } else {
-        EventsProvider::DuckDb
-    };
-
-    let blob_provider = if let Some(raw) = file_cfg.blob_provider {
-        parse_blob_storage_provider(&raw)?
-    } else {
-        BlobStorageProvider::Local
-    };
-
     Ok(StoreBackendConfig {
         relational: RelationalBackendConfig {
-            provider: relational_provider,
-            sqlite_path: file_cfg.sqlite_path,
+            sqlite_path: file_cfg
+                .sqlite_path
+                .or_else(|| Some(DEFAULT_SQLITE_PATH.to_string())),
             postgres_dsn: file_cfg.pg_dsn,
         },
         events: EventsBackendConfig {
-            provider: events_provider,
-            duckdb_path: file_cfg.duckdb_path,
+            duckdb_path: file_cfg
+                .duckdb_path
+                .or_else(|| Some(DEFAULT_DUCKDB_PATH.to_string())),
             clickhouse_url: file_cfg.clickhouse_url,
             clickhouse_user: file_cfg.clickhouse_user,
             clickhouse_password: file_cfg.clickhouse_password,
             clickhouse_database: file_cfg.clickhouse_database,
         },
         blobs: BlobStorageConfig {
-            provider: blob_provider,
-            local_path: file_cfg.blob_local_path,
+            local_path: file_cfg
+                .blob_local_path
+                .or_else(|| Some(DEFAULT_BLOB_LOCAL_PATH.to_string())),
             s3_bucket: file_cfg.blob_s3_bucket,
             s3_region: file_cfg.blob_s3_region,
             s3_access_key_id: file_cfg.blob_s3_access_key_id,

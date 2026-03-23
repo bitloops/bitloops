@@ -91,11 +91,8 @@ impl BlobStore for GcsBlobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BlobStorageProvider;
-
     fn base_config() -> BlobStorageConfig {
         BlobStorageConfig {
-            provider: BlobStorageProvider::Gcs,
             local_path: None,
             s3_bucket: None,
             s3_region: None,

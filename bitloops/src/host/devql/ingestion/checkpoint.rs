@@ -136,7 +136,7 @@ pub(super) enum CheckpointEventsStoreInner {
 
 impl CheckpointEventsStore {
     fn from_config(cfg: &DevqlConfig, events_cfg: &EventsBackendConfig) -> Self {
-        match events_cfg.provider {
+        match events_cfg.provider() {
             EventsProvider::ClickHouse => Self {
                 inner: CheckpointEventsStoreInner::ClickHouse {
                     endpoint: cfg.clickhouse_endpoint(),

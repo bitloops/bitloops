@@ -247,7 +247,6 @@ fn when_execute_query_without_pg_client(
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
                 let events_cfg = EventsBackendConfig {
-                    provider: EventsProvider::DuckDb,
                     duckdb_path: None,
                     clickhouse_url: None,
                     clickhouse_user: None,

@@ -3,7 +3,6 @@ use super::*;
 #[test]
 fn events_backend_duckdb_path_defaults_under_repo_store_directory() {
     let events = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: None,
         clickhouse_url: None,
         clickhouse_user: None,
@@ -22,7 +21,6 @@ fn events_backend_duckdb_path_defaults_under_repo_store_directory() {
 #[test]
 fn events_backend_duckdb_path_preserves_explicit_path() {
     let events = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some("/tmp/custom-events.duckdb".to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -39,7 +37,6 @@ fn events_backend_duckdb_path_preserves_explicit_path() {
 #[test]
 fn events_backend_clickhouse_endpoint_uses_defaults() {
     let events = EventsBackendConfig {
-        provider: EventsProvider::ClickHouse,
         duckdb_path: None,
         clickhouse_url: None,
         clickhouse_user: None,
@@ -56,7 +53,6 @@ fn events_backend_clickhouse_endpoint_uses_defaults() {
 #[test]
 fn events_backend_clickhouse_endpoint_trims_trailing_slash() {
     let events = EventsBackendConfig {
-        provider: EventsProvider::ClickHouse,
         duckdb_path: None,
         clickhouse_url: Some("http://localhost:8123/".to_string()),
         clickhouse_user: None,

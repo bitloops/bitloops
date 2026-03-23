@@ -112,11 +112,8 @@ impl BlobStore for S3BlobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BlobStorageProvider;
-
     fn base_config() -> BlobStorageConfig {
         BlobStorageConfig {
-            provider: BlobStorageProvider::S3,
             local_path: None,
             s3_bucket: None,
             s3_region: None,

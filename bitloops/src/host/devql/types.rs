@@ -81,7 +81,7 @@ impl RelationalStorage {
         relational: &RelationalBackendConfig,
         command: &str,
     ) -> Result<Self> {
-        match relational.provider {
+        match relational.provider() {
             RelationalProvider::Postgres => {
                 let pg_dsn = require_postgres_dsn(cfg, relational, command)?;
                 let client = connect_postgres_client(pg_dsn).await?;

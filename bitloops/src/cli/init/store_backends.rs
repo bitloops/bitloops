@@ -4,9 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config::{
-    BlobStorageProvider, EventsProvider, RelationalProvider, resolve_blob_local_path_for_repo,
-    resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
-    resolve_store_backend_config_for_repo,
+    resolve_blob_local_path_for_repo, resolve_duckdb_db_path_for_repo,
+    resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
 };
 use crate::utils::paths;
 
@@ -39,7 +38,7 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
     let cfg = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for store initialisation")?;
 
-    if cfg.relational.provider == RelationalProvider::Sqlite {
+    if !cfg.relational.has_postgres() {
         let sqlite_path =
             resolve_sqlite_db_path_for_repo(repo_root, cfg.relational.sqlite_path.as_deref())
                 .context("resolving SQLite path for `bitloops init`")?;
@@ -50,7 +49,7 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
             .context("initialising SQLite checkpoint/session schema")?;
     }
 
-    if cfg.events.provider == EventsProvider::DuckDb {
+    if !cfg.events.has_clickhouse() {
         let duckdb_path =
             resolve_duckdb_db_path_for_repo(repo_root, cfg.events.duckdb_path.as_deref());
         if let Some(parent) = duckdb_path.parent()
@@ -66,7 +65,7 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
             .context("initialising DuckDB checkpoint events schema")?;
     }
 
-    if cfg.blobs.provider == BlobStorageProvider::Local {
+    if !cfg.blobs.has_remote() {
         let blob_root =
             resolve_blob_local_path_for_repo(repo_root, cfg.blobs.local_path.as_deref())
                 .context("resolving local blob store path for `bitloops init`")?;

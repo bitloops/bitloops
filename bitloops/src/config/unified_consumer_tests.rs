@@ -30,12 +30,12 @@ fn store_backend_from_unified_reads_relational_and_events() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
 
-    assert_eq!(cfg.relational.provider, super::RelationalProvider::Postgres);
+    assert!(cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.postgres_dsn.as_deref(),
         Some("postgres://localhost/db")
     );
-    assert_eq!(cfg.events.provider, super::EventsProvider::DuckDb);
+    assert!(!cfg.events.has_clickhouse());
 }
 
 #[test]
@@ -44,9 +44,9 @@ fn store_backend_from_unified_applies_defaults() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&settings, tmp.path()).unwrap();
 
-    assert_eq!(cfg.relational.provider, super::RelationalProvider::Sqlite);
-    assert_eq!(cfg.events.provider, super::EventsProvider::DuckDb);
-    assert_eq!(cfg.blobs.provider, super::BlobStorageProvider::Local);
+    assert!(!cfg.relational.has_postgres());
+    assert!(!cfg.events.has_clickhouse());
+    assert!(!cfg.blobs.has_remote());
 }
 
 #[test]
@@ -67,8 +67,8 @@ fn store_backend_from_unified_merges_across_layers() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = resolve_store_backend_from_unified(&merged, tmp.path()).unwrap();
 
-    assert_eq!(cfg.relational.provider, super::RelationalProvider::Sqlite);
-    assert_eq!(cfg.events.provider, super::EventsProvider::ClickHouse);
+    assert!(!cfg.relational.has_postgres());
+    assert!(cfg.events.has_clickhouse());
     assert_eq!(cfg.events.clickhouse_url.as_deref(), Some("http://ch:8123"));
 }
 

@@ -19,7 +19,6 @@ fn blob_local_path_resolution_defaults_under_current_repo_root() {
 fn blob_storage_local_path_or_default_uses_current_repo_root() {
     let temp = tempfile::tempdir().expect("temp dir");
     let config = BlobStorageConfig {
-        provider: BlobStorageProvider::Local,
         local_path: None,
         s3_bucket: None,
         s3_region: None,
@@ -62,7 +61,6 @@ fn blob_local_path_resolution_expands_tilde_prefix() {
 #[test]
 fn blob_local_path_resolution_defaults_under_repo_store_directory() {
     let blobs = BlobStorageConfig {
-        provider: BlobStorageProvider::Local,
         local_path: None,
         s3_bucket: None,
         s3_region: None,

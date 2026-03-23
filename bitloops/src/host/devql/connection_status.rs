@@ -35,21 +35,21 @@ pub(crate) async fn collect_connection_status_rows(
 }
 
 fn relational_status_label(cfg: &RelationalBackendConfig) -> &'static str {
-    match cfg.provider {
+    match cfg.provider() {
         RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
         RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
     }
 }
 
 fn events_status_label(cfg: &EventsBackendConfig) -> &'static str {
-    match cfg.provider {
+    match cfg.provider() {
         EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
         EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
     }
 }
 
 async fn relational_connection_status(cfg: &RelationalBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
+    match cfg.provider() {
         RelationalProvider::Sqlite => match cfg.resolve_sqlite_db_path() {
             Ok(path) => match check_sqlite_connection(&path).await {
                 Ok(_) => DatabaseConnectionStatus::Connected,
@@ -68,7 +68,7 @@ async fn relational_connection_status(cfg: &RelationalBackendConfig) -> Database
 }
 
 async fn events_connection_status(cfg: &EventsBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
+    match cfg.provider() {
         EventsProvider::DuckDb => {
             let duckdb_path = cfg.duckdb_path_or_default();
             match check_duckdb_connection(&duckdb_path).await {

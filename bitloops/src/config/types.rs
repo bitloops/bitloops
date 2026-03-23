@@ -98,12 +98,26 @@ pub struct StoreEmbeddingConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationalBackendConfig {
-    pub provider: RelationalProvider,
     pub sqlite_path: Option<String>,
     pub postgres_dsn: Option<String>,
 }
 
 impl RelationalBackendConfig {
+    /// Returns `true` when a Postgres DSN is configured.
+    pub fn has_postgres(&self) -> bool {
+        self.postgres_dsn.is_some()
+    }
+
+    /// Derived provider for dispatch (replaces the former `provider` field).
+    /// Postgres when DSN is present, SQLite otherwise.
+    pub fn provider(&self) -> RelationalProvider {
+        if self.has_postgres() {
+            RelationalProvider::Postgres
+        } else {
+            RelationalProvider::Sqlite
+        }
+    }
+
     pub fn resolve_sqlite_db_path(&self) -> Result<PathBuf> {
         resolve_sqlite_db_path(self.sqlite_path.as_deref())
     }
@@ -116,7 +130,6 @@ impl RelationalBackendConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventsBackendConfig {
-    pub provider: EventsProvider,
     pub duckdb_path: Option<String>,
     pub clickhouse_url: Option<String>,
     pub clickhouse_user: Option<String>,
@@ -125,6 +138,21 @@ pub struct EventsBackendConfig {
 }
 
 impl EventsBackendConfig {
+    /// Returns `true` when a ClickHouse URL is configured.
+    pub fn has_clickhouse(&self) -> bool {
+        self.clickhouse_url.is_some()
+    }
+
+    /// Derived provider for dispatch (replaces the former `provider` field).
+    /// ClickHouse when URL is present, DuckDB otherwise.
+    pub fn provider(&self) -> EventsProvider {
+        if self.has_clickhouse() {
+            EventsProvider::ClickHouse
+        } else {
+            EventsProvider::DuckDb
+        }
+    }
+
     pub fn duckdb_path_or_default(&self) -> PathBuf {
         let repo_root = current_repo_root_or_cwd();
         resolve_duckdb_db_path_for_repo(&repo_root, self.duckdb_path.as_deref())
@@ -146,7 +174,6 @@ impl EventsBackendConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobStorageConfig {
-    pub provider: BlobStorageProvider,
     pub local_path: Option<String>,
     pub s3_bucket: Option<String>,
     pub s3_region: Option<String>,
@@ -157,6 +184,23 @@ pub struct BlobStorageConfig {
 }
 
 impl BlobStorageConfig {
+    /// Returns `true` when any remote blob backend (S3 or GCS) is configured.
+    pub fn has_remote(&self) -> bool {
+        self.s3_bucket.is_some() || self.gcs_bucket.is_some()
+    }
+
+    /// Derived provider for dispatch (replaces the former `provider` field).
+    /// S3 when bucket is present, GCS when bucket is present, Local otherwise.
+    pub fn provider(&self) -> BlobStorageProvider {
+        if self.s3_bucket.is_some() {
+            BlobStorageProvider::S3
+        } else if self.gcs_bucket.is_some() {
+            BlobStorageProvider::Gcs
+        } else {
+            BlobStorageProvider::Local
+        }
+    }
+
     #[allow(dead_code)]
     pub fn local_path_or_default(&self) -> Result<PathBuf> {
         resolve_blob_local_path(self.local_path.as_deref())
@@ -165,9 +209,11 @@ impl BlobStorageConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct StoreFileConfig {
+    #[allow(dead_code)]
     pub(crate) relational_provider: Option<String>,
     pub(crate) sqlite_path: Option<String>,
     pub(crate) pg_dsn: Option<String>,
+    #[allow(dead_code)]
     pub(crate) events_provider: Option<String>,
     pub(crate) duckdb_path: Option<String>,
     pub(crate) clickhouse_url: Option<String>,
@@ -181,6 +227,7 @@ pub struct StoreFileConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
+    #[allow(dead_code)]
     pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
