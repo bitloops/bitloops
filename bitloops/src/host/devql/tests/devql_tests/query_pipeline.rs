@@ -1366,29 +1366,19 @@ fn parse_devql_tests_stage_with_filters() {
 }
 
 #[test]
-fn parse_devql_internal_core_test_links_stage_with_args() {
-    let parsed = parse_devql_query(
+fn parse_devql_rejects_legacy_internal_core_stages() {
+    for q in [
         r#"repo("r")->__core_test_links(artefact_id:"artefact::a_1",min_confidence:0.5,linkage_source:"static_analysis")->limit(7)"#,
-    )
-    .unwrap();
-
-    assert!(parsed.has_test_harness_core_test_links_stage);
-    assert_eq!(
-        parsed.test_harness_core_test_links.artefact_id.as_deref(),
-        Some("artefact::a_1")
-    );
-    assert_eq!(
-        parsed.test_harness_core_test_links.min_confidence,
-        Some(0.5)
-    );
-    assert_eq!(
-        parsed
-            .test_harness_core_test_links
-            .linkage_source
-            .as_deref(),
-        Some("static_analysis")
-    );
-    assert_eq!(parsed.limit, 7);
+        r#"repo("r")->__core_line_coverage()"#,
+        r#"repo("r")->__core_branch_coverage(artefact_id:"a")"#,
+        r#"repo("r")->__core_coverage_metadata()"#,
+    ] {
+        let err = parse_devql_query(q).unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported DevQL stage"),
+            "expected unsupported stage for {q:?}, got {err}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1402,20 +1392,6 @@ async fn execute_devql_query_rejects_tests_without_artefacts() {
     assert!(
         err.to_string()
             .contains("tests() requires an artefacts() stage")
-    );
-}
-
-#[tokio::test]
-async fn execute_devql_query_rejects_internal_core_stage_without_artefact_id() {
-    let cfg = test_cfg();
-    let events_cfg = default_events_cfg();
-    let parsed = parse_devql_query(r#"repo("temp2")->__core_line_coverage()->limit(1)"#).unwrap();
-    let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("__core_line_coverage() requires artefact_id")
     );
 }
 
