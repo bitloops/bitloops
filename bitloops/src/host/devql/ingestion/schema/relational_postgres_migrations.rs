@@ -356,3 +356,49 @@ SET metadata = json_set(COALESCE(metadata, '{}'), '$.import_form', 'binding')
 WHERE json_extract(metadata, '$.import_form') IN ('module', 'use');
 "#
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_state_hardening_sql_includes_checkpoint_column_migrations_for_artefacts_current() {
+        let sql = current_state_hardening_sql();
+        assert!(
+            sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_kind"),
+            "migration must add revision_kind to artefacts_current"
+        );
+        assert!(
+            sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_id"),
+            "migration must add revision_id to artefacts_current"
+        );
+        assert!(
+            sql.contains(
+                "ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id"
+            ),
+            "migration must add temp_checkpoint_id to artefacts_current"
+        );
+    }
+
+    #[test]
+    fn current_state_hardening_sql_includes_checkpoint_column_migrations_for_artefact_edges_current()
+     {
+        let sql = current_state_hardening_sql();
+        assert!(
+            sql.contains(
+                "ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_kind"
+            ),
+            "migration must add revision_kind to artefact_edges_current"
+        );
+        assert!(
+            sql.contains("ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_id"),
+            "migration must add revision_id to artefact_edges_current"
+        );
+        assert!(
+            sql.contains(
+                "ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id"
+            ),
+            "migration must add temp_checkpoint_id to artefact_edges_current"
+        );
+    }
+}

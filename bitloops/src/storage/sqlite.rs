@@ -314,4 +314,131 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn initialise_devql_schema_migrates_legacy_artefacts_current_missing_checkpoint_columns()
+    -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+        // Create artefacts_current with the old schema (missing checkpoint columns).
+        sqlite.execute_batch(
+            "CREATE TABLE artefacts_current (
+                repo_id TEXT NOT NULL,
+                symbol_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                canonical_kind TEXT,
+                language_kind TEXT,
+                symbol_fqn TEXT,
+                parent_symbol_id TEXT,
+                parent_artefact_id TEXT,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL,
+                signature TEXT,
+                modifiers TEXT NOT NULL DEFAULT '[]',
+                docstring TEXT,
+                content_hash TEXT,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (repo_id, symbol_id)
+            );",
+        )?;
+
+        // Run the current migration path.
+        sqlite.initialise_devql_schema()?;
+
+        // The runtime INSERT that was failing before the migration fix.
+        sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO artefacts_current
+                    (repo_id, symbol_id, artefact_id, commit_sha,
+                     revision_kind, revision_id, temp_checkpoint_id,
+                     blob_sha, path, language, start_line, end_line,
+                     start_byte, end_byte)
+                 VALUES ('r', 's', 'a', 'c',
+                         'commit', 'c', NULL,
+                         'b', 'p', 'rust', 1, 10, 0, 100)",
+                [],
+            )?;
+            Ok(())
+        })?;
+
+        // The runtime SELECT that was failing before the migration fix.
+        let revision_kind: String = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT revision_kind FROM artefacts_current WHERE repo_id = 'r' AND symbol_id = 's'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(revision_kind, "commit");
+
+        Ok(())
+    }
+
+    #[test]
+    fn initialise_devql_schema_migrates_legacy_artefact_edges_current_missing_checkpoint_columns()
+    -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+        // Create artefact_edges_current with the old schema (missing checkpoint columns).
+        sqlite.execute_batch(
+            "CREATE TABLE artefact_edges_current (
+                edge_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                from_symbol_id TEXT NOT NULL,
+                from_artefact_id TEXT NOT NULL,
+                to_symbol_id TEXT,
+                to_artefact_id TEXT,
+                to_symbol_ref TEXT,
+                edge_kind TEXT NOT NULL,
+                language TEXT NOT NULL,
+                start_line INTEGER,
+                end_line INTEGER,
+                metadata TEXT DEFAULT '{}',
+                updated_at TEXT DEFAULT (datetime('now')),
+                CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL)
+            );",
+        )?;
+
+        sqlite.initialise_devql_schema()?;
+
+        sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO artefact_edges_current
+                    (edge_id, repo_id, commit_sha, revision_kind, revision_id,
+                     temp_checkpoint_id, blob_sha, path, from_symbol_id,
+                     from_artefact_id, to_symbol_ref, edge_kind, language)
+                 VALUES ('e1', 'r', 'c', 'commit', 'c',
+                         NULL, 'b', 'p', 'from_s',
+                         'from_a', 'ref', 'imports', 'rust')",
+                [],
+            )?;
+            Ok(())
+        })?;
+
+        let revision_kind: String = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT revision_kind FROM artefact_edges_current WHERE edge_id = 'e1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(revision_kind, "commit");
+
+        Ok(())
+    }
 }
