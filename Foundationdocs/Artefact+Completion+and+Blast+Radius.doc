@@ -1,0 +1,1777 @@
+Date: Mon, 23 Mar 2026 11:52:57 +0000 (UTC)
+Message-ID: <1602580545.35.1774266777027@14cd29f1e1a1>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_34_1606680054.1774266777027"
+
+------=_Part_34_1606680054.1774266777027
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>Artefact Completion and Blast Radius</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>Artefact Completion and Blast Radius</h1>
+    <div class=3D"Section1">
+        <h2 id=3D"ArtefactCompletionandBlastRadius-1.Metadata">1. Metadata<=
+/h2>
+<ul>
+<li>
+<p><strong>Feature name:</strong> Artefact Completion and Blast Radius</p><=
+/li>
+<li>
+<p><strong>Module(s):</strong> DevQL watcher, DevQL ingestion, DevQL query =
+pipeline</p></li>
+<li>
+<p><strong>Tech lead:</strong> TBD</p></li>
+<li>
+<p><strong>Status:</strong> Draft</p></li>
+<li>
+<p><strong>Priority:</strong> High</p></li>
+<li>
+<p><strong>Target release:</strong> TBD</p></li>
+<li>
+<p><strong>Related Feature spec brief:</strong> Artefact and dependency gra=
+ph completion for TS/JS + Rust</p></li>
+<li>
+<p><strong>Related Jira epic (if applicable):</strong> TBD</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-2.Overview">2. Overview</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Problemstatement">Problem statem=
+ent</h3>
+<p>DevQL currently needs a complete and trustworthy symbol and dependency g=
+raph in order to support blast-radius analysis, reverse dependency queries =
+(<code>who depends on me</code>), and precise local developer feedback duri=
+ng editing.</p>
+<p>This feature is no longer only about committed ingest. DevQL now operate=
+s across two complementary state models:</p>
+<ul>
+<li>
+<p><strong>Current workspace state</strong> in <code>artefacts_current</cod=
+e> and <code>artefact_edges_current</code></p></li>
+<li>
+<p><strong>Historical committed state</strong> in <code>artefacts</code> an=
+d <code>artefact_edges</code></p></li>
+</ul>
+<p>Local file changes can be indexed into the current tables immediately as=
+ temporary revisions. Later, <code>bitloops devql ingest</code> promotes ma=
+tching temporary current rows to committed current rows when the blob in th=
+e temporary revision matches <code>HEAD</code>, and persists committed hist=
+orical rows for point-in-time queries.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Goals">Goals</h3>
+<ul>
+<li>
+<p>Extract artefacts with tree-sitter only for TS/JS and Rust.</p></li>
+<li>
+<p>Emit dependency edges for <code>imports</code>, <code>calls</code>, <cod=
+e>references</code>, <code>extends</code>, <code>implements</code>, and <co=
+de>exports</code>.</p></li>
+<li>
+<p>Support reverse dependency analysis via <code>deps(direction:"in")</code=
+>.</p></li>
+<li>
+<p>Maintain <strong>live current-state indexing</strong> for local workspac=
+e changes in <code>artefacts_current</code> and <code>artefact_edges_curren=
+t</code>.</p></li>
+<li>
+<p>Promote temporary current rows to committed current rows during <code>de=
+vql ingest</code> when <code>HEAD</code> matches the temporary blob.</p></l=
+i>
+<li>
+<p>Persist committed historical rows in <code>artefacts</code> and <code>ar=
+tefact_edges</code> for <code>asOf(commit/ref)</code> queries.</p></li>
+<li>
+<p>Keep symbol identity stable across formatting changes and line moves whe=
+n semantics are unchanged.</p></li>
+<li>
+<p>Keep re-ingestion idempotent for unchanged code.</p></li>
+<li>
+<p>Use canonical kinds only for cross-language abstractions; keep language-=
+specific constructs in <code>language_kind</code>.</p></li>
+<li>
+<p>Success metric: on curated TS/JS + Rust fixtures, expected artefacts and=
+ edges are present and stable across repeated ingest runs and local edit cy=
+cles.</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Non-goals">Non-goals</h3>
+<ul>
+<li>
+<p>Parse-failure persistence/retry mechanism</p></li>
+<li>
+<p>Property/field artefacts in V1</p></li>
+<li>
+<p>Deep semantic/type inference beyond AST-level extraction</p></li>
+<li>
+<p>Recomputing semantic features, embeddings, and clone edges on every file=
+ save</p></li>
+<li>
+<p>Full live-backend parity across every relational provider in this featur=
+e scope</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Openquestions">Open questions</h=
+3>
+<div class=3D"table-wrap">
+<table data-layout=3D"default" class=3D"confluenceTable">
+<tbody>
+<tr>
+<th class=3D"confluenceTh">
+<p>ID</p></th>
+<th class=3D"confluenceTh">
+<p>Decision topic</p></th>
+<th class=3D"confluenceTh">
+<p>Context</p></th>
+<th class=3D"confluenceTh">
+<p>Options considered</p></th>
+<th class=3D"confluenceTh">
+<p>Implications</p></th>
+<th class=3D"confluenceTh">
+<p>Decision</p></th>
+<th class=3D"confluenceTh">
+<p>Status</p></th>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>D1</p></td>
+<td class=3D"confluenceTd">
+<p>Variable scope</p></td>
+<td class=3D"confluenceTd">
+<p>Example: <code>export const API_URL =3D ...</code> vs <code>const intern=
+alCacheKey =3D ...</code> at file top-level. Should both be indexed as <cod=
+e>variable</code>?</p></td>
+<td class=3D"confluenceTd">
+<p>All top-level / Exported only</p></td>
+<td class=3D"confluenceTd">
+<p>All top-level gives better internal blast radius; exported-only reduces =
+graph noise and token output.</p></td>
+<td class=3D"confluenceTd">
+<p>Only exported</p></td>
+<td class=3D"confluenceTd">
+<p>Proposed</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>D2</p></td>
+<td class=3D"confluenceTd">
+<p>Live relational backend parity</p></td>
+<td class=3D"confluenceTd">
+<p>Current live indexing behavior is implemented around current-state table=
+s and workspace revisions; backend parity may differ by provider.</p></td>
+<td class=3D"confluenceTd">
+<p>SQLite-first / Full provider parity</p></td>
+<td class=3D"confluenceTd">
+<p>SQLite-first is pragmatic; full parity reduces behavior drift between en=
+vironments.</p></td>
+<td class=3D"confluenceTd">
+<p>TBD</p></td>
+<td class=3D"confluenceTd">
+<p>Open</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>D3</p></td>
+<td class=3D"confluenceTd">
+<p>Live enrichment boundary</p></td>
+<td class=3D"confluenceTd">
+<p>Current workspace indexing updates structural artefacts/edges immediatel=
+y, while semantic features, embeddings, and clone edges are refreshed durin=
+g ingest.</p></td>
+<td class=3D"confluenceTd">
+<p>Structural-only live updates / Full live enrichment</p></td>
+<td class=3D"confluenceTd">
+<p>Structural-only is cheaper and simpler; full live enrichment gives stron=
+ger real-time answers but costs more.</p></td>
+<td class=3D"confluenceTd">
+<p>Structural-only in V1</p></td>
+<td class=3D"confluenceTd">
+<p>Proposed</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-3.Scope">3. Scope</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Inscope">In scope</h3>
+<ul>
+<li>
+<p>Tree-sitter-only artefact extraction for TS/JS and Rust</p></li>
+<li>
+<p>Canonical artefact normalization with language-specific <code>language_k=
+ind</code></p></li>
+<li>
+<p>V1 edges: <code>imports</code>, <code>calls</code>, <code>references</co=
+de>, <code>extends</code>, <code>implements</code>, <code>exports</code></p=
+></li>
+<li>
+<p><code>deps(...)</code> query support with <code>kind</code>, <code>direc=
+tion</code>, and <code>include_unresolved</code></p></li>
+<li>
+<p>Watcher-driven local updates to <code>artefacts_current</code> and <code=
+>artefact_edges_current</code></p></li>
+<li>
+<p>Temporary revision tracking for workspace changes</p></li>
+<li>
+<p>Promotion of matching temporary current rows to committed current rows d=
+uring <code>devql ingest</code></p></li>
+<li>
+<p>Historical persistence in <code>artefacts</code> and <code>artefact_edge=
+s</code></p></li>
+<li>
+<p>Query routing between current state, temporary revisions, and historical=
+ committed state</p></li>
+<li>
+<p>Deterministic upsert and re-ingest behavior</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Outofscope">Out of scope</h3>
+<ul>
+<li>
+<p>Parse-failure persistence and retry command flow in V1</p></li>
+<li>
+<p>Property/field artefacts</p></li>
+<li>
+<p>Full interprocedural/type-checker-level symbol resolution</p></li>
+<li>
+<p>Refreshing semantic features, embeddings, and clone edges on every works=
+pace save</p></li>
+<li>
+<p>Redesign of watcher lifecycle/process architecture</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-4.Assumptions&amp;constraints">4=
+. Assumptions &amp; constraints</h2>
+<ul>
+<li>
+<p>Extraction uses tree-sitter parsers for TS/JS and Rust.</p></li>
+<li>
+<p>Live structural indexing writes to <code>artefacts_current</code> and <c=
+ode>artefact_edges_current</code>.</p></li>
+<li>
+<p>Historical committed state is stored in <code>artefacts</code> and <code=
+>artefact_edges</code>.</p></li>
+<li>
+<p><code>file_state</code> is the commit/path/blob bridge used for historic=
+al path resolution.</p></li>
+<li>
+<p>Semantic features, embeddings, and clone edges are refreshed by <code>de=
+vql ingest</code>, not by each local edit.</p></li>
+<li>
+<p>Rust <code>trait</code> is normalized to canonical <code>interface</code=
+>.</p></li>
+<li>
+<p>Language-specific constructs that are not cross-language abstractions do=
+ not get canonical kinds in V1.</p></li>
+<li>
+<p>Current live indexing should be described as structural current-state in=
+dexing, not full DevQL enrichment.</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-5.Userstories">5. User stories</=
+h2>
+<p><strong>US1 - Analyze outgoing dependencies</strong> <br>
+As a developer <br>
+I want to list what a symbol imports/calls/references <br>
+So that I can understand what it depends on</p>
+<p><strong>US2 - Analyze incoming dependencies (blast radius)</strong> <br>
+As a developer <br>
+I want to find who depends on a symbol <br>
+So that I can estimate change impact before editing or merging</p>
+<p><strong>US3 - See local workspace impact before commit</strong> <br>
+As a developer <br>
+I want local edits to update current DevQL state <br>
+So that blast-radius analysis reflects what is currently in my workspace</p=
+>
+<p><strong>US4 - Query historical committed state</strong> <br>
+As a developer <br>
+I want to query artefacts and dependencies at a commit or ref <br>
+So that I can compare behavior across revisions</p>
+<p><strong>US5 - Preserve symbol continuity across non-semantic edits</stro=
+ng> <br>
+As a platform engineer <br>
+I want symbol identity to remain stable across line moves and formatting-on=
+ly edits <br>
+So that analytics and lineage stay coherent</p>
+<p><strong>US6 - Read symbols with low lookup cost</strong> <br>
+As a CLI consumer <br>
+I want a DB record for a symbol to be directly queryable <br>
+So that lookups are efficient</p>
+<p><strong>US7 - Get language-specific precision when needed</strong> <br>
+As a developer <br>
+I want to filter by <code>language_kind</code> for constructs like <code>im=
+pl_item</code> or <code>struct_item</code> <br>
+So that I retain fidelity without polluting canonical analytics</p>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-6.Functionalflows(Mermaid)">6. F=
+unctional flows (Mermaid)</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-6.1High-levelflow">6.1 High-leve=
+l flow</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A["Workspace file change"] --&gt; B["Watcher batches changed paths"]
+    B --&gt; C["Create temporary revision"]
+    C --&gt; D["Upsert artefacts_current"]
+    C --&gt; E["Upsert artefact_edges_current"]
+    D --&gt; F["Default DevQL query or asOf(save:\"current\")"]
+    E --&gt; F
+
+    G["devql ingest"] --&gt; H["Process committed checkpoints"]
+    G --&gt; I["Promote matching temporary current rows when HEAD blob matc=
+hes"]
+    H --&gt; J["Upsert artefacts"]
+    H --&gt; K["Upsert artefact_edges"]
+    G --&gt; L["Refresh semantic features / embeddings / clone edges"]
+    J --&gt; M["Historical query asOf(commit/ref)"]
+    K --&gt; M
+    I --&gt; F</pre>
+</div>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-6.2Sequencediagram">6.2 Sequence=
+ diagram</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">sequenc=
+eDiagram
+    participant DEV as Developer
+    participant W as DevQL Watcher
+    participant ING as DevQL Ingest
+    participant DB as Relational Store
+    participant Q as DevQL Query
+
+    DEV-&gt;&gt;W: save file
+    W-&gt;&gt;DB: write temporary revision metadata
+    W-&gt;&gt;DB: upsert artefacts_current / artefact_edges_current
+    DEV-&gt;&gt;Q: query without asOf(...)
+    Q-&gt;&gt;DB: read current tables
+    DB--&gt;&gt;Q: current workspace graph
+
+    DEV-&gt;&gt;ING: bitloops devql ingest
+    ING-&gt;&gt;DB: persist artefacts / artefact_edges
+    ING-&gt;&gt;DB: promote matching temporary current rows
+    ING-&gt;&gt;DB: refresh semantic features / embeddings / clone edges
+    DEV-&gt;&gt;Q: query asOf(commit/ref)
+    Q-&gt;&gt;DB: read historical tables
+    DB--&gt;&gt;Q: committed historical graph</pre>
+</div>
+</div>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-7.BDDscenarios(sourceoftruth)">7=
+. BDD scenarios (source of truth)</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-7.1Happypaths">7.1 Happy paths</=
+h3>
+<p><strong>S1 - TS/JS artefact extraction succeeds</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ TypeScript file with class, constructor, method, interface, type, import, =
+and function
+When ingest runs
+Then artefacts are created with correct canonical_kind and language_kind</p=
+re>
+</div>
+</div>
+<p><strong>S2 - Rust artefact extraction succeeds</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ Rust file with use, struct, trait, impl, method, and function
+When ingest runs
+Then artefacts are created and trait is normalized to canonical interface</=
+pre>
+</div>
+</div>
+<p><strong>S3 - Dependency edges are emitted</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given f=
+iles with import/use and callable invocations
+When ingest runs
+Then imports, calls, references, extends, implements, and exports edges are=
+ emitted with resolved or unresolved targets as applicable</pre>
+</div>
+</div>
+<p><strong>S4 - Local workspace changes update current state</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ previously indexed file in the workspace
+When the file is edited locally
+Then artefacts_current and artefact_edges_current are updated for that file=
+ as a temporary revision</pre>
+</div>
+</div>
+<p><strong>S5 - Matching temporary current rows are promoted during ingest<=
+/strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given t=
+emporary current rows produced from local workspace changes
+And the blob for a file matches HEAD during ingest
+When devql ingest runs
+Then the matching current rows are marked as committed revision state
+And file_state is updated for that commit/path/blob</pre>
+</div>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-7.2Alternativepaths">7.2 Alterna=
+tive paths</h3>
+<p><strong>S6 - Reverse dependency query</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given e=
+xisting dependency edges
+When query uses deps(kind:"calls", direction:"in")
+Then callers of the selected symbol are returned</pre>
+</div>
+</div>
+<p><strong>S7 - Historical dependency query by commit</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given c=
+ommitted historical rows exist for a commit
+When query uses asOf(commit:"&lt;sha&gt;") and deps(...)
+Then results are read from historical committed tables</pre>
+</div>
+</div>
+<p><strong>S8 - Temporary revision query</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ temporary workspace revision exists
+When query uses asOf(saveRevision:"temp:&lt;id&gt;")
+Then results are read from current tables filtered to that temporary revisi=
+on</pre>
+</div>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-7.3Edgecases">7.3 Edge cases</h3=
+>
+<p><strong>E1 - Unresolved symbol fallback</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ call/import/reference that cannot resolve to a local artefact_id
+When ingest runs
+Then the edge stores to_symbol_ref and keeps the resolved artefact target n=
+ull</pre>
+</div>
+</div>
+<p><strong>E2 - Export and re-export dedup</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given r=
+epeated export/re-export statements for the same normalized target
+When ingest runs repeatedly
+Then logical duplicate export edges are not duplicated</pre>
+</div>
+</div>
+<p><strong>E3 - Symbol identity remains stable across line moves</strong></=
+p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ symbol that moves lines without semantic change
+When the file is re-indexed
+Then symbol_id remains stable
+And revision-specific artefact identity may still change with blob content<=
+/pre>
+</div>
+</div>
+<p><strong>E4 - Deleted file clears current state</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ file currently represented in artefacts_current and artefact_edges_current
+When the file is deleted from the workspace
+Then the current rows for that path are removed</pre>
+</div>
+</div>
+<p><strong>E5 - Macro invocation handling is conservative in V1</strong></p=
+>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ Rust macro invocation
+When dependency edges are emitted
+Then any emitted macro call edge uses metadata call_form=3D"macro"
+And unresolved macro calls may be omitted in V1 to avoid noisy fallback edg=
+es</pre>
+</div>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-7.4Errorcases">7.4 Error cases</=
+h3>
+<p><strong>ERR1 - AST parse failure</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+ syntactically invalid source file
+When ingest runs
+Then only file artefact is persisted for that file
+And no symbol-level artefacts or edges are emitted for that file
+And system logs parse failure details</pre>
+</div>
+</div>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-8.Acceptancecriteria">8. Accepta=
+nce criteria</h2>
+<ul>
+<li>
+<p>S1 and S2 produce complete V1 artefacts with canonical mapping for abstr=
+act kinds and <code>language_kind</code> fidelity for language-specific kin=
+ds.</p></li>
+<li>
+<p>S3 produces V1 edge kinds: <code>imports</code>, <code>calls</code>, <co=
+de>references</code>, <code>extends</code>, <code>implements</code>, <code>=
+exports</code>.</p></li>
+<li>
+<p>S4 updates <code>artefacts_current</code> and <code>artefact_edges_curre=
+nt</code> after local edits.</p></li>
+<li>
+<p>S5 promotes matching temporary current rows to committed current rows du=
+ring ingest and updates <code>file_state</code>.</p></li>
+<li>
+<p>S6 returns correct incoming blast-radius dependencies.</p></li>
+<li>
+<p>S7 reads historical state through <code>asOf(commit/ref)</code>.</p></li=
+>
+<li>
+<p>S8 reads temporary workspace state through <code>asOf(saveRevision:...)<=
+/code>.</p></li>
+<li>
+<p>E1 persists unresolved targets through <code>to_symbol_ref</code> where =
+fallback is supported.</p></li>
+<li>
+<p>E2 maintains deduped logical export edges across repeated ingest.</p></l=
+i>
+<li>
+<p>E3 preserves <code>symbol_id</code> stability across non-semantic moves.=
+</p></li>
+<li>
+<p>E4 removes current-state rows for deleted files.</p></li>
+<li>
+<p>E5 uses <code>call_form=3D"macro"</code> for emitted macro edges and doe=
+s not require unresolved macro fallback in V1.</p></li>
+<li>
+<p>ERR1 degrades safely to file-only artefact persistence.</p></li>
+<li>
+<p>Repeated ingest on unchanged inputs does not create duplicate logical ar=
+tefacts or edges.</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-9.APIcontracts">9. API contracts=
+</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-9.1Querystagedefinitions">9.1 Qu=
+ery stage definitions</h3>
+<p><strong>Artefacts stage</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">artefac=
+ts(kind:"function|method|interface|type|enum|variable|file|module|import", =
+symbol_fqn:"...", lines:1..50)</pre>
+</div>
+</div>
+<p><strong>Dependencies stage</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">deps(ki=
+nd:"calls|imports|references|extends|implements|exports", direction:"out|in=
+|both", include_unresolved:true|false)</pre>
+</div>
+</div>
+<p><strong>Revision selector stage</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">asOf(co=
+mmit:"&lt;sha&gt;")
+asOf(ref:"main")
+asOf(save:"current")
+asOf(saveRevision:"temp:42")</pre>
+</div>
+</div>
+<p>Compatibility note:</p>
+<ul>
+<li>
+<p><code>inherits</code> is still accepted temporarily as a query alias and=
+ is normalized internally to <code>extends</code>.</p></li>
+<li>
+<p>Canonical output uses <code>extends</code> only.</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-9.2Queryroutingsemantics">9.2 Qu=
+ery routing semantics</h3>
+<div class=3D"table-wrap">
+<table data-layout=3D"default" class=3D"confluenceTable">
+<tbody>
+<tr>
+<th class=3D"confluenceTh">
+<p>Query selector</p></th>
+<th class=3D"confluenceTh">
+<p>Artefact source</p></th>
+<th class=3D"confluenceTh">
+<p>Edge source</p></th>
+<th class=3D"confluenceTh">
+<p>Meaning</p></th>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>No <code>asOf(...)</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefacts_current</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefact_edges_current</code></p></td>
+<td class=3D"confluenceTd">
+<p>Latest current workspace state</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><code>asOf(save:"current")</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefacts_current</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefact_edges_current</code></p></td>
+<td class=3D"confluenceTd">
+<p>Explicit current workspace state</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><code>asOf(saveRevision:"temp:&lt;id&gt;")</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefacts_current</code> filtered by temporary revision</p></td>
+<td class=3D"confluenceTd">
+<p><code>artefact_edges_current</code> filtered by temporary revision</p></=
+td>
+<td class=3D"confluenceTd">
+<p>Specific temporary workspace revision</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><code>asOf(commit:"&lt;sha&gt;")</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefacts</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefact_edges</code></p></td>
+<td class=3D"confluenceTd">
+<p>Historical committed state for a commit</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><code>asOf(ref:"main")</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefacts</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>artefact_edges</code></p></td>
+<td class=3D"confluenceTd">
+<p>Historical committed state for a resolved ref</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-9.3Responserowfieldsfordeps(...)=
+">9.3 Response row fields for <code>deps(...)</code></h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "edge_id": "uuid",
+  "edge_kind": "calls",
+  "language": "typescript|javascript|rust",
+  "from_artefact_id": "uuid",
+  "to_artefact_id": "uuid|null",
+  "to_symbol_ref": "string|null",
+  "start_line": 12,
+  "end_line": 12,
+  "metadata": {}
+}</pre>
+</div>
+</div>
+<p>Error responses:</p>
+<ul>
+<li>
+<p>Validation error for unsupported stage combinations</p></li>
+<li>
+<p>Validation error for malformed args</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-10.Datamodelchanges">10. Data mo=
+del changes</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.1Logicalstoragemodel">10.1 Lo=
+gical storage model</h3>
+<ul>
+<li>
+<p><code>artefacts</code>: committed historical artefacts keyed by revision=
+-specific <code>artefact_id</code></p></li>
+<li>
+<p><code>artefact_edges</code>: committed historical edges keyed by <code>e=
+dge_id</code></p></li>
+<li>
+<p><code>artefacts_current</code>: latest current symbol view keyed by <cod=
+e>(repo_id, symbol_id)</code></p></li>
+<li>
+<p><code>artefact_edges_current</code>: latest current dependency view keye=
+d by current edge natural uniqueness</p></li>
+<li>
+<p><code>file_state</code>: commit/path/blob mapping used for historical pa=
+th resolution and promotion</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.2Revisionmetadataincurrent-st=
+atetables">10.2 Revision metadata in current-state tables</h3>
+<p><code>artefacts_current</code> and <code>artefact_edges_current</code> i=
+nclude:</p>
+<ul>
+<li>
+<p><code>commit_sha</code></p></li>
+<li>
+<p><code>revision_kind</code> (<code>commit</code> or <code>temporary</code=
+>)</p></li>
+<li>
+<p><code>revision_id</code> (commit SHA or <code>temp:&lt;id&gt;</code>)</p=
+></li>
+<li>
+<p><code>temp_checkpoint_id</code> when the row originated from a temporary=
+ revision</p></li>
+<li>
+<p><code>updated_at</code></p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.3Identitymodel">10.3 Identity=
+ model</h3>
+<ul>
+<li>
+<p><code>symbol_id</code> is the stable semantic identity for a symbol acro=
+ss non-semantic line moves and formatting-only edits.</p></li>
+<li>
+<p><code>artefact_id</code> is revision/blob-specific and may change when b=
+lob content changes.</p></li>
+<li>
+<p>Current tables are keyed on stable symbol identity for efficient replace=
+ment of the latest state.</p></li>
+<li>
+<p>Historical tables retain blob-scoped revision history.</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.4Canonicaledgeanddependencyen=
+ums">10.4 Canonical edge and dependency enums</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Ed=
+geKind {
+  imports,
+  calls,
+  references,
+  extends,
+  implements,
+  exports
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum De=
+psKind {
+  imports,
+  calls,
+  references,
+  extends,
+  implements,
+  exports
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum De=
+psDirection {
+  out,
+  in,
+  both
+}</pre>
+</div>
+</div>
+<p>Notes:</p>
+<ul>
+<li>
+<p><code>extends</code> is the canonical graph term.</p></li>
+<li>
+<p>Legacy <code>inherits</code> is accepted only as a temporary query alias=
+.</p></li>
+<li>
+<p>Query results and stored new rows use <code>extends</code>.</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.5Depsmodel">10.5 Deps model</=
+h3>
+<p><code>deps(...)</code> is the query-layer projection over <code>artefact=
+_edges</code> or <code>artefact_edges_current</code>, depending on the revi=
+sion selector.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">type In=
+cludeUnresolved =3D boolean;</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">type De=
+psQuery =3D {
+  kind?: DepsKind;
+  direction?: DepsDirection;
+  include_unresolved?: IncludeUnresolved;
+};</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">type De=
+vqlDependencyEdgeRow =3D {
+  edge_id: string;
+  edge_kind: EdgeKind;
+  language: "typescript" | "javascript" | "rust";
+  from_artefact_id: string;
+  to_artefact_id: string | null;
+  to_symbol_ref: string | null;
+  start_line: number | null;
+  end_line: number | null;
+  metadata: DevqlEdgeMetadata;
+};</pre>
+</div>
+</div>
+<p>Interpretation rules:</p>
+<ul>
+<li>
+<p><code>kind</code> filters by <code>edge_kind</code>.</p></li>
+<li>
+<p><code>direction=3Dout</code> returns edges whose source is the selected =
+artefact.</p></li>
+<li>
+<p><code>direction=3Din</code> returns edges whose target resolves to the s=
+elected artefact.</p></li>
+<li>
+<p><code>direction=3Dboth</code> returns the union of <code>in</code> and <=
+code>out</code> result sets.</p></li>
+<li>
+<p><code>include_unresolved=3Dtrue</code> keeps rows where only <code>to_sy=
+mbol_ref</code> is present.</p></li>
+<li>
+<p><code>include_unresolved=3Dfalse</code> excludes unresolved edges from t=
+he result set.</p></li>
+<li>
+<p>For <code>imports</code>, <code>exports</code>, and some unresolved or i=
+mported calls, the target may be represented only by <code>to_symbol_ref</c=
+ode>.</p></li>
+<li>
+<p><code>from_artefact_id</code> is always required.</p></li>
+<li>
+<p>At least one of <code>to_artefact_id</code> or <code>to_symbol_ref</code=
+> must be present.</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.6Edgemetadataenums">10.6 Edge=
+ metadata enums</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Im=
+portForm {
+  binding,
+  side_effect
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Re=
+fKind {
+  type,
+  value
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Ca=
+llForm {
+  identifier,
+  member,
+  function,
+  associated,
+  method,
+  macro
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Re=
+solution {
+  local,
+  import,
+  unresolved,
+  re_export,
+  external
+}</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">enum Ex=
+portForm {
+  declaration,
+  default,
+  named,
+  re_export,
+  re_export_all,
+  re_export_namespace,
+  pub_use
+}</pre>
+</div>
+</div>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.7Metadatashapebyedgekind">10.=
+7 Metadata shape by edge kind</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">type De=
+vqlEdgeMetadata =3D
+  | { import_form: ImportForm }
+  | { call_form: CallForm; resolution: Resolution }
+  | { ref_kind: RefKind; resolution: Resolution }
+  | {}
+  | { export_name: string; export_form: ExportForm; resolution: Resolution =
+};</pre>
+</div>
+</div>
+<p>Edge kind to metadata mapping:</p>
+<ul>
+<li>
+<p><code>imports</code> -&gt; <code>import_form</code></p></li>
+<li>
+<p><code>calls</code> -&gt; <code>call_form</code>, <code>resolution</code>=
+</p></li>
+<li>
+<p><code>references</code> -&gt; <code>ref_kind</code>, <code>resolution</c=
+ode></p></li>
+<li>
+<p><code>extends</code> -&gt; no metadata</p></li>
+<li>
+<p><code>implements</code> -&gt; no metadata</p></li>
+<li>
+<p><code>exports</code> -&gt; <code>export_name</code>, <code>export_form</=
+code>, <code>resolution</code></p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-10.8Artefacttaxonomyandmapping">=
+10.8 Artefact taxonomy and mapping</h3>
+<h4 id=3D"ArtefactCompletionandBlastRadius-Canonicalartefactkinds(cross-lan=
+guageabstractions)">Canonical artefact kinds (cross-language abstractions)<=
+/h4>
+<ul>
+<li>
+<p><code>file</code></p></li>
+<li>
+<p><code>module</code></p></li>
+<li>
+<p><code>import</code></p></li>
+<li>
+<p><code>function</code></p></li>
+<li>
+<p><code>method</code></p></li>
+<li>
+<p><code>interface</code></p></li>
+<li>
+<p><code>type</code></p></li>
+<li>
+<p><code>enum</code></p></li>
+<li>
+<p><code>variable</code></p></li>
+</ul>
+<h4 id=3D"ArtefactCompletionandBlastRadius-Language-specificartefactkinds(n=
+ocanonicalinV1)">Language-specific artefact kinds (no canonical in V1)</h4>
+<ul>
+<li>
+<p>TypeScript/JavaScript: <code>class_declaration</code>, <code>constructor=
+</code>, <code>property_declaration</code></p></li>
+<li>
+<p>Rust: <code>impl_item</code>, <code>struct_item</code>, <code>const_item=
+</code>, <code>static_item</code>, <code>macro_definition</code></p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Mappingtable:language_kind->cano=
+nical_kind">Mapping table: <code>language_kind -&gt; canonical_kind</code><=
+/h3>
+<div class=3D"table-wrap">
+<table data-layout=3D"default" class=3D"confluenceTable">
+<tbody>
+<tr>
+<th class=3D"confluenceTh">
+<p>Language</p></th>
+<th class=3D"confluenceTh">
+<p>language_kind</p></th>
+<th class=3D"confluenceTh">
+<p>canonical_kind</p></th>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>function_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>function</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>method_definition</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>method</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>interface_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>interface</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>type_alias_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>type</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>enum_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>enum</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>variable_declarator</code> (top-level)</p></td>
+<td class=3D"confluenceTd">
+<p><code>variable</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>import_statement</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>import</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>module_declaration</code> / <code>internal_module</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>module</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>class_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>constructor</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>TS/JS</p></td>
+<td class=3D"confluenceTd">
+<p><code>property_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>function_item</code> (free function)</p></td>
+<td class=3D"confluenceTd">
+<p><code>function</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>function_item</code> (inside impl)</p></td>
+<td class=3D"confluenceTd">
+<p><code>method</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>trait_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>interface</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>type_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>type</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>enum_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>enum</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>use_declaration</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>import</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>mod_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>module</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>let_declaration</code> (top-level, if retained)</p></td>
+<td class=3D"confluenceTd">
+<p><code>variable</code></p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>impl_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>struct_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>const_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>static_item</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p>Rust</p></td>
+<td class=3D"confluenceTd">
+<p><code>macro_definition</code></p></td>
+<td class=3D"confluenceTd">
+<p><code>NULL</code> (<code>language-only</code>)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-11.Businessrules">11. Business r=
+ules</h2>
+<ol start=3D"1">
+<li>
+<p>Canonical kind is set only for cross-language abstractions; language-spe=
+cific symbols may have no canonical kind.</p></li>
+<li>
+<p><code>language_kind</code> preserves parser-native node kind.</p></li>
+<li>
+<p>Resolution order is deterministic: local -&gt; import alias -&gt; unreso=
+lved fallback.</p></li>
+<li>
+<p>Default DevQL artefact and dependency queries operate on current-state t=
+ables unless a historical selector is provided.</p></li>
+<li>
+<p><code>asOf(commit/ref)</code> uses historical committed tables.</p></li>
+<li>
+<p><code>asOf(saveRevision:...)</code> uses current-state tables filtered t=
+o the specified temporary revision.</p></li>
+<li>
+<p><code>symbol_id</code> remains stable across non-semantic line moves and=
+ formatting-only edits.</p></li>
+<li>
+<p><code>artefact_id</code> is revision/blob-specific and may change when b=
+lob content changes.</p></li>
+<li>
+<p><code>devql ingest</code> promotes temporary current rows only when the =
+blob in temporary state matches the blob at <code>HEAD</code> for that path=
+.</p></li>
+<li>
+<p><code>implements</code> is emitted from implementation constructs such a=
+s Rust <code>impl Trait for Type</code>.</p></li>
+<li>
+<p><code>extends</code> is the canonical relation for class/interface exten=
+sion and Rust supertrait relationships.</p></li>
+<li>
+<p>If a macro edge is emitted, it uses <code>call_form=3D"macro"</code>; un=
+resolved macro fallback is not required in V1.</p></li>
+<li>
+<p>Re-ingest on changed code updates emitted data and preserves logical ded=
+up.</p></li>
+</ol>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-12.DevQLcapabilitiesandexamples"=
+>12. DevQL capabilities and examples</h2>
+<p>This feature enables more than a static ingest. DevQL can answer questio=
+ns about the <strong>current workspace</strong>, a <strong>temporary local =
+revision</strong>, or a <strong>historical committed snapshot</strong>.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.1Listcurrentsymbolsinafile">1=
+2.1 List current symbols in a file</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;file("src/main.ts")-&gt;artefacts(k=
+ind:"function")-&gt;limit(10)'</pre>
+</div>
+</div>
+<p>Use this to inspect the functions currently indexed for a file in the li=
+ve workspace state.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.2Currentblastradiusforasymbol=
+">12.2 Current blast radius for a symbol</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("temp2")-&gt;artefacts(symbol_fqn:"src/target.ts::targe=
+t")-&gt;deps(kind:"calls",direction:"in")-&gt;limit(10)'</pre>
+</div>
+</div>
+<p>This returns callers of <code>src/target.ts::target</code> from the curr=
+ent graph.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.3Currentoutgoingdependenciesf=
+orafunction">12.3 Current outgoing dependencies for a function</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;file("src/main.ts")-&gt;artefacts(k=
+ind:"function")-&gt;deps(kind:"calls",direction:"out",include_unresolved:fa=
+lse)-&gt;limit(25)'</pre>
+</div>
+</div>
+<p>Use this to see what a function currently calls, excluding unresolved ed=
+ges.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.4Historicalblastradiusatacomm=
+it">12.4 Historical blast radius at a commit</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;asOf(commit:"abc123")-&gt;file("src=
+/main.ts")-&gt;artefacts(kind:"function")-&gt;deps(kind:"calls",direction:"=
+out")-&gt;limit(10)'</pre>
+</div>
+</div>
+<p>This reads from historical committed rows, not the current workspace sta=
+te.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.5Queryatemporarylocalrevision=
+">12.5 Query a temporary local revision</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("temp2")-&gt;asOf(saveRevision:"temp:42")-&gt;artefacts=
+(kind:"function")-&gt;deps(kind:"calls",direction:"both")-&gt;limit(10)'</p=
+re>
+</div>
+</div>
+<p>Use this when you want to inspect a specific temporary workspace revisio=
+n instead of the latest current state.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.6Explicitlyquerycurrentsavedw=
+orkspacestate">12.6 Explicitly query current saved workspace state</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;asOf(save:"current")-&gt;file("src/=
+main.ts")-&gt;artefacts(kind:"function")-&gt;limit(10)'</pre>
+</div>
+</div>
+<p>This is equivalent in routing to the default current-state query but mak=
+es intent explicit.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.7Agent-awareartefactdiscovery=
+">12.7 Agent-aware artefact discovery</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;artefacts(agent:"claude-code",since=
+:"2026-03-01")-&gt;select(path,canonical_kind,symbol_fqn,start_line,end_lin=
+e)-&gt;limit(50)'</pre>
+</div>
+</div>
+<p>This filters artefacts by event-derived change history.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.8Chathistoryforindexedartefac=
+ts">12.8 Chat history for indexed artefacts</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("bitloops-cli")-&gt;file("index.ts")-&gt;artefacts(line=
+s:1..20,kind:"function")-&gt;chatHistory()-&gt;limit(5)'</pre>
+</div>
+</div>
+<p>This enriches artefact results with relevant chat history context.</p>
+<h3 id=3D"ArtefactCompletionandBlastRadius-12.9Testscoveringaproductionarte=
+fact">12.9 Tests covering a production artefact</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: bash; gutter: false; theme: Confluence" data-theme=3D"Confluence">bitloop=
+s devql query 'repo("r")-&gt;file("src/user/service.rs")-&gt;artefacts(kind=
+:"function")-&gt;tests()-&gt;limit(10)'</pre>
+</div>
+</div>
+<p>This returns linked test scenarios for the selected production artefacts=
+.</p>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-13.Risksandlimitations">13. Risk=
+s and limitations</h2>
+<ul>
+<li>
+<p>Live workspace indexing currently reflects structural artefacts and depe=
+ndency edges first; semantic features, embeddings, and clone edges are upda=
+ted during ingest.</p></li>
+<li>
+<p>The current watcher architecture should not be described as a generic, f=
+ully reconciled, provider-agnostic indexing service.</p></li>
+<li>
+<p>Blast-radius answers can differ between current state and historical com=
+mitted state by design; the page should call out which one is being queried=
+.</p></li>
+<li>
+<p>Unresolved Rust macro calls may be intentionally dropped in V1 under the=
+ current import/local resolution policy.</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-14.Testplan">14. Test plan</h2>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Unittests">Unit tests</h3>
+<ul>
+<li>
+<p>Canonical mapping (<code>language_kind -&gt; canonical_kind</code>)</p><=
+/li>
+<li>
+<p><code>symbol_fqn</code> construction rules</p></li>
+<li>
+<p>TS/JS extraction for artefacts and edge kinds</p></li>
+<li>
+<p>Rust extraction for artefacts and edge kinds</p></li>
+<li>
+<p>Deterministic target resolution order</p></li>
+<li>
+<p>Symbol identity stability across line moves</p></li>
+<li>
+<p>Revision-specific artefact identity changes per blob</p></li>
+<li>
+<p>Parser normalization from legacy <code>inherits</code> to canonical <cod=
+e>extends</code></p></li>
+<li>
+<p>Current-state schema constraints and indexes</p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-Integrationtests">Integration te=
+sts</h3>
+<ul>
+<li>
+<p>Ingest + query roundtrip for mixed TS/JS + Rust fixture repos</p></li>
+<li>
+<p>Watcher/current-state update flow for local changes</p></li>
+<li>
+<p>Promotion of temporary current rows during ingest</p></li>
+<li>
+<p><code>deps(direction:"in"|"out"|"both")</code></p></li>
+<li>
+<p><code>asOf(commit/ref)</code> routing to historical tables</p></li>
+<li>
+<p><code>asOf(saveRevision:...)</code> routing to filtered current tables</=
+p></li>
+<li>
+<p>Unresolved filtering</p></li>
+<li>
+<p>Repeated ingest dedup behavior</p></li>
+<li>
+<p>Export/re-export dedup behavior</p></li>
+<li>
+<p>Query output returns canonical <code>extends</code></p></li>
+</ul>
+<h3 id=3D"ArtefactCompletionandBlastRadius-E2Etests">E2E tests</h3>
+<ul>
+<li>
+<p>Blast-radius user journey from current workspace state</p></li>
+<li>
+<p>Blast-radius user journey from historical committed state</p></li>
+<li>
+<p>Local edit -&gt; current query -&gt; ingest -&gt; promoted committed que=
+ry</p></li>
+<li>
+<p>Locate symbol -&gt; query incoming dependencies -&gt; verify impacted fi=
+les/symbols set</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-15.Dependencies">15. Dependencie=
+s</h2>
+<ul>
+<li>
+<p><strong>Internal services</strong></p>
+<ul>
+<li>
+<p>DevQL watcher/current-state update path</p></li>
+<li>
+<p>DevQL ingest pipeline</p></li>
+<li>
+<p>DevQL query parser/executor</p></li>
+</ul></li>
+<li>
+<p><strong>External libraries</strong></p>
+<ul>
+<li>
+<p><code>tree-sitter</code></p></li>
+<li>
+<p><code>tree-sitter-javascript</code></p></li>
+<li>
+<p><code>tree-sitter-typescript</code></p></li>
+<li>
+<p><code>tree-sitter-rust</code></p></li>
+<li>
+<p><code>notify</code></p></li>
+</ul></li>
+<li>
+<p><strong>Infrastructure/runtime dependencies</strong></p>
+<ul>
+<li>
+<p>Git CLI for tree and blob resolution</p></li>
+<li>
+<p>Relational storage (<code>sqlite</code> and/or <code>postgres</code>, de=
+pending on environment)</p></li>
+</ul></li>
+<li>
+<p><strong>Feature flags</strong></p>
+<ul>
+<li>
+<p>Optional parser rollout flag if needed</p></li>
+</ul></li>
+<li>
+<p><strong>Rollout strategy</strong></p>
+<ul>
+<li>
+<p>Enable AST extraction and current-state indexing in staged validation en=
+vironments first</p></li>
+</ul></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-16.Observabilityandrolloutnotes"=
+>16. Observability and rollout notes</h2>
+<ul>
+<li>
+<p>Log promotion counts for temporary current rows during <code>devql inges=
+t</code>.</p></li>
+<li>
+<p>Track current-state update success/failure for watcher-driven batches.</=
+p></li>
+<li>
+<p>Track parse failures separately from query failures.</p></li>
+<li>
+<p>Keep documentation explicit about which capabilities are current-state o=
+nly, historical only, or ingest-refreshed.</p></li>
+</ul>
+<hr>
+<h2 id=3D"ArtefactCompletionandBlastRadius-17.DefinitionofDone">17. Definit=
+ion of Done</h2>
+<p>Feature is Done when:</p>
+<ul>
+<li>
+<p>All BDD scenarios pass</p></li>
+<li>
+<p>Acceptance criteria are met</p></li>
+<li>
+<p>Unit and integration tests pass</p></li>
+<li>
+<p>Current-state indexing and historical query routing are documented</p></=
+li>
+<li>
+<p>DevQL capabilities examples are documented and validated against support=
+ed syntax</p></li>
+<li>
+<p>Observability counters/logs are enabled</p></li>
+<li>
+<p>No unresolved open questions block release</p></li>
+</ul>
+    </div>
+</body>
+</html>
+------=_Part_34_1606680054.1774266777027--

@@ -1,0 +1,1219 @@
+Date: Mon, 23 Mar 2026 11:52:47 +0000 (UTC)
+Message-ID: <1737733197.1231.1774266767944@3fe06f77147d>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_1230_1486537847.1774266767944"
+
+------=_Part_1230_1486537847.1774266767944
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>bitloops init</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>bitloops init</h1>
+    <div class=3D"Section1">
+        <h2 local-id=3D"64b43f7b7429" id=3D"bitloopsinit-1.Metadata">1. Met=
+adata</h2>
+<ul local-id=3D"c12dc4f8a30c">
+<li local-id=3D"a7f693028952">
+<p local-id=3D"75ca0772db1c"><strong>Feature name:</strong> <code>bitloops =
+init</code></p></li>
+<li local-id=3D"f4e82bd717f2">
+<p local-id=3D"2d9a22fb9938"><strong>Module(s):</strong></p>
+<ul local-id=3D"74c255bcb11d">
+<li local-id=3D"bb4277ad9cc3">
+<p local-id=3D"0a3a9ab0bbc0"><code>bitloops_cli/src/commands/init.rs</code>=
+</p></li>
+<li local-id=3D"d0b80dd52194">
+<p local-id=3D"57e102c4d61a"><code>bitloops_cli/src/commands/enable.rs</cod=
+e> (<code>find_repo_root</code>, <code>initialized_agents</code>)</p></li>
+<li local-id=3D"24b2c15d42eb">
+<p local-id=3D"ca590d97af41"><code>bitloops_cli/src/engine/agent/claude_cod=
+e/hooks.rs</code></p></li>
+<li local-id=3D"edae33084829">
+<p local-id=3D"5fe083cb4e20"><code>bitloops_cli/src/engine/agent/codex/hook=
+s.rs</code></p></li>
+<li local-id=3D"5b932f240143">
+<p local-id=3D"4fb5a6dcc5b5"><code>bitloops_cli/src/engine/agent/cursor/hoo=
+ks.rs</code></p></li>
+<li local-id=3D"c97d234abdd8">
+<p local-id=3D"2450c7069375"><code>bitloops_cli/src/engine/agent/gemini_cli=
+/agent.rs</code></p></li>
+<li local-id=3D"232830c414ed">
+<p local-id=3D"674daff00095"><code>bitloops_cli/src/engine/agent/open_code/=
+agent.rs</code></p></li>
+<li local-id=3D"c9a0bd0e3a22">
+<p local-id=3D"e483bc457468"><code>bitloops_cli/src/engine/settings/mod.rs<=
+/code></p></li>
+</ul></li>
+<li local-id=3D"2eb9602c617d">
+<p local-id=3D"dbb744c133df"><strong>Tech lead:</strong> TBD</p></li>
+<li local-id=3D"80859dc0363f">
+<p local-id=3D"8556a2fbd5bf"><strong>Status:</strong> Live</p></li>
+<li local-id=3D"f03db8a5845a">
+<p local-id=3D"8ff2665f995f"><strong>Priority:</strong> High</p></li>
+<li local-id=3D"d777d6d0c31d">
+<p local-id=3D"9c6df9b7f025"><strong>Target release:</strong> Existing beha=
+viour in current mainline CLI (as of 15 March 2026)</p></li>
+<li local-id=3D"dafd18254b28">
+<p local-id=3D"e584d8760fa0"><strong>Related Feature spec brief:</strong> R=
+etroactive SDD baseline for CLI command behaviour</p></li>
+<li local-id=3D"b153b52c7580">
+<p local-id=3D"c2752f0faae8"><strong>Related Jira epic (if applicable):</st=
+rong> TBD</p></li>
+</ul>
+<hr local-id=3D"c9546a7081ec">
+<h2 local-id=3D"5142e45e408a" id=3D"bitloopsinit-2.Overview">2. Overview</h=
+2>
+<p local-id=3D"a2ce0a659ad3"><code>bitloops init</code> initialises Bitloop=
+s agent integrations for one or more supported AI coding agents by writing =
+or merging hook configuration files.</p>
+<h3 local-id=3D"4b512b4a55dc" id=3D"bitloopsinit-Problemstatement">Problem =
+statement</h3>
+<p local-id=3D"a2be3def9c35">Bitloops session lifecycle and checkpoint work=
+flows depend on agent hook events being wired correctly. Without a single i=
+nitialisation command, users must configure each agent manually, which is e=
+rror-prone, inconsistent across tools, and difficult to reproduce in team o=
+r automation contexts.</p>
+<h3 local-id=3D"d08aa41490fc" id=3D"bitloopsinit-Goals">Goals</h3>
+<ul local-id=3D"7c9fe9beb78f">
+<li local-id=3D"3b4f8e87e91f">
+<p local-id=3D"678566bef843">Provide one command to initialise supported ag=
+ent integrations (<code>claude-code</code>, <code>codex</code>, <code>curso=
+r</code>, <code>gemini-cli</code>, <code>opencode</code>).</p></li>
+<li local-id=3D"4e6b6ba9095e">
+<p local-id=3D"81cceec11e81">Support both explicit targeting (<code>--agent=
+</code>) and guided multi-agent setup (<code>bitloops init</code> interacti=
+ve flow).</p></li>
+<li local-id=3D"535cc84c5201">
+<p local-id=3D"8187d55ee869">Keep initialisation idempotent and safe to re-=
+run, while supporting reinstalls via <code>--force</code>.</p></li>
+<li local-id=3D"6c20eb88694a">
+<p local-id=3D"187d34a45e69">Preserve non-Bitloops user configuration where=
+ installers merge settings.</p></li>
+<li local-id=3D"258343dec4e5">
+<p local-id=3D"23ebb5d833ad">Handle telemetry consent deterministically acr=
+oss interactive and non-interactive environments.</p></li>
+</ul>
+<h3 local-id=3D"3fd697cfcd85" id=3D"bitloopsinit-Non-goals">Non-goals</h3>
+<ul local-id=3D"efd1c1941822">
+<li local-id=3D"5396ffd87dfb">
+<p local-id=3D"fa73587e72cb">Enabling or disabling Bitloops project strateg=
+y/settings (handled by <code>bitloops enable</code>/<code>disable</code>).<=
+/p></li>
+<li local-id=3D"0a43727240ac">
+<p local-id=3D"8ce9f5d02775">Executing runtime hook event handling logic (h=
+andled by <code>bitloops hooks ...</code> commands).</p></li>
+<li local-id=3D"f7a8796807fe">
+<p local-id=3D"cae26557f587">Managing unsupported agents outside the curren=
+t built-in set.</p></li>
+<li local-id=3D"776e47ec9091">
+<p local-id=3D"fde76bf07cc3">Designing a new UX beyond current command cont=
+racts.</p></li>
+</ul>
+<h3 local-id=3D"738ca2190e1b" id=3D"bitloopsinit-Openquestions">Open questi=
+ons</h3>
+<div class=3D"table-wrap">
+<table data-table-width=3D"1404" data-layout=3D"center" data-local-id=3D"9d=
+84a2d21544" class=3D"confluenceTable">
+<colgroup>
+<col style=3D"width: 87.0px;">
+<col style=3D"width: 188.0px;">
+<col style=3D"width: 262.0px;">
+<col style=3D"width: 330.0px;">
+<col style=3D"width: 236.0px;">
+<col style=3D"width: 169.0px;">
+<col style=3D"width: 123.0px;">
+</colgroup>
+<tbody>
+<tr data-local-id=3D"18115738d49f">
+<th data-local-id=3D"8b37800f6fd1" class=3D"confluenceTh">
+<p local-id=3D"3790834a6367">ID</p></th>
+<th data-local-id=3D"0b09b9e81611" class=3D"confluenceTh">
+<p local-id=3D"ea0b3af32153">Decision topic</p></th>
+<th data-local-id=3D"73a0bea4e8bf" class=3D"confluenceTh">
+<p local-id=3D"4230fe8efd7a">Context</p></th>
+<th data-local-id=3D"088c310b3850" class=3D"confluenceTh">
+<p local-id=3D"b01119cb40da">Options considered</p></th>
+<th data-local-id=3D"076b604a6303" class=3D"confluenceTh">
+<p local-id=3D"c1c2d9ec2c70">Implications</p></th>
+<th data-local-id=3D"897b3af54682" class=3D"confluenceTh">
+<p local-id=3D"2cac6322fbbd">Decision</p></th>
+<th data-local-id=3D"767fbf12666c" class=3D"confluenceTh">
+<p local-id=3D"ec51e8753da6">Status</p></th>
+</tr>
+<tr data-local-id=3D"310fa79f44fc">
+<td data-local-id=3D"96d1cdec9b18" class=3D"confluenceTd">
+<p local-id=3D"ee6918dda245">D1</p></td>
+<td data-local-id=3D"e80a4b0a5901" class=3D"confluenceTd">
+<p local-id=3D"f22dcee13f5d">Should <code>--agent</code> support multi-valu=
+e input?</p></td>
+<td data-local-id=3D"db30c2ede56a" class=3D"confluenceTd">
+<p local-id=3D"60ec6579bbc0">Current implementation accepts exactly one <co=
+de>--agent</code>; multi-agent is interactive only.</p></td>
+<td data-local-id=3D"c17ee89d0730" class=3D"confluenceTd">
+<p local-id=3D"998741b964d7">Keep single value; add comma-separated list; a=
+dd repeated <code>--agent</code>.</p></td>
+<td data-local-id=3D"3f0f8d6ddb34" class=3D"confluenceTd">
+<p local-id=3D"6179392afb90">Affects automation/non-interactive workflows a=
+nd CLI ergonomics.</p></td>
+<td data-local-id=3D"ddb209923e2c" class=3D"confluenceTd">
+<p local-id=3D"728aec400b74"></p></td>
+<td data-local-id=3D"1b6d2a2eb726" class=3D"confluenceTd">
+<p local-id=3D"4bce35a87844">Proposed</p></td>
+</tr>
+<tr data-local-id=3D"2b9f139a5601">
+<td data-local-id=3D"14633410d4ac" class=3D"confluenceTd">
+<p local-id=3D"ddde4881bef9">D2</p></td>
+<td data-local-id=3D"4b87aea546df" class=3D"confluenceTd">
+<p local-id=3D"a67bafbbed80">Should <code>--non-interactive</code> flag be =
+added?</p></td>
+<td data-local-id=3D"d16a7b5811b7" class=3D"confluenceTd">
+<p local-id=3D"3dedb77fa5c7">Currently there are no guarantees that the flo=
+w is not going to be non-interactive. We need a way to either guarantee non=
+-interactive or throw an error if lacking the required information</p></td>
+<td data-local-id=3D"12bfab109418" class=3D"confluenceTd">
+<p local-id=3D"610012ae2d8a">When <code>--non-interactive</code> is passed,=
+ at least one <code>--agent</code> flag is required, explicit configuration=
+ related selections are made (location and type of each Store) and explicit=
+ telemetry decision.</p></td>
+<td data-local-id=3D"ea2c640ed51c" class=3D"confluenceTd">
+<p local-id=3D"75fc101a6239">Impacts consent discoverability and determinis=
+tic scripting behaviour.</p></td>
+<td data-local-id=3D"0c0dfd8d7838" class=3D"confluenceTd">
+<p local-id=3D"7b6930687a4a"></p></td>
+<td data-local-id=3D"7cc56bb5eaf0" class=3D"confluenceTd">
+<p local-id=3D"20c946effa95">Proposed</p></td>
+</tr>
+<tr data-local-id=3D"56fe3f5e0e0d">
+<td data-local-id=3D"dc891f770f2d" class=3D"confluenceTd">
+<p local-id=3D"8cfc46c5b7b4">D3</p></td>
+<td data-local-id=3D"904ffb97d9fa" class=3D"confluenceTd">
+<p local-id=3D"38c1de418bad">Should hook-installed detection be standardise=
+d across agents?</p></td>
+<td data-local-id=3D"7dca5382f811" class=3D"confluenceTd">
+<p local-id=3D"0bb76a6207ce">Detection semantics differ per agent (e.g. Cla=
+ude checks only Stop hook presence; Gemini checks any managed hook).</p></t=
+d>
+<td data-local-id=3D"f3a7467c165d" class=3D"confluenceTd">
+<p local-id=3D"4723179bd84b">Keep per-agent heuristics; enforce complete ho=
+ok-set checks for all agents; check for at least one valid hook per agent a=
+nd not a specific hook per agent.</p></td>
+<td data-local-id=3D"5a9dd23cb7e2" class=3D"confluenceTd">
+<p local-id=3D"672cb2aad921">Affects defaults for interactive selection and=
+ status accuracy.</p></td>
+<td data-local-id=3D"d850b948fd77" class=3D"confluenceTd">
+<p local-id=3D"396f75ba1721"></p></td>
+<td data-local-id=3D"709cc74c19a9" class=3D"confluenceTd">
+<p local-id=3D"a0a00557c043">Proposed</p></td>
+</tr>
+<tr data-local-id=3D"d52f4616bfa7">
+<td data-local-id=3D"98b1e0ff89fc" class=3D"confluenceTd">
+<p local-id=3D"e2155aa5b6ed">D4</p></td>
+<td data-local-id=3D"0dfddbf522b5" class=3D"confluenceTd">
+<p local-id=3D"9dd9b57ae833">Should OpenCode init have explicit command-lev=
+el tests?</p></td>
+<td data-local-id=3D"61817835e723" class=3D"confluenceTd">
+<p local-id=3D"e985771d0745"><code>init.rs</code> has no direct OpenCode in=
+it test, while other agents are covered.</p></td>
+<td data-local-id=3D"d4dcbf4fa973" class=3D"confluenceTd">
+<p local-id=3D"67c5db2aac7e">Keep indirect coverage; add direct tests in <c=
+ode>init.rs</code> and/or integration suite.</p></td>
+<td data-local-id=3D"48e2eebad760" class=3D"confluenceTd">
+<p local-id=3D"d2bfbe29cea7">Impacts regression risk for OpenCode installer=
+ behaviour.</p></td>
+<td data-local-id=3D"ad09971c62cd" class=3D"confluenceTd">
+<p local-id=3D"e2250b999609">Add direct tests for opencode.</p></td>
+<td data-local-id=3D"5ad4295a2881" class=3D"confluenceTd">
+<p local-id=3D"efea9da1e40c">Proposed</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr local-id=3D"fbf4f06ee821">
+<h2 local-id=3D"69178ea3d107" id=3D"bitloopsinit-3.Scope">3. Scope</h2>
+<h3 local-id=3D"690d9e1f8c31" id=3D"bitloopsinit-Inscope">In scope</h3>
+<ul local-id=3D"8065fa1a4d57">
+<li local-id=3D"b74e8624b05e">
+<p local-id=3D"8717e8105ef7">CLI arg contract for <code>bitloops init</code=
+> (<code>--force</code>, <code>--agent</code>, <code>--telemetry</code>).</=
+p></li>
+<li local-id=3D"6e9a490db4bc">
+<p local-id=3D"592d6a44b60f">Agent detection and interactive/non-interactiv=
+e selection logic.</p></li>
+<li local-id=3D"f04a17b473d5">
+<p local-id=3D"6f2c39549e75">Per-agent hook installation invocation and per=
+-run summary output.</p></li>
+<li local-id=3D"7ce054bf130a">
+<p local-id=3D"ad5fe83cef16">Telemetry consent capture and persistence rule=
+s.</p></li>
+<li local-id=3D"21b151cb8893">
+<p local-id=3D"ca9e9253780a">Error and cancellation behaviour.</p></li>
+</ul>
+<h3 local-id=3D"894d7919b0a1" id=3D"bitloopsinit-Outofscope">Out of scope</=
+h3>
+<ul local-id=3D"464e2bd0009c">
+<li local-id=3D"c48935cafe7d">
+<p local-id=3D"2a851e93f375"><code>bitloops enable</code>/<code>disable</co=
+de> behaviour (except helper calls used by <code>init</code>).</p></li>
+<li local-id=3D"4c4b0a61a4dd">
+<p local-id=3D"f017f8e39b3c">Runtime processing of hook events after instal=
+lation.</p></li>
+<li local-id=3D"1962f905bd03">
+<p local-id=3D"8bc10f51afc1">Uninstall behaviour.</p></li>
+<li local-id=3D"1c288c1746b9">
+<p local-id=3D"ee71abd1bf7d">Remote service APIs.</p></li>
+</ul>
+<hr local-id=3D"583d05b5f902">
+<h2 local-id=3D"526bee18a1cb" id=3D"bitloopsinit-4.Assumptions&amp;constrai=
+nts">4. Assumptions &amp; constraints</h2>
+<ul local-id=3D"af62ff07671a">
+<li local-id=3D"5b47504b3787">
+<p local-id=3D"b8157d491051">Command must run inside a Git repository (<cod=
+e>find_repo_root</code> searches for <code>.git</code>, else errors).</p></=
+li>
+<li local-id=3D"492c4e5d4f96">
+<p local-id=3D"1fd5da4deecf">Interactive agent picker requires terminal cap=
+ability (<code>stdin/stdout</code> terminal or <code>/dev/tty</code>) and u=
+ses <code>stty</code> raw mode.</p></li>
+<li local-id=3D"982805df4be0">
+<p local-id=3D"5c31e5b74acb">Supported agent set is fixed in code: <code>cl=
+aude-code</code>, <code>codex</code>, <code>cursor</code>, <code>gemini-cli=
+</code>, <code>opencode</code>.</p></li>
+<li local-id=3D"1659fba6e7f8">
+<p local-id=3D"daf20e7f8a86"><code>local_dev</code> settings flag controls =
+command prefix for some generated hooks/plugins.</p></li>
+<li local-id=3D"815c395637d3">
+<p local-id=3D"3de2fe846a84">Telemetry setting is persisted to <code>.bitlo=
+ops/settings.local.json</code> if it exists, otherwise <code>.bitloops/sett=
+ings.json</code>.</p></li>
+</ul>
+<hr local-id=3D"6ab72824791e">
+<h2 local-id=3D"9c6b638ed866" id=3D"bitloopsinit-5.Userstories">5. User sto=
+ries</h2>
+<p local-id=3D"985afcad1d0d"><strong>US1 - Explicit agent initialisation</s=
+trong> <br>
+As a developer <br>
+I want to run <code>bitloops init --agent &lt;name&gt;</code> <br>
+So that only that agent=E2=80=99s integration is installed.</p>
+<p local-id=3D"80589ceffe02"><strong>US2 - Interactive multi-agent initiali=
+sation</strong> <br>
+As a developer using multiple agents <br>
+I want to select agents interactively <br>
+So that one command initialises all required integrations.</p>
+<p local-id=3D"95c1f097fb09"><strong>US3 - Non-interactive fallback behavio=
+ur</strong> <br>
+As a CI/script user <br>
+I want deterministic non-interactive defaults <br>
+So that init can run without prompts.</p>
+<p local-id=3D"158f8d9a6756"><strong>US4 - Telemetry consent capture</stron=
+g> <br>
+As a user <br>
+I want clear telemetry consent behaviour <br>
+So that my preference is respected and persisted.</p>
+<hr local-id=3D"523e39a461e4">
+<h2 local-id=3D"62a74d77c87f" id=3D"bitloopsinit-6.Functionalflows(Mermaid)=
+">6. Functional flows (Mermaid)</h2>
+<h3 local-id=3D"51a5d15970ef" id=3D"bitloopsinit-6.1End-to-endcommandflow">=
+6.1 End-to-end command flow</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A[Run bitloops init] --&gt; B[Resolve cwd and find repo root]
+    B --&gt; C{--agent provided?}
+    C -- Yes --&gt; D[Normalise and validate agent name]
+    C -- No --&gt; E[Detect or select agents]
+    D --&gt; F[Install selected agent hooks]
+    E --&gt; F
+    F --&gt; G[Capture telemetry choice if applicable]
+    G --&gt; H[Print summary]
+    H --&gt; I[Exit success]
+
+    D --&gt; X[Unknown agent -&gt; error]
+    B --&gt; Y[Not in git repo -&gt; error]</pre>
+</div>
+</div>
+<h3 local-id=3D"01d332b642f8" id=3D"bitloopsinit-6.2Agentdetectionandselect=
+ionflow">6.2 Agent detection and selection flow</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A[detect_or_select_agent] --&gt; B[Detect agent dirs: .claude/.codex/.c=
+ursor/.gemini/.opencode]
+    B --&gt; C[Read already initialised agents from hook files]
+    C --&gt; D{Interactive prompt available?}
+
+    D -- No --&gt; E{Detected agents exist?}
+    E -- Yes --&gt; F[Return detected agents]
+    E -- No --&gt; G{Installed agents exist?}
+    G -- Yes --&gt; H[Return installed agents]
+    G -- No --&gt; I[Return default: claude-code]
+
+    D -- Yes --&gt; J[Defaults =3D installed &gt; detected &gt; claude-code=
+]
+    J --&gt; K[Render multi-select picker]
+    K --&gt; L{Any selected?}
+    L -- No --&gt; M[Error: no agents selected]
+    L -- Yes --&gt; N[Validate names and de-duplicate]
+    N --&gt; O[Return selected agents]</pre>
+</div>
+</div>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A[detect_or_select_agent] --&gt; B[Detect agent dirs: .claude/.codex/.c=
+ursor/.gemini/.opencode]
+    B --&gt; C[Read already initialised agents from hook files]
+    C --&gt; D{Interactive prompt available?}
+    D -- No --&gt; E{Detected agents exist?}
+    E -- Yes --&gt; F[Return detected agents]
+    E -- No --&gt; G{Installed agents exist?}
+    G -- Yes --&gt; H[Return installed agents]
+    G -- No --&gt; I[Return default: claude-code]
+   =20
+    D -- Yes --&gt; J[Defaults =3D installed &gt; detected &gt; claude-code=
+]
+    J --&gt; K[Render multi-select picker]
+    K --&gt; L{Any selected?}
+    L -- No --&gt; M[Error: no agents selected]
+    L -- Yes --&gt; N[Validate names and de-duplicate]
+    N --&gt; O[Return selected agents]</pre>
+</div>
+</div>
+<h3 local-id=3D"b607012dd75b" id=3D"bitloopsinit-6.3Telemetryconsentflow">6=
+.3 Telemetry consent flow</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">sequenc=
+eDiagram
+    participant U as User
+    participant C as bitloops init
+    participant S as Settings files
+
+    U-&gt;&gt;C: Run command
+    C-&gt;&gt;C: maybe_capture_telemetry_consent(...)
+
+    alt --telemetry=3Dfalse or BITLOOPS_TELEMETRY_OPTOUT set
+        C-&gt;&gt;S: Persist telemetry=3Dfalse
+    else telemetry already set
+        C--&gt;&gt;U: Skip telemetry prompt
+    else prompt not allowed or non-interactive
+        C--&gt;&gt;U: Leave telemetry unset
+    else interactive and unset
+        C-&gt;&gt;U: Enable anonymous telemetry? [Y/n]
+        U--&gt;&gt;C: yes/no
+        C-&gt;&gt;S: Persist selected value
+    end</pre>
+</div>
+</div>
+<hr local-id=3D"bd3fb45e2216">
+<h2 local-id=3D"84b06e76ddbc" id=3D"bitloopsinit-7.BDDscenarios(sourceoftru=
+th)">7. BDD scenarios (source of truth)</h2>
+<h3 local-id=3D"ba7b069daa55" id=3D"bitloopsinit-7.1Happypaths">7.1 Happy p=
+aths</h3>
+<p local-id=3D"0cb3b0dab44c"><strong>S1 - Explicit known agent initialises =
+hooks</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given I=
+ am inside a git repository
+And I run `bitloops init --agent claude-code`
+When the command completes
+Then Claude hook configuration exists at `.claude/settings.json`
+And the command prints per-agent install status
+And the command prints final initialisation summary lines</pre>
+</div>
+</div>
+<p local-id=3D"1b604f643247"><strong>S2 - Explicit agent initialises Cursor=
+ hooks</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given I=
+ am inside a git repository
+When I run `bitloops init --agent cursor`
+Then `.cursor/hooks.json` contains Bitloops cursor hook commands</pre>
+</div>
+</div>
+<p local-id=3D"bd476d127e18"><strong>S3 - Interactive selection initialises=
+ multiple agents</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given i=
+nteractive prompting is available
+When I run `bitloops init` and select multiple agents
+Then hooks are installed for each selected agent
+And the summary lists all selected agents</pre>
+</div>
+</div>
+<p local-id=3D"23ee1b7c1305"><strong>S4 - Re-running without changes is ide=
+mpotent</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given h=
+ooks are already installed for the selected agent(s)
+When I run `bitloops init` again without `--force`
+Then the command reports hooks are already initialised (or installs 0)
+And existing user settings are preserved by installers</pre>
+</div>
+</div>
+<hr local-id=3D"f92302fb9952">
+<h3 local-id=3D"a5be27d9a0be" id=3D"bitloopsinit-7.2Alternativepaths">7.2 A=
+lternative paths</h3>
+<p local-id=3D"7bee2186e594"><strong>A1 - Non-interactive with detected age=
+nt directories</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given n=
+o interactive prompt is available
+And one or more agent directories are present
+When I run `bitloops init`
+Then detected agents are selected automatically</pre>
+</div>
+</div>
+<p local-id=3D"433e1d5ddcba"><strong>A2 - Non-interactive with no detected =
+dirs but installed hooks</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given n=
+o interactive prompt is available
+And no agent directories are detected
+And one or more agents already have installed hooks
+When I run `bitloops init`
+Then already-initialised agents are selected automatically</pre>
+</div>
+</div>
+<p local-id=3D"75a53c86cdff"><strong>A3 - Non-interactive fallback default<=
+/strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given n=
+o interactive prompt is available
+And no agent directories are detected
+And no installed hooks are found
+When I run `bitloops init`
+Then `claude-code` is selected by default</pre>
+</div>
+</div>
+<p local-id=3D"b2ffdcd72935"><strong>A4 - Force reinstall path</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given h=
+ooks are already installed
+When I run `bitloops init --agent claude-code --force`
+Then managed Claude hooks are removed and re-added
+And install count is reported as installed</pre>
+</div>
+</div>
+<hr local-id=3D"f6284ed114c6">
+<h3 local-id=3D"9b9ea7aaffb7" id=3D"bitloopsinit-7.3Edgecases">7.3 Edge cas=
+es</h3>
+<p local-id=3D"f48fa0a10fb6"><strong>E1 - Agent aliases are normalised</str=
+ong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given I=
+ pass an alias (`gemini` or `open-code`)
+When I run `bitloops init --agent &lt;alias&gt;`
+Then the command normalises to canonical names (`gemini-cli`, `opencode`)</=
+pre>
+</div>
+</div>
+<p local-id=3D"690ffe559683"><strong>E2 - Duplicate selections are deduplic=
+ated</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given a=
+gent selection returns duplicate values
+When selection is validated
+Then duplicate agent names are removed while preserving order of first appe=
+arance</pre>
+</div>
+</div>
+<p local-id=3D"0fe0089bcc7e"><strong>E3 - Telemetry prompt defaults to yes<=
+/strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given t=
+elemetry is unset
+And interactive prompting is enabled
+When prompted for telemetry and I press Enter
+Then telemetry is persisted as true</pre>
+</div>
+</div>
+<p local-id=3D"7c70a351ddba"><strong>E4 - No prompt in non-interactive tele=
+metry path</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given t=
+elemetry is unset
+And prompting is not possible
+When I run `bitloops init`
+Then telemetry remains unset unless explicitly opted out via flag/env</pre>
+</div>
+</div>
+<hr local-id=3D"3cdaf069484d">
+<h3 local-id=3D"9a7ba0c7acb0" id=3D"bitloopsinit-7.4Errorcases">7.4 Error c=
+ases</h3>
+<p local-id=3D"ac03359000f9"><strong>ERR1 - Unknown agent value</strong></p=
+>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given I=
+ run `bitloops init --agent bad-agent`
+When argument normalisation runs
+Then command fails with `unknown agent name`</pre>
+</div>
+</div>
+<p local-id=3D"7c75fdfc301e"><strong>ERR2 - Missing </strong><code>--agent<=
+/code> value</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given I=
+ run `bitloops init --agent`
+When CLI parsing runs
+Then parsing fails indicating a value is required</pre>
+</div>
+</div>
+<p local-id=3D"a325b58cefb8"><strong>ERR3 - Selection cancelled</strong></p=
+>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given i=
+nteractive selection is in progress
+When user cancels selection
+Then command fails with a cancellation error</pre>
+</div>
+</div>
+<p local-id=3D"1b4f52616ceb"><strong>ERR4 - No agents selected</strong></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given i=
+nteractive selection returns an empty selection
+When validation runs
+Then command fails with `no agents selected`</pre>
+</div>
+</div>
+<p local-id=3D"ade10cbe465f"><strong>ERR5 - Not inside git repository</stro=
+ng></p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Given c=
+urrent directory is not within a git repository
+When I run `bitloops init`
+Then command fails with `not inside a git repository`</pre>
+</div>
+</div>
+<hr local-id=3D"bdbcf6411257">
+<h2 local-id=3D"0a2c9a24b9f7" id=3D"bitloopsinit-8.Acceptancecriteria">8. A=
+cceptance criteria</h2>
+<ul local-id=3D"097e40314456">
+<li local-id=3D"b5e2fc42cad9">
+<p local-id=3D"6b8020402798"><code>S1</code>/<code>S2</code>/<code>S3</code=
+>: Correct installer is called for every selected agent and writes expected=
+ files.</p></li>
+<li local-id=3D"b144718392ac">
+<p local-id=3D"ea72664937a8"><code>S4</code>: Re-running init is idempotent=
+ unless <code>--force</code> is used.</p></li>
+<li local-id=3D"9bf5609d2e0f">
+<p local-id=3D"a92feab0b4e7"><code>A1</code>/<code>A2</code>/<code>A3</code=
+>: Non-interactive fallback order is deterministic: detected &gt; installed=
+ &gt; default <code>claude-code</code>.</p></li>
+<li local-id=3D"f3e3a77c95ec">
+<p local-id=3D"6d635915bb9a"><code>A4</code>: <code>--force</code> reinstal=
+ls managed hooks for installer implementations that support force semantics=
+.</p></li>
+<li local-id=3D"2873fbfea5fd">
+<p local-id=3D"9a13586a1eee"><code>E1</code>: Alias normalisation accepts <=
+code>gemini</code> and <code>open-code</code>.</p></li>
+<li local-id=3D"daa853f2b006">
+<p local-id=3D"09748ec502e4"><code>E3</code>/<code>E4</code>: Telemetry per=
+sistence follows current prompt/flag/env gating.</p></li>
+<li local-id=3D"08b4bb62b3c6">
+<p local-id=3D"3faa7b5bc2dc"><code>ERR1</code>..<code>ERR5</code>: Invalid =
+input and environment failures return explicit errors and non-zero exit.</p=
+></li>
+</ul>
+<hr local-id=3D"237b2415caf3">
+<h2 local-id=3D"6b80696d2d29" id=3D"bitloopsinit-9.APIcontracts(CLIcontract=
+)">9. API contracts (CLI contract)</h2>
+<h3 local-id=3D"de82e1ed4be6" id=3D"bitloopsinit-9.1Commanddefinition">9.1 =
+Command definition</h3>
+<p local-id=3D"58d955e9a74b"><code>bitloops init [--force|-f] [--agent &lt;=
+agent&gt;] [--telemetry=3D&lt;true|false&gt;]</code></p>
+<p local-id=3D"8ec4c3fe2b68">Supported canonical <code>--agent</code> value=
+s:</p>
+<ul local-id=3D"814c07bf2f46">
+<li local-id=3D"cffe26e8b94c">
+<p local-id=3D"2ab4f8538821"><code>claude-code</code></p></li>
+<li local-id=3D"7a2fd38ed2a6">
+<p local-id=3D"2079c5319809"><code>codex</code></p></li>
+<li local-id=3D"54d900271725">
+<p local-id=3D"4d4494bc7239"><code>cursor</code></p></li>
+<li local-id=3D"b15e22f45eb4">
+<p local-id=3D"141225922d9b"><code>gemini-cli</code></p></li>
+<li local-id=3D"2a439a59d73f">
+<p local-id=3D"7868a3ce244e"><code>opencode</code></p></li>
+</ul>
+<p local-id=3D"5b0c186cd185">Accepted aliases:</p>
+<ul local-id=3D"023472c09f23">
+<li local-id=3D"4569b87197e8">
+<p local-id=3D"f5a203a2c4d5"><code>gemini</code> -&gt; <code>gemini-cli</co=
+de></p></li>
+<li local-id=3D"bb5b1d274fd8">
+<p local-id=3D"abaaa1b2aa46"><code>open-code</code> -&gt; <code>opencode</c=
+ode></p></li>
+</ul>
+<p local-id=3D"0f918749fcb5">Flag semantics:</p>
+<ul local-id=3D"151acd9f8300">
+<li local-id=3D"fa291f8abee2">
+<p local-id=3D"8e217bebfaf5"><code>--force</code>: Remove/reinstall managed=
+ hooks where supported.</p></li>
+<li local-id=3D"30f53869ba06">
+<p local-id=3D"fe32520ef8da"><code>--agent</code>: Skip auto-detection/pick=
+er and target one explicit agent.</p></li>
+<li local-id=3D"2dd3120520ca">
+<p local-id=3D"f3dff22d93b9"><code>--telemetry</code>: Defaults to <code>tr=
+ue</code>; <code>false</code> forces telemetry opt-out persistence.</p></li=
+>
+</ul>
+<p local-id=3D"21af0f94ecf7">Success output contract (current behaviour):</=
+p>
+<ul local-id=3D"fa6ab187b591">
+<li local-id=3D"3d96d44c326f">
+<p local-id=3D"5bbeb6339828">Per selected agent: either <code>Installed N &=
+lt;Agent&gt; hook(s).</code> or <code>&lt;Agent&gt; hooks are already initi=
+alized.</code></p></li>
+<li local-id=3D"0ee6b9972c5b">
+<p local-id=3D"4806e97eaca2">Final summary:</p>
+<ul local-id=3D"41c1f6e9cedb">
+<li local-id=3D"cdeea175a3f2">
+<p local-id=3D"7bfaabe9e455"><code>Initialized agents: ...</code></p></li>
+<li local-id=3D"fe08e0b19cd8">
+<p local-id=3D"3c2ae714facf"><code>Total hooks installed: ...</code></p></l=
+i>
+<li local-id=3D"92e68e2165b6">
+<p local-id=3D"6616486e328a"><code>Bitloops agent initialization complete.<=
+/code></p></li>
+</ul></li>
+</ul>
+<hr local-id=3D"f4b418b32868">
+<h2 local-id=3D"4e830e5484d0" id=3D"bitloopsinit-10.Datamodelchanges">10. D=
+ata model changes</h2>
+<p local-id=3D"507695ca2752">No database schema changes.</p>
+<p local-id=3D"06a546ae412f">File/config side effects:</p>
+<ul local-id=3D"cd156f9c35a9">
+<li local-id=3D"23574b905f22">
+<p local-id=3D"49d616715b3c">Telemetry preference:</p>
+<ul local-id=3D"d8d63b0895e9">
+<li local-id=3D"95f3ca745ead">
+<p local-id=3D"06f1ca2c642a"><code>.bitloops/settings.local.json</code> if =
+present; otherwise <code>.bitloops/settings.json</code></p></li>
+<li local-id=3D"910ec3050646">
+<p local-id=3D"a1e230cef7fa">sets <code>telemetry: true|false</code> when p=
+ersisted</p></li>
+</ul></li>
+<li local-id=3D"e4b219f1f149">
+<p local-id=3D"ab7682a6aaca">Claude Code:</p>
+<ul local-id=3D"0ba4a7d5431c">
+<li local-id=3D"1307598e03be">
+<p local-id=3D"87b5817cbcf9"><code>.claude/settings.json</code></p></li>
+<li local-id=3D"2838dc7b9b07">
+<p local-id=3D"a1b997fc763c">managed hooks + permissions deny rule for <cod=
+e>.bitloops/metadata/**</code></p></li>
+</ul></li>
+<li local-id=3D"051e375871b9">
+<p local-id=3D"c3fb54fda557">Codex:</p>
+<ul local-id=3D"bb094818108f">
+<li local-id=3D"9b12e3be5491">
+<p local-id=3D"b656655c9ee4"><code>.codex/hooks.json</code> with managed Se=
+ssionStart and Stop hooks</p></li>
+</ul></li>
+<li local-id=3D"78ed69575c6b">
+<p local-id=3D"5400e4e8a604">Cursor:</p>
+<ul local-id=3D"f56562a95180">
+<li local-id=3D"1d646b16e776">
+<p local-id=3D"dac70fea6809"><code>.cursor/hooks.json</code> with 9 managed=
+ hook types</p></li>
+</ul></li>
+<li local-id=3D"49c44c89fb33">
+<p local-id=3D"53d92373a9e8">Gemini CLI:</p>
+<ul local-id=3D"9099b0ccd173">
+<li local-id=3D"846e44d48c75">
+<p local-id=3D"796f696dba1f"><code>.gemini/settings.json</code> with <code>=
+hooksConfig.enabled=3Dtrue</code> and managed hooks (returns count <code>12=
+</code> on install path)</p></li>
+</ul></li>
+<li local-id=3D"28a725cbabee">
+<p local-id=3D"bbba126bd067">OpenCode:</p>
+<ul local-id=3D"5c282891c1a4">
+<li local-id=3D"4b44a5b022ac">
+<p local-id=3D"c79e6df92832"><code>.opencode/plugins/bitloops.ts</code> gen=
+erated plugin file with Bitloops marker</p></li>
+</ul></li>
+</ul>
+<hr local-id=3D"738e2d1d47e8">
+<h2 local-id=3D"10cc35c026ac" id=3D"bitloopsinit-11.Businessrules">11. Busi=
+ness rules</h2>
+<ol start=3D"1" local-id=3D"6478c002890d">
+<li local-id=3D"01a19ac876cd">
+<p local-id=3D"c6ecc3f6f6d9">Command must resolve Git repo root before proc=
+eeding.</p></li>
+<li local-id=3D"f49392680726">
+<p local-id=3D"481706ed7cb6"><code>--agent</code> path bypasses detection a=
+nd interactive picker.</p></li>
+<li local-id=3D"85ddfa1554bd">
+<p local-id=3D"bd8143a4141e">Agent detection is directory-based (<code>.cla=
+ude</code>, <code>.codex</code>, <code>.cursor</code>, <code>.gemini</code>=
+, <code>.opencode</code>).</p></li>
+<li local-id=3D"8eaa8987832e">
+<p local-id=3D"e310ad6b3906">Non-interactive fallback order: detected agent=
+s, else installed agents, else default <code>claude-code</code>.</p></li>
+<li local-id=3D"573819dcd8a0">
+<p local-id=3D"3167885ade37">Interactive defaults order: installed agents, =
+else detected agents, else default <code>claude-code</code>.</p></li>
+<li local-id=3D"c92f48261d2b">
+<p local-id=3D"a9e549bd35b5">Selected agents are validated against availabl=
+e set and de-duplicated.</p></li>
+<li local-id=3D"b908d4357917">
+<p local-id=3D"3c52674a4c56">Per-agent install is executed sequentially; to=
+tal installed count is aggregated.</p></li>
+<li local-id=3D"3ed4e91d1aa2">
+<p local-id=3D"3784797944cf"><code>local_dev</code> settings value changes =
+generated command prefix for compatible installers.</p></li>
+<li local-id=3D"94d7f399c84c">
+<p local-id=3D"7814730eac6f"><code>--telemetry=3Dfalse</code> always persis=
+ts telemetry opt-out.</p></li>
+<li local-id=3D"e5f52b125f6b">
+<p local-id=3D"3fb639527bdc"><code>BITLOOPS_TELEMETRY_OPTOUT</code> (non-em=
+pty) always persists telemetry opt-out.</p></li>
+<li local-id=3D"cfc90b9cbec3">
+<p local-id=3D"2f76c87250df">Existing telemetry setting is not re-prompted;=
+ prompt only occurs when unset + interactive + no explicit <code>--agent</c=
+ode>.</p></li>
+<li local-id=3D"b668a22fca35">
+<p local-id=3D"90eaacb8d9b6">Init always prints a final summary block on su=
+ccess.</p></li>
+</ol>
+<hr local-id=3D"ffc7920784b0">
+<h2 local-id=3D"af01fa829040" id=3D"bitloopsinit-12.Permissions&amp;roles">=
+12. Permissions &amp; roles</h2>
+<ul local-id=3D"3492ec13e96b">
+<li local-id=3D"67c89500c1da">
+<p local-id=3D"72d9612457fc">No role-based access model.</p></li>
+<li local-id=3D"51b55073dc30">
+<p local-id=3D"4adfa0b36185">Operates with current local user permissions.<=
+/p></li>
+<li local-id=3D"5d28e9673bbb">
+<p local-id=3D"459bf0673680">Requires write access to repository files for =
+selected agent config paths and settings file.</p></li>
+<li local-id=3D"8e5f1d3f5be8">
+<p local-id=3D"7116862e831d">No privileged operations or remote authenticat=
+ion required for init itself.</p></li>
+</ul>
+<hr local-id=3D"bd2398c4f398">
+<h2 local-id=3D"05549705b896" id=3D"bitloopsinit-13.Observability">13. Obse=
+rvability</h2>
+<p local-id=3D"140b2f02abe3">Current built-in observability for <code>init<=
+/code>:</p>
+<ul local-id=3D"14093e1a4b5d">
+<li local-id=3D"deefb8306b3d">
+<p local-id=3D"5403ab37582a">User-facing stdout for detection/selection/ins=
+tall outcomes.</p></li>
+<li local-id=3D"02f311f63a2f">
+<p local-id=3D"2ccf63f17e0e">Any failures surface as command errors.</p></l=
+i>
+<li local-id=3D"8a7bb284914e">
+<p local-id=3D"d878e744c848">Telemetry preference set by <code>init</code> =
+influences whether future command analytics events are emitted.</p></li>
+</ul>
+<p local-id=3D"32fc28f3ca84">Current gaps:</p>
+<ul local-id=3D"70ec13735859">
+<li local-id=3D"ba89b5e2bc62">
+<p local-id=3D"86a6fdb61749">No dedicated structured metrics/log events spe=
+cifically for init install decisions.</p></li>
+</ul>
+<hr local-id=3D"090b795d5aad">
+<h2 local-id=3D"1001cc8f9589" id=3D"bitloopsinit-14.Testplan">14. Test plan=
+</h2>
+<h3 local-id=3D"5a14f97dec25" id=3D"bitloopsinit-Unittests(implemented)">Un=
+it tests (implemented)</h3>
+<ul local-id=3D"59a899361aae">
+<li local-id=3D"36cea821cac5">
+<p local-id=3D"13af41ef6d65"><code>bitloops_cli/src/commands/init.rs</code>=
+ covers:</p>
+<ul local-id=3D"66b046b33a83">
+<li local-id=3D"7fbe04bf6ef5">
+<p local-id=3D"9c65d5df3f47">flag parsing (<code>--agent</code>, <code>--te=
+lemetry</code>)</p></li>
+<li local-id=3D"800a315d82ad">
+<p local-id=3D"2c95c7af7adf">unknown agent validation</p></li>
+<li local-id=3D"918c37c78c6e">
+<p local-id=3D"94c1a198526b">per-agent install for Claude/Cursor/Codex/Gemi=
+ni</p></li>
+<li local-id=3D"474455b6cf06">
+<p local-id=3D"0455758d538a">force reinstall path (Claude)</p></li>
+<li local-id=3D"3a67baf233e4">
+<p local-id=3D"b6858bf5a8a7">non-interactive fallback rules</p></li>
+<li local-id=3D"89b94ffbe645">
+<p local-id=3D"f0804164dca0">selection cancellation/empty selection errors<=
+/p></li>
+<li local-id=3D"b497d58de507">
+<p local-id=3D"6143577f869a">telemetry prompt and persistence branches</p><=
+/li>
+</ul></li>
+</ul>
+<h3 local-id=3D"c6f19a26fe62" id=3D"bitloopsinit-Integration/E2Etests(imple=
+mented)">Integration/E2E tests (implemented)</h3>
+<ul local-id=3D"3c4712c8adf0">
+<li local-id=3D"2dd0c935395d">
+<p local-id=3D"1004e9900771"><code>bitloops_cli/tests/claude_git_hooks_inte=
+gration.rs</code> validates Claude init hook materialisation and preservati=
+on rules.</p></li>
+<li local-id=3D"d194deaaa9e8">
+<p local-id=3D"0af0234f7bcf"><code>bitloops_cli/tests/cursor_e2e_scenarios.=
+rs</code> validates Cursor init in workflow setup.</p></li>
+<li local-id=3D"ffef1681e0cf">
+<p local-id=3D"673778311bd9"><code>bitloops_cli/tests/e2e_scenario_groups.r=
+s</code> uses init as part of end-to-end Claude flows.</p></li>
+</ul>
+<h3 local-id=3D"0c2c2a1fbec9" id=3D"bitloopsinit-Coveragegapstoclose">Cover=
+age gaps to close</h3>
+<ul local-id=3D"24ce4f2d948a">
+<li local-id=3D"fb8fb36d8ab1">
+<p local-id=3D"a82a58520ca7">Add direct command-level test for OpenCode ini=
+t path.</p></li>
+<li local-id=3D"78795c943539">
+<p local-id=3D"94ab05345b8c">Add explicit not-in-git-repository init test.<=
+/p></li>
+<li local-id=3D"53f166eec42f">
+<p local-id=3D"bd4c3f502a83">Add explicit telemetry prompt integration test=
+ path (interactive simulation at process level).</p></li>
+</ul>
+<hr local-id=3D"f817eaa6faad">
+<h2 local-id=3D"133de4f53206" id=3D"bitloopsinit-15.Dependencies">15. Depen=
+dencies</h2>
+<ul local-id=3D"d3a50a39b366">
+<li local-id=3D"4083f2410fa8">
+<p local-id=3D"e9715cc061ea">Git repository layout (<code>.git</code> prese=
+nce).</p></li>
+<li local-id=3D"0e062740b8c2">
+<p local-id=3D"a6e2fa09a24b">OS terminal features for interactive picker (<=
+code>/dev/tty</code>, <code>stty</code>).</p></li>
+<li local-id=3D"affd2370de31">
+<p local-id=3D"dfcfed80e2ed">JSON settings/hook file compatibility with eac=
+h supported agent.</p></li>
+<li local-id=3D"93a4421a5bf2">
+<p local-id=3D"7b36aff1d129"><code>bitloops hooks ...</code> command handle=
+rs (consumed by generated hook commands/plugins).</p></li>
+</ul>
+<hr local-id=3D"c60b2107e601">
+<h2 local-id=3D"c4432f12f4bb" id=3D"bitloopsinit-16.Rolloutplan">16. Rollou=
+t plan</h2>
+<ul local-id=3D"7ba3781fcb22">
+<li local-id=3D"3083c3ef5ce7">
+<p local-id=3D"a0c008a0cf5b">Feature already exists; this is retrospective =
+documentation.</p></li>
+<li local-id=3D"a278d86ab348">
+<p local-id=3D"51dd210f4b8e">No runtime rollout needed for this spec update=
+.</p></li>
+<li local-id=3D"4a056c2de62a">
+<p local-id=3D"ffbbb2b6f113">Backward compatibility expectation for future =
+changes:</p>
+<ul local-id=3D"7a9ad31f9111">
+<li local-id=3D"09f60c3fd686">
+<p local-id=3D"1cca4ca43201">preserve user-defined non-Bitloops settings/ho=
+oks where currently preserved,</p></li>
+<li local-id=3D"23adaffb93d3">
+<p local-id=3D"1cdb0b0af8ad">keep idempotent re-run behaviour,</p></li>
+<li local-id=3D"dbd696d02969">
+<p local-id=3D"68ef9e54d6d1">keep deterministic non-interactive fallback be=
+haviour unless intentionally versioned.</p></li>
+</ul></li>
+</ul>
+<hr local-id=3D"23a53cfc1556">
+<h2 local-id=3D"af17e7bf45b8" id=3D"bitloopsinit-17.DefinitionofDone">17. D=
+efinition of Done</h2>
+<p local-id=3D"99f285ed2b73">This is already implemented but we need to rev=
+iew and make appropriate adjustments.</p>
+<p local-id=3D"bb307391b2fd"></p>
+<h2 local-id=3D"5318e03ff1de" id=3D"bitloopsinit-18.QuickNotes">18. Quick N=
+otes</h2>
+<p local-id=3D"2b7a81e1c877">These are quick notes about ideas suggestions =
+that need to be formalised and better incorporated in the document above.</=
+p>
+<ul local-id=3D"b59378f2c6bc">
+<li local-id=3D"e8a497f3ca94">
+<p local-id=3D"283e8ebda284">Need for consistent agent names (e.g. rename g=
+emini-cli to gemini)</p></li>
+<li local-id=3D"920f14e11b0a">
+<p local-id=3D"1a4706bcc753">Add future provisions for GitHub Copilot</p></=
+li>
+<li local-id=3D"76f74f1edcee">
+<p local-id=3D"5cf72f0d8127">Need to add better config options for the diff=
+erent Stores. The default preselected could be at the user home folder and =
+we could change it for the specific project if we want by including a confi=
+g file with relevant entries at the project level. In --non-interactive mod=
+e we could default to current project location with local stores</p></li>
+<li local-id=3D"1edca46e2378">
+<p local-id=3D"3851d526843f">Need to improve the git detection to allow for=
+ monorepos and be able to use the cli from within any folder. When we run a=
+ny command except init, we should search upwards for the closest git repo a=
+nd .bitloops config and use that. For init, we should search upwards for th=
+e closest .bitloops settings. If we reach the user home .bitloops or don=E2=
+=80=99t find .bitloops at all then if we are within a .git level we are tal=
+king about a regular repo whereas when we are at a lower level than the .gi=
+t then we are looking at a monorepo setup. In the case of a monorepo where =
+the .bitloops already exists at the .git level, then we are effectively cre=
+ating override settings for the specific project and we should at least dis=
+play a notice if not require confirmation. If we decide to go with confirma=
+tion then in the --non-interactive mode, we would require an explicit flag =
+in order to not return an error.</p></li>
+</ul>
+<p local-id=3D"e23ed8c1a841"></p>
+<p local-id=3D"759620e00f7d"></p>
+    </div>
+</body>
+</html>
+------=_Part_1230_1486537847.1774266767944--

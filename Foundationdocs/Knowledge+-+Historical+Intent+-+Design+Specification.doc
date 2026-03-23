@@ -1,0 +1,2158 @@
+Date: Mon, 23 Mar 2026 11:53:45 +0000 (UTC)
+Message-ID: <521488109.57.1774266825835@669c32a42e27>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_56_1426608814.1774266825835"
+
+------=_Part_56_1426608814.1774266825835
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>Knowledge - Historical Intent - Design Specification</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>Knowledge - Historical Intent - Design Specification</h1>
+    <div class=3D"Section1">
+        <h1 local-id=3D"c57465e3f971" id=3D"Knowledge-HistoricalIntent-Desi=
+gnSpecification-Knowledge-DesignSpecification">Knowledge - Design Specifica=
+tion</h1>
+<h2 local-id=3D"4b3b8a738553" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-TL;DR">TL;DR</h2>
+<p local-id=3D"f4e81dae7165">Knowledge is a generalized external-context la=
+yer for Bitloops.</p>
+<p local-id=3D"9069e549fe2c">The core idea is:</p>
+<ul local-id=3D"a845f44d20da">
+<li local-id=3D"3d53ca6c5f09">
+<p local-id=3D"ed263bf71b98">ingest external documents as stable <code>know=
+ledge_items</code></p></li>
+<li local-id=3D"01a3beb2e55e">
+<p local-id=3D"b14c5c0e6934">store immutable content snapshots as document =
+versions</p></li>
+<li local-id=3D"ee995a6b5d1d">
+<p local-id=3D"573fd2210e77">create explicit, append-only relations from kn=
+owledge to repository entities and to other knowledge</p></li>
+<li local-id=3D"0e64ab2b3145">
+<p local-id=3D"d78e0c235807">preserve old versions and old links without re=
+writing them</p></li>
+<li local-id=3D"29532a331460">
+<p local-id=3D"46d3ca183f29">let both manual workflows and future automatio=
+ns call the same low-level primitives</p></li>
+</ul>
+<p local-id=3D"76dc534f72c3">For the local-first MVP:</p>
+<ul local-id=3D"38ca753934c0">
+<li local-id=3D"a19ed4bcbd69">
+<p local-id=3D"5a840f7148f1">DuckDB stores document/version payloads</p></l=
+i>
+<li local-id=3D"61a89a771c2e">
+<p local-id=3D"d83e1ade8570">SQLite stores identities, links, and traversal=
+ metadata</p></li>
+</ul>
+<p local-id=3D"6486e563132d">The low-level primitives are:</p>
+<ul local-id=3D"d066260edda3">
+<li local-id=3D"0ccce391ff7c">
+<p local-id=3D"313b174b88fd"><code>resolve_ref</code></p></li>
+<li local-id=3D"2cfb875063c2">
+<p local-id=3D"ad4ccccc42bf"><code>ingest_source</code></p></li>
+<li local-id=3D"26eec9abbd39">
+<p local-id=3D"41bb26077fee"><code>associate</code></p></li>
+<li local-id=3D"54d221c628ad">
+<p local-id=3D"c75cae602846"><code>refresh_source</code></p></li>
+<li local-id=3D"8f7ea5b2dd94">
+<p local-id=3D"78ee37f7212b"><code>list_versions</code></p></li>
+</ul>
+<p local-id=3D"a47db5a527e7">These primitives are called by:</p>
+<ul local-id=3D"2c3b684898fb">
+<li local-id=3D"1ff997e656f6">
+<p local-id=3D"8244bf9282f5">manual CLI commands in MVP</p></li>
+<li local-id=3D"8009db8fb241">
+<p local-id=3D"53972ab761cb"><code>bitloops devql ingest</code> when it lat=
+er adds discovered knowledge</p></li>
+<li local-id=3D"2916433a4a93">
+<p local-id=3D"9394108e54b8">future hooks, schedulers, and server-side auto=
+mations</p></li>
+</ul>
+<p local-id=3D"f02f9ffd3c60">Historical intent is not a separate storage sy=
+stem. It is a later retrieval layer over the subset of knowledge that is li=
+nked to commits and, through them, to code history.</p>
+<h2 local-id=3D"fe695557cb12" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Glossary">Glossary</h2>
+<ul local-id=3D"9abce50ff7d2">
+<li local-id=3D"a5bb07ada042">
+<p local-id=3D"ccf99f456b6f"><strong>Knowledge</strong> <br>
+The generalized external-context layer for a repository in Bitloops.</p></l=
+i>
+<li local-id=3D"4fdb5c79119d">
+<p local-id=3D"e3a4ce94ffac"><strong>Knowledge source</strong> <br>
+The external origin of a record, such as GitHub, Jira, or Confluence, ident=
+ified by provider-specific canonical identity.</p></li>
+<li local-id=3D"5607a8d3bbbe">
+<p local-id=3D"60cc986d4376"><strong>Knowledge item</strong> <br>
+The stable logical identity of an ingested external record within a reposit=
+ory scope, such as one PR, one Jira ticket, or one Confluence page.</p></li=
+>
+<li local-id=3D"ebb2e2649dec">
+<p local-id=3D"dd6845e28aa0"><strong>Repository scope</strong> <br>
+The ownership context that makes a <code>knowledge_item</code> belong to a =
+specific repository=E2=80=99s knowledge graph, even when it has no semantic=
+ relations.</p></li>
+<li local-id=3D"5437c56ebabe">
+<p local-id=3D"9a807b607d76"><strong>Document version</strong> <br>
+An immutable snapshot of a knowledge item=E2=80=99s fetched content and met=
+adata at a point in time.</p></li>
+<li local-id=3D"7692a13b51d2">
+<p local-id=3D"d6c44ad52edc"><strong>Canonical identity</strong> <br>
+The provider-specific identity used to deduplicate a source into one stable=
+ <code>knowledge_item</code>, such as <code>repo + PR number</code> or <cod=
+e>site + Jira key</code>.</p></li>
+<li local-id=3D"84ad9f2b81f5">
+<p local-id=3D"5858a28292cc"><strong>Relation assertion</strong> <br>
+An append-only record that states that a semantic relation exists from one =
+source document version to a target.</p></li>
+<li local-id=3D"936c84456cd6">
+<p local-id=3D"f6deab041a71"><strong>Relation type</strong> <br>
+The semantic meaning of a relation assertion, such as <code>associated_with=
+</code>, <code>child_of</code>, <code>references</code>, or <code>explains<=
+/code>.</p></li>
+<li local-id=3D"ffefd14c4d02">
+<p local-id=3D"ee9aa7dffbe0"><strong>Association method</strong> <br>
+The way a relation assertion entered the system, such as <code>manual_attac=
+hment</code>, <code>provider_resolved</code>, or <code>automation_generated=
+</code>.</p></li>
+<li local-id=3D"3ef4bbab26c9">
+<p local-id=3D"562a80597cd9"><strong>Provenance</strong> <br>
+The supporting metadata that explains why a relation assertion exists, for =
+example the trigger, resolver, rule name, or actor.</p></li>
+<li local-id=3D"63b438ce5ea6">
+<p local-id=3D"2438714b20d9"><strong>Source version binding</strong> <br>
+The rule that every relation assertion references the exact source document=
+ version used when the relation was created.</p></li>
+<li local-id=3D"ff8a8dfc550e">
+<p local-id=3D"33c323adf190"><strong>Hierarchy</strong> <br>
+Parent/child structure between knowledge items, modeled as relation asserti=
+ons such as <code>child_of</code>.</p></li>
+<li local-id=3D"9b8fa46c4646">
+<p local-id=3D"645fd5d39292"><strong>Historical intent</strong> <br>
+A later retrieval layer over the subset of knowledge that is commit-linked =
+and therefore relevant to explaining code history.</p></li>
+</ul>
+<h2 local-id=3D"939ba3405b8c" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-1.ExecutiveSummary">1. Executive Summary</h2>
+<p local-id=3D"bce4dd344515">The Knowledge capability introduces a generali=
+zed repository knowledge layer for Bitloops.</p>
+<p local-id=3D"7d14c12cd256">Its job is to ingest external documents and re=
+cords, preserve them as versioned knowledge objects, and connect them to re=
+pository context through explicit relations.</p>
+<p local-id=3D"b6bf56350eed">This capability is the substrate for later ret=
+rieval features such as <code>historicalIntent()</code>, but it is not limi=
+ted to historical intent. It also supports repository-scoped knowledge that=
+ is useful even when it is not attached to a specific commit.</p>
+<p local-id=3D"a9c1237809f4">The design is intentionally low-level:</p>
+<ul local-id=3D"7c540e15f58d">
+<li local-id=3D"012ca9b5a23a">
+<p local-id=3D"c9a67e45cbb0">the same primitives should support manual loca=
+l use today</p></li>
+<li local-id=3D"9e866c5d2743">
+<p local-id=3D"a17cb412a59b">the same primitives should support server-side=
+ or hook-driven automation later</p></li>
+<li local-id=3D"b4e35a6cb1be">
+<p local-id=3D"256da42a13c8">the same storage model should preserve old doc=
+ument versions and old relations without mutation</p></li>
+</ul>
+<p local-id=3D"de528435e161">The proposed local-first MVP split is:</p>
+<ul local-id=3D"e5021458f93c">
+<li local-id=3D"fe6747f63a6d">
+<p local-id=3D"27c15affa713">DuckDB for immutable document/version payload =
+storage</p></li>
+<li local-id=3D"569b47fd2ced">
+<p local-id=3D"ab3245a4d9bd">SQLite for identities, graph relations, traver=
+sal, and repository entity relationships</p></li>
+</ul>
+<p local-id=3D"d79504501047">This gives Bitloops:</p>
+<ul local-id=3D"d53b6ac8303a">
+<li local-id=3D"753db2e65c32">
+<p local-id=3D"d9e1c300f05b">efficient local storage for full external docu=
+ment content</p></li>
+<li local-id=3D"99973a0f7ffa">
+<p local-id=3D"234aa4850917">simple, transactional local graph operations f=
+or linking knowledge to commits, checkpoints, and other knowledge</p></li>
+<li local-id=3D"b55f7c737970">
+<p local-id=3D"87af5efbf7ab">a low-level model that future automations can =
+call directly rather than bypassing</p></li>
+<li local-id=3D"251e973e9672">
+<p local-id=3D"de3e228f087c">a repository-scoped knowledge layer where item=
+s may exist without any commit association</p></li>
+</ul>
+<h2 local-id=3D"380fa6d4dc32" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-2.Problem">2. Problem</h2>
+<h3 local-id=3D"d6fd2a62c042" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-2.1ThegapinthecurrentBitloopsmodel">2.1 The gap in the current Bitl=
+oops model</h3>
+<p local-id=3D"769feb896ae1">Bitloops already captures important internal s=
+ignals:</p>
+<ul local-id=3D"c172307bbe25">
+<li local-id=3D"c86b5fb86335">
+<p local-id=3D"c7d39cc6028d">commits</p></li>
+<li local-id=3D"59bae50c1067">
+<p local-id=3D"f5473427cdf0">checkpoint/session history</p></li>
+<li local-id=3D"c3cb4c1c9532">
+<p local-id=3D"ff7c1282ac87">prompts</p></li>
+<li local-id=3D"d5de4878be5f">
+<p local-id=3D"38b06b7a4143">summaries</p></li>
+<li local-id=3D"2bf606e60650">
+<p local-id=3D"75a16750c973">transcripts</p></li>
+</ul>
+<p local-id=3D"7e9b3ac44439">That foundation explains part of a codebase=E2=
+=80=99s history, but not the full rationale around it.</p>
+<p local-id=3D"8748348fafa7">Important context often exists outside the rep=
+ository:</p>
+<ul local-id=3D"a42a1b3451de">
+<li local-id=3D"58ec7ac3cf96">
+<p local-id=3D"0a39badf0e46">PR descriptions</p></li>
+<li local-id=3D"71f7878c6b0f">
+<p local-id=3D"018bb138b266">PR review comments</p></li>
+<li local-id=3D"2c5103d79ae4">
+<p local-id=3D"a56d101e3f08">GitHub issues</p></li>
+<li local-id=3D"0a2083ed094b">
+<p local-id=3D"61c90eb35291">Jira tickets</p></li>
+<li local-id=3D"77a708cf2988">
+<p local-id=3D"4ad1522c9096">Confluence pages</p></li>
+</ul>
+<p local-id=3D"447d7984bc9f">Without a knowledge layer, these records remai=
+n fragmented and disconnected from the repository graph.</p>
+<h3 local-id=3D"84e8ce030dd8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-2.2Whythismatters">2.2 Why this matters</h3>
+<p local-id=3D"097eed2f0a40">Agents and developers often fail not because t=
+hey misunderstand syntax, but because they lack external rationale:</p>
+<ul local-id=3D"6926a8626482">
+<li local-id=3D"a8c088945532">
+<p local-id=3D"75ee4c5fa559">a Jira ticket explains why a guard exists</p><=
+/li>
+<li local-id=3D"c682ad0866a1">
+<p local-id=3D"c003649e8a52">a Confluence page describes a design constrain=
+t</p></li>
+<li local-id=3D"ec1ed69767c5">
+<p local-id=3D"1b00efc9ce3d">a PR review comment explains why a simpler cha=
+nge was rejected</p></li>
+<li local-id=3D"5ec6addf99e7">
+<p local-id=3D"3ad413948add">a GitHub issue documents the bug that motivate=
+d a workaround</p></li>
+</ul>
+<p local-id=3D"91ea18825f91">If these records are not modeled explicitly, t=
+hey cannot be retrieved consistently later from repository, commit, or arte=
+fact context.</p>
+<h3 local-id=3D"9a67f5f88a41" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-2.3Whatthecapabilitymustsolve">2.3 What the capability must solve</=
+h3>
+<p local-id=3D"dd985fe30f7f">The capability must solve five linked problems=
+:</p>
+<ol start=3D"1" local-id=3D"8e689821317b">
+<li local-id=3D"72c2ff19373e">
+<p local-id=3D"3102cb09cf52">identify external records and normalize them i=
+nto a stable internal identity</p></li>
+<li local-id=3D"d1b2fafa42ee">
+<p local-id=3D"c79768c50ca6">store full document content and provider snaps=
+hots over time</p></li>
+<li local-id=3D"c8c17c5a82dc">
+<p local-id=3D"b01e1a17c556">preserve explicit relationships between knowle=
+dge items and repository entities</p></li>
+<li local-id=3D"4a236ba1baea">
+<p local-id=3D"8c4b6451175a">preserve historical versions and historical li=
+nks without rewriting them</p></li>
+<li local-id=3D"74592b7f4476">
+<p local-id=3D"afc840f87279">make the whole graph queryable later from repo=
+, commit, checkpoint, and artefact context</p></li>
+</ol>
+<h2 local-id=3D"585090f5d8c6" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-3.ScopeOfThisDesign">3. Scope Of This Design</h2>
+<p local-id=3D"77de1131513f">This document focuses on the low-level substra=
+te, not just the user-facing commands.</p>
+<p local-id=3D"5aaf8266057e">It covers:</p>
+<ul local-id=3D"4cab5b213df0">
+<li local-id=3D"36ba854318fb">
+<p local-id=3D"11b2b4273b90">the conceptual model</p></li>
+<li local-id=3D"0c8baad9575f">
+<p local-id=3D"a539706a1fca">the storage split</p></li>
+<li local-id=3D"8d251294ba30">
+<p local-id=3D"3067a26b35ef">low-level ingestion and association primitives=
+</p></li>
+<li local-id=3D"07372a15a3d5">
+<p local-id=3D"04a2f54bf9ed">version handling</p></li>
+<li local-id=3D"8e1cb187fcab">
+<p local-id=3D"0ec287bb2a08">relation handling</p></li>
+<li local-id=3D"b29a3c030dc1">
+<p local-id=3D"98a700f2eb7c">schema sketches</p></li>
+<li local-id=3D"8369df0e0e9d">
+<p local-id=3D"238206731898">provider normalization responsibilities</p></l=
+i>
+<li local-id=3D"bf66775a151d">
+<p local-id=3D"2dbc39a0dbb9">retrieval implications</p></li>
+<li local-id=3D"e1622298455d">
+<p local-id=3D"f1ab91cc4719">tradeoffs and future evolution</p></li>
+</ul>
+<p local-id=3D"406974e2a1cc">It does not attempt to specify:</p>
+<ul local-id=3D"0c259c7aeb2e">
+<li local-id=3D"808bb1f84db4">
+<p local-id=3D"6ac8b2875658">the full user-facing feature spec template</p>=
+</li>
+<li local-id=3D"4f21e0f28a14">
+<p local-id=3D"888518918075">LLM explanation or summarization logic</p></li=
+>
+<li local-id=3D"8fdd2f9adf8b">
+<p local-id=3D"efc6009d1f02">hosted permissions or multi-tenant auth</p></l=
+i>
+</ul>
+<h2 local-id=3D"595d99c2a3d8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.DesignPrinciples">4. Design Principles</h2>
+<h3 local-id=3D"eeb5844ec59e" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.1Knowledgefirst,historicalintentsecond">4.1 Knowledge first, hist=
+orical intent second</h3>
+<p local-id=3D"a423337bfa1c">The system should model a broad repository kno=
+wledge graph.</p>
+<p local-id=3D"6528d1e52d2d">Historical intent is a derived subset:</p>
+<ul local-id=3D"07d472e38db0">
+<li local-id=3D"5c0f6a6b2058">
+<p local-id=3D"3b31cf3b2d92"><code>knowledge</code>: all external/context r=
+ecords linked to the repository</p></li>
+<li local-id=3D"b1327d72fd12">
+<p local-id=3D"e9fc8b0914fd"><code>historical_intent</code>: the subset of =
+knowledge linked to commits and, through them, to code history</p></li>
+</ul>
+<p local-id=3D"580f293fdb19">This is important because not all useful conte=
+xt is commit-scoped.</p>
+<h3 local-id=3D"e9efb32453e4" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.2Stableidentity,immutableversions">4.2 Stable identity, immutable=
+ versions</h3>
+<p local-id=3D"e5b68b8d41bc">Every external object must have:</p>
+<ul local-id=3D"7a0ae5c4be62">
+<li local-id=3D"294634acdf07">
+<p local-id=3D"075063e0c942">a stable logical identity</p></li>
+<li local-id=3D"b7452a1ea559">
+<p local-id=3D"9cf63cdc552f">one or more immutable content versions</p></li=
+>
+</ul>
+<p local-id=3D"d1dcb46700d3">This avoids duplication and allows historical =
+traceability.</p>
+<h3 local-id=3D"e34717af2633" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.3Explicitlow-levelrelationsarethedesigncenterinMVP">4.3 Explicit =
+low-level relations are the design center in MVP</h3>
+<p local-id=3D"8d939933b334">The MVP should prefer:</p>
+<ul local-id=3D"baf42d798048">
+<li local-id=3D"c028e854c9a7">
+<p local-id=3D"90c40a028eaf">explicit user association</p></li>
+<li local-id=3D"e24ab29401b6">
+<p local-id=3D"fabc5488991a">explicit low-level ingest and associate primit=
+ives</p></li>
+<li local-id=3D"c77b00e77912">
+<p local-id=3D"887f7aee320e">automation later calling those same primitives=
+</p></li>
+</ul>
+<p local-id=3D"c07d49c7258f">This keeps the graph correct and understandabl=
+e.</p>
+<h3 local-id=3D"f32dd4569edf" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.4Append-onlyrelations">4.4 Append-only relations</h3>
+<p local-id=3D"26a04052d847">When a user or automation creates a relation, =
+it should be preserved as a historical fact tied to the document version us=
+ed at that time.</p>
+<p local-id=3D"68f048326b44">New document versions should not rewrite old r=
+elations.</p>
+<h3 local-id=3D"96cda89d937a" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.5Manualandautomaticflowssharethesameengine">4.5 Manual and automa=
+tic flows share the same engine</h3>
+<p local-id=3D"0513d17b25cc">Later automations should not invent their own =
+storage path.</p>
+<p local-id=3D"3c4c027e9758">They should call the same low-level primitives=
+ as manual local flows:</p>
+<ul local-id=3D"379455bdf52a">
+<li local-id=3D"d4830c2e9856">
+<p local-id=3D"023aa732cb69">ingest a source</p></li>
+<li local-id=3D"c53c15934b04">
+<p local-id=3D"a8d85b4ffbc0">create an association</p></li>
+<li local-id=3D"0c21045755d8">
+<p local-id=3D"6e86dc78136d">refresh a source</p></li>
+<li local-id=3D"58251a994864">
+<p local-id=3D"f3bb6c311ab5">inspect versions</p></li>
+</ul>
+<h3 local-id=3D"cf9773fc7fb4" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-4.6Repository-scopedknowledgeisvalidwithoutcommitlinks">4.6 Reposit=
+ory-scoped knowledge is valid without commit links</h3>
+<p local-id=3D"136aa2dc9757">A knowledge item is valid as soon as it is ing=
+ested into the repository knowledge scope.</p>
+<p local-id=3D"d9cf7f9f033c">Commit associations are optional enrichments, =
+not requirements.</p>
+<p local-id=3D"a97168551826">A knowledge item may therefore exist in any of=
+ these states:</p>
+<ul local-id=3D"80b421c483b5">
+<li local-id=3D"c254884e9f5e">
+<p local-id=3D"2443821f8e14">repo-scoped only</p></li>
+<li local-id=3D"283fa1bc666c">
+<p local-id=3D"0e07ca51dd27">associated with another knowledge item</p></li=
+>
+<li local-id=3D"4f5219583114">
+<p local-id=3D"87375501ed95">associated with a checkpoint</p></li>
+<li local-id=3D"f1a53f21cd67">
+<p local-id=3D"d2f70c1be912">associated with a commit</p></li>
+<li local-id=3D"5e886c43f08c">
+<p local-id=3D"87e1a3a8f8e4">associated with an artefact</p></li>
+</ul>
+<h2 local-id=3D"6453cfd2da6e" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-5.UserMentalModel">5. User Mental Model</h2>
+<p local-id=3D"77ad7a7d32b3">The simplest way to explain the capability to =
+a new user is:</p>
+<ol start=3D"1" local-id=3D"e12b59d4bc0c">
+<li local-id=3D"c75454424c30">
+<p local-id=3D"58158d73275a">add a document or external record</p></li>
+<li local-id=3D"38fb1eda0930">
+<p local-id=3D"efb6ff076dce">optionally relate it to another document or to=
+ repository history</p></li>
+<li local-id=3D"73d53f1810ce">
+<p local-id=3D"d618001319e8">repeat over time as documents change</p></li>
+<li local-id=3D"48fcbd66ca28">
+<p local-id=3D"c63c5e8bb0df">query the resulting graph later</p></li>
+</ol>
+<p local-id=3D"c6ebcf423fbb">Examples:</p>
+<ul local-id=3D"fb839021d493">
+<li local-id=3D"8d83ffda9aa3">
+<p local-id=3D"cf4056f509e5">add a Confluence page</p></li>
+<li local-id=3D"94857043eccb">
+<p local-id=3D"a292dc2d93ce">add a Jira ticket</p></li>
+<li local-id=3D"37b60ace472a">
+<p local-id=3D"ca17657af56c">associate the Confluence page to the Jira tick=
+et</p></li>
+<li local-id=3D"cf4f980cf7e9">
+<p local-id=3D"0aa875d0f80d">associate the Jira ticket to a commit</p></li>
+<li local-id=3D"1204f44f37fc">
+<p local-id=3D"ccc326144966">later refresh the Confluence page, creating a =
+new document version</p></li>
+<li local-id=3D"7e2aa27772b4">
+<p local-id=3D"8f1ae1866c93">the old relation remains preserved against the=
+ old version</p></li>
+</ul>
+<p local-id=3D"c7c20df498f5">Importantly:</p>
+<ul local-id=3D"d68bd8502eae">
+<li local-id=3D"9b32ee8e176c">
+<p local-id=3D"d6a1535c3a97">a document may remain repo-scoped with no sema=
+ntic relations</p></li>
+<li local-id=3D"0998d350b1e0">
+<p local-id=3D"7f12a906b91e">a document may be related only to other knowle=
+dge items</p></li>
+<li local-id=3D"b620ae5eac34">
+<p local-id=3D"b7154b078c53">commit linkage is only required for later hist=
+orical-intent retrieval, not for the knowledge layer itself</p></li>
+</ul>
+<h2 local-id=3D"2bbb8f818547" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-6.CoreConceptualModel">6. Core Conceptual Model</h2>
+<p local-id=3D"cc85cac00818">There are four primary concepts:</p>
+<h3 local-id=3D"2c59275e56d0" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-6.1Knowledgesource">6.1 Knowledge source</h3>
+<p local-id=3D"9cdfbe12a75a">The external origin:</p>
+<ul local-id=3D"c3bc5dae967f">
+<li local-id=3D"af988eece046">
+<p local-id=3D"6fcdd3c0a493">GitHub</p></li>
+<li local-id=3D"ddfa0d02626c">
+<p local-id=3D"fa625c39f273">Jira</p></li>
+<li local-id=3D"b363eec8452a">
+<p local-id=3D"4ec8e299cd60">Confluence</p></li>
+</ul>
+<p local-id=3D"cf29ae77d7cb">It provides:</p>
+<ul local-id=3D"44bdf3ae6db1">
+<li local-id=3D"4cec60aca72f">
+<p local-id=3D"7ef20ff14d60">provider identity</p></li>
+<li local-id=3D"0df332c4550b">
+<p local-id=3D"73e5e9565996">canonical URL</p></li>
+<li local-id=3D"3699bf030a34">
+<p local-id=3D"25dbcd820eec">canonical external id</p></li>
+<li local-id=3D"6a5dd725c12a">
+<p local-id=3D"83006c2e3cf1">source kind</p></li>
+</ul>
+<h3 local-id=3D"7e79059766b8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-6.2Knowledgeitem">6.2 Knowledge item</h3>
+<p local-id=3D"16cf896eff5b">The stable logical thing:</p>
+<ul local-id=3D"169642eab54a">
+<li local-id=3D"cb34494f266f">
+<p local-id=3D"be6853cd4bce">one GitHub issue</p></li>
+<li local-id=3D"12dc51d14a92">
+<p local-id=3D"f39c131c8a39">one Jira ticket</p></li>
+<li local-id=3D"ea5a4bcf6041">
+<p local-id=3D"04e6e9bcea28">one PR</p></li>
+<li local-id=3D"183867e2147c">
+<p local-id=3D"5c85e2e9fc0d">one Confluence page</p></li>
+<li local-id=3D"d566376a904d">
+<p local-id=3D"cca1476f883b">one PR review comment</p></li>
+</ul>
+<p local-id=3D"4dab9533457f">It survives across content changes.</p>
+<h3 local-id=3D"044744e035d6" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-6.3Documentversion">6.3 Document version</h3>
+<p local-id=3D"ec160de39c5e">The immutable snapshot of the content at a poi=
+nt in time.</p>
+<p local-id=3D"29284f3503b6">This stores:</p>
+<ul local-id=3D"99c6afc790b6">
+<li local-id=3D"613259f8a4dd">
+<p local-id=3D"acb194b0d7cb">full body/content</p></li>
+<li local-id=3D"ef0c90901dce">
+<p local-id=3D"e868617eeee4">normalized metadata</p></li>
+<li local-id=3D"ba9160dd23a2">
+<p local-id=3D"ced381b709a0">raw provider payload</p></li>
+<li local-id=3D"bee7d5a2eb44">
+<p local-id=3D"935ae306d410">content hash</p></li>
+<li local-id=3D"f15baa489bf3">
+<p local-id=3D"c0d79e60fca9">timestamps</p></li>
+</ul>
+<h3 local-id=3D"4a2d3ee6bd3f" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-6.4Knowledgerelationassertion">6.4 Knowledge relation assertion</h3=
+>
+<p local-id=3D"f153c2791817">The low-level storage model stores relation as=
+sertions.</p>
+<p local-id=3D"9d62d6d9a9cd">Each assertion means:</p>
+<blockquote local-id=3D"e16c750a6dc4">
+<p local-id=3D"33b9f9996ec0">"From this source document version, we assert =
+that this relation exists to this target."</p>
+</blockquote>
+<p local-id=3D"8761f196853d">An assertion points from a source knowledge it=
+em to:</p>
+<ul local-id=3D"38f83c994c58">
+<li local-id=3D"3140eb2e2079">
+<p local-id=3D"568a208909ad">repository</p></li>
+<li local-id=3D"0f55d54f3c81">
+<p local-id=3D"09f7d086e725">commit</p></li>
+<li local-id=3D"d93f77deba73">
+<p local-id=3D"20b78928fb76">checkpoint</p></li>
+<li local-id=3D"5ec609c0f6db">
+<p local-id=3D"94417164b6f3">artefact</p></li>
+<li local-id=3D"b26649b24e0a">
+<p local-id=3D"63ff76416bd4">another knowledge item</p></li>
+</ul>
+<p local-id=3D"c21975cff992">The assertion must preserve:</p>
+<ul local-id=3D"8c1453b62960">
+<li local-id=3D"577407bf7a1c">
+<p local-id=3D"b16b043b25ba">the source knowledge item id</p></li>
+<li local-id=3D"75eae170a995">
+<p local-id=3D"8081e71d8782">the source document version id</p></li>
+<li local-id=3D"5f9ac0145093">
+<p local-id=3D"1e12fdf3e2c3">the target</p></li>
+<li local-id=3D"2bcd9e4cb475">
+<p local-id=3D"f6b63ffee74a">the relation type</p></li>
+<li local-id=3D"058bf2f74212">
+<p local-id=3D"897b9f116229">the association method</p></li>
+<li local-id=3D"0f424b604c2e">
+<p local-id=3D"0cdb0d8bfe4b">provenance</p></li>
+<li local-id=3D"ca660ca0d9df">
+<p local-id=3D"57233d4c33cc">confidence</p></li>
+</ul>
+<p local-id=3D"6d518c0c86fe">The important distinction is:</p>
+<ul local-id=3D"ed5227323650">
+<li local-id=3D"75731af9f885">
+<p local-id=3D"610ea58c3c5f"><code>relation_type</code> expresses graph mea=
+ning</p></li>
+<li local-id=3D"2de706eff5e6">
+<p local-id=3D"16e1ad6ae98d"><code>association_method</code> and <code>prov=
+enance</code> express how that meaning entered the system</p></li>
+</ul>
+<h2 local-id=3D"f4a82504658d" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-7.RepositoryScopeAndRelationTargets">7. Repository Scope And Relati=
+on Targets</h2>
+<p local-id=3D"be4f7df76142">Every knowledge item belongs to a repository k=
+nowledge scope.</p>
+<p local-id=3D"ace7f98953bb">Repository scope is not modeled as a semantic =
+relation assertion in MVP. It is ownership/scope metadata on the knowledge =
+item itself.</p>
+<p local-id=3D"02986f24b02b">This means:</p>
+<ul local-id=3D"b6c41c645ece">
+<li local-id=3D"b42e04f5056a">
+<p local-id=3D"da2355cecd97">a knowledge item can exist with no semantic re=
+lations at all</p></li>
+<li local-id=3D"b7fe0028189a">
+<p local-id=3D"3d53df3a72b8">semantic relations are optional assertions add=
+ed later</p></li>
+<li local-id=3D"2428797ee092">
+<p local-id=3D"4a971fb17f1d">historical intent is the subset of knowledge t=
+hat eventually becomes commit-linked</p></li>
+</ul>
+<p local-id=3D"edc08f245107">The relation graph must still be able to targe=
+t both knowledge objects and repository entities.</p>
+<p local-id=3D"42c56000e2f4">Target types in MVP relation assertions:</p>
+<ul local-id=3D"fcb9aaab1d78">
+<li local-id=3D"9be81a90a8ed">
+<p local-id=3D"5a3974c630ca"><code>commit</code></p></li>
+<li local-id=3D"973087cc54bb">
+<p local-id=3D"70d20a165659"><code>checkpoint</code></p></li>
+<li local-id=3D"0f75e45b5156">
+<p local-id=3D"85f59df7c598"><code>artefact</code></p></li>
+<li local-id=3D"6ff893d5517b">
+<p local-id=3D"6c22709bc5ec"><code>knowledge_item</code></p></li>
+</ul>
+<p local-id=3D"9501071cfb74">The practical meaning of each relation target:=
+</p>
+<ul local-id=3D"74ca10984656">
+<li local-id=3D"07f808b9d87e">
+<p local-id=3D"59e35e66deb0"><code>knowledge_item -&gt; commit</code> <br>
+The document is linked to a specific change.</p></li>
+<li local-id=3D"521b11e41ba8">
+<p local-id=3D"58de55396b7b"><code>knowledge_item -&gt; checkpoint</code> <=
+br>
+The document is linked to a specific Bitloops checkpoint/session point.</p>=
+</li>
+<li local-id=3D"5003a35a8c0b">
+<p local-id=3D"1df9598429d3"><code>knowledge_item -&gt; artefact</code> <br=
+>
+The document is linked directly to a code artefact, usually only when the s=
+ource data gives file/line specificity.</p></li>
+<li local-id=3D"c8aa11ff8422">
+<p local-id=3D"c5a23e8870ba"><code>knowledge_item -&gt; knowledge_item</cod=
+e> <br>
+Two knowledge objects are explicitly related.</p></li>
+</ul>
+<h2 local-id=3D"c3d0560f5e5c" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.Low-LevelPrimitives">8. Low-Level Primitives</h2>
+<p local-id=3D"1980077b2aed">These are the primitives that should exist reg=
+ardless of CLI/UI shape.</p>
+<h3 local-id=3D"531258de3958" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.1ingest_source">8.1 <code>ingest_source</code></h3>
+<p local-id=3D"25333611c06c">Ingest a supported source URL or provider refe=
+rence.</p>
+<p local-id=3D"6f1a716fec55">Input:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">struct =
+IngestSourceRequest {
+    source_url: String,
+    include_children: bool,
+    trigger: IngestionTrigger,
+}
+
+enum IngestionTrigger {
+    Manual,
+    Automation,
+}</pre>
+</div>
+</div>
+<p local-id=3D"bf10b6297387">Output:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">struct =
+IngestSourceResult {
+    knowledge_item_id: String,
+    document_version_id: String,
+    version_created: bool,
+    children_ingested: usize,
+}</pre>
+</div>
+</div>
+<p local-id=3D"a4f357123ac2"><code>ingest_source</code> is a pure materiali=
+zation primitive.</p>
+<p local-id=3D"49b95aecfa6c">It may:</p>
+<ul local-id=3D"82789e9fcb1a">
+<li local-id=3D"cf84b16489ea">
+<p local-id=3D"47ff33a1d3de">create or resolve the stable knowledge source<=
+/p></li>
+<li local-id=3D"cc8e0919e93e">
+<p local-id=3D"ca58437f3b6d">create or resolve the stable knowledge item</p=
+></li>
+<li local-id=3D"c19ff74493cc">
+<p local-id=3D"38ddf72daa61">create a new immutable document version when c=
+ontent changed</p></li>
+<li local-id=3D"cb72062b1e33">
+<p local-id=3D"f41b92900605">optionally ingest child items</p></li>
+</ul>
+<p local-id=3D"7b0d6d23a3ed">It does not create semantic relations such as =
+commit or checkpoint associations.</p>
+<p local-id=3D"48dad46f01ce">If a higher-level command accepts both a URL a=
+nd a <code>--commit</code>, that command should internally call:</p>
+<ol start=3D"1" local-id=3D"d8f557960a06">
+<li local-id=3D"bdd1676cbedb">
+<p local-id=3D"0063079e5ddc"><code>ingest_source</code></p></li>
+<li local-id=3D"adba1be7e058">
+<p local-id=3D"c3d229199e2b"><code>associate</code></p></li>
+</ol>
+<h3 local-id=3D"34c0601b8ccd" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.2associate">8.2 <code>associate</code></h3>
+<p local-id=3D"59561ff9d5e6">Create an explicit version-bound relation.</p>
+<p local-id=3D"ac6e25df330c">Input:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">struct =
+AssociateRequest {
+    source_ref: String,
+    target_ref: String,
+    relation_type: String,
+    association_method: AssociationMethod,
+}
+
+enum AssociationMethod {
+    ManualAttachment,
+    ProviderResolved,
+    AutomationGenerated,
+}</pre>
+</div>
+</div>
+<p local-id=3D"c1e3d1e5c830">Output:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">struct =
+AssociateResult {
+    relation_assertion_id: String,
+    source_knowledge_item_id: String,
+    source_document_version_id: String,
+    target_type: String,
+    target_id: String,
+}</pre>
+</div>
+</div>
+<p local-id=3D"6db976dcd4ae">Version binding rules:</p>
+<ul local-id=3D"267effb0da83">
+<li local-id=3D"1a61725df958">
+<p local-id=3D"ed77b073ee65">if <code>source_ref =3D knowledge:&lt;knowledg=
+e_item_id&gt;</code>, <code>associate</code> binds to the latest document v=
+ersion at call time</p></li>
+<li local-id=3D"2c46f1631be2">
+<p local-id=3D"b6e85e69c42a">if <code>source_ref =3D knowledge_version:&lt;=
+document_version_id&gt;</code>, <code>associate</code> binds to that exact =
+historical version</p></li>
+</ul>
+<p local-id=3D"ce2626635308">Initial target reference forms:</p>
+<ul local-id=3D"71676a4e0d84">
+<li local-id=3D"0a3a68487896">
+<p local-id=3D"128c7297d7d0"><code>commit:&lt;sha&gt;</code></p></li>
+<li local-id=3D"e69347f4ff9c">
+<p local-id=3D"a691ab893ee8"><code>checkpoint:&lt;checkpoint_id&gt;</code><=
+/p></li>
+<li local-id=3D"c1878a86302a">
+<p local-id=3D"7e32b2db76d9"><code>artefact:&lt;artefact_id&gt;</code></p><=
+/li>
+<li local-id=3D"7accbe7ba8f4">
+<p local-id=3D"bffdcb197ad9"><code>knowledge:&lt;knowledge_item_id&gt;</cod=
+e></p></li>
+<li local-id=3D"9ef7c409448f">
+<p local-id=3D"87a9181e0c35">later, <code>knowledge_version:&lt;document_ve=
+rsion_id&gt;</code> when target-version-specific knowledge-to-knowledge lin=
+ks are needed</p></li>
+</ul>
+<h3 local-id=3D"d12f73dc0fd7" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.3refresh_source">8.3 <code>refresh_source</code></h3>
+<p local-id=3D"88756a460b00">Fetch the canonical source again and create a =
+new document version only if content changed.</p>
+<h3 local-id=3D"ddf75f7d4ee8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.4list_versions">8.4 <code>list_versions</code></h3>
+<p local-id=3D"55eccb2c3af2">Return all immutable versions for a knowledge =
+item.</p>
+<h3 local-id=3D"c74a37998773" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.5resolve_ref">8.5 <code>resolve_ref</code></h3>
+<p local-id=3D"3f5a710af0f6">Resolve user-facing references to canonical id=
+s.</p>
+<p local-id=3D"fd0045357f4d">Possible initial forms:</p>
+<ul local-id=3D"be850c0e5d2c">
+<li local-id=3D"993a2f0ea686">
+<p local-id=3D"3247209c5a7c"><code>knowledge:&lt;knowledge_item_id&gt;</cod=
+e></p></li>
+<li local-id=3D"93e069ccc8c6">
+<p local-id=3D"f67d1ff90804"><code>knowledge_version:&lt;document_version_i=
+d&gt;</code></p></li>
+<li local-id=3D"08ec801f31f4">
+<p local-id=3D"e666c2a819f3"><code>commit:&lt;sha&gt;</code></p></li>
+<li local-id=3D"b593003e5eec">
+<p local-id=3D"74774d9b1495"><code>checkpoint:&lt;checkpoint_id&gt;</code><=
+/p></li>
+<li local-id=3D"2af1bebcf82d">
+<p local-id=3D"17943c2b1c8e"><code>artefact:&lt;artefact_id&gt;</code></p><=
+/li>
+<li local-id=3D"8bd537261c2b">
+<p local-id=3D"5e6ed52be108">later provider-native refs such as <code>jira:=
+PROJ-123</code></p></li>
+</ul>
+<p local-id=3D"ff38d32c976b">Repository scope is resolved from the active r=
+epository context rather than created through <code>associate</code>.</p>
+<h3 local-id=3D"a7cdddfb53f7" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-8.6Wheretheseprimitivesarecalled">8.6 Where these primitives are ca=
+lled</h3>
+<p local-id=3D"37be2364bd4e">The low-level primitives are not user-facing b=
+y themselves.</p>
+<p local-id=3D"4c0a76ea1135">They should live in a shared knowledge service=
+ layer and be called from multiple entry points.</p>
+<h4 local-id=3D"3a0d041d8bbe" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-PrimarycallersinMVP">Primary callers in MVP</h4>
+<ul local-id=3D"ed87d62c4966">
+<li local-id=3D"0ae35f043187">
+<p local-id=3D"b15350e8c90b">Manual CLI commands</p>
+<ul local-id=3D"55d0b1c11f3c">
+<li local-id=3D"1af2f8562cb4">
+<p local-id=3D"b1e40a658f86"><code>bitloops devql knowledge add ...</code> =
+-&gt; <code>ingest_source</code></p></li>
+<li local-id=3D"9c5d81da957b">
+<p local-id=3D"544d2eb73619"><code>bitloops devql knowledge associate ...</=
+code> -&gt; <code>associate</code></p></li>
+<li local-id=3D"09e89aaf95d1">
+<p local-id=3D"c05eb35e4a93"><code>bitloops devql knowledge refresh ...</co=
+de> -&gt; <code>refresh_source</code></p></li>
+<li local-id=3D"eed8f5546d7d">
+<p local-id=3D"0b0b771282e0"><code>bitloops devql knowledge versions ...</c=
+ode> -&gt; <code>list_versions</code></p></li>
+</ul></li>
+</ul>
+<p local-id=3D"1f41bb44cbe2">If a CLI convenience command such as <code>bit=
+loops devql knowledge add &lt;url&gt; --commit &lt;sha&gt;</code> is suppor=
+ted, it should still be implemented as:</p>
+<ol start=3D"1" local-id=3D"f01d9ab3d88c">
+<li local-id=3D"ed2b71cbcd88">
+<p local-id=3D"a91feda5575b"><code>ingest_source(&lt;url&gt;)</code></p></l=
+i>
+<li local-id=3D"5256c5650536">
+<p local-id=3D"9c9e59a67e9d"><code>associate(knowledge:&lt;knowledge_item_i=
+d&gt;, commit:&lt;sha&gt;, associated_with, manual_attachment)</code></p></=
+li>
+</ol>
+<h4 local-id=3D"ee994a1104d8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Secondarycallers">Secondary callers</h4>
+<ul local-id=3D"4089e7c22722">
+<li local-id=3D"c73f48707401">
+<p local-id=3D"53623ac913ae">DevQL ingest pipeline</p>
+<ul local-id=3D"7c054bcd5160">
+<li local-id=3D"2c819af83212">
+<p local-id=3D"57dbebbd2a4f"><code>bitloops devql ingest</code> can call <c=
+ode>ingest_source</code> and <code>associate</code> for discovered knowledg=
+e records</p></li>
+</ul></li>
+</ul>
+<h4 local-id=3D"c8fd2eb4934f" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Futurecallers">Future callers</h4>
+<ul local-id=3D"aea9510a4a02">
+<li local-id=3D"1c6810b6c863">
+<p local-id=3D"a560f88acce8">local hooks</p></li>
+<li local-id=3D"7d5b5ffa6722">
+<p local-id=3D"af9282f55fab">server-side webhooks</p></li>
+<li local-id=3D"557df0edb4db">
+<p local-id=3D"6fe2d8b2384e">schedulers</p></li>
+<li local-id=3D"fc64fc447e35">
+<p local-id=3D"6071bc8dd1ff">managed ingestion workflows</p></li>
+</ul>
+<p local-id=3D"908e4d0a5602">The important design constraint is:</p>
+<ul local-id=3D"b761e7e050e5">
+<li local-id=3D"c3dac47ed5ca">
+<p local-id=3D"c3f8e26d79b7">these callers must reuse the same low-level pr=
+imitives</p></li>
+<li local-id=3D"341ea34c5ce0">
+<p local-id=3D"3022d587ef67">no caller should write directly into the store=
+s in an alternative format</p></li>
+</ul>
+<p local-id=3D"117e0688731e">Illustrative call hierarchy:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A["Manual CLI commands"] --&gt; D["Knowledge service layer"]
+    B["DevQL ingest pipeline"] --&gt; D
+    C["Future hooks / automation / scheduler"] --&gt; D
+
+    D --&gt; E["resolve_ref"]
+    D --&gt; F["ingest_source"]
+    D --&gt; G["associate"]
+    D --&gt; H["refresh_source"]
+    D --&gt; I["list_versions"]
+
+    F --&gt; J["Provider adapters"]
+    F --&gt; K["SQLite graph store"]
+    F --&gt; L["DuckDB document store"]
+
+    G --&gt; K
+    H --&gt; J
+    H --&gt; K
+    H --&gt; L
+    I --&gt; L
+    E --&gt; K</pre>
+</div>
+</div>
+<p local-id=3D"5bf1651a0212">Recommended layering:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">entry p=
+oints
+  - manual CLI
+  - devql ingest
+  - future automation triggers
+
+knowledge service layer
+  - resolve_ref
+  - ingest_source
+  - associate
+  - refresh_source
+  - list_versions
+
+storage and adapters
+  - provider adapters
+  - SQLite graph store
+  - DuckDB document store</pre>
+</div>
+</div>
+<h2 local-id=3D"abbfe41b256e" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-9.WhySplitDocumentsAndRelationsAcrossStores">9. Why Split Documents=
+ And Relations Across Stores</h2>
+<h3 local-id=3D"ddd715e450ae" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-9.1Proposedlocal-firststoragesplit">9.1 Proposed local-first storag=
+e split</h3>
+<ul local-id=3D"1239796c6ac0">
+<li local-id=3D"fee9c422593c">
+<p local-id=3D"6b688edc7aff">DuckDB stores document payloads and versions.<=
+/p></li>
+<li local-id=3D"a9767288eeae">
+<p local-id=3D"07a29d9a5435">SQLite stores the graph:</p>
+<ul local-id=3D"c60b8597c066">
+<li local-id=3D"95495fc4af72">
+<p local-id=3D"1634708c9ca3">stable identities</p></li>
+<li local-id=3D"28aee8720361">
+<p local-id=3D"c28999628b34">repository scope / ownership</p></li>
+<li local-id=3D"ee45a1172c11">
+<p local-id=3D"e66462086944">commit/checkpoint/artefact relation assertions=
+</p></li>
+<li local-id=3D"a8ac911e3a3a">
+<p local-id=3D"c01dc93e694a">knowledge-to-knowledge relation assertions</p>=
+</li>
+<li local-id=3D"40eebc35dff5">
+<p local-id=3D"715cce4462e9">hierarchy assertions</p></li>
+</ul></li>
+</ul>
+<h3 local-id=3D"d6d42fe5bb40" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-9.2WhyDuckDBfordocuments">9.2 Why DuckDB for documents</h3>
+<p local-id=3D"e16c21e36360">DuckDB is a good fit for local document storag=
+e because:</p>
+<ul local-id=3D"149b5f99d714">
+<li local-id=3D"9eadaeb79fa7">
+<p local-id=3D"d9b4751e5e77">it handles larger analytical/text payloads wel=
+l</p></li>
+<li local-id=3D"8eff5144241e">
+<p local-id=3D"98807bdc71a9">it is convenient for local file-backed storage=
+</p></li>
+<li local-id=3D"b88c373e2e7d">
+<p local-id=3D"3c71c13acdd7">it can store raw JSON snapshots and document b=
+odies efficiently</p></li>
+<li local-id=3D"d1a052659562">
+<p local-id=3D"6e744443dce4">it gives flexibility for later document analys=
+is or chunk scanning</p></li>
+</ul>
+<h3 local-id=3D"3ee4332d5731" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-9.3WhySQLiteforrelations">9.3 Why SQLite for relations</h3>
+<p local-id=3D"f98a98f6c789">SQLite is a good fit for the relationship grap=
+h because:</p>
+<ul local-id=3D"f54e66fcffb8">
+<li local-id=3D"e944c9b8e8f8">
+<p local-id=3D"9db3034db27d">the graph metadata is small and transactional<=
+/p></li>
+<li local-id=3D"3a79d5dbde76">
+<p local-id=3D"777c9d2b6a6f">local graph traversals and lookups are simple<=
+/p></li>
+<li local-id=3D"158e629a15fb">
+<p local-id=3D"a286203e6997">append-only relation writes are straightforwar=
+d</p></li>
+<li local-id=3D"5a89bc7c98f1">
+<p local-id=3D"cd745a1631b7">it fits the existing local-relational directio=
+n of DevQL</p></li>
+</ul>
+<h3 local-id=3D"0349bbebb067" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-9.4Tradeoffofthesplit">9.4 Tradeoff of the split</h3>
+<p local-id=3D"d6ee85dadb91">The main cost is that document retrieval and r=
+elation traversal become a two-step process:</p>
+<ol start=3D"1" local-id=3D"c80e3e081cb6">
+<li local-id=3D"adb68b87bdc1">
+<p local-id=3D"cedfc7b9d639">query SQLite to find relevant knowledge item i=
+ds and document version ids</p></li>
+<li local-id=3D"3b1b26c8c32f">
+<p local-id=3D"79df5003caf2">query DuckDB to fetch the actual payloads</p><=
+/li>
+</ol>
+<p local-id=3D"52652e91862f">This is acceptable for a local-first MVP becau=
+se:</p>
+<ul local-id=3D"919912241d9a">
+<li local-id=3D"da9710a70b86">
+<p local-id=3D"33dd55d632e2">correctness and simplicity of the logical mode=
+l matter more than single-store elegance</p></li>
+<li local-id=3D"4848254e76d6">
+<p local-id=3D"9291aa96c5d0">the application layer can orchestrate the join=
+</p></li>
+<li local-id=3D"5ee3e99175ea">
+<p local-id=3D"219aeee932fe">the low-level contracts remain stable even if =
+later storage engines change</p></li>
+</ul>
+<h2 local-id=3D"363e030beb7d" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-10.Local-FirstArchitecture">10. Local-First Architecture</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A["Provider Adapter"] --&gt; B["Normalize Source"]
+    B --&gt; C["SQLite: identities + links"]
+    B --&gt; D["DuckDB: document versions + payloads"]
+    C --&gt; E["Traversal / query planner"]
+    D --&gt; E
+    E --&gt; F["CLI / DevQL response"]</pre>
+</div>
+</div>
+<h3 local-id=3D"104913a9b1d3" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Responsibilities">Responsibilities</h3>
+<ul local-id=3D"07b1a6f76cc1">
+<li local-id=3D"a2f33b4dda71">
+<p local-id=3D"b56ffd64cd2a">Provider adapter:</p>
+<ul local-id=3D"7a5b72c6adc5">
+<li local-id=3D"d18971978575">
+<p local-id=3D"94033abac345">fetches the source</p></li>
+<li local-id=3D"4c07708ed130">
+<p local-id=3D"689f1696621c">extracts canonical ids</p></li>
+<li local-id=3D"b0c1442817fb">
+<p local-id=3D"8f3a10179213">extracts normalized metadata</p></li>
+</ul></li>
+<li local-id=3D"b4258667e582">
+<p local-id=3D"4db10b94169d">SQLite:</p>
+<ul local-id=3D"fb7ae20104f1">
+<li local-id=3D"e17997c991c8">
+<p local-id=3D"32ae05e12851">stores stable graph data</p></li>
+<li local-id=3D"7ea5338e6b8f">
+<p local-id=3D"d4184865486e">stores repository scope</p></li>
+<li local-id=3D"9581be068cd6">
+<p local-id=3D"72192f60a529">stores relation assertion history</p></li>
+<li local-id=3D"1bd04dc9c251">
+<p local-id=3D"d13c2ae8b67c">stores latest-version pointers</p></li>
+</ul></li>
+<li local-id=3D"fc3c24980da7">
+<p local-id=3D"9a2ce94973e6">DuckDB:</p>
+<ul local-id=3D"f532003fcd91">
+<li local-id=3D"f808023649c2">
+<p local-id=3D"65acea345e13">stores immutable version bodies and payloads</=
+p></li>
+</ul></li>
+<li local-id=3D"c4e48360679a">
+<p local-id=3D"71520a85e2f1">Application layer:</p>
+<ul local-id=3D"bd032f1d1789">
+<li local-id=3D"f4beb925efd2">
+<p local-id=3D"220829b078ba">resolves references</p></li>
+<li local-id=3D"4e61f30f5037">
+<p local-id=3D"58edfbb11e97">orchestrates cross-store retrieval</p></li>
+<li local-id=3D"200704c53402">
+<p local-id=3D"497c071bcb7d">applies relation semantics</p></li>
+</ul></li>
+</ul>
+<h2 local-id=3D"f67d25419f7a" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-11.VersioningModel">11. Versioning Model</h2>
+<h3 local-id=3D"7cb145180dea" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-11.1Stableitem,changingdocument">11.1 Stable item, changing documen=
+t</h3>
+<p local-id=3D"aae510fa503e">One logical knowledge item can have many docum=
+ent versions.</p>
+<p local-id=3D"824a9c787e01">Example:</p>
+<ul local-id=3D"c8aaf4ff20b8">
+<li local-id=3D"cc40f03e950e">
+<p local-id=3D"61576f0fd69b">Confluence page <code>page_id=3D438337548</cod=
+e></p>
+<ul local-id=3D"cfe32dc82b59">
+<li local-id=3D"755e1985996c">
+<p local-id=3D"1a01a54c9672">version A on March 13</p></li>
+<li local-id=3D"d173899900ca">
+<p local-id=3D"584e10618276">version B on March 20</p></li>
+<li local-id=3D"da40e60583e1">
+<p local-id=3D"250e6efe83dd">version C on April 1</p></li>
+</ul></li>
+</ul>
+<p local-id=3D"d005f7fcd276">All three versions belong to one stable <code>=
+knowledge_item_id</code>.</p>
+<h3 local-id=3D"4565e50f0d73" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-11.2Content-hashrule">11.2 Content-hash rule</h3>
+<p local-id=3D"d1e38cffa091">Version creation rule:</p>
+<ul local-id=3D"0fea2184a008">
+<li local-id=3D"4a0a9f323bc6">
+<p local-id=3D"f6ee9fb21910">same canonical source id</p></li>
+<li local-id=3D"859c7d1573bd">
+<p local-id=3D"4430c4ddb766">same content hash</p>
+<ul local-id=3D"3884b2881952">
+<li local-id=3D"d1a5910399dd">
+<p local-id=3D"eebde9d92163">no new version</p></li>
+</ul></li>
+<li local-id=3D"81234fa6445d">
+<p local-id=3D"06a59ba577ca">same canonical source id</p></li>
+<li local-id=3D"6d51366e1da0">
+<p local-id=3D"717f657121ba">different content hash</p>
+<ul local-id=3D"2b2c5a25cd5b">
+<li local-id=3D"f3967c81d4dc">
+<p local-id=3D"706ab4c569e5">new document version row</p></li>
+</ul></li>
+</ul>
+<h3 local-id=3D"cccc419722e9" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-11.3Linkpreservationrule">11.3 Link preservation rule</h3>
+<p local-id=3D"e7c6db1b8157">Relation assertions are append-only.</p>
+<p local-id=3D"73dc827e9ef3">If version A of a Confluence page was associat=
+ed to Jira ticket <code>PROJ-123</code>, and later version B is ingested:</=
+p>
+<ul local-id=3D"ba8d4985671c">
+<li local-id=3D"644c3db1a04f">
+<p local-id=3D"a2db039aba8a">the old link remains pointing to version A</p>=
+</li>
+<li local-id=3D"e1a732762d8b">
+<p local-id=3D"9b119190b3c4">no old relation is rewritten</p></li>
+<li local-id=3D"c0f1bef28b3b">
+<p local-id=3D"6bd96e6d34d9">a new relation can be created later for versio=
+n B if desired</p></li>
+</ul>
+<p local-id=3D"799c2f34c391">This is a deliberate design choice to preserve=
+ exact historical context.</p>
+<h2 local-id=3D"fdfe8e1ec542" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.RelationModel">12. Relation Model</h2>
+<h3 local-id=3D"277d7bcc2afa" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.1Relationtypevsassociationmethod">12.1 Relation type vs associat=
+ion method</h3>
+<p local-id=3D"16922d50c287">These are different concepts and must not be c=
+ollapsed.</p>
+<p local-id=3D"3222ed53578d"><code>relation_type</code> answers:</p>
+<ul local-id=3D"120228fe73f2">
+<li local-id=3D"8aa2e76d49fd">
+<p local-id=3D"fac751fb5600">what is the semantic connection?</p></li>
+</ul>
+<p local-id=3D"5571fc6840ca">Examples:</p>
+<ul local-id=3D"52e739a47375">
+<li local-id=3D"b4f906f54635">
+<p local-id=3D"fe09bad8ffea"><code>associated_with</code></p></li>
+<li local-id=3D"349efaee0979">
+<p local-id=3D"5b2c7ab6841a"><code>child_of</code></p></li>
+<li local-id=3D"dbc7840908bf">
+<p local-id=3D"f73925ace854"><code>references</code></p></li>
+<li local-id=3D"b868a560de44">
+<p local-id=3D"521f7ca5c96e"><code>explains</code></p></li>
+</ul>
+<p local-id=3D"c8b691eec53b"><code>association_method</code> answers:</p>
+<ul local-id=3D"f2d4d62bc9f6">
+<li local-id=3D"2e32b695f7a5">
+<p local-id=3D"8900ced52291">how was this relation created?</p></li>
+</ul>
+<p local-id=3D"c5e9abfaf63a">Examples:</p>
+<ul local-id=3D"8a0826d84266">
+<li local-id=3D"e06f1c50a10f">
+<p local-id=3D"59e1d4107320"><code>manual_attachment</code></p></li>
+<li local-id=3D"7ee589208faf">
+<p local-id=3D"62d1ce597a6b"><code>provider_resolved</code></p></li>
+<li local-id=3D"159ce8d64525">
+<p local-id=3D"46866ebc4ad9"><code>automation_generated</code></p></li>
+</ul>
+<h3 local-id=3D"cdeb7d110d84" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.2Whybothareneeded">12.2 Why both are needed</h3>
+<p local-id=3D"05cd348d9976">Two identical semantic edges may come from dif=
+ferent creation paths.</p>
+<p local-id=3D"ec37cbb1c3e8">Example:</p>
+<ul local-id=3D"f6531aa0b76e">
+<li local-id=3D"ad07bf26fb9e">
+<p local-id=3D"fb8bedfb785a">a Jira ticket <code>associated_with</code> a c=
+ommit because a user manually attached it</p></li>
+<li local-id=3D"b33587fbe39e">
+<p local-id=3D"9c5f77b28e2a">a Jira ticket <code>associated_with</code> a c=
+ommit because a future automation created the relation</p></li>
+</ul>
+<p local-id=3D"3a93744b8106">The semantic relation is similar, but the prov=
+enance and confidence differ.</p>
+<p local-id=3D"e51f0a0f2276">Automation-specific rule names should live in =
+provenance metadata rather than in the core association model.</p>
+<p local-id=3D"8559913156a0">Examples:</p>
+<ul local-id=3D"7f1ebea41c13">
+<li local-id=3D"85c111b670b5">
+<p local-id=3D"9510b9c0e700"><code>trigger =3D manual_cli</code></p></li>
+<li local-id=3D"a064009297c3">
+<p local-id=3D"643dabd76af2"><code>trigger =3D automation</code></p></li>
+<li local-id=3D"62e3ed735974">
+<p local-id=3D"5f14a3f14344"><code>rule_name =3D commit_message_reference</=
+code></p></li>
+<li local-id=3D"98f10a345976">
+<p local-id=3D"858d4c59e74a"><code>rule_name =3D pr_body_reference</code></=
+p></li>
+<li local-id=3D"a0b9084ebc72">
+<p local-id=3D"f8db09516e6f"><code>resolver =3D github_commit_to_pr_api</co=
+de></p></li>
+</ul>
+<h3 local-id=3D"7be7bf683a28" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.3Relationassertionsvslogicaledges">12.3 Relation assertions vs l=
+ogical edges</h3>
+<p local-id=3D"ab19a22adef6">At storage level, the system keeps relation as=
+sertions.</p>
+<p local-id=3D"b736b5610fd1">That means two rows may assert the same logica=
+l graph meaning for different reasons.</p>
+<p local-id=3D"25454a6db03e">Illustrative assertion rows:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: text; gutter: false; theme: Confluence" data-theme=3D"Confluence">Row A
+source_knowledge_item_id =3D jira_456
+source_document_version_id =3D jira_v1
+target_type =3D commit
+target_id =3D abc123
+relation_type =3D associated_with
+association_method =3D manual_attachment
+confidence =3D 1.0
+provenance_json =3D {
+  "trigger": "manual_cli",
+  "actor": "user"
+}
+
+Row B
+source_knowledge_item_id =3D jira_456
+source_document_version_id =3D jira_v1
+target_type =3D commit
+target_id =3D abc123
+relation_type =3D associated_with
+association_method =3D automation_generated
+confidence =3D 0.85
+provenance_json =3D {
+  "trigger": "automation",
+  "rule_name": "commit_message_reference"
+}</pre>
+</div>
+</div>
+<p local-id=3D"be6dc4194714">In both rows, the graph meaning is the same:</=
+p>
+<ul local-id=3D"4431f0d5dc6e">
+<li local-id=3D"3fdbbe954c48">
+<p local-id=3D"5007d606806e"><code>jira_456 associated_with commit abc123</=
+code></p></li>
+</ul>
+<p local-id=3D"92c2a227d910">What differs is:</p>
+<ul local-id=3D"6ba7c592ec3b">
+<li local-id=3D"005a0fdba9bb">
+<p local-id=3D"242373c65e56">who or what created the assertion</p></li>
+<li local-id=3D"6fad309ca0b6">
+<p local-id=3D"1938ff477af9">how strong the evidence is</p></li>
+<li local-id=3D"0739a3d217a0">
+<p local-id=3D"473ac84b79d8">how the system should explain or debug that as=
+sertion later</p></li>
+</ul>
+<p local-id=3D"1749c2b0146a">At retrieval time, the system may later:</p>
+<ul local-id=3D"37ecbbb6985b">
+<li local-id=3D"5a85ba4b9c82">
+<p local-id=3D"4226bae1e73c">show both assertion rows</p></li>
+<li local-id=3D"fd5f8649bf26">
+<p local-id=3D"20f85e997c2b">or collapse them into one logical edge with mu=
+ltiple supporting assertions</p></li>
+</ul>
+<p local-id=3D"525939e27ac9">For MVP, the storage model should preserve bot=
+h assertions as append-only rows.</p>
+<h3 local-id=3D"4f5fba9e4f42" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.4One-to-manyandmany-to-onerelations">12.4 One-to-many and many-t=
+o-one relations</h3>
+<p local-id=3D"53cba588c5b9">The model must support:</p>
+<ul local-id=3D"4a98eaeb5a88">
+<li local-id=3D"7d0b9a1be233">
+<p local-id=3D"62eb94642fe6">one document linked to many commits</p></li>
+<li local-id=3D"763de1409b5d">
+<p local-id=3D"eab5796e4d5d">many documents linked to one commit</p></li>
+<li local-id=3D"f7968ec06f71">
+<p local-id=3D"6bbcbb25a581">one document linked to many checkpoints</p></l=
+i>
+<li local-id=3D"b88462f48ffe">
+<p local-id=3D"caab01876c33">one document linked to another document and al=
+so to repository history</p></li>
+</ul>
+<p local-id=3D"00bdb6768b6c">This is a graph, not a tree.</p>
+<h3 local-id=3D"c86d1e9b4f19" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-12.5Parent/childrelationsdonotreplacesemanticrelations">12.5 Parent=
+/child relations do not replace semantic relations</h3>
+<p local-id=3D"5ed9530e1fbc">Hierarchy is one type of relation, not the onl=
+y one.</p>
+<p local-id=3D"8823c98c5d44">Example:</p>
+<ul local-id=3D"32fcdadc824e">
+<li local-id=3D"f652269242b4">
+<p local-id=3D"9975febff836">PR is parent of review comment</p></li>
+<li local-id=3D"7ab16f7d4ecc">
+<p local-id=3D"fc347ef69462">review comment may also link directly to an ar=
+tefact</p></li>
+<li local-id=3D"5b35dfc7cdcf">
+<p local-id=3D"3c2bcab978b4">PR may link to a commit</p></li>
+</ul>
+<p local-id=3D"731c8bd35332">All of these must coexist.</p>
+<h2 local-id=3D"773fb32e48ed" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-13.ConcreteRelationScenarios">13. Concrete Relation Scenarios</h2>
+<h3 local-id=3D"70a850605450" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-13.1Confluencepage->Jiraticket">13.1 Confluence page -&gt; Jira tic=
+ket</h3>
+<p local-id=3D"d947e2690030">User flow:</p>
+<ol start=3D"1" local-id=3D"4bb1397f4dc2">
+<li local-id=3D"84ac765ecc59">
+<p local-id=3D"08cd8240c931">ingest Confluence page</p></li>
+<li local-id=3D"e817b42d6bac">
+<p local-id=3D"e76422b81684">ingest Jira ticket</p></li>
+<li local-id=3D"50d34736d61e">
+<p local-id=3D"437b17825222">explicitly associate Confluence page to Jira t=
+icket</p></li>
+</ol>
+<p local-id=3D"e47e228c1905">Graph result:</p>
+<ul local-id=3D"93aecf807c11">
+<li local-id=3D"979d07d45b5e">
+<p local-id=3D"f7c7275a2a86">Confluence page exists in repository knowledge=
+ scope</p></li>
+<li local-id=3D"4f22d87d61eb">
+<p local-id=3D"34d609817a43">Jira ticket exists in repository knowledge sco=
+pe</p></li>
+<li local-id=3D"00c2dcf0c7ea">
+<p local-id=3D"e931b05f835c">Confluence page -&gt; Jira ticket</p></li>
+</ul>
+<h3 local-id=3D"b962008f8e82" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-13.2Jiraticket->checkpoint">13.2 Jira ticket -&gt; checkpoint</h3>
+<p local-id=3D"b3fb3bd18cfb">User flow:</p>
+<ol start=3D"1" local-id=3D"5762fb73868f">
+<li local-id=3D"7d80500779c2">
+<p local-id=3D"2e291198923e">ingest Jira ticket</p></li>
+<li local-id=3D"828100df0ed4">
+<p local-id=3D"c60be84e8571">associate to checkpoint</p></li>
+</ol>
+<p local-id=3D"2386f189d914">Graph result:</p>
+<ul local-id=3D"3cb247c9d65e">
+<li local-id=3D"836273ffd82d">
+<p local-id=3D"ed964510729b">Jira ticket exists in repository knowledge sco=
+pe</p></li>
+<li local-id=3D"00cc15311c03">
+<p local-id=3D"eaeda48e693c">Jira ticket -&gt; checkpoint</p></li>
+</ul>
+<h3 local-id=3D"44a98c2cd37d" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-13.3Jiraticket->multiplecommits">13.3 Jira ticket -&gt; multiple co=
+mmits</h3>
+<p local-id=3D"9c4606efad2f">User flow:</p>
+<ol start=3D"1" local-id=3D"540c40030797">
+<li local-id=3D"1afb781d2c91">
+<p local-id=3D"1505637549e6">ingest Jira ticket once</p></li>
+<li local-id=3D"c16c952b116f">
+<p local-id=3D"2c706dacd16b">associate to commit A</p></li>
+<li local-id=3D"2e3415c90a17">
+<p local-id=3D"5cc7752d6eae">associate to commit B</p></li>
+</ol>
+<p local-id=3D"072e8f847814">Graph result:</p>
+<ul local-id=3D"4a918db0d2a2">
+<li local-id=3D"8367e5329847">
+<p local-id=3D"4a8cfe0cf1b8">one knowledge item</p></li>
+<li local-id=3D"5cd8bdf5c972">
+<p local-id=3D"13f46a7e5f51">two immutable relation rows</p></li>
+<li local-id=3D"c8fb692d0538">
+<p local-id=3D"83df596c76cf">zero duplication of the Jira ticket</p></li>
+</ul>
+<h3 local-id=3D"4580ba513fcc" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-13.4Commit->PR->reviewcomments->artefact">13.4 Commit -&gt; PR -&gt=
+; review comments -&gt; artefact</h3>
+<p local-id=3D"f7e7ec6dca92">Possible future automation flow:</p>
+<ol start=3D"1" local-id=3D"c9496891a93f">
+<li local-id=3D"6f33aa5879a0">
+<p local-id=3D"ed6d9e32b722">resolve commit -&gt; PR through provider API</=
+p></li>
+<li local-id=3D"79a0b20ace64">
+<p local-id=3D"b37066b6d9b4">ingest PR as knowledge item</p></li>
+<li local-id=3D"79af0332cd91">
+<p local-id=3D"d49f5c15fcea">ingest review comments as child knowledge item=
+s</p></li>
+<li local-id=3D"25cd9a12e450">
+<p local-id=3D"19d2a6176648">if review comments have anchors, link them to =
+artefacts</p></li>
+</ol>
+<p local-id=3D"72d167727040">Graph result:</p>
+<ul local-id=3D"af0a1cc3b666">
+<li local-id=3D"507c922f0713">
+<p local-id=3D"9ddc9c3c4111">PR is linked to commit</p></li>
+<li local-id=3D"c8942f4df1b5">
+<p local-id=3D"3c6c22fa4965">review comments are children of PR</p></li>
+<li local-id=3D"c43050d4353c">
+<p local-id=3D"9cb23903875a">specific review comments may link to artefacts=
+ directly</p></li>
+</ul>
+<h2 local-id=3D"190fa57c97b6" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-14.ProviderAdapters">14. Provider Adapters</h2>
+<p local-id=3D"29ade1e4c1f4">Each provider adapter has the same job:</p>
+<ol start=3D"1" local-id=3D"db9f22da3df1">
+<li local-id=3D"bcb341db5e86">
+<p local-id=3D"869977755a1f">detect whether a URL belongs to that provider/=
+source kind</p></li>
+<li local-id=3D"d8c8b196dd93">
+<p local-id=3D"78b3f9ea5e88">fetch the remote record</p></li>
+<li local-id=3D"4fe415fccc06">
+<p local-id=3D"88d5a8430926">compute canonical source identity</p></li>
+<li local-id=3D"b28cc5823606">
+<p local-id=3D"8ee5245a95d1">normalize fields</p></li>
+<li local-id=3D"a7f08c11627e">
+<p local-id=3D"bc01562cea93">return raw payload</p></li>
+<li local-id=3D"0ee8494703a7">
+<p local-id=3D"ff0091bb98f8">optionally discover children</p></li>
+</ol>
+<h3 local-id=3D"95182409f37e" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-14.1GitHubPRadapter">14.1 GitHub PR adapter</h3>
+<p local-id=3D"48d6f1438375">Must normalize:</p>
+<ul local-id=3D"bf8dd3b172a4">
+<li local-id=3D"4d23a336e5ea">
+<p local-id=3D"4bcc72c892a4">repo</p></li>
+<li local-id=3D"8bc551b257f1">
+<p local-id=3D"3ce0ce0f7a91">PR number</p></li>
+<li local-id=3D"c3ac4a25d2c7">
+<p local-id=3D"8dcb631bdb72">title</p></li>
+<li local-id=3D"42f418f536d8">
+<p local-id=3D"ad6ce620a9b0">body</p></li>
+<li local-id=3D"cce2a1e1f6ba">
+<p local-id=3D"4889b984eec9">author</p></li>
+<li local-id=3D"9ea62fb20db6">
+<p local-id=3D"ff174d03a6d1">timestamps</p></li>
+<li local-id=3D"629452207068">
+<p local-id=3D"152abd6f8a45">URL</p></li>
+</ul>
+<p local-id=3D"65301ce9d62a">Must optionally fetch:</p>
+<ul local-id=3D"897634dd84a0">
+<li local-id=3D"72d0c8a74b87">
+<p local-id=3D"2050865bc1e7">review comments</p></li>
+</ul>
+<p local-id=3D"c56a65532624">Must support:</p>
+<ul local-id=3D"391a8a1d72d4">
+<li local-id=3D"a916edee6c9b">
+<p local-id=3D"f9d28205ab4e">PR body reference parsing for GitHub issues an=
+d Jira tickets</p></li>
+</ul>
+<h3 local-id=3D"7be5c883ad49" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-14.2GitHubissueadapter">14.2 GitHub issue adapter</h3>
+<p local-id=3D"fc296580e377">Must normalize:</p>
+<ul local-id=3D"4c6f026a69d9">
+<li local-id=3D"ef112d175534">
+<p local-id=3D"4f9139f4f423">repo</p></li>
+<li local-id=3D"416107a38000">
+<p local-id=3D"cc5fb1d18b74">issue number</p></li>
+<li local-id=3D"ad4a7c19d25b">
+<p local-id=3D"6058c47cd22c">title</p></li>
+<li local-id=3D"ee6785ab983b">
+<p local-id=3D"07605d4fcd92">body</p></li>
+<li local-id=3D"4096c45355cf">
+<p local-id=3D"58c306f5230c">author</p></li>
+<li local-id=3D"b32232da25d3">
+<p local-id=3D"16fa9c2c052c">state</p></li>
+<li local-id=3D"b2c7a1beebc2">
+<p local-id=3D"4c19f6c1cc06">timestamps</p></li>
+<li local-id=3D"89c126370165">
+<p local-id=3D"4e6e64a29f69">URL</p></li>
+</ul>
+<h3 local-id=3D"3826996e81f8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-14.3Jiraadapter">14.3 Jira adapter</h3>
+<p local-id=3D"19d0f44ab1e5">Must normalize:</p>
+<ul local-id=3D"b9bad808c7f1">
+<li local-id=3D"12d9b321fdd1">
+<p local-id=3D"5e00cd8cc3ea">issue key</p></li>
+<li local-id=3D"a0146885c577">
+<p local-id=3D"b727e2271c3f">title</p></li>
+<li local-id=3D"e5c276ea7b1d">
+<p local-id=3D"5d094a167e8e">description</p></li>
+<li local-id=3D"0e149b09c8a4">
+<p local-id=3D"ded91270788b">comments</p></li>
+<li local-id=3D"089084a82214">
+<p local-id=3D"6923bee9e0a8">status</p></li>
+<li local-id=3D"b11d4a3e3a30">
+<p local-id=3D"1318e52239f1">issue type</p></li>
+<li local-id=3D"90fbf79ae4de">
+<p local-id=3D"62dc9d03cca3">author/reporter/assignee metadata</p></li>
+<li local-id=3D"76f1b5d08e0a">
+<p local-id=3D"c17f413cf26e">timestamps</p></li>
+<li local-id=3D"17040a3ae38f">
+<p local-id=3D"cd7cac28d6c1">URL</p></li>
+</ul>
+<h3 local-id=3D"c24057292270" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-14.4Confluenceadapter">14.4 Confluence adapter</h3>
+<p local-id=3D"e6329721aa04">Must normalize:</p>
+<ul local-id=3D"8a87ae4a386f">
+<li local-id=3D"9340b9d8959c">
+<p local-id=3D"ea974a187764">page id</p></li>
+<li local-id=3D"a2578f4b05ef">
+<p local-id=3D"8ffebb7b519c">title</p></li>
+<li local-id=3D"3993aa2dc07c">
+<p local-id=3D"75a1261289e6">full body</p></li>
+<li local-id=3D"89b457788e69">
+<p local-id=3D"294487b9f288">author</p></li>
+<li local-id=3D"83e5b2c23613">
+<p local-id=3D"7f8787b0eee6">space</p></li>
+<li local-id=3D"8c5e8f6c90f4">
+<p local-id=3D"11500c50585a">parent id</p></li>
+<li local-id=3D"0af9bb5f2a24">
+<p local-id=3D"49bf66825c97">timestamps</p></li>
+<li local-id=3D"eb8b68f8f5da">
+<p local-id=3D"28328418c0e4">URL</p></li>
+</ul>
+<p local-id=3D"28171c4d017a">Must support:</p>
+<ul local-id=3D"c9f50194cfee">
+<li local-id=3D"b6e188709761">
+<p local-id=3D"efb69c2e3fd1">optional child-page ingestion when requested</=
+p></li>
+</ul>
+<h2 local-id=3D"1582e87529fb" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-15.FutureAutomationExamples">15. Future Automation Examples</h2>
+<p local-id=3D"1f92b81acfed">These examples are intentionally secondary to =
+the core manual substrate.</p>
+<p local-id=3D"875cd92b394c">They show how later automation can reuse the s=
+ame low-level model without changing storage or relation semantics.</p>
+<h3 local-id=3D"e32f32a711fb" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-15.1Examplefutureautomation:Commit->PR">15.1 Example future automat=
+ion: Commit -&gt; PR</h3>
+<p local-id=3D"2c6d19f8b355">For GitHub-backed repositories, one future aut=
+omation can use:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">GET /re=
+pos/{owner}/{repo}/commits/{commit_sha}/pulls</pre>
+</div>
+</div>
+<p local-id=3D"8560fd317d63">Why this is a strong future automation mechani=
+sm:</p>
+<ul local-id=3D"7a35d3999f6b">
+<li local-id=3D"50d2af23951a">
+<p local-id=3D"964b5c6883bf">it is provider-backed, not guessed</p></li>
+<li local-id=3D"a4bbadcda1f0">
+<p local-id=3D"29ece4b72e84">it reflects GitHub=E2=80=99s actual commit-to-=
+PR model</p></li>
+<li local-id=3D"a97bc53b0777">
+<p local-id=3D"221418e3ca18">it produces strong provenance metadata</p></li=
+>
+</ul>
+<h3 local-id=3D"22714c597c85" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-15.2Examplefutureautomation:commitmessagereferences">15.2 Example f=
+uture automation: commit message references</h3>
+<p local-id=3D"9c3b156299a0">A future automation can parse:</p>
+<ul local-id=3D"8b4287879f59">
+<li local-id=3D"ba468c7afa40">
+<p local-id=3D"a4a197057b86">GitHub issue references</p></li>
+<li local-id=3D"6cbdfd02fb35">
+<p local-id=3D"2b5bb22f86e4">Jira ticket keys</p></li>
+<li local-id=3D"abaec49d1f27">
+<p local-id=3D"082524641959">Jira URLs</p></li>
+</ul>
+<h3 local-id=3D"5226f7e8bb8d" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-15.3Examplefutureautomation:PRbodyreferences">15.3 Example future a=
+utomation: PR body references</h3>
+<p local-id=3D"220a2bccce3d">A future automation can parse PR bodies for:</=
+p>
+<ul local-id=3D"1073fbd0e768">
+<li local-id=3D"b336b423f20d">
+<p local-id=3D"a728f6f4118d">explicit linked issues</p></li>
+<li local-id=3D"b5834a8616c7">
+<p local-id=3D"d206b4309727">closing-keyword issue references</p></li>
+<li local-id=3D"4a2a013507a8">
+<p local-id=3D"0ea921f28caf">Jira ticket keys and URLs</p></li>
+</ul>
+<p local-id=3D"60bdedfe2097">Suggested priority order:</p>
+<ol start=3D"1" local-id=3D"daf9b1a2a341">
+<li local-id=3D"a515adfa34d0">
+<p local-id=3D"1aceb1a507fa">explicit linked issue on the PR</p></li>
+<li local-id=3D"d5e4f1e33e10">
+<p local-id=3D"15821a1fa54e">closing keyword in PR body</p></li>
+<li local-id=3D"4b5589b74ad1">
+<p local-id=3D"a0e4bf874aa8">closing keyword in commit message</p></li>
+<li local-id=3D"6c47c6266372">
+<p local-id=3D"765fe2200363">plain issue reference when repository context =
+is unambiguous</p></li>
+</ol>
+<h2 local-id=3D"2872c1018eb3" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-16.SchemaSketches">16. Schema Sketches</h2>
+<h3 local-id=3D"54e5d7e4d56b" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-16.1SQLiteschemasketch">16.1 SQLite schema sketch</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: sql; gutter: false; theme: Confluence" data-theme=3D"Confluence">CREATE T=
+ABLE knowledge_sources (
+    source_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    canonical_external_id TEXT NOT NULL,
+    canonical_url TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (provider, canonical_external_id)
+);
+
+CREATE TABLE knowledge_items (
+    knowledge_item_id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    item_kind TEXT NOT NULL,
+    latest_document_version_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE knowledge_relation_assertions (
+    relation_assertion_id TEXT PRIMARY KEY,
+    source_knowledge_item_id TEXT NOT NULL,
+    source_document_version_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    target_document_version_id TEXT,
+    relation_type TEXT NOT NULL,
+    association_method TEXT NOT NULL,
+    confidence REAL,
+    provenance_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX knowledge_relation_assertions_target_idx
+ON knowledge_relation_assertions (target_type, target_id);
+
+CREATE INDEX knowledge_relation_assertions_source_version_idx
+ON knowledge_relation_assertions (source_document_version_id);</pre>
+</div>
+</div>
+<p local-id=3D"895b79671cd7">Hierarchy should use the same relation-asserti=
+on model through semantic edges such as <code>child_of</code>.</p>
+<p local-id=3D"134d7eb84734">If current-state hierarchy cache fields are ne=
+eded later for performance, they should be explicitly documented as derived=
+ indexes rather than as a second source of truth.</p>
+<h3 local-id=3D"37fedd90f1b0" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-16.2DuckDBschemasketch">16.2 DuckDB schema sketch</h3>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: sql; gutter: false; theme: Confluence" data-theme=3D"Confluence">CREATE T=
+ABLE knowledge_document_versions (
+    document_version_id TEXT PRIMARY KEY,
+    knowledge_item_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    item_kind TEXT NOT NULL,
+    title TEXT,
+    body TEXT,
+    normalized_metadata_json JSON,
+    raw_payload_json JSON,
+    source_pointer_json JSON,
+    author_display TEXT,
+    source_created_at TIMESTAMP,
+    source_updated_at TIMESTAMP,
+    ingested_at TIMESTAMP NOT NULL,
+    content_hash TEXT NOT NULL
+);
+
+CREATE INDEX knowledge_document_versions_item_hash_idx
+ON knowledge_document_versions (knowledge_item_id, content_hash);</pre>
+</div>
+</div>
+<h2 local-id=3D"e91311b0fff8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-17.RetrievalModel">17. Retrieval Model</h2>
+<p local-id=3D"956b9633cf21">The low-level retrieval flow is:</p>
+<ol start=3D"1" local-id=3D"0fbc811a377b">
+<li local-id=3D"089e3201b816">
+<p local-id=3D"a7cc65405da0">resolve traversal in SQLite</p></li>
+<li local-id=3D"e6ed1c90f316">
+<p local-id=3D"a1cfd0e9708a">gather relevant knowledge item ids and documen=
+t version ids</p></li>
+<li local-id=3D"9162dc477660">
+<p local-id=3D"18c5e7e3b6d1">fetch document payloads from DuckDB</p></li>
+<li local-id=3D"29f76c4abd30">
+<p local-id=3D"ee81fd58c7cc">assemble the response in the application layer=
+ using the exact versions referenced by the matched relation assertions</p>=
+</li>
+</ol>
+<p local-id=3D"563b7a0baddd">This makes the <code>knowledge()</code> stage =
+possible without forcing all data into one store.</p>
+<p local-id=3D"91c0ec4aa905">A future current-state projection may addition=
+ally offer =E2=80=9Clatest known version=E2=80=9D views, but that should be=
+ explicit rather than implicit.</p>
+<p local-id=3D"b1a69ecbc9be">Illustrative retrieval:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A["DevQL query: repo(...) -&gt; knowledge()"] --&gt; B["SQLite relation=
+ traversal"]
+    B --&gt; C["Collect knowledge_item_ids + document_version_ids"]
+    C --&gt; D["DuckDB payload fetch"]
+    D --&gt; E["Assemble response with relation assertions + exact referenc=
+ed versions"]</pre>
+</div>
+</div>
+<h2 local-id=3D"14d4fd5460dc" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-18.Tradeoffs">18. Tradeoffs</h2>
+<h3 local-id=3D"acf0dcfdbd95" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-18.1Broadknowledgelayervsnarrowhistorical-intent-onlysystem">18.1 B=
+road knowledge layer vs narrow historical-intent-only system</h3>
+<p local-id=3D"3f0bd56971ee">Chosen:</p>
+<ul local-id=3D"4241b4202002">
+<li local-id=3D"843773272f61">
+<p local-id=3D"d9ad2d55208f">broad knowledge layer</p></li>
+</ul>
+<p local-id=3D"df13fe49a752">Pros:</p>
+<ul local-id=3D"052c4373269b">
+<li local-id=3D"c98ce21d7163">
+<p local-id=3D"23f2419b67e9">supports both repo context and historical rati=
+onale</p></li>
+<li local-id=3D"d301b43fda6b">
+<p local-id=3D"e4ce88730839">better long-term fit for automation</p></li>
+<li local-id=3D"24245ee7c0fb">
+<p local-id=3D"85dec7dbfd04">avoids having to redesign the model when non-c=
+ommit-scoped documents become important</p></li>
+</ul>
+<p local-id=3D"486184fd074c">Cons:</p>
+<ul local-id=3D"9ace34e9ad24">
+<li local-id=3D"91e7e5e0e1b2">
+<p local-id=3D"ae08c33a0332">broader schema and vocabulary</p></li>
+<li local-id=3D"0ecd46a4f4bc">
+<p local-id=3D"23e0f5b0f9a9">more initial design work</p></li>
+</ul>
+<h3 local-id=3D"91d2807ec71f" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-18.2One-storedesignvssplit-storedesign">18.2 One-store design vs sp=
+lit-store design</h3>
+<p local-id=3D"f54c5f23d215">Chosen:</p>
+<ul local-id=3D"9aee0cf1ac8c">
+<li local-id=3D"d63f6054d3ca">
+<p local-id=3D"ac7369242238">split-store local MVP</p></li>
+</ul>
+<p local-id=3D"503ffa61e591">Pros:</p>
+<ul local-id=3D"825a502c0c87">
+<li local-id=3D"ec9bc68ee8f7">
+<p local-id=3D"cae9b30f683a">document payloads and graph metadata can be op=
+timized differently</p></li>
+<li local-id=3D"345f4086709b">
+<p local-id=3D"be2423a8d351">local document storage can scale independently=
+ from graph traversal</p></li>
+<li local-id=3D"c1784d4b3800">
+<p local-id=3D"645ea1e6b92c">future chunking/analytics are easier in DuckDB=
+</p></li>
+</ul>
+<p local-id=3D"4e72f2eacf65">Cons:</p>
+<ul local-id=3D"40b04e1209b6">
+<li local-id=3D"5cda3d6e9ab6">
+<p local-id=3D"d2abc53a3a73">application-layer joins are required</p></li>
+<li local-id=3D"5dbb5aca8909">
+<p local-id=3D"9d8ae35b141d">storage complexity is higher than a single dat=
+abase</p></li>
+</ul>
+<h3 local-id=3D"7da73b81982c" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-18.3Item-levellinksonlyvsversion-boundlinks">18.3 Item-level links =
+only vs version-bound links</h3>
+<p local-id=3D"39c883af70eb">Chosen:</p>
+<ul local-id=3D"0dd5ad2df7e4">
+<li local-id=3D"0951de8f0a65">
+<p local-id=3D"3700463d2462">version-bound links</p></li>
+</ul>
+<p local-id=3D"a1526e09d4aa">Pros:</p>
+<ul local-id=3D"63b3ee7d8ed3">
+<li local-id=3D"18e2fe1766c1">
+<p local-id=3D"21349b2a064b">preserves exact historical context</p></li>
+<li local-id=3D"3315f01787a2">
+<p local-id=3D"c956c541e10f">old associations remain auditably correct</p><=
+/li>
+<li local-id=3D"408f284dbb9c">
+<p local-id=3D"14831016907d">avoids silently rewriting history when content=
+ changes</p></li>
+</ul>
+<p local-id=3D"fd731220aeb8">Cons:</p>
+<ul local-id=3D"40a9847ce097">
+<li local-id=3D"443a736aa07e">
+<p local-id=3D"2a914ed6ba30">more storage rows</p></li>
+<li local-id=3D"1c82012760fc">
+<p local-id=3D"4d9f3ed70750">slightly more complex retrieval semantics</p><=
+/li>
+</ul>
+<h3 local-id=3D"8d6660e1571a" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-18.4Automaticrelationcarry-forwardvsexplicitnewrelation">18.4 Autom=
+atic relation carry-forward vs explicit new relation</h3>
+<p local-id=3D"d48d17293b60">Chosen:</p>
+<ul local-id=3D"e0b49d9858df">
+<li local-id=3D"2aae5a5a38b9">
+<p local-id=3D"54bd0241ebae">preserve old links; create new ones explicitly=
+ later</p></li>
+</ul>
+<p local-id=3D"10384d3f81aa">Pros:</p>
+<ul local-id=3D"2e206d0283a0">
+<li local-id=3D"b7d157373eef">
+<p local-id=3D"be2bb79a06d4">keeps version history honest</p></li>
+<li local-id=3D"36e1b16ebec9">
+<p local-id=3D"3dbdd1f842fc">avoids accidental reassignment of old context =
+to new content</p></li>
+</ul>
+<p local-id=3D"d73888f43e6d">Cons:</p>
+<ul local-id=3D"f2979e9098bd">
+<li local-id=3D"d3725f5dbe44">
+<p local-id=3D"a876d233da95">users or automations may need to create new re=
+lations after refresh</p></li>
+</ul>
+<h2 local-id=3D"000787352e03" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-19.FutureAutomationModel">19. Future Automation Model</h2>
+<p local-id=3D"42b268e5688b">This design does not depend on automation exis=
+ting first.</p>
+<p local-id=3D"ae14b67838eb">The primary design center is:</p>
+<ul local-id=3D"9880c36a6112">
+<li local-id=3D"e1af1a07bc80">
+<p local-id=3D"97077ef7d35d">manual ingest</p></li>
+<li local-id=3D"e4ef95779e4c">
+<p local-id=3D"4a817374c439">manual associate</p></li>
+<li local-id=3D"c148cd569e9c">
+<p local-id=3D"fba157239c54">immutable version and relation handling</p></l=
+i>
+</ul>
+<p local-id=3D"5e798c9ac89f">Later automations are expected to be thin wrap=
+pers over the same primitives.</p>
+<p local-id=3D"0f63cdebee5a">Examples:</p>
+<ul local-id=3D"571ff7917197">
+<li local-id=3D"7fbd26d39e2b">
+<p local-id=3D"8b0b029c87c3">PR webhook receives a PR event</p>
+<ul local-id=3D"4effe15609f6">
+<li local-id=3D"0b59786dd3cf">
+<p local-id=3D"230b34f0980c">calls <code>ingest_source</code> for the PR</p=
+></li>
+<li local-id=3D"fa6ef00aec1d">
+<p local-id=3D"ccb249e2039b">calls <code>associate</code> to link it to com=
+mit context</p></li>
+</ul></li>
+<li local-id=3D"a343606744e8">
+<p local-id=3D"58e45df12f40">Slack message hook extracts a Jira ticket URL<=
+/p>
+<ul local-id=3D"bb3668c1a93e">
+<li local-id=3D"574bc2307147">
+<p local-id=3D"57f8d0bf4cb6">calls <code>ingest_source</code></p></li>
+<li local-id=3D"dfd5e4129236">
+<p local-id=3D"63ed5d912a75">optionally calls <code>associate</code></p></l=
+i>
+</ul></li>
+<li local-id=3D"c142a8379d5c">
+<p local-id=3D"7a0424623ef3">server-side scheduled refresh</p>
+<ul local-id=3D"dd8b387ae136">
+<li local-id=3D"c0797f064690">
+<p local-id=3D"9cafed168a1c">calls <code>refresh_source</code> on tracked k=
+nowledge items</p></li>
+</ul></li>
+</ul>
+<p local-id=3D"d0d799b4219a">The storage and relation model should not care=
+ whether the caller is:</p>
+<ul local-id=3D"410b68cf321f">
+<li local-id=3D"54719f8681c7">
+<p local-id=3D"3dd1207a22be">a human running the CLI</p></li>
+<li local-id=3D"05858a6965ef">
+<p local-id=3D"577fc026198f">a local hook</p></li>
+<li local-id=3D"d3e457fe5ab4">
+<p local-id=3D"e192ca0db8fc">a deployed server</p></li>
+</ul>
+<h2 local-id=3D"1ea9373c2985" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-20.ImplementationPhasing">20. Implementation Phasing</h2>
+<h3 local-id=3D"0119dc207659" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Phase1">Phase 1</h3>
+<p local-id=3D"f9e89aed9663">Build the substrate:</p>
+<ul local-id=3D"7bd2b108cadf">
+<li local-id=3D"5eabb6927deb">
+<p local-id=3D"ea97d2c5cd20">provider config</p></li>
+<li local-id=3D"df10f744b397">
+<p local-id=3D"a3b2f96b321a"><code>ingest_source</code></p></li>
+<li local-id=3D"c99e06e490c9">
+<p local-id=3D"910e38b33e4a"><code>associate</code></p></li>
+<li local-id=3D"5d8449e4e630">
+<p local-id=3D"61d128ab8797">SQLite graph store</p></li>
+<li local-id=3D"aa9f9fcce9cd">
+<p local-id=3D"cea8d246602b">DuckDB document store</p></li>
+</ul>
+<h3 local-id=3D"6915d5df93f8" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Phase2">Phase 2</h3>
+<p local-id=3D"8c3edd9c1b6c">Support structured sources:</p>
+<ul local-id=3D"5a0975c36054">
+<li local-id=3D"86ec49e103ef">
+<p local-id=3D"baaed52b243b">PR review comments</p></li>
+<li local-id=3D"eb90c2026d2f">
+<p local-id=3D"1fed96cd41d8">Confluence child pages</p></li>
+<li local-id=3D"f62daf7057f4">
+<p local-id=3D"e23120f7778f">direct artefact linking for anchored comments<=
+/p></li>
+</ul>
+<h3 local-id=3D"8fffaed8d38a" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Phase3">Phase 3</h3>
+<p local-id=3D"a8e1e840a4de">Add automation clients on top of the substrate=
+:</p>
+<ul local-id=3D"958ad0e3c5ff">
+<li local-id=3D"31cee9d8d5bd">
+<p local-id=3D"9d384c510446">commit -&gt; PR</p></li>
+<li local-id=3D"139f12b0ebc5">
+<p local-id=3D"8dcb740b3aa1">commit message -&gt; issues/tickets</p></li>
+<li local-id=3D"a6bede229d3f">
+<p local-id=3D"067b221fa4a1">PR body -&gt; issues/tickets</p></li>
+</ul>
+<h3 local-id=3D"ea67d5c96ad1" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Phase4">Phase 4</h3>
+<p local-id=3D"ac569fdd9c56">Expose raw retrieval:</p>
+<ul local-id=3D"8fde1e7ae98a">
+<li local-id=3D"af9b5ffd15a5">
+<p local-id=3D"eae584225f49"><code>knowledge()</code></p></li>
+</ul>
+<h3 local-id=3D"404d47420f36" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-Phase5">Phase 5</h3>
+<p local-id=3D"b3008152d051">Build higher-level reasoning:</p>
+<ul local-id=3D"8529374b7675">
+<li local-id=3D"873b722eeecd">
+<p local-id=3D"fa6cedea5d31"><code>historicalIntent()</code></p></li>
+<li local-id=3D"b9f5dc54efa7">
+<p local-id=3D"c7202f33fc8d">ranking</p></li>
+<li local-id=3D"1c761af886a9">
+<p local-id=3D"bcb3cf712b6f">summarization</p></li>
+<li local-id=3D"b339884fee8a">
+<p local-id=3D"b7bcca544836">explanation assembly</p></li>
+</ul>
+<h2 local-id=3D"c05b7579eb9c" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-21.OpenDesignQuestions">21. Open Design Questions</h2>
+<p local-id=3D"991a6f0c593a">These are the main unresolved low-level design=
+ questions:</p>
+<ul local-id=3D"ece0b7e014b5">
+<li local-id=3D"73456907c006">
+<p local-id=3D"ca08a01d2b25">exact <code>knowledge()</code> query grammar</=
+p></li>
+<li local-id=3D"665f2b86e7c5">
+<p local-id=3D"574f096fcaf9">whether future automations should refresh or o=
+nly link existing items</p></li>
+<li local-id=3D"57e871613167">
+<p local-id=3D"4623f072d81a">how to represent =E2=80=9Ccurrent logical rela=
+tions=E2=80=9D over immutable historical link rows</p></li>
+<li local-id=3D"121a93f1f430">
+<p local-id=3D"3f79279d8b9f">whether target document versions should always=
+ be recorded for knowledge-to-knowledge links or only optionally</p></li>
+<li local-id=3D"1a9a3a2d9fde">
+<p local-id=3D"a51bfc684a51">when same-repo GitHub issue shorthand should b=
+e supported in MVP</p></li>
+<li local-id=3D"af4cbcc77c09">
+<p local-id=3D"84750f5ab954">whether <code>knowledge_item</code> identity s=
+hould be globally stable across repositories or repository-scoped</p>
+<ul local-id=3D"5bf8a675838a">
+<li local-id=3D"27477289c36f">
+<p local-id=3D"988511cf071a">current leaning for MVP: keep <code>knowledge_=
+item</code> identity repository-scoped and revisit global deduplication lat=
+er if cross-repo knowledge becomes a real requirement</p></li>
+</ul></li>
+</ul>
+<h2 local-id=3D"30bd147ac947" id=3D"Knowledge-HistoricalIntent-DesignSpecif=
+ication-22.BottomLine">22. Bottom Line</h2>
+<p local-id=3D"b1c99a3bea1c">The right low-level design is:</p>
+<ul local-id=3D"7e636c4fe887">
+<li local-id=3D"e467ee529bd6">
+<p local-id=3D"57efcf2d4a03">stable knowledge items</p></li>
+<li local-id=3D"228338a4bf10">
+<p local-id=3D"3120287927df">immutable document versions</p></li>
+<li local-id=3D"f3ed54a5a632">
+<p local-id=3D"453dee5c409b">append-only, version-bound relations</p></li>
+<li local-id=3D"80f6d0586d4c">
+<p local-id=3D"296709aed7e3">local-first split storage:</p>
+<ul local-id=3D"808ec00552e8">
+<li local-id=3D"af933c82ddc6">
+<p local-id=3D"a2aacfd099b4">DuckDB for documents</p></li>
+<li local-id=3D"1ac0e3f4d38d">
+<p local-id=3D"95aafd764c03">SQLite for graph metadata</p></li>
+</ul></li>
+<li local-id=3D"eb6536dcdadb">
+<p local-id=3D"7000ae21f45c">provider adapters for ingestion</p></li>
+<li local-id=3D"7f9b09cbcf67">
+<p local-id=3D"26f0ee462a00">one reusable set of primitives for both manual=
+ use and future automation</p></li>
+</ul>
+<p local-id=3D"c44f67e3eb44">If this substrate is implemented correctly, ad=
+ding future automations becomes a trigger problem, not a data-model redesig=
+n problem.</p>
+    </div>
+</body>
+</html>
+------=_Part_56_1426608814.1774266825835--

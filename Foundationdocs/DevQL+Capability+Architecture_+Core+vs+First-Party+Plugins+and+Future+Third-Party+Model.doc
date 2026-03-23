@@ -1,0 +1,568 @@
+Date: Mon, 23 Mar 2026 11:42:34 +0000 (UTC)
+Message-ID: <544959863.67.1774266154920@89713b12adc4>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_66_824241774.1774266154919"
+
+------=_Part_66_824241774.1774266154919
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>DevQL Capability Architecture: Core vs First-Party Plugins and F=
+uture Third-Party Model</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>DevQL Capability Architecture: Core vs First-Party Plugins and Futu=
+re Third-Party Model</h1>
+    <div class=3D"Section1">
+        <h1 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFu=
+tureThird-PartyModel-DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsan=
+dFutureThird-PartyModel">DevQL Capability Architecture: Core vs First-Party=
+ Plugins and Future Third-Party Model</h1>
+<p><em>Date: March 16, 2026</em></p>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-Purpose">Purpose</h2>
+<p>This page documents:</p>
+<p>a) the reasoning behind the plugin approach <br>
+b) the classification of planned capabilities into Core vs first-party plug=
+ins <br>
+c) how first-party plugins will be implemented <br>
+d) how third-party plugins can work in the future, and what we must impleme=
+nt now to support that safely.</p>
+<hr>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-A)WhyaPluginApproach">A) Why a Plugin Approach</h2>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-1)Problemwearesolving">1) Problem we are solving</h2>
+<p>We are adding multiple advanced capabilities (Blast Radius, Knowledge, S=
+emantic Clones, Test Harness) that evolve at different speeds, have differe=
+nt dependencies, and may require different storage/computation profiles.</p=
+>
+<p>If everything is hardcoded into one DevQL monolith:</p>
+<ul>
+<li>
+<p>every new capability forces central parser/executor changes</p></li>
+<li>
+<p>release risk increases as surface area grows</p></li>
+<li>
+<p>experimentation (models, heuristics, scoring) becomes harder</p></li>
+<li>
+<p>ownership boundaries are unclear</p></li>
+</ul>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-2)Whyapluginarchitectureistherightdirection">2) Why a plugin a=
+rchitecture is the right direction</h2>
+<p>A plugin-oriented capability model gives:</p>
+<ul>
+<li>
+<p><strong>Separation of concerns</strong>: capability-specific logic stays=
+ isolated</p></li>
+<li>
+<p><strong>Extensibility</strong>: new stages/ingesters can be added withou=
+t destabilizing the core</p></li>
+<li>
+<p><strong>Safer evolution</strong>: we can iterate scoring/classification =
+logic independently</p></li>
+<li>
+<p><strong>Operational flexibility</strong>: some capabilities can be enabl=
+ed/disabled by deployment profile</p></li>
+<li>
+<p><strong>Future ecosystem readiness</strong>: clear host/plugin boundarie=
+s enable third-party support later</p></li>
+</ul>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-3)Whynotmakeeverythingaplugin">3) Why not make everything a pl=
+ugin</h2>
+<p>Some concerns are foundational and cross-cutting. If they are pluginized=
+ too early, we lose consistency and increase coordination cost.</p>
+<p>Therefore, we keep a <strong>small, stable Core</strong> and move capabi=
+lity-specific intelligence into plugins.</p>
+<hr>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-B)CapabilityClassification:CorevsFirst-PartyPlugins">B) Capabi=
+lity Classification: Core vs First-Party Plugins</h2>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-1)Plannedcapabilities(currentscope)">1) Planned capabilities (=
+current scope)</h2>
+<div class=3D"table-wrap">
+<table data-layout=3D"default" class=3D"confluenceTable">
+<tbody>
+<tr>
+<th class=3D"confluenceTh">
+<p>Capability</p></th>
+<th class=3D"confluenceTh">
+<p>Classification</p></th>
+<th class=3D"confluenceTh">
+<p>Rationale</p></th>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><strong>Blast Radius</strong></p></td>
+<td class=3D"confluenceTd">
+<p><strong>Core</strong></p></td>
+<td class=3D"confluenceTd">
+<p>Foundational static graph substrate; other capabilities depend on artefa=
+ct/dependency correctness.</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><strong>Knowledge</strong></p></td>
+<td class=3D"confluenceTd">
+<p><strong>First-party plugin</strong> on top of core provenance primitives=
+</p></td>
+<td class=3D"confluenceTd">
+<p>Ingestion/retrieval behavior varies by source and policy; should be modu=
+lar. Core provides shared identity/version/relation primitives.</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><strong>Semantic Clones</strong></p></td>
+<td class=3D"confluenceTd">
+<p><strong>First-party plugin</strong></p></td>
+<td class=3D"confluenceTd">
+<p>Model/provider/scoring choices evolve frequently; plugin boundary reduce=
+s core churn.</p></td>
+</tr>
+<tr>
+<td class=3D"confluenceTd">
+<p><strong>Test Harness</strong></p></td>
+<td class=3D"confluenceTd">
+<p><strong>First-party plugin</strong></p></td>
+<td class=3D"confluenceTd">
+<p>Test linkage/classification/coverage heuristics are capability-specific =
+and iterative.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-2)Coreplatformresponsibilities(notoptional)">2) Core platform =
+responsibilities (not optional)</h2>
+<p>Core must own:</p>
+<ul>
+<li>
+<p>snapshot and temporal semantics (<code>repo</code>, <code>asOf</code>, c=
+ommit-addressable truth)</p></li>
+<li>
+<p>canonical artefact/symbol model and dependency graph</p></li>
+<li>
+<p>query pipeline kernel (parse/validate/plan/execute)</p></li>
+<li>
+<p>stage registry and schema metadata registry</p></li>
+<li>
+<p>storage gateways and migration orchestration</p></li>
+<li>
+<p>provenance stamping and result traceability</p></li>
+</ul>
+<hr>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-C)First-PartyPluginImplementationModel">C) First-Party Plugin =
+Implementation Model</h2>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-1)Runtimeshape">1) Runtime shape</h2>
+<p>First-party plugins are implemented in-repo and loaded by a host registr=
+y at startup.</p>
+<p>Each plugin contributes:</p>
+<ul>
+<li>
+<p>query stages (e.g., <code>tests()</code>, <code>coverage()</code>, <code=
+>semanticClones()</code>, <code>knowledge()</code>)</p></li>
+<li>
+<p>ingestion hooks (e.g., enrich-on-ingest, coverage ingest, connector inge=
+st)</p></li>
+<li>
+<p>schema metadata for Query Explorer autocomplete</p></li>
+<li>
+<p>capability-specific migrations through host-controlled migration APIs</p=
+></li>
+</ul>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-2)Suggestedplugincontract">2) Suggested plugin contract</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">trait C=
+apabilityPlugin {
+    fn id(&amp;self) -&gt; &amp;'static str;
+    fn register_stages(&amp;self, stages: &amp;mut StageRegistry);
+    fn register_ingesters(&amp;self, ingesters: &amp;mut IngestRegistry);
+    fn register_schema(&amp;self, schema: &amp;mut QuerySchemaRegistry);
+    fn migrate(&amp;self, migrator: &amp;mut Migrator) -&gt; anyhow::Result=
+&lt;()&gt;;
+}</pre>
+</div>
+</div>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-3)Executionflow">3) Execution flow</h2>
+<ol start=3D"1">
+<li>
+<p>DevQL host boots</p></li>
+<li>
+<p>Host loads first-party plugin registry</p></li>
+<li>
+<p>Plugins register stages/ingesters/schema entries</p></li>
+<li>
+<p>Query parser resolves stage names through registry</p></li>
+<li>
+<p>Executor invokes stage handlers through typed host context</p></li>
+<li>
+<p>Outputs are schema-validated, provenance-stamped, and returned</p></li>
+</ol>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-4)Implementationconstraintsforfirst-partyplugins">4) Implement=
+ation constraints for first-party plugins</h2>
+<ul>
+<li>
+<p>plugin code does not bypass host abstractions</p></li>
+<li>
+<p>storage access should go through host gateways (not raw unrestricted SQL=
+ everywhere)</p></li>
+<li>
+<p>every plugin stage has typed args and typed outputs</p></li>
+<li>
+<p>plugin-produced data includes <code>capability_id</code> and version met=
+adata for traceability</p></li>
+</ul>
+<hr>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-D)FutureThird-PartyPluginModelandWhatWeNeedNow">D) Future Thir=
+d-Party Plugin Model and What We Need Now</h2>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-1)Futurethird-partymodel">1) Future third-party model</h2>
+<p>We should support third-party plugins as <strong>out-of-process</strong>=
+ components (separate binary/WASM), not arbitrary in-process code.</p>
+<p>High-level model:</p>
+<ul>
+<li>
+<p>plugin package contains manifest + executable/WASM + signature</p></li>
+<li>
+<p>host validates compatibility and trust policy</p></li>
+<li>
+<p>plugin performs handshake with host (capabilities, stages, required perm=
+issions)</p></li>
+<li>
+<p>stage/ingest calls happen over stable RPC (e.g., JSON-RPC/gRPC)</p></li>
+<li>
+<p>host enforces timeouts, resource limits, scope checks, output validation=
+</p></li>
+</ul>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-2)Permissionscopesforthird-partyplugins">2) Permission scopes =
+for third-party plugins</h2>
+<p>Examples:</p>
+<ul>
+<li>
+<p><code>read_source</code></p></li>
+<li>
+<p><code>read_git_metadata</code></p></li>
+<li>
+<p><code>read_events</code></p></li>
+<li>
+<p><code>write_plugin_namespace</code></p></li>
+<li>
+<p><code>network</code> (explicitly opt-in)</p></li>
+</ul>
+<p>Default policy should be least-privilege and deny-by-default.</p>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-3)Whatwemustimplementnow(requiredfoundation)">3) What we must =
+implement now (required foundation)</h2>
+<p>To avoid a costly retrofit later, we should implement these now even for=
+ first-party plugins:</p>
+<ol start=3D"1">
+<li>
+<p><strong>Capability metadata model</strong></p>
+<ul>
+<li>
+<p>id, version, api_version, declared required scopes</p></li>
+</ul></li>
+<li>
+<p><strong>Host-controlled execution context</strong></p>
+<ul>
+<li>
+<p>stage handlers receive a constrained host context, not ambient unrestric=
+ted access</p></li>
+</ul></li>
+<li>
+<p><strong>Storage gateway abstraction</strong></p>
+<ul>
+<li>
+<p>namespaced writes and typed storage APIs</p></li>
+</ul></li>
+<li>
+<p><strong>Stage I/O schema contracts</strong></p>
+<ul>
+<li>
+<p>typed argument and output validation at registry boundary</p></li>
+</ul></li>
+<li>
+<p><strong>Provenance stamping</strong></p>
+<ul>
+<li>
+<p>persist capability id/version/run metadata with outputs</p></li>
+</ul></li>
+<li>
+<p><strong>Versioned plugin API</strong></p>
+<ul>
+<li>
+<p>explicit compatibility handshake for future third-party adapters</p></li=
+>
+</ul></li>
+<li>
+<p><strong>Policy hooks</strong></p>
+<ul>
+<li>
+<p>enable/disable by capability; future scope-approval checks</p></li>
+</ul></li>
+</ol>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-4)Practicalsequencing">4) Practical sequencing</h2>
+<ul>
+<li>
+<p><strong>Phase 1</strong>: Registry-based first-party plugin architecture=
+ in-process</p></li>
+<li>
+<p><strong>Phase 2</strong>: Permission-aware host context and storage gate=
+ways</p></li>
+<li>
+<p><strong>Phase 3</strong>: External plugin runtime adapter (RPC)</p></li>
+<li>
+<p><strong>Phase 4</strong>: Packaging/signing/trust-policy UX</p></li>
+</ul>
+<p>This keeps near-term delivery fast while ensuring long-term extensibilit=
+y and safety.</p>
+<hr>
+<h2 id=3D"DevQLCapabilityArchitecture:CorevsFirst-PartyPluginsandFutureThir=
+d-PartyModel-Summary">Summary</h2>
+<ul>
+<li>
+<p>Keep Core minimal, stable, and foundational.</p></li>
+<li>
+<p>Treat Blast Radius as Core.</p></li>
+<li>
+<p>Implement Knowledge, Semantic Clones, and Test Harness as first-party pl=
+ugins.</p></li>
+<li>
+<p>Introduce execution/storage/schema/provenance boundaries now so third-pa=
+rty plugins become an extension, not a redesign.</p></li>
+</ul>
+    </div>
+</body>
+</html>
+------=_Part_66_824241774.1774266154919--

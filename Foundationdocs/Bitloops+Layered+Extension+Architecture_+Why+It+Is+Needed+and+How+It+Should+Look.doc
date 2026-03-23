@@ -1,0 +1,1182 @@
+Date: Mon, 23 Mar 2026 11:42:51 +0000 (UTC)
+Message-ID: <2014719635.81.1774266171556@c0962d0c594b>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_80_749830027.1774266171555"
+
+------=_Part_80_749830027.1774266171555
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>Bitloops Layered Extension Architecture: Why It Is Needed and Ho=
+w It Should Look</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>Bitloops Layered Extension Architecture: Why It Is Needed and How I=
+t Should Look</h1>
+    <div class=3D"Section1">
+        <h1 local-id=3D"f4c449d07cd7" id=3D"BitloopsLayeredExtensionArchite=
+cture:WhyItIsNeededandHowItShouldLook-BitloopsLayeredExtensionArchitecture"=
+>Bitloops Layered Extension Architecture</h1>
+<h2 local-id=3D"504f8eef20d7" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Purpose">Purpose</h2>
+<p local-id=3D"5adccc860a42">This document defines the <strong>layered exte=
+nsion architecture</strong> Bitloops should adopt across the product.</p>
+<p local-id=3D"ee34a72b40f1">The goal is to establish a broader extension m=
+odel that explains:</p>
+<ul local-id=3D"9713a6788073">
+<li local-id=3D"1ad270ff15d2">
+<p local-id=3D"6fea8d175fd1">why Bitloops needs multiple extension seams ra=
+ther than one generic plugin mechanism</p></li>
+<li local-id=3D"c735f9d0188e">
+<p local-id=3D"9f0316bcf2a5">which parts of the system should remain Core</=
+p></li>
+<li local-id=3D"e81b8d362b10">
+<p local-id=3D"3930e0b4dd46">which parts should be extensible</p></li>
+<li local-id=3D"b191bd3fa748">
+<p local-id=3D"3d326bae48e4">how those extension layers should interact</p>=
+</li>
+<li local-id=3D"248921a5b604">
+<p local-id=3D"26458d8c4f07">how this architecture supports product reach, =
+platform velocity, security, and monetisation</p></li>
+</ul>
+<p local-id=3D"6d53c375c0ef">This is the <strong>umbrella architecture docu=
+ment</strong> for the topic.</p>
+<p local-id=3D"b07ab0bc4832">Follow-up documents should deep dive into each=
+ category separately.</p>
+<hr local-id=3D"5eb543816926">
+<h2 local-id=3D"37d07d344e0d" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-ExecutiveSummary">Executive Summary</h2>
+<p local-id=3D"88aa67db2ebd">Bitloops is now reaching the point where a sin=
+gle monolithic architecture is no longer the right shape.</p>
+<p local-id=3D"3f6b4fefcfcd">The pressure is coming from multiple direction=
+s at once:</p>
+<ul local-id=3D"c6b199c693bb">
+<li local-id=3D"8581b2a99fe6">
+<p local-id=3D"7ae1685ffde6">DevQL capabilities are diverging in complexity=
+ and rate of change</p></li>
+<li local-id=3D"e483a77e270b">
+<p local-id=3D"258a8f85dc87">agent support is expanding across multiple env=
+ironments and protocols</p></li>
+<li local-id=3D"a7e6dfb14826">
+<p local-id=3D"720859f37552">language support must grow far beyond Rust and=
+ TypeScript</p></li>
+<li local-id=3D"81b07cfc1fa1">
+<p local-id=3D"3d9c0ee5b4ee">model/inference backends need to remain flexib=
+le</p></li>
+<li local-id=3D"3bf6b98d005d">
+<p local-id=3D"8774f1957c5a">connectors and test/coverage ecosystems are br=
+oadening</p></li>
+<li local-id=3D"640c4aefe6fd">
+<p local-id=3D"b119eba2ef6d">dashboard and remote API/server concerns are e=
+merging</p></li>
+<li local-id=3D"b118e18786e8">
+<p local-id=3D"4daf2efce661">enterprise and paid product requirements intro=
+duce stronger security, governance, and deployment needs</p></li>
+</ul>
+<p local-id=3D"1bd4b77a996f">These pressures cannot be served by a monolith=
+ic architecture and should not all be solved by a single generic =E2=80=9Cp=
+lugin system=E2=80=9D either.</p>
+<p local-id=3D"be17304f0317">Instead, Bitloops should adopt a <strong>layer=
+ed extension architecture</strong> with clear categories of extensibility.<=
+/p>
+<p local-id=3D"1563f68397c2">The proposed model has four layers:</p>
+<ol start=3D"1" local-id=3D"2f80656f42a0">
+<li local-id=3D"669285d74bc3">
+<p local-id=3D"5d178b7f02be"><strong>Capability Packs</strong> <br>
+User-visible intelligence extensions such as Knowledge, Semantic Clones, an=
+d Test Harness.</p></li>
+<li local-id=3D"8d1adab9aaa6">
+<p local-id=3D"f3ec86326025"><strong>Adapter Plugins</strong> <br>
+Integration seams such as agent adapters, language packs, model providers, =
+connectors, coverage adapters, and auth providers.</p></li>
+<li local-id=3D"4c1c3b25322d">
+<p local-id=3D"f8f9805b56da"><strong>Runtime Products</strong> <br>
+Different deployment shapes built on shared open-core foundations, includin=
+g local CLI and remote server products.</p></li>
+<li local-id=3D"9bc171dc4e11">
+<p local-id=3D"26054fbf1c41"><strong>Commercial / Governance Packs</strong>=
+ <br>
+Paid or enterprise-oriented layers such as private inference, internal conn=
+ectors, remote shared services, policy, audit, and governance.</p></li>
+</ol>
+<p local-id=3D"6113e79ac390">This architecture is needed because Bitloops i=
+s no longer just a local CLI with a query layer.</p>
+<p local-id=3D"9ba58ede60d3">It is already becoming a platform.</p>
+<hr local-id=3D"0d685331b855">
+<h2 local-id=3D"1ff5d1372772" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-TheProblemWeAreActuallySolving">The Problem W=
+e Are Actually Solving</h2>
+<p local-id=3D"1baa2a0e5821">There are several extension pressures currentl=
+y appearing at the same time.</p>
+<h3 local-id=3D"0800cf1a0217" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-1.DevQLcapabilitiesarediverging">1. DevQL cap=
+abilities are diverging</h3>
+<p local-id=3D"74904bf5b83e">Knowledge, Semantic Clones, Test Harness, and =
+future capabilities do not evolve at the same speed and do not share the sa=
+me dependencies.</p>
+<h3 local-id=3D"45a1075a3dc8" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-2.Agentsupportisexpanding">2. Agent support i=
+s expanding</h3>
+<p local-id=3D"4e6e56c941b3">Right now, support for different agents can ea=
+sily become hardcoded.</p>
+<p local-id=3D"544cb6ab0ef1">But different agent environments introduce rea=
+l variation:</p>
+<ul local-id=3D"664932d1032e">
+<li local-id=3D"58ff6fa9911b">
+<p local-id=3D"c9e66b730906">transport/protocol expectations</p></li>
+<li local-id=3D"70953d625e90">
+<p local-id=3D"abecdb0e6bc8">tool discovery shape</p></li>
+<li local-id=3D"ca1921215dd4">
+<p local-id=3D"3471df8c77dd">instruction surface</p></li>
+<li local-id=3D"8a3490cde72e">
+<p local-id=3D"9cf14bc03d8f">session lifecycle</p></li>
+<li local-id=3D"3e0be11d2f17">
+<p local-id=3D"8a333e079057">auth/bootstrap expectations</p></li>
+<li local-id=3D"824502f47655">
+<p local-id=3D"900782e07bc4">limitations of each ecosystem</p></li>
+</ul>
+<p local-id=3D"436f5035f2b0">If these differences are hardcoded into the pr=
+oduct, the host will become cluttered and brittle.</p>
+<h3 local-id=3D"b51fd7df2caf" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-3.Languagesupportmustscale">3. Language suppo=
+rt must scale</h3>
+<p local-id=3D"05c62a6a21be">Bitloops cannot remain limited to Rust and Typ=
+eScript.</p>
+<p local-id=3D"f9b4ac1a7133">Adding new languages should not require scatte=
+ring language-specific logic across Core.</p>
+<p local-id=3D"0d4b9b18e706">The platform needs a consistent way to add:</p=
+>
+<ul local-id=3D"e373a1a69b6c">
+<li local-id=3D"15bc5ace28b3">
+<p local-id=3D"08656ed65719">parsers</p></li>
+<li local-id=3D"456934117c72">
+<p local-id=3D"db9505a2d522">artefact extraction rules</p></li>
+<li local-id=3D"e6e0fb5bd236">
+<p local-id=3D"621e4a42b3a6">symbol and dependency rules</p></li>
+<li local-id=3D"65273ad5846e">
+<p local-id=3D"0cbfb704a543">test discovery conventions</p></li>
+<li local-id=3D"802c1f4a1806">
+<p local-id=3D"5d4b6e0c1900">language-specific capability enrichments</p></=
+li>
+</ul>
+<h3 local-id=3D"6aaaf5eb9fa9" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-4.Deploymentshapeischanging">4. Deployment sh=
+ape is changing</h3>
+<p local-id=3D"adff80cfef64">Bitloops is not only a local CLI anymore.</p>
+<p local-id=3D"041a90f76713">The product direction now includes:</p>
+<ul local-id=3D"635a4247395e">
+<li local-id=3D"06e1fe45c6f3">
+<p local-id=3D"671cee190ba0">dashboard/API surfaces</p></li>
+<li local-id=3D"0e71ca669754">
+<p local-id=3D"771094b637c8">remote shared services</p></li>
+<li local-id=3D"abdd89c06d3d">
+<p local-id=3D"1c3031ebe0c7">security and shared database concerns</p></li>
+<li local-id=3D"0c336b7a5ac9">
+<p local-id=3D"c6ccdeb7480b">remote CLI/agent access to a common backend</p=
+></li>
+</ul>
+<p local-id=3D"c60c885f72e7">That means Bitloops is moving from a <strong>s=
+ingle local runtime</strong> toward <strong>multiple runtimes</strong> buil=
+t on shared foundations.</p>
+<h3 local-id=3D"8fa61a6c6672" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-5.Productandmonetisationconcernsareincreasing=
+">5. Product and monetisation concerns are increasing</h3>
+<p local-id=3D"b7f5eaad8a86">Some extensions are not merely technical.</p>
+<p local-id=3D"287761fc75bd">They are commercial and operational boundaries=
+:</p>
+<ul local-id=3D"0efe236f0f05">
+<li local-id=3D"77d57ad88d8f">
+<p local-id=3D"fbc353fadc2a">private model routing</p></li>
+<li local-id=3D"2af8326b1c24">
+<p local-id=3D"76312ca38649">internal enterprise connectors</p></li>
+<li local-id=3D"803a0445be68">
+<p local-id=3D"90d325552e8d">auditability</p></li>
+<li local-id=3D"8af1ea661275">
+<p local-id=3D"88a9536bf26d">policy enforcement</p></li>
+<li local-id=3D"1a03c61d6779">
+<p local-id=3D"4f13073535c2">remote shared services</p></li>
+<li local-id=3D"7b8eb93f5bd8">
+<p local-id=3D"3f7b818d4d01">governance and entitlements</p></li>
+</ul>
+<p local-id=3D"22178bfb12db">These should not be mixed conceptually with or=
+dinary language or provider adapters.</p>
+<hr local-id=3D"491a08adc153">
+<h2 local-id=3D"8143210bc4c6" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-WhyOneGenericPluginSystemIsNotEnough">Why One=
+ Generic Plugin System Is Not Enough</h2>
+<p local-id=3D"8fa08e1093bb">A single undifferentiated plugin model would c=
+reate confusion and bad boundaries.</p>
+<p local-id=3D"0e327b5a7210">For example:</p>
+<ul local-id=3D"59a8d08d1579">
+<li local-id=3D"64200ac9c19d">
+<p local-id=3D"84f499587513">a Knowledge capability is not the same kind of=
+ thing as a Python language pack</p></li>
+<li local-id=3D"18489aa973f6">
+<p local-id=3D"2608d54d99f5">a Claude Code adapter is not the same kind of =
+thing as an enterprise compliance module</p></li>
+<li local-id=3D"835ff0daee05">
+<p local-id=3D"779005fdc286">a remote multi-user server runtime is not the =
+same kind of thing as a DevQL stage extension</p></li>
+</ul>
+<p local-id=3D"58e7f532a0ca">They differ in:</p>
+<ul local-id=3D"aa8d52befd27">
+<li local-id=3D"ef4407a9ac8c">
+<p local-id=3D"0d8ca4a6c2b3">lifecycle</p></li>
+<li local-id=3D"8bc7b55ca597">
+<p local-id=3D"4aa2bd9ae0d1">risk profile</p></li>
+<li local-id=3D"52560d97b684">
+<p local-id=3D"c500fddf8e7a">ownership</p></li>
+<li local-id=3D"411543524853">
+<p local-id=3D"6cf41f91d45b">testing model</p></li>
+<li local-id=3D"146426452a43">
+<p local-id=3D"71fc4abdd331">security implications</p></li>
+<li local-id=3D"2e9f06e84293">
+<p local-id=3D"9c689b7660d0">packaging implications</p></li>
+<li local-id=3D"4b2d62fc32d0">
+<p local-id=3D"f890a79028b2">monetisation role</p></li>
+</ul>
+<p local-id=3D"f62d8b29849e">If all of these are treated as the same catego=
+ry of plugin, Bitloops will lose architectural clarity.</p>
+<p local-id=3D"45659f9686d2">So the correct move is not:</p>
+<blockquote local-id=3D"f8ff005c1619">
+<p local-id=3D"911bd88dbee8">=E2=80=9CLet=E2=80=99s make everything a plugi=
+n.=E2=80=9D</p>
+</blockquote>
+<p local-id=3D"4d0981b8d884">The correct move is:</p>
+<blockquote local-id=3D"bca7b218f22e">
+<p local-id=3D"4b926911ba4f">=E2=80=9CLet=E2=80=99s define the right extens=
+ion seam for each category of change.=E2=80=9D</p>
+</blockquote>
+<hr local-id=3D"f502b0a7379d">
+<h2 local-id=3D"35bd32ce298a" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-ArchitecturePrinciples">Architecture Principl=
+es</h2>
+<p local-id=3D"e7262a7b7965">The layered extension architecture should foll=
+ow these principles.</p>
+<h3 local-id=3D"089c3f3d9a01" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-1.KeepCoresmall,stable,andopinionated">1. Kee=
+p Core small, stable, and opinionated</h3>
+<p local-id=3D"f83319ae29cf">Core should own the platform foundations that =
+must remain coherent across every extension type.</p>
+<h3 local-id=3D"9f74f03c2a5b" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-2.Differentkindsofextensibilityshouldusediffe=
+rentcontracts">2. Different kinds of extensibility should use different con=
+tracts</h3>
+<p local-id=3D"d662e94f80f0">Capability packs, language packs, agent adapte=
+rs, and runtimes are not the same thing and should not share a fake one-siz=
+e-fits-all abstraction.</p>
+<h3 local-id=3D"d514383973c4" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-3.User-visiblevalueshouldmaptocleanproductsur=
+faces">3. User-visible value should map to clean product surfaces</h3>
+<p local-id=3D"df3b2be04908">Top-level packaging boundaries should correspo=
+nd to things users understand and buy, not low-level implementation details=
+.</p>
+<h3 local-id=3D"1a79c98de57f" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-4.Extensionsshouldbeadditive,notdestabilising=
+">4. Extensions should be additive, not destabilising</h3>
+<p local-id=3D"2242555bee88">New extensions should expand Bitloops without =
+repeatedly forcing redesign of the host.</p>
+<h3 local-id=3D"8d2f79af559a" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-5.Security,provenance,andpolicystayhost-contr=
+olled">5. Security, provenance, and policy stay host-controlled</h3>
+<p local-id=3D"7d5ac16b3972">Extension does not mean unrestricted execution=
+ or ad hoc data access.</p>
+<h3 local-id=3D"30c59dd67c97" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-6.Open-corereuseshouldbemaximisedacrossruntim=
+es">6. Open-core reuse should be maximised across runtimes</h3>
+<p local-id=3D"daceebe06cbd">Local CLI and remote/server products should sh=
+are core libraries and canonical models wherever possible.</p>
+<h3 local-id=3D"df92c0b3aece" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-7.Paid/enterprisevalueshouldhaveexplicitbound=
+aries">7. Paid/enterprise value should have explicit boundaries</h3>
+<p local-id=3D"ca1353767f8d">Commercial layers should not be accidental by-=
+products of the codebase. They should be recognised as first-class product =
+architecture concerns.</p>
+<hr local-id=3D"3cbd45e0d069">
+<h2 local-id=3D"459cce87f694" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-TheProposedLayeredModel">The Proposed Layered=
+ Model</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">flowcha=
+rt TD
+    A["Core Platform"] --&gt; B["Capability Packs"]
+    A --&gt; C["Adapter Plugins"]
+    A --&gt; D["Runtime Products"]
+    A --&gt; E["Commercial / Governance Packs"]
+
+    subgraph sg1 [" "]
+        B1["Knowledge"]
+        B2["Semantic Clones"]
+        B3["Test Harness"]
+    end
+    B --&gt; sg1
+
+    subgraph sg2 [" "]
+        C1["Agent Adapters"]
+        C2["Language Packs"]
+        C3["Model Providers"]
+        C4["Connectors"]
+        C5["Coverage/Test Adapters"]
+        C6["Auth / Storage Adapters"]
+    end
+    C --&gt; sg2
+
+    subgraph sg3 [" "]
+        D1["Local CLI Runtime"]
+        D2["Remote Server Runtime"]
+        D3["Dashboard/API Runtime"]
+    end
+    D --&gt; sg3
+
+    subgraph sg4 [" "]
+        E1["Private Inference"]
+        E2["Internal Connectors"]
+        E3["Policy / Compliance"]
+        E4["Governance / Audit"]
+    end
+    E --&gt; sg4</pre>
+</div>
+</div>
+<hr local-id=3D"875c6e28b6dd">
+<h2 local-id=3D"90b9cc4b777c" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Layer1:CapabilityPacks"><a href=3D"https://bi=
+tloops.atlassian.net/wiki/spaces/ADCP/pages/452591621/DevQL+Capability+Pack=
+s+Architecture+and+Implementation+Compass" data-linked-resource-id=3D"45259=
+1621" data-linked-resource-version=3D"8" data-linked-resource-type=3D"page"=
+>Layer 1: Capability Packs</a></h2>
+<h3 local-id=3D"b0906ead53dc" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Definition">Definition</h3>
+<p local-id=3D"a1f0f90975f4">Capability packs are <strong>user-visible inte=
+lligence extensions</strong>.</p>
+<p local-id=3D"7cdcb3febf08">They add meaningful behaviour to Bitloops=E2=
+=80=99 reasoning, retrieval, or analysis surface.</p>
+<p local-id=3D"d319f2c8fee1">Examples:</p>
+<ul local-id=3D"6766ebdc8e97">
+<li local-id=3D"4da77a0a2ed6">
+<p local-id=3D"05f39e67ea63">Knowledge</p></li>
+<li local-id=3D"23c3c7080d8a">
+<p local-id=3D"8ff3dba10414">Semantic Clones</p></li>
+<li local-id=3D"bee8e988d8e4">
+<p local-id=3D"0a73debf5ced">Test Harness</p></li>
+<li local-id=3D"a198138a5d12">
+<p local-id=3D"c079e0d8a754">future compliance/evidence or workflow reasoni=
+ng packs</p></li>
+</ul>
+<h3 local-id=3D"e1d875c2d67d" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whattheyshouldown">What they should own</h3>
+<p local-id=3D"aeafb25797a0">Capability packs may contribute:</p>
+<ul local-id=3D"c0f9ca5e3ead">
+<li local-id=3D"67871a8def79">
+<p local-id=3D"b9059e69ba41">query stages and higher-level DevQL surfaces</=
+p></li>
+<li local-id=3D"8bd693d0b6e3">
+<p local-id=3D"6bdc2277c745">ingestion hooks or enrichers specific to the c=
+apability</p></li>
+<li local-id=3D"e243b162563c">
+<p local-id=3D"cbd9fc6c24ac">capability-specific scoring, ranking, or infer=
+ence logic</p></li>
+<li local-id=3D"eea99cdf6f0a">
+<p local-id=3D"2029635e597c">schema/discoverability metadata</p></li>
+<li local-id=3D"15e3aeb3ff39">
+<p local-id=3D"d2183ac0b5df">capability-owned migrations through host APIs<=
+/p></li>
+</ul>
+<h3 local-id=3D"9076543de273" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whattheyshouldnotown">What they should not ow=
+n</h3>
+<p local-id=3D"e351f2a9f948">Capability packs should not own:</p>
+<ul local-id=3D"3444333dee9c">
+<li local-id=3D"4c74605cf4d5">
+<p local-id=3D"5bd338d60ade">canonical repo/temporal semantics</p></li>
+<li local-id=3D"48727a2b7089">
+<p local-id=3D"fb53122a64a2">unrestricted storage access</p></li>
+<li local-id=3D"41b339ffdc67">
+<p local-id=3D"d5f827d35672">global policy enforcement</p></li>
+<li local-id=3D"100d1b92a524">
+<p local-id=3D"754450e5188e">host-owned provenance rules</p></li>
+<li local-id=3D"90f8177ba9df">
+<p local-id=3D"ffe7dd95cb22">runtime-specific security policy</p></li>
+</ul>
+<h3 local-id=3D"1484eafaaec4" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whythiscategoryexists">Why this category exis=
+ts</h3>
+<p local-id=3D"076a2c108e74">These are the highest-value product extensions=
+.</p>
+<p local-id=3D"f8bad6757c88">They are the main engine of user-facing intell=
+igence, packaging, and differentiated value.</p>
+<hr local-id=3D"b615b99bb3b4">
+<h2 local-id=3D"bb57bf540d4c" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Layer2:AdapterPlugins">Layer 2: Adapter Plugi=
+ns</h2>
+<h3 local-id=3D"a17f01d2771c" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Definition.1">Definition</h3>
+<p local-id=3D"3293ba35a642">Adapter plugins are <strong>integration seams<=
+/strong>.</p>
+<p local-id=3D"7c17c2d8610b">They do not primarily define new product capab=
+ilities.</p>
+<p local-id=3D"8c2493960d42">Instead, they let Bitloops operate across diff=
+erent ecosystems, protocols, providers, and technical environments.</p>
+<h3 local-id=3D"f019cadc9b8b" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Mainsubcategories">Main subcategories</h3>
+<h4 local-id=3D"2a71fb29044a" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-A.AgentAdapters">A. Agent Adapters</h4>
+<p local-id=3D"9250dd103c3d">Examples:</p>
+<ul local-id=3D"6c7719d94ae4">
+<li local-id=3D"4b185dd1fa93">
+<p local-id=3D"fcedf1e90db3">Claude Code</p></li>
+<li local-id=3D"045529c8b8e5">
+<p local-id=3D"77773c421c9c">Codex</p></li>
+<li local-id=3D"daeae7991819">
+<p local-id=3D"03b8d6151f61">Cursor</p></li>
+<li local-id=3D"549d2fc92cee">
+<p local-id=3D"79180429eba4">Gemini</p></li>
+<li local-id=3D"a00d03516006">
+<p local-id=3D"a959f5a41c5f">Copilot</p></li>
+<li local-id=3D"9338520fbcc2">
+<p local-id=3D"7732dd3ad8cd">generic MCP-compatible adapters</p></li>
+</ul>
+<p local-id=3D"13fa1ad7188e">These should translate between Bitloops=E2=80=
+=99 internal agent-facing contract and the quirks of each agent environment=
+.</p>
+<h4 local-id=3D"8bd3c310f0da" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-B.LanguagePacks">B. Language Packs</h4>
+<p local-id=3D"df84b9e56202">Examples:</p>
+<ul local-id=3D"3c8f42322fed">
+<li local-id=3D"3c14e3edea58">
+<p local-id=3D"5e3c5deb7ab0">Rust</p></li>
+<li local-id=3D"9b7f94cf0921">
+<p local-id=3D"156d9641717d">TypeScript</p></li>
+<li local-id=3D"847f71417fa6">
+<p local-id=3D"c246083c8a9e">Python</p></li>
+<li local-id=3D"4c90f282f83b">
+<p local-id=3D"3c8389267107">Java</p></li>
+<li local-id=3D"e0b81002cd2e">
+<p local-id=3D"f9467b1df47c">Go</p></li>
+<li local-id=3D"39f5caa3c384">
+<p local-id=3D"bf9dba41ea01">C#</p></li>
+</ul>
+<p local-id=3D"47898ed67ed8">These should contribute language-specific supp=
+ort such as parsing, artefact extraction, symbol modeling, test discovery c=
+onventions, and language-aware enrichments.</p>
+<h4 local-id=3D"27b90f0703e5" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-C.Model/InferenceProviders">C. Model / Infere=
+nce Providers</h4>
+<p local-id=3D"f25f6eb0739b">Examples:</p>
+<ul local-id=3D"c068f32b7363">
+<li local-id=3D"ced51c43b1c7">
+<p local-id=3D"e300efca92fd">OpenAI</p></li>
+<li local-id=3D"0e8f5ec04ff9">
+<p local-id=3D"e1d721648e72">Anthropic</p></li>
+<li local-id=3D"a535c8eae699">
+<p local-id=3D"f52ed2c517e2">Voyage</p></li>
+<li local-id=3D"95256ff311ac">
+<p local-id=3D"8282b3b8d645">Ollama</p></li>
+<li local-id=3D"8108a4b3cce5">
+<p local-id=3D"56715ae83e43">local embedding backends</p></li>
+<li local-id=3D"66b64b43ee96">
+<p local-id=3D"5a37a70cd2e9">enterprise private model gateways</p></li>
+</ul>
+<h4 local-id=3D"3e2a6aee7978" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-D.ConnectorProviders">D. Connector Providers<=
+/h4>
+<p local-id=3D"02f31407ce55">Examples:</p>
+<ul local-id=3D"130daced52fd">
+<li local-id=3D"2c81faed8c5b">
+<p local-id=3D"d5de26e80c9a">GitHub</p></li>
+<li local-id=3D"07ae962289fe">
+<p local-id=3D"46fdcfd35ba0">GitLab</p></li>
+<li local-id=3D"bd82e11574d0">
+<p local-id=3D"72d6ddc4fe20">Bitbucket</p></li>
+<li local-id=3D"f7f229766e92">
+<p local-id=3D"72b2b0a4c4e2">Jira</p></li>
+<li local-id=3D"c86dafb408dd">
+<p local-id=3D"f674877ea25d">Confluence</p></li>
+<li local-id=3D"1905a294cc4c">
+<p local-id=3D"dfc99cde3cd3">Linear</p></li>
+<li local-id=3D"3012bcd9b5d4">
+<p local-id=3D"299f7b03d2f9">Notion</p></li>
+<li local-id=3D"f3e8a630892b">
+<p local-id=3D"d8c43b2d380f">internal systems</p></li>
+</ul>
+<h4 local-id=3D"fac27ef6670f" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-E.Test/CoverageAdapters"><span class=3D"inlin=
+e-comment-marker" data-ref=3D"512366e0-d7b0-43d3-959b-211154c44dbb">E. Test=
+ / Coverage Adapters</span></h4>
+<p local-id=3D"3f55342068b3">Examples:</p>
+<ul local-id=3D"7b873e1d2f0e">
+<li local-id=3D"283019e1c2c4">
+<p local-id=3D"e5adfde7ca59">LCOV</p></li>
+<li local-id=3D"fc8182fc1dcb">
+<p local-id=3D"9a53654ff2cc">JaCoCo</p></li>
+<li local-id=3D"ccff5fc32f38">
+<p local-id=3D"4ef29a8f7132">Cobertura</p></li>
+<li local-id=3D"c997410432ec">
+<p local-id=3D"da6d7c152bd0">language/framework-specific coverage providers=
+</p></li>
+</ul>
+<h4 local-id=3D"7737e12a4459" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-F.Othertechnicaladapters">F. Other technical =
+adapters</h4>
+<p local-id=3D"3dded9c7d19f">Examples:</p>
+<ul local-id=3D"bdd4853807b1">
+<li local-id=3D"8fd8ca25c842">
+<p local-id=3D"6ea55a71f28e">auth provider adapters</p></li>
+<li local-id=3D"fdb39dd39938">
+<p local-id=3D"21fac5aef32d">vector backend adapters</p></li>
+<li local-id=3D"33d6eb7d2013">
+<p local-id=3D"587b8c249fe4">storage provider adapters where appropriate</p=
+></li>
+</ul>
+<h3 local-id=3D"5dba216fd6a3" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whythiscategoryexists.1">Why this category ex=
+ists</h3>
+<p local-id=3D"be0137d95304">Without adapter seams, Bitloops will either:</=
+p>
+<ul local-id=3D"92958bab1952">
+<li local-id=3D"3de85a432460">
+<p local-id=3D"220b6f08df9b">hardcode ecosystem-specific logic into the hos=
+t, or</p></li>
+<li local-id=3D"5d03039adf96">
+<p local-id=3D"f1d0e182177d">block future growth by making every new integr=
+ation feel like a core rewrite</p></li>
+</ul>
+<p local-id=3D"fa54ca4b1352">Adapter plugins are the main way Bitloops can =
+broaden reach without destroying host clarity.</p>
+<hr local-id=3D"c83758f6218f">
+<h2 local-id=3D"814b5c0f67a2" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Layer3:RuntimeProducts">Layer 3: Runtime Prod=
+ucts</h2>
+<h3 local-id=3D"c48210a45b5e" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Definition.2">Definition</h3>
+<p local-id=3D"2da87c31256f">Runtime products are <strong>different deploym=
+ent and consumption shapes</strong> built on shared open-core foundations.<=
+/p>
+<p local-id=3D"84232f03b8fb">This is not just =E2=80=9Canother plugin type.=
+=E2=80=9D</p>
+<p local-id=3D"fccc29a94b55">A runtime changes how Bitloops is executed, se=
+cured, exposed, and operated.</p>
+<h3 local-id=3D"4ddc87fc8203" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Mainruntimeshapes">Main runtime shapes</h3>
+<h4 local-id=3D"4c1e8ec10043" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-A.LocalCLIRuntime">A. Local CLI Runtime</h4>
+<p local-id=3D"b658538cd87d">The local-first developer runtime.</p>
+<h4 local-id=3D"e5ef3d05a46b" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-B.RemoteServerRuntime">B. Remote Server Runti=
+me</h4>
+<p local-id=3D"55b926aefc21">A shared or hosted runtime that can expose API=
+s to remote CLI agents or team environments, backed by a shared DB and stro=
+nger security controls.</p>
+<h4 local-id=3D"feeb9a622bdc" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-C.Dashboard/APIRuntime">C. Dashboard / API Ru=
+ntime</h4>
+<p local-id=3D"eb6c059d81ad">A product/runtime surface supporting UI, API, =
+admin, and broader operational interactions.</p>
+<h3 local-id=3D"6183b5c6c6ce" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whyruntimeshouldbeitsowncategory">Why runtime=
+ should be its own category</h3>
+<p local-id=3D"6280f0a3f6c2">A remote server product introduces concerns th=
+at are qualitatively different from local plugin extension:</p>
+<ul local-id=3D"9da9b6292e60">
+<li local-id=3D"527c9e8063cd">
+<p local-id=3D"f58b0c88a22f">authn/authz</p></li>
+<li local-id=3D"34b871ae3f90">
+<p local-id=3D"74979fdcaf0f">tenancy</p></li>
+<li local-id=3D"4d8754158d13">
+<p local-id=3D"5094b397598e">secrets handling</p></li>
+<li local-id=3D"fadb01435a5b">
+<p local-id=3D"4e9659acd2ee">job execution</p></li>
+<li local-id=3D"ac7f572ed77f">
+<p local-id=3D"38c66ddf5b1f">request isolation</p></li>
+<li local-id=3D"85dc303379d6">
+<p local-id=3D"efe42c1a4510">quotas and rate limiting</p></li>
+<li local-id=3D"f8fe357776f2">
+<p local-id=3D"c5e8d4b6150c">auditability</p></li>
+<li local-id=3D"08742ac430e5">
+<p local-id=3D"a93358e2e796">shared DB security</p></li>
+<li local-id=3D"ebe0047857ba">
+<p local-id=3D"6ecd3389fa11">org-level policy enforcement</p></li>
+<li local-id=3D"a48aae8ec81f">
+<p local-id=3D"f9a6e8301f48">service operations</p></li>
+</ul>
+<p local-id=3D"9e910d745e91">This means the right model is generally:</p>
+<ul local-id=3D"16dd02f10345">
+<li local-id=3D"6dd0fb44fb5a">
+<p local-id=3D"af0356f1ebd3">shared open-core crates and contracts</p></li>
+<li local-id=3D"7a7363f34ec8">
+<p local-id=3D"d480019068ce">multiple runtimes built on those foundations</=
+p></li>
+</ul>
+<p local-id=3D"c227ca90cc0f">not:</p>
+<ul local-id=3D"c3e34d33b131">
+<li local-id=3D"4fed3c658bf6">
+<p local-id=3D"35df225b1197">=E2=80=9Cbolt a server onto the CLI via one pl=
+ugin=E2=80=9D</p></li>
+</ul>
+<h3 local-id=3D"3ad8a47aa970" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Recommendeddirection">Recommended direction</=
+h3>
+<p local-id=3D"795f61ab7f6c">The server product should most likely be a <st=
+rong>separate runtime/product</strong> built on shared open-core crates, ra=
+ther than a thin extension of the local CLI executable.</p>
+<hr local-id=3D"c2098f26408f">
+<h2 local-id=3D"1f38bf076f74" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Layer4:Commercial/GovernancePacks">Layer 4: C=
+ommercial / Governance Packs</h2>
+<h3 local-id=3D"4575eb3802bc" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Definition.3">Definition</h3>
+<p local-id=3D"ea0be1d18adb">Commercial / governance packs are <strong>paid=
+, enterprise-oriented, or operationally sensitive layers</strong> that buil=
+d on the rest of the platform.</p>
+<p local-id=3D"b451202ce9a4">Examples:</p>
+<ul local-id=3D"b5fcd7603e0c">
+<li local-id=3D"d30aa2a6b525">
+<p local-id=3D"0dc8cfb0001f">private model routing</p></li>
+<li local-id=3D"b4bd66accbe2">
+<p local-id=3D"07c059830489">internal enterprise connectors</p></li>
+<li local-id=3D"912f6aaa1508">
+<p local-id=3D"bef81d1db351">policy engines</p></li>
+<li local-id=3D"2cf69cf4cef6">
+<p local-id=3D"19312355faef">compliance evidence generation</p></li>
+<li local-id=3D"789b25fb28a4">
+<p local-id=3D"a02b837a6a5a">audit logging and governance controls</p></li>
+<li local-id=3D"894de42bc905">
+<p local-id=3D"9ec5b6bfca36">remote shared service features</p></li>
+<li local-id=3D"acbdb28b2e30">
+<p local-id=3D"e8e8349220bf">org-level controls and entitlements</p></li>
+</ul>
+<h3 local-id=3D"8a74d666f4b1" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Whythiscategoryexists.2">Why this category ex=
+ists</h3>
+<p local-id=3D"f04d53507c2c">These concerns are not just technical extensio=
+n seams.</p>
+<p local-id=3D"99afda38e1ec">They are product, trust, and revenue boundarie=
+s.</p>
+<p local-id=3D"2629ec6611b8">Making them explicit helps Bitloops:</p>
+<ul local-id=3D"b9eb883d5583">
+<li local-id=3D"0b3855000514">
+<p local-id=3D"211da1c106a4">avoid accidental product sprawl</p></li>
+<li local-id=3D"951d7d23c5d7">
+<p local-id=3D"b0a6ba0a32ca">define cleaner paid tiers</p></li>
+<li local-id=3D"f052fe006353">
+<p local-id=3D"ed52c8ae86be">keep enterprise/security concerns first-class =
+rather than bolted on later</p></li>
+</ul>
+<hr local-id=3D"67d7b47459e5">
+<h2 local-id=3D"6b645a7a4c34" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-WhatMustStayCore">What Must Stay Core</h2>
+<p local-id=3D"f68cc73cc9f8">A layered extension architecture only works if=
+ the right things remain firmly inside Core.</p>
+<p local-id=3D"5fcf74449e16">Core should own:</p>
+<ul local-id=3D"6d002cae8b3a">
+<li local-id=3D"d89bf7d7b427">
+<p local-id=3D"59a22c1dcfa7">canonical artefact model</p></li>
+<li local-id=3D"9f8c1258294b">
+<p local-id=3D"b4ba82ac2d3a">temporal semantics and commit-addressable trut=
+h</p></li>
+<li local-id=3D"d86fec13a42f">
+<p local-id=3D"04fd84b1a960">provenance model</p></li>
+<li local-id=3D"e1ccda006fe0">
+<p local-id=3D"3702d1bc80a2">query kernel</p></li>
+<li local-id=3D"cdafc520f452">
+<p local-id=3D"ef2ba800fabc">capability and adapter registry mechanisms</p>=
+</li>
+<li local-id=3D"412d139ed304">
+<p local-id=3D"bb8a3283304b">extension API/versioning discipline</p></li>
+<li local-id=3D"228f2f6014cc">
+<p local-id=3D"3d2c71ff23bc">migration orchestration</p></li>
+<li local-id=3D"4e6b2b076800">
+<p local-id=3D"4f1d00ca58ec">tenancy/security policy foundations</p></li>
+<li local-id=3D"43bfc2f06092">
+<p local-id=3D"c2d3dcd11480">entitlement enforcement</p></li>
+<li local-id=3D"6a6595affd8c">
+<p local-id=3D"9f1e9d9b2135">host-side validation and safety rules</p></li>
+</ul>
+<p local-id=3D"a2eb98fc3fd9">These are not good plugin candidates.</p>
+<p local-id=3D"402a7d452fb6">If they become extension-owned too early, Bitl=
+oops will lose coherence.</p>
+<hr local-id=3D"1556aa5be5f2">
+<h2 local-id=3D"2c34c024e986" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-OpenCoreandProductBoundary">Open Core and Pro=
+duct Boundary</h2>
+<p local-id=3D"f3f13f6e6706">The architecture strongly suggests an <strong>=
+open-core foundation with multiple product layers built on top</strong>.</p=
+>
+<p local-id=3D"365de5e8c957">A reasonable split is:</p>
+<h3 local-id=3D"765e4af5efbc" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Sharedopen-corefoundations">Shared open-core =
+foundations</h3>
+<ul local-id=3D"1eaaa95896c6">
+<li local-id=3D"f8520ca09d1a">
+<p local-id=3D"efb3cc8a2682">artefact graph</p></li>
+<li local-id=3D"000c57079d1b">
+<p local-id=3D"ac67daa65d5d">temporal model</p></li>
+<li local-id=3D"3e81a95ed613">
+<p local-id=3D"7abba303fb76">query engine</p></li>
+<li local-id=3D"b7c04fef9181">
+<p local-id=3D"214f29f99c68">extension registries and contracts</p></li>
+<li local-id=3D"bda66d277f95">
+<p local-id=3D"bb0a42920e9c">base store abstractions</p></li>
+<li local-id=3D"77c5bc1ae18b">
+<p local-id=3D"484387ed6f40">capability execution foundations</p></li>
+<li local-id=3D"cafbd00caf44">
+<p local-id=3D"16da9d2845e8">common provider and runtime abstractions</p></=
+li>
+</ul>
+<h3 local-id=3D"79a59ac5e0ff" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Product/runtimelayersbuiltontop">Product/runt=
+ime layers built on top</h3>
+<ul local-id=3D"76117fc1da75">
+<li local-id=3D"66b8f9d211a4">
+<p local-id=3D"a323345fb45b">local CLI product</p></li>
+<li local-id=3D"e6c43f2ab8e9">
+<p local-id=3D"80b11d09d319">remote server product</p></li>
+<li local-id=3D"8959bc40bd65">
+<p local-id=3D"48babf09752c">dashboard/API product</p></li>
+<li local-id=3D"82e4c23ec71b">
+<p local-id=3D"f5852ebec074">enterprise/commercial packs</p></li>
+</ul>
+<p local-id=3D"2482339d37a7">This gives Bitloops:</p>
+<ul local-id=3D"e0acc17020f6">
+<li local-id=3D"846b4b7f25de">
+<p local-id=3D"63534aacdf95">reuse across runtimes</p></li>
+<li local-id=3D"b4b5c55432a9">
+<p local-id=3D"e65941614fa3">consistency across local and remote products</=
+p></li>
+<li local-id=3D"727cd4e8feaf">
+<p local-id=3D"0525a243d0e0">a cleaner monetisation story</p></li>
+<li local-id=3D"3893ee3a9f33">
+<p local-id=3D"b57007b7c3b0">less pressure to twist the CLI into every futu=
+re deployment shape</p></li>
+</ul>
+<hr local-id=3D"b2aed7a2cc14">
+<h2 local-id=3D"05a20f1dbcc3" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-HowTheLayersInteract">How The Layers Interact=
+</h2>
+<p local-id=3D"11c22a51b4f1">The intended interaction model is:</p>
+<ol start=3D"1" local-id=3D"2da027124511">
+<li local-id=3D"0a22c25f8a9e">
+<p local-id=3D"4a167a1fe136"><strong>Core</strong> provides the canonical m=
+odel and extension contracts.</p></li>
+<li local-id=3D"6748ae59e226">
+<p local-id=3D"defa2769bcf8"><strong>Adapter plugins</strong> expand the ec=
+osystems Bitloops can operate in.</p></li>
+<li local-id=3D"7b55b3b0e512">
+<p local-id=3D"1840e2635549"><strong>Capability packs</strong> use those fo=
+undations and adapters to deliver user-facing intelligence.</p></li>
+<li local-id=3D"3669de54dd96">
+<p local-id=3D"c4f9ebd89e48"><strong>Runtime products</strong> determine ho=
+w Bitloops is executed and consumed.</p></li>
+<li local-id=3D"14d053dd6057">
+<p local-id=3D"9616cb5e3e51"><strong>Commercial / governance packs</strong>=
+ add enterprise value, policy, trust, and paid product boundaries.</p></li>
+</ol>
+<p local-id=3D"ade125e605f5">This means, for example:</p>
+<ul local-id=3D"d588258ce1ee">
+<li local-id=3D"4302bb11e5a3">
+<p local-id=3D"2da64674db88">a Knowledge pack may use a Confluence connecto=
+r adapter</p></li>
+<li local-id=3D"c9622a7d197b">
+<p local-id=3D"5f40459bf110">a Semantic Clones pack may use a specific embe=
+dding provider adapter</p></li>
+<li local-id=3D"161a7adb1718">
+<p local-id=3D"fefb36c52e7d">a remote server runtime may host several capab=
+ility packs and adapters under stricter security policy</p></li>
+<li local-id=3D"06a5550fdb59">
+<p local-id=3D"1617f9594d47">an enterprise governance pack may enforce poli=
+cy over the shared runtime</p></li>
+</ul>
+<hr local-id=3D"e90ee3fff75c">
+<h2 local-id=3D"fc24a80d01f5" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-WhyThisArchitectureIsNeededNow">Why This Arch=
+itecture Is Needed Now</h2>
+<p local-id=3D"9989b7dc4a83">This architecture is needed now because Bitloo=
+ps is at the transition point where postponing these boundaries will make f=
+uture growth more expensive.</p>
+<p local-id=3D"08586d4a048a">Specifically, without it Bitloops risks:</p>
+<ul local-id=3D"e503c4c55b72">
+<li local-id=3D"31af57694cd5">
+<p local-id=3D"ad6d75a82fb5">hardcoded agent support scattered through the =
+product</p></li>
+<li local-id=3D"83adc825bf23">
+<p local-id=3D"ac998cedb616">language support becoming fragmented and dupli=
+cated</p></li>
+<li local-id=3D"45877be8c7dc">
+<p local-id=3D"9befb336a571">server/runtime concerns leaking into local CLI=
+ code paths</p></li>
+<li local-id=3D"004fcd64cc49">
+<p local-id=3D"01577c766a43">enterprise/security features arriving as one-o=
+ffs</p></li>
+<li local-id=3D"8733776c1910">
+<p local-id=3D"03657b595c6f">poor packaging boundaries for paid product sur=
+faces</p></li>
+<li local-id=3D"9050e35fc6c5">
+<p local-id=3D"af0c6bcc1021">repeated host churn whenever a new ecosystem i=
+ntegration is added</p></li>
+</ul>
+<p local-id=3D"b7139f7f4e7f">This is exactly the stage where a layered mode=
+l creates leverage.</p>
+<p local-id=3D"db0a43f21fc6">Too early and it would be overdesign.</p>
+<p local-id=3D"8b2796a3f8e5">Too late and it becomes a costly retrofit.</p>
+<hr local-id=3D"90c1c593675e">
+<h2 local-id=3D"8739b17c640e" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-RecommendedNext-StepDocuments">Recommended Ne=
+xt-Step Documents</h2>
+<p local-id=3D"e8838936e257">This document is the umbrella note.</p>
+<p local-id=3D"c98b1617d738">The next documents should deep dive into each =
+category separately.</p>
+<h3 local-id=3D"9858188f2561" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-1.CapabilityPacks">1. Capability Packs</h3>
+<p local-id=3D"9a6bd9edb4f5">Proposed deep-dive topics:</p>
+<ul local-id=3D"3fcbe7f38740">
+<li local-id=3D"f5255319c3b3">
+<p local-id=3D"a052521af122">contract shape</p></li>
+<li local-id=3D"68736910caa4">
+<p local-id=3D"662f0907a5b1">lifecycle and registration</p></li>
+<li local-id=3D"af853f33f02a">
+<p local-id=3D"900c0d2ab229">storage/provenance boundaries</p></li>
+<li local-id=3D"36fa100a0363">
+<p local-id=3D"787cb7f91984">examples: Knowledge, Semantic Clones, Test Har=
+ness</p></li>
+<li local-id=3D"1484432dd77c">
+<p local-id=3D"5b8ce6650078">packaging implications</p></li>
+</ul>
+<h3 local-id=3D"8c9f80cd3ec0" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-2.AdapterPlugins">2. Adapter Plugins</h3>
+<p local-id=3D"cab131b181cf">Proposed deep-dive topics:</p>
+<ul local-id=3D"3eefab862c9d">
+<li local-id=3D"9deb86d11a63">
+<p local-id=3D"e252f51ed5e1">agent adapters</p></li>
+<li local-id=3D"d33167bbc261">
+<p local-id=3D"6343d60b8ffa">language pack model</p></li>
+<li local-id=3D"6241a2c13938">
+<p local-id=3D"7cd55a405b79">model provider interfaces</p></li>
+<li local-id=3D"ceb30aa50aaa">
+<p local-id=3D"85f52a47e192">connector/provider contracts</p></li>
+<li local-id=3D"de99b8373d4f">
+<p local-id=3D"e75385b0fd66">coverage/test adapters</p></li>
+<li local-id=3D"0c1ad7ba7500">
+<p local-id=3D"ca6df836e167">validation and compatibility rules</p></li>
+</ul>
+<h3 local-id=3D"c7d1640f6233" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-3.RuntimeProducts">3. Runtime Products</h3>
+<p local-id=3D"6d4a2415576b">Proposed deep-dive topics:</p>
+<ul local-id=3D"4a04e2cd5bec">
+<li local-id=3D"6d070a2612af">
+<p local-id=3D"4a717105b89e">shared open-core crate boundaries</p></li>
+<li local-id=3D"c0c82893e57f">
+<p local-id=3D"fc46167a5f43">local CLI runtime vs remote server runtime</p>=
+</li>
+<li local-id=3D"a9333a0fec94">
+<p local-id=3D"233743427d0b">dashboard/API runtime</p></li>
+<li local-id=3D"a9f0da025fa4">
+<p local-id=3D"85b3ca5a3782">security, tenancy, and shared DB design implic=
+ations</p></li>
+<li local-id=3D"0fa08a1dba30">
+<p local-id=3D"baac9b576328">what should and should not be shared across ru=
+ntimes</p></li>
+</ul>
+<h3 local-id=3D"2ec87099c309" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-4.Commercial/GovernancePacks">4. Commercial /=
+ Governance Packs</h3>
+<p local-id=3D"1bcd02736dd1">Proposed deep-dive topics:</p>
+<ul local-id=3D"77305e074cba">
+<li local-id=3D"696554fa9ca9">
+<p local-id=3D"224368863969">private inference</p></li>
+<li local-id=3D"eb3b1761c242">
+<p local-id=3D"0fd2927b8b5b">internal enterprise connectors</p></li>
+<li local-id=3D"f58664d16208">
+<p local-id=3D"e0c0273ccb10">policy/compliance modules</p></li>
+<li local-id=3D"d79dae472c7b">
+<p local-id=3D"7e66d6eeaa5c">governance, audit, and org controls</p></li>
+<li local-id=3D"63c05a8d6f50">
+<p local-id=3D"3b305d032cce">paid tier boundary implications</p></li>
+</ul>
+<hr local-id=3D"eb9b70be72bd">
+<h2 local-id=3D"530cc9a24d50" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-Recommendation">Recommendation</h2>
+<p local-id=3D"49a1b916f6e1">Bitloops should formally adopt a <strong>layer=
+ed extension architecture</strong> with four categories:</p>
+<ol start=3D"1" local-id=3D"d411d82dfb62">
+<li local-id=3D"c91580a4b432">
+<p local-id=3D"b5622cb1ca3a">Capability Packs</p></li>
+<li local-id=3D"254beb09d849">
+<p local-id=3D"431bd9251735">Adapter Plugins</p></li>
+<li local-id=3D"479c7b4f21ee">
+<p local-id=3D"cc6c81ef01be">Runtime Products</p></li>
+<li local-id=3D"cb27cdb3b9da">
+<p local-id=3D"9c9dc37b9665">Commercial / Governance Packs</p></li>
+</ol>
+<p local-id=3D"dc69d4f7d234">This should become the framing for future arch=
+itecture decisions.</p>
+<p local-id=3D"2bf493c194b7">The key architectural shift is:</p>
+<blockquote local-id=3D"27aaacd1a352">
+<p local-id=3D"f019aa4912f7">Bitloops should think neither in terms of a mo=
+nolith CLI nor =E2=80=9Cone plugin system for everything.=E2=80=9D</p>
+</blockquote>
+<p local-id=3D"1cd1daf9f4a6">It should think in terms of:</p>
+<blockquote local-id=3D"b389bfb5cdb9">
+<p local-id=3D"05019dd5892d"><strong>multiple explicit extension seams, eac=
+h with the right boundary, contract, and product role.</strong></p>
+</blockquote>
+<p local-id=3D"6bcacd87ce5f">That is the architecture most likely to maximi=
+se:</p>
+<ul local-id=3D"e7ae80709cdc">
+<li local-id=3D"6bdbb8f0ea2f">
+<p local-id=3D"ac221467ec24">platform clarity</p></li>
+<li local-id=3D"cb5864eba0ec">
+<p local-id=3D"0c2647b0cdda">delivery velocity</p></li>
+<li local-id=3D"1d1a269f0432">
+<p local-id=3D"a9f2f2958314">product coherence</p></li>
+<li local-id=3D"555e4873acf8">
+<p local-id=3D"4f37e071cc6c">ecosystem reach</p></li>
+<li local-id=3D"eb3fae395429">
+<p local-id=3D"a19081349fd9">enterprise adaptability</p></li>
+<li local-id=3D"98de42303f57">
+<p local-id=3D"941bad0b314a">long-term commercial success</p></li>
+</ul>
+<hr local-id=3D"5d1513455d5b">
+<h2 local-id=3D"cccd34f0a1b2" id=3D"BitloopsLayeredExtensionArchitecture:Wh=
+yItIsNeededandHowItShouldLook-DiscussionPrompts">Discussion Prompts</h2>
+<ul local-id=3D"d265b1e49e97">
+<li local-id=3D"1c3eaa4ce9b6">
+<p local-id=3D"56c9a5c47915">Are we aligned that Bitloops now needs a broad=
+er extension architecture, not only DevQL capability plugins?</p></li>
+<li local-id=3D"481161297c8c">
+<p local-id=3D"1157bb7fab96">Is the four-layer model the right taxonomy?</p=
+></li>
+<li local-id=3D"630dec4c1aa9">
+<p local-id=3D"79333c85e46a">Which category should Bitloops formalise first=
+: Capability Packs, Adapter Plugins, Runtime Products, or Commercial / Gove=
+rnance Packs?</p></li>
+<li local-id=3D"1a4561ab6f33">
+<p local-id=3D"6a6a561e562a">Should the remote server be treated as a separ=
+ate runtime/product built on shared open core rather than as a CLI extensio=
+n?</p></li>
+<li local-id=3D"60339a620164">
+<p local-id=3D"50c941b6a96b">Which adapter seam is most urgent to define fi=
+rst: agent adapters or language packs?</p></li>
+</ul>
+    </div>
+</body>
+</html>
+------=_Part_80_749830027.1774266171555--

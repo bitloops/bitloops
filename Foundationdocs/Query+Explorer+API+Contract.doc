@@ -1,0 +1,767 @@
+Date: Mon, 23 Mar 2026 11:53:36 +0000 (UTC)
+Message-ID: <467769303.21.1774266816565@f0ef132ad3fe>
+Subject: Exported From Confluence
+MIME-Version: 1.0
+Content-Type: multipart/related; 
+	boundary="----=_Part_20_1792746131.1774266816564"
+
+------=_Part_20_1792746131.1774266816564
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+Content-Location: file:///C:/exported.html
+
+<html xmlns:o=3D'urn:schemas-microsoft-com:office:office'
+      xmlns:w=3D'urn:schemas-microsoft-com:office:word'
+      xmlns:v=3D'urn:schemas-microsoft-com:vml'
+      xmlns=3D'urn:w3-org-ns:HTML'>
+<head>
+    <meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8=
+">
+    <title>Query Explorer API Contract</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <o:OfficeDocumentSettings>
+            <o:TargetScreenSize>1024x640</o:TargetScreenSize>
+            <o:PixelsPerInch>72</o:PixelsPerInch>
+            <o:AllowPNG/>
+        </o:OfficeDocumentSettings>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>90</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+                <!--
+        @page Section1 {
+            size: 8.5in 11.0in;
+            margin: 1.0in;
+            mso-header-margin: .5in;
+            mso-footer-margin: .5in;
+            mso-paper-source: 0;
+        }
+
+        table {
+            border: solid 1px;
+            border-collapse: collapse;
+        }
+
+        table td, table th {
+            border: solid 1px;
+            padding: 5px;
+        }
+
+        td {
+            page-break-inside: avoid;
+        }
+
+        tr {
+            page-break-after: avoid;
+        }
+
+        div.Section1 {
+            page: Section1;
+        }
+
+        /* Confluence print stylesheet. Common to all themes for print medi=
+a */
+/* Full of !important until we improve batching for print CSS */
+
+@media print {
+    #main {
+        padding-bottom: 1em !important; /* The default padding of 6em is to=
+o much for printouts */
+    }
+
+    body {
+        font: var(--ds-font-body-small, Arial, Helvetica, FreeSans, sans-se=
+rif);
+    }
+
+    body, #full-height-container, #main, #page, #content, .has-personal-sid=
+ebar #content {
+        background: var(--ds-surface, #fff) !important;
+        color: var(--ds-text, #000) !important;
+        border: 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    a, a:link, a:visited, a:focus, a:hover, a:active {
+        color: var(--ds-text, #000);
+    }
+
+    #content h1,
+    #content h2,
+    #content h3,
+    #content h4,
+    #content h5,
+    #content h6 {
+        page-break-after: avoid;
+    }
+
+    pre {
+        font: var(--ds-font-code, Monaco, "Courier New", monospace);
+    }
+
+    #header,
+    .aui-header-inner,
+    #navigation,
+    #sidebar,
+    .sidebar,
+    #personal-info-sidebar,
+    .ia-fixed-sidebar,
+    .page-actions,
+    .navmenu,
+    .ajs-menu-bar,
+    .noprint,
+    .inline-control-link,
+    .inline-control-link a,
+    a.show-labels-editor,
+    .global-comment-actions,
+    .comment-actions,
+    .quick-comment-container,
+    #addcomment {
+        display: none !important;
+    }
+
+    /* CONF-28544 cannot print multiple pages in IE */
+    #splitter-content {
+        position: relative !important;
+    }
+
+    .comment .date::before {
+        content: none !important; /* remove middot for print view */
+    }
+
+    h1.pagetitle img {
+        height: auto;
+        width: auto;
+    }
+
+    .print-only {
+        display: block;
+    }
+
+    #footer {
+        position: relative !important; /* CONF-17506 Place the footer at en=
+d of the content */
+        margin: 0;
+        padding: 0;
+        background: none;
+        clear: both;
+    }
+
+    #poweredby {
+        border-top: none;
+        background: none;
+    }
+
+    #poweredby li.print-only {
+        display: list-item;
+        font-style: italic;
+    }
+
+    #poweredby li.noprint {
+        display: none;
+    }
+
+    /* no width controls in print */
+    .wiki-content .table-wrap,
+    .wiki-content p,
+    .panel .codeContent,
+    .panel .codeContent pre,
+    .image-wrap {
+        overflow: visible !important;
+    }
+
+    /* TODO - should this work? */
+    #children-section,
+    #comments-section .comment,
+    #comments-section .comment .comment-body,
+    #comments-section .comment .comment-content,
+    #comments-section .comment p {
+        page-break-inside: avoid;
+    }
+
+    #page-children a {
+        text-decoration: none;
+    }
+
+    /**
+     hide twixies
+
+     the specificity here is a hack because print styles
+     are getting loaded before the base styles. */
+    #comments-section.pageSection .section-header,
+    #comments-section.pageSection .section-title,
+    #children-section.pageSection .section-header,
+    #children-section.pageSection .section-title,
+    .children-show-hide {
+        padding-left: 0;
+        margin-left: 0;
+    }
+
+    .children-show-hide.icon {
+        display: none;
+    }
+
+    /* personal sidebar */
+    .has-personal-sidebar #content {
+        margin-right: 0px;
+    }
+
+    .has-personal-sidebar #content .pageSection {
+        margin-right: 0px;
+    }
+
+    .no-print, .no-print * {
+        display: none !important;
+    }
+}
+-->
+    </style>
+</head>
+<body>
+    <h1>Query Explorer API Contract</h1>
+    <div class=3D"Section1">
+        <h2 local-id=3D"5b0b0760103f" id=3D"QueryExplorerAPIContract-TL;DR"=
+>TL;DR</h2>
+<p local-id=3D"360b28548eaa">This page describes how the <strong>Query Expl=
+orer </strong>frontend communicates with the backend Query API using a <str=
+ong>GraphQL-style request/response format</strong>. Queries are sent to the=
+ <code>POST /query</code> endpoint as a GraphQL-like query string with opti=
+onal variables, and the API returns results in a standard GraphQL-style env=
+elope containing <code>data</code> and <code>errors</code>. The page also d=
+escribes the <strong>Autocomplete Metadata API (</strong><code>GET /query/s=
+chema</code><strong>)</strong>, which provides a schema describing availabl=
+e query types, fields, and arguments so the editor can generate context-awa=
+re autocomplete suggestions.</p>
+<p local-id=3D"61da118ff53e"><strong>Limitations:</strong> The query API fo=
+llows a GraphQL-style structure but is not a full GraphQL server, so some b=
+ehaviors may differ from standard GraphQL implementations. Autocomplete rel=
+ies on a <strong>schema snapshot loaded at editor initialization</strong>, =
+meaning schema changes require a page reload to appear, and suggestions are=
+ schema-based only, so they cannot validate runtime conditions (e.g., wheth=
+er a repository, ref, or file actually exists).</p>
+<h1 local-id=3D"f6e3e7d6e363" id=3D"QueryExplorerAPIContract-QueryAPI">Quer=
+y API</h1>
+<h2 local-id=3D"b863c6ece809" id=3D"QueryExplorerAPIContract-Endpoint">Endp=
+oint</h2>
+<div class=3D"table-wrap">
+<table data-table-width=3D"760" data-layout=3D"default" data-local-id=3D"77=
+6e7f24-b229-4a86-848f-17b545211cad" class=3D"confluenceTable">
+<tbody>
+<tr data-local-id=3D"d41a135d-b4c2-470a-b448-7e7c50e2fbd6">
+<th data-local-id=3D"9d830f3b-7a08-4522-adf7-7da6196fdd57" class=3D"conflue=
+nceTh">
+<p local-id=3D"ba45e0e4c642">Field</p></th>
+<th data-local-id=3D"7c7143ae-794f-4526-8656-3ad518cd5ffb" class=3D"conflue=
+nceTh">
+<p local-id=3D"129964c6c063">Value</p></th>
+</tr>
+<tr data-local-id=3D"bc39f740-0a91-4c70-b157-ae19bf9d63ac">
+<td data-local-id=3D"e9c70326-b9d8-4592-85d7-52fa7ccb491d" class=3D"conflue=
+nceTd">
+<p local-id=3D"d412b74021c8">Method</p></td>
+<td data-local-id=3D"7d276f94-6a44-46a0-bb76-4bacfea1ef98" class=3D"conflue=
+nceTd">
+<p local-id=3D"9a7745446b15"><code>POST</code></p></td>
+</tr>
+<tr data-local-id=3D"76ca6e2c-e1a7-4486-bb73-575f8aab1ae0">
+<td data-local-id=3D"b4a57b11-4186-4595-934b-013c361b8107" class=3D"conflue=
+nceTd">
+<p local-id=3D"fa41c2293f09">Path</p></td>
+<td data-local-id=3D"6990fc83-88b6-4217-b536-5b96da864454" class=3D"conflue=
+nceTd">
+<p local-id=3D"ff8bbc86ffb6"><code>/query</code></p></td>
+</tr>
+<tr data-local-id=3D"2a09b926-e796-45e3-b282-f8e09a2ef6f4">
+<td data-local-id=3D"2ae68b6d-eb17-4cfd-bb5d-53aa9bbc33c9" class=3D"conflue=
+nceTd">
+<p local-id=3D"bbe9a91d995e">Content-Type</p></td>
+<td data-local-id=3D"75c8acb6-17ec-4c94-b288-1a8a36172f37" class=3D"conflue=
+nceTd">
+<p local-id=3D"fe1e67f42f11"><code>application/json</code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h1 local-id=3D"d13bf832c24f" id=3D"QueryExplorerAPIContract-RequestFormat"=
+>Request Format</h1>
+<p local-id=3D"b88c577238c6">The frontend sends queries using a <strong>Gra=
+phQL-style request body</strong>.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "query": "query GetArtefacts($repo: String!, $ref: String!, $path: String=
+!) { repo(name: $repo) { ref(name: $ref) { file(path: $path) { artefacts { =
+symbolFqn canonicalKind } } } } }",
+  "variables": {
+    "repo": "repo1",
+    "ref": "main",
+    "path": "src/auth/service.ts"
+  },
+  "operationName": "GetArtefacts"
+}</pre>
+</div>
+</div>
+<hr local-id=3D"b8129145-5802-4905-947b-25f534881940">
+<h2 local-id=3D"93b1168673f7" id=3D"QueryExplorerAPIContract-RequestFields"=
+>Request Fields</h2>
+<div class=3D"table-wrap">
+<table data-table-width=3D"760" data-layout=3D"default" data-local-id=3D"7e=
+dd6632-34c0-4e48-ac9c-38520fb4ed89" class=3D"confluenceTable">
+<tbody>
+<tr data-local-id=3D"34596fe1-bba4-4805-b89a-bc4a26ac0fdc">
+<th data-local-id=3D"ee69f686-ea10-47a5-89f8-109c269fe397" class=3D"conflue=
+nceTh">
+<p local-id=3D"70351ef5bd49">Field</p></th>
+<th data-local-id=3D"693008b6-f98c-4733-94a8-821856cb4258" class=3D"conflue=
+nceTh">
+<p local-id=3D"cd001689baa3">Type</p></th>
+<th data-local-id=3D"ad0e64dd-cc21-4a43-ba3e-40e7868c904d" class=3D"conflue=
+nceTh">
+<p local-id=3D"02f8101b2baa">Required</p></th>
+<th data-local-id=3D"51fb1124-7a45-496c-ad2c-29ec2af2d682" class=3D"conflue=
+nceTh">
+<p local-id=3D"f1c5e5fc0f76">Description</p></th>
+</tr>
+<tr data-local-id=3D"e3329d9a-b66a-499d-a281-12da813f23a6">
+<td data-local-id=3D"681890c4-aadd-4763-a0b0-1ce390598648" class=3D"conflue=
+nceTd">
+<p local-id=3D"7f0a02c4df58">query</p></td>
+<td data-local-id=3D"c111aedf-32ed-4547-ae2c-4d6461fbcc72" class=3D"conflue=
+nceTd">
+<p local-id=3D"5a8bf14606dd">string</p></td>
+<td data-local-id=3D"6594d032-3905-4ceb-969c-036401f09870" class=3D"conflue=
+nceTd">
+<p local-id=3D"6046a0e965ec">Yes</p></td>
+<td data-local-id=3D"579275a2-b601-4174-ad27-9df9f7375dab" class=3D"conflue=
+nceTd">
+<p local-id=3D"6200ed849a8a">GraphQL-like query string written in the Query=
+ Explorer editor</p></td>
+</tr>
+<tr data-local-id=3D"eaf4f0b1-acff-46ce-b86e-9a136b714179">
+<td data-local-id=3D"add485f7-f5bd-4ddb-9bb9-e25eb0721a68" class=3D"conflue=
+nceTd">
+<p local-id=3D"7177163f4513">variables</p></td>
+<td data-local-id=3D"55984004-1c92-4979-baf8-cc1f831485c0" class=3D"conflue=
+nceTd">
+<p local-id=3D"00fe1374c713">object</p></td>
+<td data-local-id=3D"e758fa4d-30c9-4b2e-8cbd-2c214ca99573" class=3D"conflue=
+nceTd">
+<p local-id=3D"3a2e1886f5ce">No</p></td>
+<td data-local-id=3D"9b634f9a-7a78-4eff-8e5d-9aa52e60dc05" class=3D"conflue=
+nceTd">
+<p local-id=3D"fa5a7694d00d">Key-value map of variables used in the query</=
+p></td>
+</tr>
+<tr data-local-id=3D"d2bb0873-da5e-470c-95f4-c3242ff625c4">
+<td data-local-id=3D"9facebf8-56de-4787-8159-030935411b45" class=3D"conflue=
+nceTd">
+<p local-id=3D"ccf0cecdda4d">operationName</p></td>
+<td data-local-id=3D"f7ee3768-48a3-4a87-a3bc-d3c036295159" class=3D"conflue=
+nceTd">
+<p local-id=3D"9092534d6d1a">string</p></td>
+<td data-local-id=3D"4c364f03-30fe-47c4-9de7-87c9b56fd0ae" class=3D"conflue=
+nceTd">
+<p local-id=3D"00eb7128cb90">No</p></td>
+<td data-local-id=3D"e423b4c7-6b40-4488-a8f7-1ecfcd9055c3" class=3D"conflue=
+nceTd">
+<p local-id=3D"0986e543295e">Name of the operation if multiple queries exis=
+t in the document</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<hr local-id=3D"51b0132a-d873-4285-bba4-7a3e5f2f85fa">
+<h2 local-id=3D"a07ee06e5bfb" id=3D"QueryExplorerAPIContract-ExampleMinimal=
+Request">Example Minimal Request</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "query": "query { repo(name: \"repo1\") { ref(name: \"main\") { files { p=
+ath } } } }"
+}</pre>
+</div>
+</div>
+<hr local-id=3D"8a4c1707-bd9f-432e-acf3-fa87dce71543">
+<h1 local-id=3D"40b5982eb394" id=3D"QueryExplorerAPIContract-ResponseFormat=
+">Response Format</h1>
+<p local-id=3D"97abca1f0e3d">The API returns a <strong>GraphQL-style respon=
+se envelope</strong>.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "data": {},
+  "errors": []
+}</pre>
+</div>
+</div>
+<hr local-id=3D"97258b36-e5d3-498f-bfed-8293f198e98a">
+<h2 local-id=3D"39b78cc857cd" id=3D"QueryExplorerAPIContract-ResponseFields=
+">Response Fields</h2>
+<div class=3D"table-wrap">
+<table data-table-width=3D"760" data-layout=3D"center" data-local-id=3D"4f4=
+63d37-a1c5-4f6c-ae52-d83186cda631" class=3D"confluenceTable">
+<tbody>
+<tr data-local-id=3D"6fa2ff64-4561-48c3-ac76-1cc90d158329">
+<th data-local-id=3D"efff57a1-f1ec-442b-82e8-a20006eea093" class=3D"conflue=
+nceTh">
+<p local-id=3D"7438dea0e665">Field</p></th>
+<th data-local-id=3D"a98d8266-bc35-4202-a9a8-5aa1b305640a" class=3D"conflue=
+nceTh">
+<p local-id=3D"3ef9199bad8f">Type</p></th>
+<th data-local-id=3D"23e8a16b-05e5-4378-88fa-bf05401b874b" class=3D"conflue=
+nceTh">
+<p local-id=3D"6bb50e354ddd">Description</p></th>
+</tr>
+<tr data-local-id=3D"32238548-06eb-46ef-9c11-8042a2ebf4e3">
+<td data-local-id=3D"b5b052e9-107f-4353-bea2-d3e9e6dba17f" class=3D"conflue=
+nceTd">
+<p local-id=3D"43e8fcb54a04">data</p></td>
+<td data-local-id=3D"dd76c5f6-8112-4eb9-a3c4-fc8b28aba2db" class=3D"conflue=
+nceTd">
+<p local-id=3D"99774dc29f75">object</p></td>
+<td data-local-id=3D"3633752d-4379-4f75-9fe6-167889c02478" class=3D"conflue=
+nceTd">
+<p local-id=3D"f52e33d2824e">Query result structured according to the query=
+ selection set</p></td>
+</tr>
+<tr data-local-id=3D"cbb8f379-730c-41b9-bb87-d2f16082c460">
+<td data-local-id=3D"f541d9af-f799-4910-8f4d-06bbf767c0df" class=3D"conflue=
+nceTd">
+<p local-id=3D"e42c2d635aad">errors</p></td>
+<td data-local-id=3D"b5837f60-62ac-4d53-8383-c1b0a4601949" class=3D"conflue=
+nceTd">
+<p local-id=3D"b92c441f4741">array</p></td>
+<td data-local-id=3D"bcd1500d-8c8c-4b97-9a9b-931dde955d7d" class=3D"conflue=
+nceTd">
+<p local-id=3D"151ff3e8d255">List of errors that occurred during validation=
+ or execution</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 local-id=3D"eec1c0dd5978" id=3D"QueryExplorerAPIContract-SuccessfulQuer=
+yExample">Successful Query Example</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "data": {
+    "repo": {
+      "ref": {
+        "file": {
+          "artefacts": [
+            {
+              "symbolFqn": "AuthService.login",
+              "canonicalKind": "METHOD"
+            },
+            {
+              "symbolFqn": "AuthService.logout",
+              "canonicalKind": "METHOD"
+            }
+          ]
+        }
+      }
+    }
+  }
+}</pre>
+</div>
+</div>
+<h2 local-id=3D"155829e59f7d" id=3D"QueryExplorerAPIContract-ValidationErro=
+rExample">Validation Error Example</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "data": null,
+  "errors": [
+    {
+      "message": "Cannot query field 'banana' on type 'Repo'.",
+      "locations": [
+        { "line": 3, "column": 5 }
+      ],
+      "extensions": {
+        "code": "INVALID_FIELD"
+      }
+    }
+  ]
+}</pre>
+</div>
+</div>
+<h2 local-id=3D"7dcb2ca83c7e" id=3D"QueryExplorerAPIContract-PartialSuccess=
+Example">Partial Success Example</h2>
+<p local-id=3D"82a3a8b9d5f0">GraphQL-style responses may return <strong>par=
+tial data when some fields fail</strong>.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "data": {
+    "repo": {
+      "ref": null
+    }
+  },
+  "errors": [
+    {
+      "message": "Ref 'main' not found.",
+      "path": ["repo", "ref"]
+    }
+  ]
+}</pre>
+</div>
+</div>
+<h1 local-id=3D"512d2d57d72c" id=3D"QueryExplorerAPIContract-AutocompleteMe=
+tadataAPI">Autocomplete Metadata API</h1>
+<p local-id=3D"5b0e6c739cd7">This section describes the request and respons=
+e format used by the <strong>Query Explorer </strong> to retrieve <strong>s=
+chema metadata</strong> for powering <strong>autocomplete assistance</stron=
+g>.</p>
+<p local-id=3D"25921344add7">The autocomplete system is <strong>schema-driv=
+en</strong>, meaning the frontend retrieves queryable <strong>types, fields=
+, and arguments</strong> from the backend and uses them to generate suggest=
+ions based on the <strong>editor cursor position</strong>.</p>
+<h1 local-id=3D"8e5e81f064f2" id=3D"QueryExplorerAPIContract-SchemaEndpoint=
+">Schema Endpoint</h1>
+<div class=3D"table-wrap">
+<table data-table-width=3D"760" data-layout=3D"default" data-local-id=3D"af=
+49f912-8006-4b6d-88fc-b023202d718f" class=3D"confluenceTable">
+<tbody>
+<tr data-local-id=3D"ee079421-3be4-4a9a-b1a1-8b74782159df">
+<th data-local-id=3D"1dfc3932-ecdd-4fb2-9ee6-9f728ea746e0" class=3D"conflue=
+nceTh">
+<p local-id=3D"1c6343adaee1">Field</p></th>
+<th data-local-id=3D"ce1c9d92-03a0-45a6-bd52-ed7b3d85c7f7" class=3D"conflue=
+nceTh">
+<p local-id=3D"3c9fc973e692">Value</p></th>
+</tr>
+<tr data-local-id=3D"17561d8a-beed-4ae0-abb6-be5691358c33">
+<td data-local-id=3D"19f8ead6-b74d-4db4-ab4b-15ffa8f2c683" class=3D"conflue=
+nceTd">
+<p local-id=3D"d327569ebbe1">Method</p></td>
+<td data-local-id=3D"c2b41c76-7783-4b8d-ace5-875142ea9906" class=3D"conflue=
+nceTd">
+<p local-id=3D"d61dbeea85be"><code>GET</code></p></td>
+</tr>
+<tr data-local-id=3D"aaa22e6e-b141-46fb-a196-eb28c235fbec">
+<td data-local-id=3D"c68f88fd-9c72-40e2-9f98-e43aaf18d9f6" class=3D"conflue=
+nceTd">
+<p local-id=3D"08a6f2648c04">Path</p></td>
+<td data-local-id=3D"58a6b35c-f855-46c7-b23b-3390da3e4798" class=3D"conflue=
+nceTd">
+<p local-id=3D"1047992f6420"><code>/query-schema</code></p></td>
+</tr>
+<tr data-local-id=3D"6793054e-69a2-4f9a-bc0e-20dc67a0a0f4">
+<td data-local-id=3D"098d34d3-46b4-4e2a-9e43-29eac2d0ace3" class=3D"conflue=
+nceTd">
+<p local-id=3D"96d8e3c7f242">Content-Type</p></td>
+<td data-local-id=3D"204d82a9-fcd3-409d-b219-763fb4d80868" class=3D"conflue=
+nceTd">
+<p local-id=3D"07165679ab4a"><code>application/json</code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p local-id=3D"d4cce623ec7b">This endpoint returns metadata describing the =
+<strong>query schema</strong>.<br>
+ The frontend loads this schema when the <strong>Query Explorer initializes=
+</strong> and caches it for the <strong>duration of the session</strong>.</=
+p>
+<h1 local-id=3D"a50b7e9ab857" id=3D"QueryExplorerAPIContract-Request">Reque=
+st</h1>
+<p local-id=3D"7dbdd4c780d9">The request is a simple <strong>GET call</stro=
+ng>. No request body is required.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">GET /qu=
+ery-schema</pre>
+</div>
+</div>
+<h1 local-id=3D"4200c9cf4f60" id=3D"QueryExplorerAPIContract-ResponseFormat=
+.1">Response Format</h1>
+<p local-id=3D"317fb805984c">The response returns a <strong>schema metadata=
+ object</strong> describing all <strong>queryable types and fields</strong>=
+.</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "Query": {
+    "fields": {
+      "repo": {
+        "type": "Repo",
+        "args": {
+          "name": "String!"
+        },
+        "description": "Select a repository"
+      },
+      "search": {
+        "type": "SearchResult",
+        "args": {
+          "query": "String!"
+        }
+      }
+    }
+  },
+  "Repo": {
+    "fields": {
+      "ref": {
+        "type": "Ref",
+        "args": {
+          "name": "String!"
+        }
+      },
+      "commit": {
+        "type": "Commit",
+        "args": {
+          "sha": "String!"
+        }
+      },
+      "files": {
+        "type": "[File]",
+        "args": {
+          "path": "String"
+        }
+      }
+    }
+  },
+  "Ref": {
+    "fields": {
+      "file": {
+        "type": "File",
+        "args": {
+          "path": "String!"
+        }
+      },
+      "files": {
+        "type": "[File]",
+        "args": {
+          "path": "String"
+        }
+      }
+    }
+  }
+}</pre>
+</div>
+</div>
+<h1 local-id=3D"b91a1d09dadb" id=3D"QueryExplorerAPIContract-SchemaStructur=
+e">Schema Structure</h1>
+<p local-id=3D"0e55e0ba9d3c">Each <strong>schema type</strong> contains a l=
+ist of fields.</p>
+<p local-id=3D"df191e2590be">Field metadata includes:</p>
+<div class=3D"table-wrap">
+<table data-table-width=3D"760" data-layout=3D"default" data-local-id=3D"1d=
+e89042-f1bf-4a07-bbd7-45cabc0b8fa7" class=3D"confluenceTable">
+<tbody>
+<tr data-local-id=3D"3bb4b88b-9136-4651-9da4-6c4b4f40ff72">
+<th data-local-id=3D"302d935b-d171-408f-bccb-b278b91d0152" class=3D"conflue=
+nceTh">
+<p local-id=3D"f9ad616aa117">Field</p></th>
+<th data-local-id=3D"f5ed0c77-e40e-4275-a3d6-709d126f65cd" class=3D"conflue=
+nceTh">
+<p local-id=3D"4ce6a705b18c">Description</p></th>
+</tr>
+<tr data-local-id=3D"db9ec106-80d5-4a76-b15d-79505d7a18fa">
+<td data-local-id=3D"639b8e76-99ef-4836-b12e-0c2b9ef4d9a5" class=3D"conflue=
+nceTd">
+<p local-id=3D"393cafb621c3">type</p></td>
+<td data-local-id=3D"086bbc1c-ac85-4a87-bc03-933fe1d11b38" class=3D"conflue=
+nceTd">
+<p local-id=3D"2dff1fdc4216">Return type of the field</p></td>
+</tr>
+<tr data-local-id=3D"c39d0de0-873d-4359-b29c-1459edc11299">
+<td data-local-id=3D"86ded88a-139f-43a3-9f39-889cf8055def" class=3D"conflue=
+nceTd">
+<p local-id=3D"114b379665bb">args</p></td>
+<td data-local-id=3D"f907cbf3-51b9-4b2f-a258-ec7e01269154" class=3D"conflue=
+nceTd">
+<p local-id=3D"c8b8831d5014">Arguments accepted by the field</p></td>
+</tr>
+<tr data-local-id=3D"385d04cc-eddc-4570-8783-28ccb3d6ea71">
+<td data-local-id=3D"99ceb517-75c2-4241-9149-1e701d706b03" class=3D"conflue=
+nceTd">
+<p local-id=3D"c1a66b11b015">description</p></td>
+<td data-local-id=3D"d99342f1-0fdd-43bc-a070-516b5475daa7" class=3D"conflue=
+nceTd">
+<p local-id=3D"e5a77f016fa3">Optional documentation text</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 local-id=3D"2c231e0ba666" id=3D"QueryExplorerAPIContract-ExampleFieldDe=
+finition">Example Field Definition</h2>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">{
+  "type": "Repo",
+  "args": {
+    "name": "String!"
+  },
+  "description": "Select a repository"
+}</pre>
+</div>
+</div>
+<h1 local-id=3D"e7d32e4b077d" id=3D"QueryExplorerAPIContract-AutocompleteFl=
+ow">Autocomplete Flow</h1>
+<p local-id=3D"68d03682d6d1">The <strong>Query Explorer autocomplete system=
+</strong> operates as follows:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">Query E=
+xplorer loads
+      =E2=86=93
+GET /query-schema
+      =E2=86=93
+Schema cached in frontend state
+      =E2=86=93
+User types query
+      =E2=86=93
+Editor detects cursor position
+      =E2=86=93
+Frontend determines current query type
+      =E2=86=93
+Autocomplete suggestions generated</pre>
+</div>
+</div>
+<h1 local-id=3D"491bb547aced" id=3D"QueryExplorerAPIContract-ExampleAutocom=
+pleteScenario">Example Autocomplete Scenario</h1>
+<p local-id=3D"96c7051a355c">User types:</p>
+<div class=3D"code panel pdl" style=3D"border-width: 1px;">
+<div class=3D"codeContent panelContent pdl">
+<pre class=3D"syntaxhighlighter-pre" data-syntaxhighlighter-params=3D"brush=
+: java; gutter: false; theme: Confluence" data-theme=3D"Confluence">query {
+  repo(name: "repo1") {
+    |
+  }
+}</pre>
+</div>
+</div>
+<p local-id=3D"94aaba06d0b2">The editor determines the <strong>current type=
+ is </strong><code>Repo</code> and suggests fields from the <strong>Repo sc=
+hema</strong>:</p>
+<ul local-id=3D"19d17607-65ed-443c-8446-db5c54938ec8">
+<li local-id=3D"c549a9de-8d32-486b-a714-27283ebb5593">
+<p local-id=3D"d1a575e41f8e"><code>ref</code></p></li>
+<li local-id=3D"2e9ac468-0534-428e-995a-0a879204c0f5">
+<p local-id=3D"846bf1504f04"><code>commit</code></p></li>
+<li local-id=3D"581f8ab8-69c9-4497-9899-49f0f11e8dfa">
+<p local-id=3D"ecc1ec43fe24"><code>files</code></p></li>
+</ul>
+    </div>
+</body>
+</html>
+------=_Part_20_1792746131.1774266816564--

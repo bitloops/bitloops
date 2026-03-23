@@ -1,0 +1,19 @@
+.features {
+  display: flex;
+  align-items: center;
+  padding: 4rem 0;
+  width: 100%;
+}
+
+.featureLink {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  height: 100%;
+  margin-bottom: 1.5rem;
+}
+
+.featureLink:hover {
+  text-decoration: none;
+  color: inherit;
+}
