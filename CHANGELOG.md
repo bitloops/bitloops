@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Unified multi-scope configuration** (`CLI-1459`): One configuration domain replaces the legacy `settings.json` / `config.json` split. All settings (hooks, strategy, stores, knowledge, semantic, dashboard, watch) now live in a single `config.json` / `config.local.json` file pair using a versioned envelope format (`version` / `scope` / `settings`). Layer precedence: code defaults → global `~/.bitloops/config.json` → project shared → project local → environment variables. Deep-merge semantics for objects; arrays replace entirely; explicit `null` clears keys from lower layers.
+- **Monorepo project-root discovery** (`CLI-1463`): `bitloops_project_root()` walks upward from `cwd` to find the nearest `.bitloops/` directory marker. Falls back to git root when no marker exists. Git hooks still install at git root; config, stores, and agent directories resolve from the Bitloops project root.
+- **Provider-less store backend model** (`CLI-1481`–`CLI-1484`): Removed `provider` enum fields from `RelationalBackendConfig`, `EventsBackendConfig`, and `BlobStorageConfig`. Local backends (SQLite, DuckDB, local blob) are always present; remote backends (Postgres, ClickHouse, S3, GCS) activate when their connection string or bucket is configured. Consumer dispatch sites use capability checks (`has_postgres()`, `has_clickhouse()`, `s3_bucket.is_some()`) instead of `match provider`.
+
 - **`bitloops devql packs`**: inspect `DevqlCapabilityHost` registry (packs, stages, ingesters, migration plan, schema modules, health check names, query-example counts, invocation policy, cross-pack grants); **`--json`** (unchanged top-level **`HostRegistryReport`** unless **`--with-extensions`**), **`--with-health`**, **`--apply-migrations`**, **`--with-extensions`** (append **`CoreExtensionHost`** snapshot via **`CoreExtensionHostRegistryReport`**; JSON becomes **`PackLifecycleReport`**). **`CoreExtensionHost::registry_report`**, **`CoreExtensionHostError`** / DevQL capability host errors: **`[subsystem:…]`**-prefixed messages for triage.
 - DevQL capability host: documented core↔pack boundaries ([`docs/devql-core-pack-boundaries.md`](docs/devql-core-pack-boundaries.md)); configurable `host.invocation` timeouts for stages, ingesters, and composition subqueries; optional `host.cross_pack_access` read grants for registered-stage composition alongside descriptor dependencies; `devql_relational_scoped` for ingester-bound DevQL relational access.
 - DevQL now fully indexes code artefacts (functions, methods, classes, interfaces, structs, enums, traits, modules) for Rust and JS/TS, capturing rich metadata: fully-qualified symbol names, parent hierarchy, byte-precise location, signature, modifiers (async/static/visibility), and docstrings.
@@ -23,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Cut down the `bitloops dashboard` loading time by moving the host name detection from the DNS probe to the user-home config file (`~/.bitloops/config.json`).
 - Updated Readme documentation
 - Add documetnation around Contributing, Security & Code of Conduct
+
+### Fixed
+
+- **Global config fallback**: `load_effective_config` no longer falls back to `PathBuf::from(".")` when HOME is unset; the global layer is skipped entirely, preventing scope-validation failures that silently dropped all configuration.
+- **Conflicting blob backend detection**: `create_blob_store_with_backend` now returns an error when both `s3_bucket` and `gcs_bucket` are set, instead of silently picking S3.
 
 ### Changed
 
