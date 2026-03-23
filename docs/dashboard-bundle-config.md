@@ -11,7 +11,7 @@ Generated at build time:
 - `$OUT_DIR/dashboard_env.rs`
 
 Consumed at runtime:
-- `src/server/dashboard/bundle.rs`
+- `src/api/bundle.rs`
 
 ## Motivation
 1. Distributed binaries are self-contained and carry environment-correct dashboard URLs.

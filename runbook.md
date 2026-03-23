@@ -18,7 +18,7 @@ It creates a small Rust repo inline, so the proof does not depend on any checked
 
 ```bash
 cd /Users/markos/code/bitloops/bitloops
-cargo install --path ./bitloops_cli --force
+cargo install --path ./bitloops --force
 ```
 
 ## 1) Create a disposable Rust repo inline
