@@ -348,8 +348,7 @@ mod tests {
             .err()
             .expect("should reject conflicting remote backends");
         assert!(
-            err.to_string().contains("s3_bucket")
-                && err.to_string().contains("gcs_bucket"),
+            err.to_string().contains("s3_bucket") && err.to_string().contains("gcs_bucket"),
             "error should name the conflicting fields, got: {err}"
         );
     }

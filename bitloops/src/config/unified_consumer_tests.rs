@@ -319,7 +319,6 @@ fn watch_from_unified_merges_across_json_layers() {
 //
 // These tests assert the target API where provider enums are removed and
 // backend availability is derived from connection-string presence.
-// They MUST fail against the current codebase (proving the gap).
 // ---------------------------------------------------------------------------
 
 #[test]
