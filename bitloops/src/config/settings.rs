@@ -1,4 +1,4 @@
-//! Bitloops project settings (.bitloops/settings.json).
+//! Bitloops project configuration (.bitloops/config.json).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -8,8 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const SETTINGS_DIR: &str = ".bitloops";
-pub const SETTINGS_FILE: &str = "settings.json";
-pub const SETTINGS_LOCAL_FILE: &str = "settings.local.json";
+pub const SETTINGS_FILE: &str = "config.json";
+pub const SETTINGS_LOCAL_FILE: &str = "config.local.json";
 pub const DEFAULT_STRATEGY: &str = "manual-commit";
 
 fn default_enabled() -> bool {
@@ -32,7 +32,7 @@ fn is_empty_map(m: &HashMap<String, Value>) -> bool {
     m.is_empty()
 }
 
-/// Project settings stored in `.bitloops/settings.json`.
+/// Project configuration stored in `.bitloops/config.json`.
 ///
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,12 +75,12 @@ impl Default for BitloopsSettings {
     }
 }
 
-/// Returns path to `.bitloops/settings.json` under `repo_root`.
+/// Returns path to `.bitloops/config.json` under `repo_root`.
 pub fn settings_path(repo_root: &Path) -> PathBuf {
     repo_root.join(SETTINGS_DIR).join(SETTINGS_FILE)
 }
 
-/// Returns path to `.bitloops/settings.local.json` under `repo_root`.
+/// Returns path to `.bitloops/config.local.json` under `repo_root`.
 pub fn settings_local_path(repo_root: &Path) -> PathBuf {
     repo_root.join(SETTINGS_DIR).join(SETTINGS_LOCAL_FILE)
 }
@@ -94,11 +94,13 @@ pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
     let local_path = settings_local_path(repo_root);
     match fs::read(&local_path) {
         Ok(data) => {
-            merge_json(&mut settings, &data).context("merging local settings")?;
+            let settings_data =
+                extract_settings_bytes(&data).context("extracting settings from local config")?;
+            merge_json(&mut settings, &settings_data).context("merging local config")?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            return Err(e).context("reading local settings file");
+            return Err(e).context("reading local config file");
         }
     }
 
@@ -106,17 +108,30 @@ pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
     Ok(settings)
 }
 
+/// Extracts the `settings` block from a config envelope, or returns the
+/// raw data as-is if the file uses flat format.
+pub(crate) fn extract_settings_bytes(data: &[u8]) -> Result<Vec<u8>> {
+    let raw: Value = serde_json::from_slice(data).context("parsing JSON")?;
+    if raw.get("version").is_some()
+        && let Some(settings) = raw.get("settings")
+    {
+        return serde_json::to_vec(settings).context("re-serializing settings block");
+    }
+    Ok(data.to_vec())
+}
+
 /// Loads settings from a single file path without local overrides.
-///
 fn load_from_file(path: &Path) -> Result<BitloopsSettings> {
     match fs::read(path) {
         Ok(data) => {
-            let settings: BitloopsSettings = serde_json::from_slice(&data)
-                .with_context(|| format!("parsing settings file: {}", path.display()))?;
+            let settings_data = extract_settings_bytes(&data)
+                .with_context(|| format!("extracting settings from: {}", path.display()))?;
+            let settings: BitloopsSettings = serde_json::from_slice(&settings_data)
+                .with_context(|| format!("parsing config file: {}", path.display()))?;
             Ok(settings)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BitloopsSettings::default()),
-        Err(e) => Err(e).with_context(|| format!("reading settings file: {}", path.display())),
+        Err(e) => Err(e).with_context(|| format!("reading config file: {}", path.display())),
     }
 }
 
@@ -200,16 +215,51 @@ fn apply_defaults(settings: &mut BitloopsSettings) {
     }
 }
 
-/// Saves settings to the given path (creates parent directories as needed).
+/// Saves settings to the given path using the config envelope format.
 ///
+/// Preserves any existing non-settings keys (e.g. stores, knowledge) in
+/// the envelope so that a partial settings update does not wipe store config.
 pub fn save_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("creating settings directory: {}", parent.display()))?;
+            .with_context(|| format!("creating config directory: {}", parent.display()))?;
     }
-    let mut data = serde_json::to_string_pretty(settings).context("serializing settings")?;
+
+    let scope = if path.file_name().is_some_and(|f| f == SETTINGS_LOCAL_FILE) {
+        "project_local"
+    } else {
+        "project"
+    };
+
+    // Read existing envelope to preserve non-settings data (stores, etc.)
+    let mut envelope: serde_json::Map<String, Value> = path
+        .exists()
+        .then(|| fs::read(path).ok())
+        .flatten()
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default();
+
+    envelope.insert("version".into(), Value::String("1.0".into()));
+    envelope.insert("scope".into(), Value::String(scope.into()));
+
+    let new_settings = serde_json::to_value(settings).context("serializing settings")?;
+    match envelope.get_mut("settings") {
+        Some(Value::Object(existing)) => {
+            if let Value::Object(new) = new_settings {
+                for (k, v) in new {
+                    existing.insert(k, v);
+                }
+            }
+        }
+        _ => {
+            envelope.insert("settings".into(), new_settings);
+        }
+    }
+
+    let mut data =
+        serde_json::to_string_pretty(&Value::Object(envelope)).context("serializing config")?;
     data.push('\n');
-    fs::write(path, data).with_context(|| format!("writing settings file: {}", path.display()))?;
+    fs::write(path, data).with_context(|| format!("writing config file: {}", path.display()))?;
     Ok(())
 }
 

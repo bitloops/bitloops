@@ -311,7 +311,7 @@ fn setup_bitloops_dir_writes_all_required_gitignore_entries() {
 
     for required in [
         "tmp/",
-        "settings.local.json",
+        "config.local.json",
         "metadata/",
         "logs/",
         "stores/",
@@ -331,7 +331,7 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
     fs::create_dir_all(&bitloops_dir).unwrap();
     fs::write(
         bitloops_dir.join(".gitignore"),
-        "custom-entry/\nsettings.local.json\n",
+        "custom-entry/\nconfig.local.json\n",
     )
     .unwrap();
 
@@ -344,7 +344,7 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
     );
     for required in [
         "tmp/",
-        "settings.local.json",
+        "config.local.json",
         "metadata/",
         "logs/",
         "stores/",

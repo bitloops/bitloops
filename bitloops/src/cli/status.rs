@@ -54,8 +54,8 @@ pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
         return Ok(());
     }
 
-    let project_path = Path::new(".bitloops").join("settings.json");
-    let local_path = Path::new(".bitloops").join("settings.local.json");
+    let project_path = Path::new(".bitloops").join("config.json");
+    let local_path = Path::new(".bitloops").join("config.local.json");
     let project_exists = project_path.exists();
     let local_exists = local_path.exists();
 
@@ -328,14 +328,14 @@ mod tests {
 
     fn write_project_settings(repo_root: &Path, json: &str) {
         let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("settings dir");
-        fs::write(settings_dir.join("settings.json"), json).expect("project settings");
+        fs::create_dir_all(&settings_dir).expect("config dir");
+        fs::write(settings_dir.join("config.json"), json).expect("shared config");
     }
 
     fn write_local_settings(repo_root: &Path, json: &str) {
         let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("settings dir");
-        fs::write(settings_dir.join("settings.local.json"), json).expect("local settings");
+        fs::create_dir_all(&settings_dir).expect("config dir");
+        fs::write(settings_dir.join("config.local.json"), json).expect("local config");
     }
 
     // CLI-576
@@ -750,10 +750,7 @@ mod tests {
             repo.path(),
             r#"{"strategy":"manual-commit","enabled":true}"#,
         );
-        write_local_config(
-            repo.path(),
-            r#"{"strategy":"auto-commit","enabled":false}"#,
-        );
+        write_local_config(repo.path(), r#"{"strategy":"auto-commit","enabled":false}"#);
 
         let mut stdout = Cursor::new(Vec::new());
         let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
@@ -769,11 +766,14 @@ mod tests {
     #[test]
     fn unified_config_status_ignores_legacy_settings_json() {
         let repo = setup_status_test_repo();
-        // Only write to legacy settings.json — status should NOT find it
-        write_project_settings(
-            repo.path(),
+        // Write directly to legacy settings.json — status should NOT find it
+        let settings_dir = repo.path().join(".bitloops");
+        fs::create_dir_all(&settings_dir).expect("dir");
+        fs::write(
+            settings_dir.join("settings.json"),
             r#"{"strategy":"manual-commit","enabled":true}"#,
-        );
+        )
+        .expect("legacy file");
 
         let mut stdout = Cursor::new(Vec::new());
         let err = with_cwd(repo.path(), || run_status(&mut stdout, false));

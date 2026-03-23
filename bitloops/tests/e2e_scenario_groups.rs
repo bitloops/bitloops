@@ -330,14 +330,14 @@ fn next_transcript_uuid(prefix: &str) -> String {
 }
 
 fn set_strategy(repo: &Path, strategy: &str) {
-    let settings_path = repo.join(".bitloops/settings.json");
-    let mut settings = read_json(&settings_path);
-    settings["strategy"] = Value::String(strategy.to_string());
+    let config_path = repo.join(".bitloops/config.json");
+    let mut config = read_json(&config_path);
+    config["settings"]["strategy"] = Value::String(strategy.to_string());
     fs::write(
-        settings_path,
-        serde_json::to_string_pretty(&settings).expect("serialize settings"),
+        config_path,
+        serde_json::to_string_pretty(&config).expect("serialize config"),
     )
-    .expect("write settings");
+    .expect("write config");
 }
 
 fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {

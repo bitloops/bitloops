@@ -10,18 +10,18 @@ use clap::Args;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::config::settings::{
-    self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, load_settings, save_settings,
-    settings_local_path, settings_path,
+    self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, extract_settings_bytes,
+    load_settings, save_settings, settings_local_path, settings_path,
 };
 use crate::host::checkpoints::session::create_session_backend_or_local;
 
 #[derive(Args)]
 pub struct EnableArgs {
-    /// Write settings to .bitloops/settings.local.json (user-local, gitignored)
+    /// Write to .bitloops/config.local.json (local override, gitignored)
     #[arg(long)]
     pub local: bool,
 
-    /// Force write to .bitloops/settings.json even if it already exists
+    /// Force write to .bitloops/config.json even if it already exists
     #[arg(long)]
     pub project: bool,
 
@@ -90,8 +90,8 @@ fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
 /// Returns `(path, show_notification)`:
 /// - `--local`  → local file, no notification
 /// - `--project` → project file, no notification
-/// - neither + settings.json exists → local file, show notification
-/// - neither + no settings.json → project file, no notification
+/// - neither + config.json exists → local file, show notification
+/// - neither + no config.json → project file, no notification
 fn determine_settings_target(
     repo_root: &Path,
     use_local: bool,
@@ -132,7 +132,7 @@ pub async fn run(args: EnableArgs) -> Result<()> {
 
     if show_notification {
         eprintln!(
-            "Note: writing settings to {} (project settings.json already exists)",
+            "Note: writing local override to {} (shared config.json already exists)",
             target_path.display()
         );
     }
@@ -204,14 +204,18 @@ pub fn check_disabled_guard(repo_root: &Path, out: &mut dyn Write) -> bool {
 }
 
 fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
-    if path.exists() {
-        match fs::read(path) {
-            Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-            Err(_) => BitloopsSettings::default(),
-        }
-    } else {
-        BitloopsSettings::default()
+    if !path.exists() {
+        return BitloopsSettings::default();
     }
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return BitloopsSettings::default(),
+    };
+    let settings_data = match extract_settings_bytes(&data) {
+        Ok(d) => d,
+        Err(_) => return BitloopsSettings::default(),
+    };
+    serde_json::from_slice(&settings_data).unwrap_or_default()
 }
 
 pub const SHELL_COMPLETION_COMMENT: &str = "# Bitloops CLI shell completion";
@@ -393,9 +397,9 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         return (false, String::new(), String::new());
     }
     let config = if settings_local_path(repo_root).exists() {
-        "settings.local.json"
+        "config.local.json"
     } else {
-        "settings.json"
+        "config.json"
     };
     let agent = registry
         .agent_display(&enabled_agents[0])
