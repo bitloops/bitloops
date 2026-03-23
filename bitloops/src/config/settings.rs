@@ -526,4 +526,44 @@ mod tests {
             "expected unknown-field error, got: {err:#}"
         );
     }
+
+    // ── CLI-1469: unified config file pair ──────────────────────────────
+
+    #[test]
+    fn unified_config_file_constant_is_config_json() {
+        assert_eq!(
+            SETTINGS_FILE, "config.json",
+            "SETTINGS_FILE should be 'config.json' for unified config model"
+        );
+    }
+
+    #[test]
+    fn unified_config_local_file_constant_is_config_local_json() {
+        assert_eq!(
+            SETTINGS_LOCAL_FILE, "config.local.json",
+            "SETTINGS_LOCAL_FILE should be 'config.local.json' for unified config model"
+        );
+    }
+
+    #[test]
+    fn unified_config_settings_path_returns_config_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_path(dir.path());
+        assert!(
+            path.ends_with(".bitloops/config.json"),
+            "settings_path should return .bitloops/config.json, got: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn unified_config_settings_local_path_returns_config_local_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = settings_local_path(dir.path());
+        assert!(
+            path.ends_with(".bitloops/config.local.json"),
+            "settings_local_path should return .bitloops/config.local.json, got: {}",
+            path.display()
+        );
+    }
 }
