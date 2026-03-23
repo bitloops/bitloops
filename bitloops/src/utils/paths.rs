@@ -177,6 +177,31 @@ pub fn open_repository() -> Result<PathBuf> {
     repo_root()
 }
 
+/// Discovers the Bitloops project root by walking upward from `start`.
+///
+/// Uses the nearest ancestor containing a `.bitloops/` directory marker.
+/// Falls back to git root when no marker is found between `start` and the
+/// filesystem root (spec §10.1).
+pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
+    // Stub: delegates to git root only. Does not yet implement .bitloops walk.
+    let mut dir = if start.is_absolute() {
+        start.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|e| anyhow!("cannot determine current directory: {e}"))?
+            .join(start)
+    };
+    loop {
+        if dir.join(".git").exists() {
+            return Ok(dir);
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent.to_path_buf(),
+            _ => return Err(anyhow!("not inside a git repository (no .git directory found)")),
+        }
+    }
+}
+
 /// Returns true when the current repository root is a linked worktree.
 pub fn is_inside_worktree() -> bool {
     let Ok(root) = repo_root() else {
@@ -313,7 +338,7 @@ pub fn get_worktree_id(worktree_path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        abs_path, clear_repo_root_cache, default_blob_store_path,
+        abs_path, bitloops_project_root, clear_repo_root_cache, default_blob_store_path,
         default_embedding_model_cache_dir, default_events_db_path, default_relational_db_path,
         extract_session_id_from_transcript_path, get_claude_project_dir, get_main_repo_root,
         get_worktree_id, is_infrastructure_path, is_inside_worktree, is_protected_path,
@@ -823,5 +848,125 @@ mod tests {
                 "abs_path() error = {err}, want actionable git-root message"
             );
         });
+    }
+
+    // ── CLI-1471: monorepo project-root discovery ───────────────────────
+
+    #[test]
+    fn monorepo_bitloops_project_root_finds_nearest_ancestor() {
+        let root = tempdir().expect("create monorepo root");
+        init_git_repo(root.path());
+
+        // Create nested package with its own .bitloops
+        let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+
+        let result = bitloops_project_root(&app_dir).unwrap();
+        assert_eq!(
+            canonical(&result),
+            canonical(&app_dir),
+            "should find nearest .bitloops at packages/app, not git root"
+        );
+    }
+
+    #[test]
+    fn monorepo_bitloops_project_root_falls_back_to_git_root() {
+        let root = tempdir().expect("create monorepo root");
+        init_git_repo(root.path());
+
+        // Nested directory WITHOUT .bitloops — should fall back to git root
+        let lib_dir = root.path().join("packages/lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+
+        let result = bitloops_project_root(&lib_dir).unwrap();
+        assert_eq!(
+            canonical(&result),
+            canonical(root.path()),
+            "should fall back to git root when no .bitloops marker"
+        );
+    }
+
+    #[test]
+    fn monorepo_bitloops_project_root_resolves_from_deep_subdirectory() {
+        let root = tempdir().expect("create monorepo root");
+        init_git_repo(root.path());
+
+        // .bitloops at package level, cwd is deeper inside src/
+        let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+        let deep_dir = app_dir.join("src/components");
+        fs::create_dir_all(&deep_dir).unwrap();
+
+        let result = bitloops_project_root(&deep_dir).unwrap();
+        assert_eq!(
+            canonical(&result),
+            canonical(&app_dir),
+            "should resolve to packages/app from deep subdirectory"
+        );
+    }
+
+    #[test]
+    fn monorepo_bitloops_project_root_prefers_nearest_over_git_root() {
+        let root = tempdir().expect("create monorepo root");
+        init_git_repo(root.path());
+
+        // .bitloops at BOTH git root and nested package
+        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+        let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+
+        let result = bitloops_project_root(&app_dir).unwrap();
+        assert_eq!(
+            canonical(&result),
+            canonical(&app_dir),
+            "should prefer nearest .bitloops over git-root .bitloops"
+        );
+    }
+
+    #[test]
+    fn monorepo_git_root_unchanged_for_git_operations() {
+        let root = tempdir().expect("create monorepo root");
+        init_git_repo(root.path());
+
+        let app_dir = root.path().join("packages/app");
+        fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
+
+        // repo_root() must still return git root regardless of .bitloops markers
+        with_cwd(&app_dir, || {
+            clear_repo_root_cache();
+            let git_root = repo_root().unwrap();
+            assert_eq!(
+                canonical(&git_root),
+                canonical(root.path()),
+                "repo_root() must still return git root, not bitloops project root"
+            );
+        });
+    }
+
+    #[test]
+    fn monorepo_bitloops_project_root_single_repo_matches_git_root() {
+        let root = tempdir().expect("create single repo");
+        init_git_repo(root.path());
+
+        // Standard single-package repo: .bitloops at git root
+        fs::create_dir_all(root.path().join(".bitloops")).unwrap();
+
+        let result = bitloops_project_root(root.path()).unwrap();
+        assert_eq!(
+            canonical(&result),
+            canonical(root.path()),
+            "in a single-package repo, bitloops project root equals git root"
+        );
+    }
+
+    #[test]
+    fn monorepo_bitloops_project_root_errors_outside_git_repo() {
+        let non_repo = tempdir().expect("create non-repo dir");
+        let err = bitloops_project_root(non_repo.path())
+            .expect_err("should fail outside a git repository");
+        assert!(
+            err.to_string().contains("git repository"),
+            "error should mention git repository: {err}"
+        );
     }
 }
