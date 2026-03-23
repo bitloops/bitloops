@@ -7,6 +7,7 @@ mod resolve;
 pub mod settings;
 mod store_config_utils;
 mod types;
+pub mod unified_config;
 
 pub use constants::{BITLOOPS_CONFIG_RELATIVE_PATH, BITLOOPS_CONFIG_TOML_RELATIVE_PATH};
 pub use resolve::{
@@ -38,3 +39,5 @@ pub(crate) use resolve::{
 
 #[cfg(test)]
 mod store_config_tests;
+#[cfg(test)]
+mod unified_config_tests;
