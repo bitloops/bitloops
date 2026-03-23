@@ -85,7 +85,7 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
 
     ensure_watcher_pid_parent_dir(&pid_file)?;
     fs::write(&pid_file, format!("{}\n{}", child.id(), restart_token))
-    .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
+        .with_context(|| format!("writing watcher pid file {}", pid_file.display()))?;
 
     Ok(())
 }
@@ -299,10 +299,7 @@ fn read_pid_file(pid_file: &Path) -> Result<Option<PidFileEntry>> {
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(str::to_string);
-    Ok(Some(PidFileEntry {
-        pid,
-        restart_token,
-    }))
+    Ok(Some(PidFileEntry { pid, restart_token }))
 }
 
 fn kill_process(pid: u32) {
@@ -390,7 +387,8 @@ impl Drop for WatcherPidGuard {
 }
 
 fn current_watcher_restart_token() -> Result<String> {
-    let current_exe = std::env::current_exe().context("resolving current executable for watcher")?;
+    let current_exe =
+        std::env::current_exe().context("resolving current executable for watcher")?;
     let bytes = fs::read(&current_exe)
         .with_context(|| format!("reading watcher executable {}", current_exe.display()))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
@@ -525,7 +523,10 @@ mod tests {
             let restart_token = lines.next().expect("restart token line");
             let pid: u32 = pid_str.parse().expect("pid is numeric");
             assert_eq!(pid, std::process::id());
-            assert!(!restart_token.is_empty(), "restart token should not be empty");
+            assert!(
+                !restart_token.is_empty(),
+                "restart token should not be empty"
+            );
         }
         // Guard dropped — file should be cleaned up
         assert!(
