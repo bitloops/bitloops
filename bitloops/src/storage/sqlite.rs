@@ -43,7 +43,9 @@ impl SqliteConnectionPool {
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")?;
         self.migrate_devql_checkpoint_columns()
-            .context("migrating SQLite DevQL checkpoint columns")
+            .context("migrating SQLite DevQL checkpoint columns")?;
+        self.migrate_workspace_revisions_uniqueness()
+            .context("migrating SQLite workspace_revisions uniqueness")
     }
 
     fn migrate_devql_checkpoint_columns(&self) -> Result<()> {
@@ -92,6 +94,26 @@ impl SqliteConnectionPool {
                     }
                 }
             }
+            Ok(())
+        })
+    }
+
+    fn migrate_workspace_revisions_uniqueness(&self) -> Result<()> {
+        self.with_connection(|conn| {
+            conn.execute_batch(
+                r#"
+DELETE FROM workspace_revisions
+WHERE id NOT IN (
+    SELECT MAX(id)
+    FROM workspace_revisions
+    GROUP BY repo_id, tree_hash
+);
+DROP INDEX IF EXISTS workspace_revisions_tree_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
+ON workspace_revisions (repo_id, tree_hash);
+"#,
+            )
+            .context("hardening workspace_revisions uniqueness")?;
             Ok(())
         })
     }
@@ -256,6 +278,45 @@ mod tests {
                 .map_err(anyhow::Error::from)
         })?;
         assert_eq!(ids, vec![1, 2, 3], "ids must be autoincremented from 1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_revisions_enforces_unique_tree_hash_per_repo() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        sqlite.initialise_devql_schema()?;
+
+        sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1')",
+                [],
+            )?;
+            let duplicate = conn.execute(
+                "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1')",
+                [],
+            );
+            assert!(
+                duplicate.is_err(),
+                "duplicate repo/tree_hash inserts should be rejected by SQLite"
+            );
+            Ok(())
+        })?;
+
+        let duplicate_count: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = 'repo-a' AND tree_hash = 'hash-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            duplicate_count, 1,
+            "workspace_revisions should store at most one row per repo/tree_hash pair"
+        );
 
         Ok(())
     }

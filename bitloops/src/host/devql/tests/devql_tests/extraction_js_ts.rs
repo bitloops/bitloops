@@ -522,3 +522,133 @@ export { remoteFoo as remoteAlias } from "./remote";
         Some("re_export")
     );
 }
+
+// Case 1: extends clause must NOT also produce a references edge
+// When a class or interface only mentions a type in its extends/implements clause, that type
+// relationship is fully captured by the extends edge. A duplicate references edge for the same
+// target is noise. Currently FAILS because the reference extractor also picks up the inherited
+// type name and emits a spurious references edge.
+#[test]
+fn extract_js_ts_dependency_edges_extends_clause_does_not_emit_redundant_references_edge() {
+    let content = r#"class Animal {}
+class Dog extends Animal {}
+
+interface Base {
+  id: string;
+}
+interface Serializable extends Base {}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    // extends edges must be present — baseline
+    assert!(
+        edges.iter().any(|e| {
+            e.edge_kind == "extends"
+                && e.from_symbol_fqn == "src/sample.ts::Dog"
+                && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::Animal")
+        }),
+        "expected extends edge Dog → Animal"
+    );
+    assert!(
+        edges.iter().any(|e| {
+            e.edge_kind == "extends"
+                && e.from_symbol_fqn == "src/sample.ts::Serializable"
+                && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::Base")
+        }),
+        "expected extends edge Serializable → Base"
+    );
+
+    // no spurious references edges for the same target — the extends edge is sufficient
+    assert!(
+        !edges.iter().any(|e| {
+            e.edge_kind == "references"
+                && e.from_symbol_fqn == "src/sample.ts::Dog"
+                && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::Animal")
+        }),
+        "extends clause should not also emit a references edge for Animal (duplicate)"
+    );
+    assert!(
+        !edges.iter().any(|e| {
+            e.edge_kind == "references"
+                && e.from_symbol_fqn == "src/sample.ts::Serializable"
+                && e.to_target_symbol_fqn.as_deref() == Some("src/sample.ts::Base")
+        }),
+        "extends clause should not also emit a references edge for Base (duplicate)"
+    );
+}
+
+// Case 2: member call + identifier call duplication
+// obj.method() fires both regexes: call_ident_re matches `method(` and call_member_re matches
+// `.method(`, producing two edges for the same invocation. Only the member edge should be kept.
+#[test]
+fn extract_js_ts_dependency_edges_member_call_does_not_also_emit_identifier_call() {
+    let content = r#"function run() {
+  console.timeEnd("label");
+  obj.process();
+}
+"#;
+    let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
+    let edges = extract_js_ts_dependency_edges(content, "src/sample.ts", &artefacts).unwrap();
+
+    let calls_from_run: Vec<_> = edges
+        .iter()
+        .filter(|e| e.edge_kind == "calls" && e.from_symbol_fqn == "src/sample.ts::run")
+        .collect();
+
+    // timeEnd: should produce exactly one edge (member form), not two (member + identifier)
+    let timeend_edges: Vec<_> = calls_from_run
+        .iter()
+        .filter(|e| {
+            e.to_symbol_ref
+                .as_deref()
+                .map(|r| r.contains("timeEnd"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        timeend_edges.len(),
+        1,
+        "timeEnd() call should produce exactly one edge (member), got {:?}",
+        timeend_edges
+            .iter()
+            .map(|e| (e.to_symbol_ref.as_deref(), e.metadata.get("call_form")))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        timeend_edges[0]
+            .metadata
+            .get("call_form")
+            .and_then(|v| v.as_str()),
+        Some("member"),
+        "the single timeEnd edge should use call_form=member"
+    );
+
+    // process: same assertion for a second member call on a different line
+    let process_edges: Vec<_> = calls_from_run
+        .iter()
+        .filter(|e| {
+            e.to_symbol_ref
+                .as_deref()
+                .map(|r| r.contains("process"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        process_edges.len(),
+        1,
+        "process() call should produce exactly one edge (member), got {:?}",
+        process_edges
+            .iter()
+            .map(|e| (e.to_symbol_ref.as_deref(), e.metadata.get("call_form")))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        process_edges[0]
+            .metadata
+            .get("call_form")
+            .and_then(|v| v.as_str()),
+        Some("member"),
+        "the single process edge should use call_form=member"
+    );
+}

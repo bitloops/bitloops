@@ -42,6 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Artefacts are now updated in real time whenever someone changes them and saved in the artefacts_current and artefact_edges_current tables. CLI-1391 is complete and enums are used instead of strings.
 - Implemented watch to reuse existing runtime in DevQL
 - Fixed DevQL interface to query from the correct table depending on the query.
+- Fixed workspace revisions being persisted twice for a single change.
+- DB schema definitions now include a content hash so the schema watcher detects changes automatically, removing the need for a manual restart.
+- Edges deduplication in case of references
 
 ## [0.0.10] - 2026-03-12
 

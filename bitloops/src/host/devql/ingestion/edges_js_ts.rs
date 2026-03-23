@@ -91,6 +91,12 @@ pub(super) fn extract_js_ts_dependency_edges(
             if is_control_keyword(&name) {
                 continue;
             }
+            // Skip if the identifier is immediately preceded by '.' — it is a member access and
+            // call_member_re will emit the correct member-form edge for it.
+            if name_m.start() > 0 && line.as_bytes().get(name_m.start() - 1).copied() == Some(b'.')
+            {
+                continue;
+            }
 
             if let Some(target_fqn) = callable_name_to_fqn.get(&name) {
                 edges.push(JsTsDependencyEdge {
