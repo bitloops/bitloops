@@ -117,7 +117,18 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
     Ok(create_blob_store_with_backend(cfg)?.store)
 }
 
+fn reject_conflicting_remote_blob_backends(cfg: &BlobStorageConfig) -> Result<()> {
+    if cfg.s3_bucket.is_some() && cfg.gcs_bucket.is_some() {
+        bail!(
+            "blob storage configuration conflict: both s3_bucket and gcs_bucket are set; \
+             configure exactly one remote backend (or neither for local storage)"
+        );
+    }
+    Ok(())
+}
+
 pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
+    reject_conflicting_remote_blob_backends(cfg)?;
     if cfg.s3_bucket.is_some() {
         Ok(ResolvedBlobStore {
             store: Box::new(
@@ -144,6 +155,7 @@ pub fn create_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
+    reject_conflicting_remote_blob_backends(cfg)?;
     if cfg.s3_bucket.is_some() {
         Ok(ResolvedBlobStore {
             store: Box::new(
@@ -323,6 +335,23 @@ mod tests {
 
         let resolved = create_blob_store_with_backend(&cfg).expect("GCS dispatch should succeed");
         assert_eq!(resolved.backend, "gcs");
+    }
+
+    #[test]
+    fn create_blob_store_rejects_both_s3_and_gcs() {
+        let temp = TempDir::new().expect("temp dir");
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.s3_bucket = Some("s3-bucket".to_string());
+        cfg.gcs_bucket = Some("gcs-bucket".to_string());
+
+        let err = create_blob_store_with_backend(&cfg)
+            .err()
+            .expect("should reject conflicting remote backends");
+        assert!(
+            err.to_string().contains("s3_bucket")
+                && err.to_string().contains("gcs_bucket"),
+            "error should name the conflicting fields, got: {err}"
+        );
     }
 
     #[test]
