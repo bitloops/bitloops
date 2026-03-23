@@ -15,7 +15,7 @@ Test-only env vars are intentionally excluded.
 
 Primary use:
 
-- Storage backend/provider selection
+- Storage backend configuration
 - Knowledge provider credentials
 - Semantic feature provider settings
 - Dashboard host preference
@@ -36,15 +36,12 @@ Important:
 {
   "stores": {
     "relational": {
-      "provider": "sqlite",
       "sqlite_path": ".bitloops/stores/relational/relational.db"
     },
     "event": {
-      "provider": "duckdb",
       "duckdb_path": ".bitloops/stores/event/events.duckdb"
     },
     "blob": {
-      "provider": "local",
       "local_path": ".bitloops/stores/blob"
     }
   },
@@ -83,27 +80,26 @@ Important:
 }
 ```
 
+Backend selection is provider-less: local backends (SQLite, DuckDB, local blob) are always available with defaults. Remote backends (Postgres, ClickHouse, S3, GCS) are additive — they activate when their connection string or bucket is present.
+
 ### Store keys
 
-| Key                                | Type                     | Default                                            | Notes                                                                                        |
-| ---------------------------------- | ------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `stores.relational.provider`       | `sqlite` \| `postgres`   | `sqlite`                                           | Selects relational backend.                                                                  |
-| `stores.relational.sqlite_path`    | string                   | `<repo>/.bitloops/stores/relational/relational.db` | Used when provider is `sqlite`. Relative paths are resolved from repo root. `~` is expanded. |
-| `stores.relational.postgres_dsn`   | string                   | none                                               | Required when provider is `postgres`.                                                        |
-| `stores.event.provider`            | `duckdb` \| `clickhouse` | `duckdb`                                           | Selects event backend.                                                                       |
-| `stores.event.duckdb_path`         | string                   | `<repo>/.bitloops/stores/event/events.duckdb`      | Used when provider is `duckdb`. Relative paths are resolved from repo root. `~` is expanded. |
-| `stores.event.clickhouse_url`      | string                   | `http://localhost:8123`                            | Used when provider is `clickhouse`.                                                          |
-| `stores.event.clickhouse_user`     | string                   | none                                               | Optional ClickHouse username.                                                                |
-| `stores.event.clickhouse_password` | string                   | none                                               | Optional ClickHouse password.                                                                |
-| `stores.event.clickhouse_database` | string                   | `default`                                          | Optional ClickHouse database.                                                                |
-| `stores.blob.provider`             | `local` \| `s3` \| `gcs` | `local`                                            | Selects blob storage backend.                                                                |
-| `stores.blob.local_path`           | string                   | `<repo>/.bitloops/stores/blob`                     | Used when provider is `local`. Relative paths are resolved from repo root. `~` is expanded.  |
-| `stores.blob.s3_bucket`            | string                   | none                                               | Required when provider is `s3`.                                                              |
-| `stores.blob.s3_region`            | string                   | none                                               | Optional when provider is `s3`.                                                              |
-| `stores.blob.s3_access_key_id`     | string                   | none                                               | Optional static credentials for S3.                                                          |
-| `stores.blob.s3_secret_access_key` | string                   | none                                               | Optional static credentials for S3.                                                          |
-| `stores.blob.gcs_bucket`           | string                   | none                                               | Required when provider is `gcs`.                                                             |
-| `stores.blob.gcs_credentials_path` | string                   | none                                               | Optional path to GCS credentials JSON.                                                       |
+| Key                                | Type   | Default                                            | Notes                                                                                                  |
+| ---------------------------------- | ------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `stores.relational.sqlite_path`    | string | `<repo>/.bitloops/stores/relational/relational.db` | Local SQLite database path. Always available. Relative paths resolved from repo root. `~` is expanded. |
+| `stores.relational.postgres_dsn`   | string | none                                               | When present, Postgres is additionally available for shared/team data.                                 |
+| `stores.event.duckdb_path`         | string | `<repo>/.bitloops/stores/event/events.duckdb`      | Local DuckDB database path. Always available. Relative paths resolved from repo root. `~` is expanded. |
+| `stores.event.clickhouse_url`      | string | none                                               | When present, ClickHouse is used for event storage instead of DuckDB.                                  |
+| `stores.event.clickhouse_user`     | string | none                                               | Optional ClickHouse username.                                                                          |
+| `stores.event.clickhouse_password` | string | none                                               | Optional ClickHouse password.                                                                          |
+| `stores.event.clickhouse_database` | string | `default`                                          | Optional ClickHouse database name.                                                                     |
+| `stores.blob.local_path`           | string | `<repo>/.bitloops/stores/blob`                     | Local blob store path. Always available. Relative paths resolved from repo root. `~` is expanded.      |
+| `stores.blob.s3_bucket`            | string | none                                               | When present, S3 is used for blob storage instead of local.                                            |
+| `stores.blob.s3_region`            | string | none                                               | Optional S3 region.                                                                                    |
+| `stores.blob.s3_access_key_id`     | string | none                                               | Optional static credentials for S3.                                                                    |
+| `stores.blob.s3_secret_access_key` | string | none                                               | Optional static credentials for S3.                                                                    |
+| `stores.blob.gcs_bucket`           | string | none                                               | When present, GCS is used for blob storage instead of local.                                           |
+| `stores.blob.gcs_credentials_path` | string | none                                               | Optional path to GCS credentials JSON.                                                                 |
 
 ### Knowledge provider keys
 
