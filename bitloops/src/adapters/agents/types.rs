@@ -121,7 +121,7 @@ pub const AGENT_TYPE_CLAUDE_CODE: &str = AGENT_NAME_CLAUDE_CODE;
 pub const AGENT_TYPE_COPILOT: &str = AGENT_NAME_COPILOT;
 pub const AGENT_TYPE_CODEX: &str = AGENT_NAME_CODEX;
 pub const AGENT_TYPE_CURSOR: &str = AGENT_NAME_CURSOR;
-pub const AGENT_TYPE_GEMINI: &str = "gemini";
+pub const AGENT_TYPE_GEMINI: &str = AGENT_NAME_GEMINI;
 pub const AGENT_TYPE_OPEN_CODE: &str = AGENT_NAME_OPEN_CODE;
 pub const AGENT_TYPE_UNKNOWN: &str = "unknown";
 
@@ -148,7 +148,7 @@ pub fn agent_display_name(agent: &str) -> String {
         AGENT_TYPE_CODEX => "Codex".to_string(),
         AGENT_TYPE_CURSOR => "Cursor".to_string(),
         AGENT_TYPE_GEMINI => "Gemini".to_string(),
-        AGENT_TYPE_OPEN_CODE => "opencode".to_string(),
+        AGENT_TYPE_OPEN_CODE => "OpenCode".to_string(),
         AGENT_TYPE_UNKNOWN => "Unknown Agent".to_string(),
         "" => String::new(),
         other => other.to_string(),

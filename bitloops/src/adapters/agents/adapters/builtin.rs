@@ -270,14 +270,14 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 protocol_family: protocol_family_jsonl(),
                 target_profile: profile_for(
                     AGENT_NAME_OPEN_CODE,
-                    "OpenCode",
+                    "opencode",
                     PROTOCOL_FAMILY_JSONL_CLI,
                     &["open-code"],
                     BASE_CAPABILITIES,
                 ),
                 package: AgentAdapterPackageDescriptor::first_party_linked(
                     AGENT_NAME_OPEN_CODE,
-                    "OpenCode",
+                    "opencode",
                 ),
                 config_schema: AgentConfigSchema::empty("adapter.opencode"),
             },
