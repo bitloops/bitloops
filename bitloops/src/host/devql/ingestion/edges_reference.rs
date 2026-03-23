@@ -11,7 +11,7 @@ pub(super) fn collect_js_ts_reference_edges_recursive(
     let line_no = node.start_position().row as i32 + 1;
     if let Some(owner) = smallest_enclosing_callable(line_no, ctx.callables) {
         match node.kind() {
-            "type_identifier" => {
+            "type_identifier" if !js_ts_node_is_in_extends_clause(node) => {
                 if let Ok(name) = node.utf8_text(content.as_bytes()) {
                     push_reference_edge(
                         col,
@@ -26,7 +26,10 @@ pub(super) fn collect_js_ts_reference_edges_recursive(
                     );
                 }
             }
-            "identifier" if js_ts_identifier_is_value_reference(node) => {
+            "identifier"
+                if js_ts_identifier_is_value_reference(node)
+                    && !js_ts_node_is_in_extends_clause(node) =>
+            {
                 if let Ok(name) = node.utf8_text(content.as_bytes()) {
                     push_reference_edge(
                         col,

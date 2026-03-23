@@ -333,6 +333,28 @@ pub(super) fn symbol_lookup_name_from_text(text: &str) -> Option<String> {
     Some(candidate.to_string())
 }
 
+/// Returns true when `node` sits inside an `extends_clause` or `extends_type_clause` in the
+/// JS/TS AST. Used to suppress spurious `references` edges for types that are already captured
+/// by an `extends` edge.
+pub(super) fn js_ts_node_is_in_extends_clause(mut node: tree_sitter::Node) -> bool {
+    loop {
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        match parent.kind() {
+            "extends_clause" | "extends_type_clause" => return true,
+            // Stop at declaration boundaries — never cross into a different symbol's scope.
+            "class_declaration"
+            | "class_body"
+            | "interface_declaration"
+            | "function_declaration"
+            | "method_definition"
+            | "program" => return false,
+            _ => node = parent,
+        }
+    }
+}
+
 pub(super) fn js_ts_identifier_is_value_reference(node: tree_sitter::Node) -> bool {
     let Some(parent) = node.parent() else {
         return true;
@@ -373,6 +395,16 @@ pub(super) fn rust_identifier_is_value_reference(node: tree_sitter::Node) -> boo
         "call_expression" => !node_matches_parent_field(node, parent, "function"),
         "field_expression" => !node_matches_parent_field(node, parent, "field"),
         "macro_invocation" => !node_matches_parent_field(node, parent, "macro"),
+        // Suppress e.g. `AppServer` in `AppServer::new(...)`.  The identifier is the path
+        // qualifier of a scoped associated call; the `calls` edge already captures the
+        // dependency, so a redundant `references` edge is not needed.
+        "scoped_identifier" => {
+            let Some(grandparent) = parent.parent() else {
+                return true;
+            };
+            !(grandparent.kind() == "call_expression"
+                && node_matches_parent_field(parent, grandparent, "function"))
+        }
         _ => true,
     }
 }

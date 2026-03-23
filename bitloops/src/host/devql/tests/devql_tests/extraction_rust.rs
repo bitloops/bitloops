@@ -543,3 +543,50 @@ fn factorial(n: u64) -> u64 {
         "unresolved rust call edges should be filtered out under the import+local policy"
     );
 }
+
+// Case 3: Rust associated call `Type::fn()` must NOT also emit a references edge for the type.
+// `AppServer::new(...)` produces a calls(associated) edge; `AppServer` as the scoped-identifier
+// path qualifier must not additionally produce a references edge.
+#[test]
+fn extract_rust_dependency_edges_associated_call_does_not_emit_redundant_references_edge() {
+    let content = r#"struct AppServer {
+    host: String,
+}
+
+impl AppServer {
+    fn new(host: &str, port: u16) -> Self {
+        AppServer { host: host.to_string() }
+    }
+}
+
+fn boot() {
+    let server = AppServer::new("127.0.0.1", 8080);
+}
+"#;
+    let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
+    let edges = extract_rust_dependency_edges(content, "src/lib.rs", &artefacts).unwrap();
+
+    // calls edge must be present
+    assert!(
+        edges.iter().any(|e| {
+            e.edge_kind == "calls"
+                && e.from_symbol_fqn == "src/lib.rs::boot"
+                && e.to_target_symbol_fqn
+                    .as_deref()
+                    .is_some_and(|t| t.contains("new"))
+        }),
+        "expected a calls edge for AppServer::new from boot"
+    );
+
+    // no spurious references edge for AppServer from the call site
+    assert!(
+        !edges.iter().any(|e| {
+            e.edge_kind == "references"
+                && e.from_symbol_fqn == "src/lib.rs::boot"
+                && e.to_target_symbol_fqn
+                    .as_deref()
+                    .is_some_and(|t| t.contains("AppServer"))
+        }),
+        "AppServer::new() call should not also emit a references edge for AppServer (duplicate)"
+    );
+}
