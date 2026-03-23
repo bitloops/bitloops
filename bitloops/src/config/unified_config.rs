@@ -179,21 +179,22 @@ pub fn merge_json_layers(layers: &[Value]) -> Result<UnifiedSettings> {
 /// - `<project_root>/.bitloops/config.local.json` (scope: project_local)
 ///
 /// Missing files are silently skipped. Returns the merged [`UnifiedSettings`].
-pub fn load_effective_config(global_dir: &Path, project_root: &Path) -> Result<UnifiedSettings> {
-    let candidates: Vec<(std::path::PathBuf, ConfigScope)> = vec![
-        (
-            global_dir.join(".bitloops/config.json"),
-            ConfigScope::Global,
-        ),
-        (
-            project_root.join(".bitloops/config.json"),
-            ConfigScope::Project,
-        ),
-        (
-            project_root.join(".bitloops/config.local.json"),
-            ConfigScope::ProjectLocal,
-        ),
-    ];
+pub fn load_effective_config(
+    global_dir: Option<&Path>,
+    project_root: &Path,
+) -> Result<UnifiedSettings> {
+    let mut candidates: Vec<(std::path::PathBuf, ConfigScope)> = Vec::with_capacity(3);
+    if let Some(dir) = global_dir {
+        candidates.push((dir.join(".bitloops/config.json"), ConfigScope::Global));
+    }
+    candidates.push((
+        project_root.join(".bitloops/config.json"),
+        ConfigScope::Project,
+    ));
+    candidates.push((
+        project_root.join(".bitloops/config.local.json"),
+        ConfigScope::ProjectLocal,
+    ));
 
     let mut json_layers = Vec::new();
     for (path, expected_scope) in &candidates {

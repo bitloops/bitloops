@@ -410,7 +410,7 @@ fn load_effective_merges_global_and_project() {
         }),
     );
 
-    let effective = load_effective_config(home.path(), project.path()).unwrap();
+    let effective = load_effective_config(Some(home.path()), project.path()).unwrap();
     assert_eq!(effective.enabled, Some(true));
     assert_eq!(effective.strategy.as_deref(), Some("manual-commit"));
     assert!(effective.stores.is_some());
@@ -456,7 +456,7 @@ fn load_effective_merges_all_three_scopes() {
         }),
     );
 
-    let effective = load_effective_config(home.path(), project.path()).unwrap();
+    let effective = load_effective_config(Some(home.path()), project.path()).unwrap();
     assert_eq!(
         effective.strategy.as_deref(),
         Some("local-strategy"),
@@ -487,7 +487,7 @@ fn load_effective_missing_global_still_works() {
         }),
     );
 
-    let effective = load_effective_config(home.path(), project.path()).unwrap();
+    let effective = load_effective_config(Some(home.path()), project.path()).unwrap();
     assert_eq!(effective.enabled, Some(true));
     assert_eq!(effective.strategy.as_deref(), Some("auto-commit"));
 }
@@ -497,7 +497,7 @@ fn load_effective_missing_all_files_returns_defaults() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
 
-    let effective = load_effective_config(home.path(), project.path()).unwrap();
+    let effective = load_effective_config(Some(home.path()), project.path()).unwrap();
     assert_eq!(effective, UnifiedSettings::default());
 }
 
@@ -516,7 +516,7 @@ fn load_effective_rejects_scope_mismatch_in_project_file() {
         }),
     );
 
-    let err = load_effective_config(home.path(), project.path())
+    let err = load_effective_config(Some(home.path()), project.path())
         .expect_err("should reject scope mismatch");
     let msg = format!("{err:#}");
     assert!(

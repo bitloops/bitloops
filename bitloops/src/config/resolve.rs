@@ -23,8 +23,8 @@ use super::unified_config::{
 };
 
 fn effective_settings_for_repo(repo_root: &Path) -> Result<UnifiedSettings> {
-    let global_dir = user_home_dir().unwrap_or_else(|| PathBuf::from("."));
-    load_effective_config(&global_dir, repo_root)
+    let global_dir = user_home_dir();
+    load_effective_config(global_dir.as_deref(), repo_root)
 }
 
 pub fn dashboard_use_bitloops_local() -> bool {
