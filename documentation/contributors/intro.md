@@ -1,13 +1,31 @@
 ---
 sidebar_position: 1
-title: Contributing to Bitloops
+title: Welcome
 slug: /
 ---
 
 # Contributing to Bitloops
 
-Welcome to the Bitloops contributor documentation. This section is for developers who want to contribute to the Bitloops codebase, understand the internal architecture, or extend the tool with new capabilities.
+Bitloops is open source (Apache 2.0) and we welcome contributions of all kinds.
 
-**Coming soon** — detailed guides on development setup, architecture, internals, testing, and the release process.
+## Ways to Contribute
 
-In the meantime, check out the [CONTRIBUTING.md](https://github.com/bitloops/bitloops/blob/main/CONTRIBUTING.md) on GitHub to get started.
+- **Report bugs** — found something broken? [Open an issue](https://github.com/bitloops/bitloops/issues)
+- **Suggest features** — have an idea? We'd love to hear it
+- **Improve docs** — typos, unclear explanations, missing examples
+- **Write code** — bug fixes, new features, new language parsers
+- **Add tests** — more coverage is always welcome
+- **Review PRs** — fresh eyes catch things others miss
+
+## Before You Start
+
+For anything beyond a small fix, open an issue first so we can align on the approach. This saves everyone time — especially you.
+
+## Community
+
+- [GitHub](https://github.com/bitloops/bitloops) — issues, PRs, discussions
+- [Discord](https://discord.com/invite/vj8EdZx8gK) — chat with the team and other contributors
+
+## License and CLA
+
+Bitloops is licensed under Apache 2.0. By contributing, you agree to the Contributor License Agreement (CLA). Details are in the repo.
