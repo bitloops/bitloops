@@ -226,3 +226,62 @@ pub fn load_effective_config(global_dir: &Path, project_root: &Path) -> Result<U
 pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
     serde_json::from_value(value).context("failed to parse UnifiedSettings from JSON value")
 }
+
+// ---------------------------------------------------------------------------
+// Consumer adapters: resolve subsystem configs from the merged unified tree.
+// ---------------------------------------------------------------------------
+
+use super::types::{
+    DashboardFileConfig, ProviderConfig, StoreBackendConfig, StoreEmbeddingConfig,
+    StoreSemanticConfig, WatchRuntimeConfig,
+};
+
+/// Resolve store backend configuration (relational, events, blob) from merged
+/// [`UnifiedSettings`]. Applies defaults and resolves paths relative to `repo_root`.
+pub fn resolve_store_backend_from_unified(
+    _settings: &UnifiedSettings,
+    _repo_root: &Path,
+) -> Result<StoreBackendConfig> {
+    todo!()
+}
+
+/// Resolve semantic search configuration from merged [`UnifiedSettings`],
+/// with environment variables taking precedence where documented.
+pub fn resolve_semantic_from_unified<F: Fn(&str) -> Option<String>>(
+    _settings: &UnifiedSettings,
+    _env_lookup: F,
+) -> StoreSemanticConfig {
+    todo!()
+}
+
+/// Resolve embedding configuration from merged [`UnifiedSettings`],
+/// with environment variables taking precedence where documented.
+pub fn resolve_embedding_from_unified<F: Fn(&str) -> Option<String>>(
+    _settings: &UnifiedSettings,
+    _env_lookup: F,
+) -> StoreEmbeddingConfig {
+    todo!()
+}
+
+/// Resolve watch runtime configuration from merged [`UnifiedSettings`] (JSON only,
+/// no TOML). Environment variables take precedence where documented.
+pub fn resolve_watch_from_unified<F: Fn(&str) -> Option<String>>(
+    _settings: &UnifiedSettings,
+    _env_lookup: F,
+) -> WatchRuntimeConfig {
+    todo!()
+}
+
+/// Resolve knowledge provider configuration from merged [`UnifiedSettings`],
+/// supporting `${ENV_VAR}` indirection in JSON values.
+pub fn resolve_provider_from_unified<F: Fn(&str) -> Option<String>>(
+    _settings: &UnifiedSettings,
+    _env_lookup: F,
+) -> Result<ProviderConfig> {
+    todo!()
+}
+
+/// Resolve dashboard configuration from merged [`UnifiedSettings`].
+pub fn resolve_dashboard_from_unified(_settings: &UnifiedSettings) -> DashboardFileConfig {
+    todo!()
+}

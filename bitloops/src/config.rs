@@ -41,3 +41,5 @@ pub(crate) use resolve::{
 mod store_config_tests;
 #[cfg(test)]
 mod unified_config_tests;
+#[cfg(test)]
+mod unified_consumer_tests;
