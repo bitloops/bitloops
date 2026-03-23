@@ -93,8 +93,7 @@ pub(super) fn extract_js_ts_dependency_edges(
             }
             // Skip if the identifier is immediately preceded by '.' — it is a member access and
             // call_member_re will emit the correct member-form edge for it.
-            if name_m.start() > 0
-                && line.as_bytes().get(name_m.start() - 1).copied() == Some(b'.')
+            if name_m.start() > 0 && line.as_bytes().get(name_m.start() - 1).copied() == Some(b'.')
             {
                 continue;
             }
