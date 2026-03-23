@@ -6,11 +6,7 @@ pub(super) async fn load_test_harness_commit_counts(
     client: &mut tokio_postgres::Client,
     commit_sha: &str,
 ) -> Result<TestHarnessCommitCounts> {
-    async fn cnt(
-        client: &mut tokio_postgres::Client,
-        sql: &str,
-        commit_sha: &str,
-    ) -> Result<u64> {
+    async fn cnt(client: &mut tokio_postgres::Client, sql: &str, commit_sha: &str) -> Result<u64> {
         let row = client
             .query_one(sql, &[&commit_sha])
             .await

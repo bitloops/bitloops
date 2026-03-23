@@ -12,7 +12,8 @@ use crate::capability_packs::test_harness::storage::{
 };
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_CAPABILITY_ID, TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
-    test_harness_commit_sha_required_response, test_harness_relational_store_unavailable_stage_response,
+    test_harness_commit_sha_required_response,
+    test_harness_relational_store_unavailable_stage_response,
 };
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
@@ -154,10 +155,7 @@ mod tests {
             resp.payload["reason"],
             "test_harness_relational_store_unavailable"
         );
-        assert_eq!(
-            resp.payload["stage"],
-            TEST_HARNESS_TESTS_SUMMARY_STAGE_ID
-        );
+        assert_eq!(resp.payload["stage"], TEST_HARNESS_TESTS_SUMMARY_STAGE_ID);
     }
 
     #[tokio::test]

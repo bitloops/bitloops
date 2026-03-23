@@ -43,10 +43,7 @@ pub(super) async fn load_stage_covering_tests(
     let rows = match (min_confidence, linkage_source_owned.as_deref()) {
         (Some(mc), Some(ls)) => {
             client
-                .query(
-                    &sql,
-                    &[&repo_id, &production_artefact_id, &mc, &ls],
-                )
+                .query(&sql, &[&repo_id, &production_artefact_id, &mc, &ls])
                 .await
         }
         (Some(mc), None) => {
@@ -72,9 +69,7 @@ pub(super) async fn load_stage_covering_tests(
             Ok(StageCoveringTestRecord {
                 test_id: get(&row, 0, "test_id")?,
                 test_name: get(&row, 1, "test_name")?,
-                suite_name: row
-                    .try_get::<_, Option<String>>(2)
-                    .context("suite_name")?,
+                suite_name: row.try_get::<_, Option<String>>(2).context("suite_name")?,
                 file_path: get(&row, 3, "file_path")?,
                 confidence: row.try_get::<_, f64>(4).context("confidence")?,
                 discovery_source: get(&row, 5, "discovery_source")?,
@@ -112,9 +107,7 @@ pub(super) async fn load_stage_line_coverage(
             .query(sql_with_commit, &[&repo_id, &artefact_id, sha])
             .await
     } else {
-        client
-            .query(sql_no_commit, &[&repo_id, &artefact_id])
-            .await
+        client.query(sql_no_commit, &[&repo_id, &artefact_id]).await
     }
     .context("failed querying stage line coverage")?;
 
@@ -159,9 +152,7 @@ pub(super) async fn load_stage_branch_coverage(
             .query(sql_with_commit, &[&repo_id, &artefact_id, sha])
             .await
     } else {
-        client
-            .query(sql_no_commit, &[&repo_id, &artefact_id])
-            .await
+        client.query(sql_no_commit, &[&repo_id, &artefact_id]).await
     }
     .context("failed querying stage branch coverage")?;
 

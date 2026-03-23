@@ -20,9 +20,8 @@ use crate::models::{
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
     StageCoveringTestRecord, StageLineCoverageRecord, TestClassificationRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts,
-    TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
-    derive_test_classification,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord,
+    TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
@@ -935,13 +934,8 @@ ORDER BY ch.line, ch.branch_id
         let commit_sha = commit_sha.map(str::to_string);
         self.with_client(move |client| {
             Box::pin(async move {
-                stage_serving::load_stage_branch_coverage(
-                    client,
-                    repo_id,
-                    artefact_id,
-                    commit_sha,
-                )
-                .await
+                stage_serving::load_stage_branch_coverage(client, repo_id, artefact_id, commit_sha)
+                    .await
             })
         })
     }

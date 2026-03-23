@@ -82,11 +82,8 @@ impl StageHandler for CoverageStageHandler {
                     "end_line": row_obj.get("end_line").and_then(Value::as_i64).unwrap_or(0),
                 });
 
-                let line_records = g.load_stage_line_coverage(
-                    &repo_id,
-                    artefact_id,
-                    commit_sha.as_deref(),
-                )?;
+                let line_records =
+                    g.load_stage_line_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
                 let total_lines = line_records.len();
                 let mut uncovered_lines = Vec::new();
                 let mut covered_line_count = 0usize;
@@ -103,11 +100,8 @@ impl StageHandler for CoverageStageHandler {
                     0.0
                 };
 
-                let branch_records = g.load_stage_branch_coverage(
-                    &repo_id,
-                    artefact_id,
-                    commit_sha.as_deref(),
-                )?;
+                let branch_records =
+                    g.load_stage_branch_coverage(&repo_id, artefact_id, commit_sha.as_deref())?;
                 let total_branches = branch_records.len();
                 let mut uncovered_branch_count = 0usize;
                 let mut branches = Vec::with_capacity(total_branches);
