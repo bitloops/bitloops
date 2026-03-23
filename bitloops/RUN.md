@@ -37,4 +37,4 @@ bitloops --version
 3. bitloops init
 4. bitloops enable
 5. chat with Claude (so hooks run and stop snapshots)
-6. git commit → this one should include Bitloops-Checkpoint: ... and git branch -v ,show the checkpoints branch
+6. git commit → Bitloops now stores checkpoint-to-commit mappings in relational state

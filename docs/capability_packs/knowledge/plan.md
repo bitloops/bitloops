@@ -1,5 +1,7 @@
 # Knowledge Capability BDD Plan (CLI-1432)
 
+> This plan was moved from the repo root into the Knowledge capability-pack docs set. File references below have been normalised to the current in-repo layout.
+
 ## 1. Goal
 
 Add BDD coverage for the currently implemented Knowledge capability flows, aligned to:
@@ -25,36 +27,36 @@ Primary BDD scope (first pass):
 
 The active Knowledge capability path is:
 
-1. CLI command parsing in `bitloops/src/commands/devql.rs`
-2. `run_knowledge_*_via_host` in `bitloops/src/engine/devql/capabilities/knowledge/cli.rs`
+1. CLI command parsing in `bitloops/src/cli/devql.rs`
+2. `run_knowledge_*_via_host` in `bitloops/src/capability_packs/knowledge/cli.rs`
 3. `DevqlCapabilityHost::invoke_ingester(...)`
-4. ingesters registered in `knowledge/register.rs`:
+4. ingesters registered in `bitloops/src/capability_packs/knowledge/register.rs`:
    - `knowledge.add`
    - `knowledge.associate`
    - `knowledge.refresh`
    - `knowledge.versions`
-5. service layer in `knowledge/services.rs`
+5. service layer in `bitloops/src/capability_packs/knowledge/services.rs`
 6. storage gateways:
-   - SQLite relational store (`sqlite_relational.rs`)
-   - DuckDB document versions (`duckdb_documents.rs`)
-   - blob payloads (`blob_payloads.rs`)
+   - SQLite relational store (`bitloops/src/capability_packs/knowledge/storage/sqlite_relational.rs`)
+   - DuckDB document versions (`bitloops/src/capability_packs/knowledge/storage/duckdb_documents.rs`)
+   - blob payloads (`bitloops/src/capability_packs/knowledge/storage/blob_payloads.rs`)
 
 ### 2.2 Important capability behavior already implemented
 
-- URL parsing and provider detection (`knowledge/url.rs`)
+- URL parsing and provider detection (`bitloops/src/capability_packs/knowledge/url.rs`)
   - GitHub issue + PR
   - Jira issue
   - Confluence page
   - unsupported URL fails early
-- canonical identity and deterministic IDs (`storage/models.rs`)
+- canonical identity and deterministic IDs (`bitloops/src/capability_packs/knowledge/storage/models.rs`)
 - content-hash dedupe for immutable versions (`content_hash` + `has_knowledge_item_version`)
 - repository-scoped item identity (`knowledge_item_id(repo_id, source_id)`)
-- association resolution (`knowledge/refs.rs`)
+- association resolution (`bitloops/src/capability_packs/knowledge/refs.rs`)
   - source supports latest + explicit version
   - target supports commit/knowledge/checkpoint/artefact
   - versioned target refs rejected
 - relation idempotency (`relation_assertion_id(...)` + SQLite `INSERT OR IGNORE`)
-- provenance stamping for add/associate (`knowledge/provenance.rs`)
+- provenance stamping for add/associate (`bitloops/src/capability_packs/knowledge/provenance.rs`)
 - checkpoint and artefact target validation in relational gateway
 
 ### 2.3 Storage contract actually enforced by code
@@ -72,8 +74,8 @@ The active Knowledge capability path is:
 
 Strong helper/test logic already exists in Knowledge test code (scenario matrix for most CLI-1432 cases), especially in:
 
-- `bitloops/src/engine/devql/capabilities/knowledge/tests.rs` (flow matrix + helpers)
-- `bitloops/src/engine/devql/capabilities/knowledge/services.rs` test module (stub connector + runtime context)
+- `bitloops/src/host/devql/tests/knowledge_support.rs` (BDD support flows, fixtures, and assertions)
+- `bitloops/src/capability_packs/knowledge/services.rs` test module (stub connector + runtime context)
 
 Reusable assets already present:
 
@@ -86,7 +88,7 @@ Reusable assets already present:
 
 ### 2.5 Important nuance (must account for in plan)
 
-`plugin.rs` and `knowledge/tests.rs` currently exist as reference, but `knowledge/mod.rs` does **not** include `pub mod plugin;` or `#[cfg(test)] mod tests;`. So those are not part of the active compiled module graph right now.
+The old `plugin.rs`, `knowledge/providers/`, and `knowledge/tests.rs` references were removed during the layered-host restructure. The active compiled seams are the capability-pack services/registration modules plus the host-side BDD support under `bitloops/src/host/devql/tests/`.
 
 Implication for BDD implementation:
 
@@ -127,9 +129,9 @@ without network calls and without brittle CLI stdout parsing.
 
 ### 4.1 Add dedicated Knowledge BDD support module
 
-Create:
+Use and extend:
 
-- `bitloops/src/engine/devql/tests/knowledge_support.rs`
+- `bitloops/src/host/devql/tests/knowledge_support.rs`
 
 Move/extract from existing Knowledge tests into this module:
 
@@ -147,7 +149,7 @@ Move/extract from existing Knowledge tests into this module:
 Code skeleton:
 
 ```rust
-// bitloops/src/engine/devql/tests/knowledge_support.rs
+// bitloops/src/host/devql/tests/knowledge_support.rs
 pub(super) async fn run_add_flow(
     services: &KnowledgeServices,
     ctx: &mut TestRuntimeContext,
@@ -183,15 +185,15 @@ pub(super) async fn run_associate_flow(
 
 ### 4.2 Restructure cucumber steps into modules
 
-Current file is monolithic: `tests/cucumber_steps.rs`.
+The current step layout is already modular under `bitloops/src/host/devql/tests/cucumber_steps/`.
 
 Refactor to:
 
-- `bitloops/src/engine/devql/tests/cucumber_steps/mod.rs`
-- `bitloops/src/engine/devql/tests/cucumber_steps/core.rs` (existing non-knowledge steps)
-- `bitloops/src/engine/devql/tests/cucumber_steps/knowledge.rs` (new)
+- `bitloops/src/host/devql/tests/cucumber_steps/mod.rs`
+- `bitloops/src/host/devql/tests/cucumber_steps/core.rs` (existing non-knowledge steps)
+- `bitloops/src/host/devql/tests/cucumber_steps/knowledge.rs` (new)
 
-Update `devql/mod.rs` path include:
+Update the `host/devql` test module wiring if the step layout changes:
 
 ```rust
 #[cfg(test)]
@@ -201,7 +203,7 @@ mod cucumber_steps;
 
 ### 4.3 Extend Cucumber world with Knowledge state
 
-Update `bitloops/src/engine/devql/tests/cucumber_world.rs`.
+Update `bitloops/src/host/devql/tests/cucumber_world.rs`.
 
 Add fields:
 
@@ -226,9 +228,9 @@ Add reset/init methods:
 
 ### 4.4 Add dedicated knowledge step module
 
-Create:
+Create or extend:
 
-- `bitloops/src/engine/devql/tests/cucumber_steps/knowledge.rs`
+- `bitloops/src/host/devql/tests/cucumber_steps/knowledge.rs`
 
 Step groups:
 
@@ -252,7 +254,7 @@ pub(super) fn register(collection: Collection<DevqlBddWorld>) -> Collection<Devq
 
 ## Phase 2: Feature files (BDD scenarios)
 
-Place under `bitloops/src/engine/devql/tests/features/`:
+Place under `bitloops/src/host/devql/tests/features/`:
 
 1. `knowledge_add.feature`
 2. `knowledge_add_commit.feature`
@@ -447,8 +449,8 @@ After prerequisites, parallel lanes:
 
 ## 12. Risks and Mitigations
 
-Risk: dormant `plugin.rs` path diverges from active services path.
-Mitigation: implement BDD on active service/ingester flow wrappers; do not reactivate dormant module just for tests.
+Risk: host-side BDD helpers drift away from the active service/ingester path.
+Mitigation: keep `knowledge_support.rs` aligned with `services.rs` and registered ingesters; do not reintroduce removed module seams just for tests.
 
 Risk: step explosion and regex collisions.
 Mitigation: keep one clear vocabulary, isolate knowledge steps in dedicated module.

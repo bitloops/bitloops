@@ -257,7 +257,7 @@ Dashboard bundle URL settings are now build-time embedded:
 - Input file: `config/dashboard_urls.json` (gitignored)
 - Template: `config/dashboard_urls.template.json`
 - Build generator: `build.rs`
-- Runtime consumer: `src/server/dashboard/bundle.rs`
+- Runtime consumer: `src/api/bundle.rs`
 
 Optional emergency runtime overrides are still supported:
 

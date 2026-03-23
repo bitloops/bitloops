@@ -1,5 +1,7 @@
 # Context
 
+> This plan was moved from the repo root into the Test Harness capability-pack docs set. Historical `TestLens` ownership has been translated to the current in-repo `bitloops` layout where direct equivalents exist.
+
 Check the test-harness-stage-1 branch. There is a TestHarness implementation (functional prototype), based on this document https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/450265089/Feature+Spec+Draft+Structural+Test+Mapping Full Test harness document: https://bitloops.atlassian.net/wiki/spaces/ADCP/pages/433717249/Test+Harness+-+Design+Specification?atl_f=PAGETREE bitloops is the existing CLI, which contains stuff for getBlastRadius, devQL. The TestLens has an ingest_production_artefacts functionality which is not going to be needed, since this is implemented by the main bitloops (a mock simple impl was done, so testHarness could be developed unblocked). We are going probably to have schema compatibility issues that we need to figure out, (regarding production artefacts, the bitloops should be the source of truth). So in a high level flow, i think test artefacts should be on an independant table probably, and not mix them with production artefacts.
 
 ---
@@ -60,9 +62,9 @@ Implement this in six phases, in order.
 
 ### 1.1 Copy production schema exactly
 
-In `TestLens/src/db/schema.rs`, replace the current prototype production table definitions with the exact SQLite DDL from:
+In `bitloops/src/capability_packs/test_harness/storage/schema.rs` (and the shared SQLite bootstrap in `bitloops/src/storage/init/schema.rs`), replace the current prototype production table definitions with the exact SQLite DDL from:
 
-- `bitloops/src/engine/devql/ingestion/schema/relational_sqlite_schema.rs` for:
+- `bitloops/src/host/devql/ingestion/schema/relational_sqlite_schema.rs` for:
   - `repositories`
   - `commits`
   - `file_state`
@@ -79,7 +81,7 @@ Do not reinterpret meanings.
 
 ### 1.2 Keep test-domain tables separate
 
-Add new test-domain tables to `TestLens/src/db/schema.rs`:
+Add new test-domain tables to `bitloops/src/capability_packs/test_harness/storage/schema.rs`:
 
 `test_suites`
 
@@ -260,7 +262,7 @@ This is acceptable for the prototype stage.
 
 ### 2.1 Replace the current mixed artefact record model
 
-In `TestLens/src/domain/mod.rs`, split the current mixed types into:
+In `bitloops/src/models.rs`, split the current mixed types into:
 
 ### Production domain records
 
@@ -291,20 +293,20 @@ These should be modeled to match the production schema copied from `bitloops`
 
 ### 2.2 Keep classification logic where it is
 
-Keep the current classification threshold constants and derivation logic in `domain/mod.rs`, but update them to operate on `test_scenario_id`-based records instead of mixed artefact IDs
+Keep the current classification threshold constants and derivation logic in `bitloops/src/models.rs`, but update them to operate on `test_scenario_id`-based records instead of mixed artefact IDs
 
 ## Phase 3: rewrite production ingestion to match `bitloops` semantics
 
 ## 3.1 Production ingestion still exists in Stage 1
 
-Keep `TestLens/src/app/commands/ingest_production_artefacts.rs`, but rewrite it so it produces the same kind of persisted production state as `bitloops`, not the current thin prototype rows
+Keep the production-ingest entrypoints in `bitloops/src/cli/devql.rs`, but rewrite the underlying materialisation so it produces the same kind of persisted production state as `bitloops`, not the current thin prototype rows
 
 ## 3.2 Reuse `bitloops` identity semantics
 
 Implement or copy the identity helpers from:
 
-- `bitloops/src/engine/devql/ingestion/artefact_identity.rs`
-- `bitloops/src/engine/devql/ingestion/artefact_persistence.rs`
+- `bitloops/src/host/devql/ingestion/artefact_identity.rs`
+- `bitloops/src/host/devql/ingestion/artefact_persistence.rs`
 
 Specifically align these semantics:
 
@@ -378,17 +380,17 @@ It must not write:
 
 Keep the current structural mapping subsystem in:
 
-- `src/app/test_mapping/*`
-- `languages/rust/*`
-- `languages/typescript.rs`
-- `linker.rs`
+- `bitloops/src/capability_packs/test_harness/mapping/*`
+- `bitloops/src/capability_packs/test_harness/mapping/languages/rust/*`
+- `bitloops/src/capability_packs/test_harness/mapping/languages/typescript.rs`
+- `bitloops/src/capability_packs/test_harness/mapping/linker.rs`
 
 Do not redesign the discovery algorithm.
 Do not change direct-only linking behavior
 
 ## 4.2 Change only the materialization target
 
-In `TestLens/src/app/test_mapping/materialize.rs`, stop creating `ArtefactRecord` rows for:
+In `bitloops/src/capability_packs/test_harness/mapping/materialize.rs`, stop creating `ArtefactRecord` rows for:
 
 - test files
 - test suites
@@ -428,7 +430,7 @@ Persist all current discovery issues into `test_discovery_diagnostics` instead o
 
 ## 5.1 Coverage ingestion
 
-In `TestLens/src/app/commands/ingest_coverage.rs`:
+In `bitloops/src/capability_packs/test_harness/ingest/coverage.rs`:
 
 Change coverage ingestion so that:
 
@@ -440,13 +442,13 @@ Keep current behavior around LCOV / LLVM JSON handling and coverage mode semanti
 
 ## 5.2 Results ingestion
 
-In `TestLens/src/app/commands/ingest_results.rs`:
+In `bitloops/src/capability_packs/test_harness/ingest/results.rs`:
 
 Change all result/run mapping to resolve against `test_scenarios.scenario_id`, not `artefacts.artefact_id` for mixed test rows.
 
 ## 5.3 Rebuild classifications from dedicated test tables
 
-In `TestLens/src/repository/sqlite.rs`, rewrite `rebuild_classifications_from_coverage` so it:
+In `bitloops/src/capability_packs/test_harness/storage/sqlite.rs`, rewrite `rebuild_classifications_from_coverage` so it:
 
 - groups by `subject_test_scenario_id`
 - counts distinct `production_artefact_id`
@@ -459,7 +461,7 @@ Do not read test identity from mixed `artefacts` anymore.
 
 ## 6.1 Split repository traits
 
-In `TestLens/src/repository/mod.rs`, split the current repository contracts into clearer domains:
+In `bitloops/src/capability_packs/test_harness/storage.rs`, split the current repository contracts into clearer domains:
 
 `ProductionRepository`
 
@@ -500,7 +502,7 @@ Replace it with domain-specific cleanup:
 
 ## 6.3 Query layer must resolve only production artefacts as query targets
 
-In `TestLens/src/read/query_test_harness.rs`:
+In `bitloops/src/capability_packs/test_harness/query.rs` and the storage backends under `bitloops/src/capability_packs/test_harness/storage/`:
 
 `find_artefact(...)` must resolve only production artefacts from production tables, never test tables.
 
@@ -525,74 +527,74 @@ Implement changes in this order.
 
 ## Must change
 
-`TestLens/src/db/schema.rs`
+`bitloops/src/capability_packs/test_harness/storage/schema.rs`
 
 - replace production schema with exact `bitloops` production schema
 - add dedicated test-domain tables
 
-`TestLens/src/domain/mod.rs`
+`bitloops/src/models.rs`
 
 - split production and test domain records
 - keep classification logic, adapt IDs
 
-`TestLens/src/repository/mod.rs`
+`bitloops/src/capability_packs/test_harness/storage.rs`
 
 - split repository traits
 
-`TestLens/src/repository/sqlite.rs`
+`bitloops/src/capability_packs/test_harness/storage/sqlite.rs`
 
 - rewrite persistence and query logic for separated domains
 - remove mixed-table cleanup logic
 - update classification rebuild
 - update covering-tests query joins
 
-`TestLens/src/app/commands/ingest_production_artefacts.rs`
+`bitloops/src/host/devql/ingestion/artefact_persistence.rs`
 
 - rewrite to emit `bitloops`-compatible production rows and state
 
-`TestLens/src/app/test_mapping/materialize.rs`
+`bitloops/src/capability_packs/test_harness/mapping/materialize.rs`
 
 - emit `test_suites`, `test_scenarios`, `test_links`
 - stop creating test rows in production tables
 
-`TestLens/src/app/commands/ingest_tests.rs`
+`bitloops/src/capability_packs/test_harness/ingest/tests.rs`
 
 - write discovery runs and diagnostics
 - call new test-domain persistence path
 
-`TestLens/src/app/commands/ingest_coverage.rs`
+`bitloops/src/capability_packs/test_harness/ingest/coverage.rs`
 
 - update to `test_scenario_id` and `production_artefact_id`
 
-`TestLens/src/app/commands/ingest_results.rs`
+`bitloops/src/capability_packs/test_harness/ingest/results.rs`
 
 - update to dedicated test scenario tables
 
-`TestLens/src/read/query_test_harness.rs`
+`bitloops/src/capability_packs/test_harness/query.rs`
 
 - query only production artefacts as targets
 - join into test tables for harness output
 
 ## Likely change
 
-`TestLens/src/app/test_mapping/model.rs`
+`bitloops/src/capability_packs/test_harness/mapping/model.rs`
 
 - keep discovery model
 - adjust output types so they are no longer built around `ArtefactRecord` for test entities
 
-`TestLens/src/app/test_mapping/linker.rs`
+`bitloops/src/capability_packs/test_harness/mapping/linker.rs`
 
 - possibly add lookup support for `production_symbol_id`
 
-`TestLens/src/app.rs`
+`bitloops/src/cli/testlens.rs`
 
 - wire new repository functions
 
-`TestLens/docs/architecture/overview.md`
+`docs/layered-extension-architecture.md`
 
 - update architecture diagram and wording
 
-`TestLens/docs/architecture/test_harness_decisions.md`
+`docs/layered-extension-architecture-capability-packs.md`
 
 - document split-domain storage
 
@@ -703,15 +705,15 @@ Use these rules while coding:
 
 # Suggested execution order for codex
 
-1. update `db/schema.rs`
-2. refactor `domain/mod.rs`
-3. split repository traits in `repository/mod.rs`
-4. rewrite `repository/sqlite.rs` schema-dependent code
-5. rewrite `ingest_production_artefacts.rs`
-6. rewrite `materialize.rs` and `ingest_tests.rs`
-7. rewrite `ingest_coverage.rs`
-8. rewrite `ingest_results.rs`
-9. rewrite `read/query_test_harness.rs`
+1. update `capability_packs/test_harness/storage/schema.rs`
+2. refactor `models.rs`
+3. split repository traits in `capability_packs/test_harness/storage.rs`
+4. rewrite `capability_packs/test_harness/storage/sqlite.rs` schema-dependent code
+5. rewrite the production-ingest path in `cli/devql.rs` + `host/devql/ingestion/`
+6. rewrite `capability_packs/test_harness/mapping/materialize.rs` and `capability_packs/test_harness/ingest/tests.rs`
+7. rewrite `capability_packs/test_harness/ingest/coverage.rs`
+8. rewrite `capability_packs/test_harness/ingest/results.rs`
+9. rewrite `capability_packs/test_harness/query.rs` and storage backends
 10. fix tests
 11. update docs
 

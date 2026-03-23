@@ -28,7 +28,7 @@ This document captures an architecture review of first-party capability packs ag
 - `commands/` → `cli/` (Presentation)
 - `server/dashboard/` → `api/` (Presentation)
 
-See [architecture-review.md](../bitloops/docs/architecture-review.md) for the full rationale and mapping.
+See [architecture-review.md](../bitloops/docs/archive/architecture-review.md) for the archived rationale and path mapping.
 
 **Target boundaries (core ↔ packs, timeouts, optional cross-pack grants):** [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md). Implemented in-repo (2026-03-20): `HostInvocationPolicy` + `with_timeout` on stage/ingester dispatch; `execute_devql_subquery` wall-clock limit via `DevqlSubqueryOptions::subquery_timeout`; `host.cross_pack_access` grants **or** descriptor `dependencies` for registered-stage composition; `devql_relational_scoped` binds DevQL relational to the invoking ingester capability id; default `host` config block in `build_capability_config_root`.
 

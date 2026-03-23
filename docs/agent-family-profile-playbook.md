@@ -1,11 +1,11 @@
 # Agent Adapter Family/Profile Playbook
 
-For Phase 3 package-ready/runtime guidance, see `docs/agent-phase3-extension-playbook.md`.
+For package/runtime guidance, see `docs/agent-extension-playbook.md` and `docs/layered-extension-architecture-agent-adapters.md`.
 
 ## Purpose
 
 This guide explains when to add a **protocol family**, when to add a **target profile**, and when to add both.
-It is grounded in the Phase 2 implementation in `bitloops/src/engine/agent/adapters.rs` and lifecycle routing in `bitloops/src/engine/lifecycle/adapters.rs`.
+It is grounded in the current implementation in `bitloops/src/adapters/agents/adapters/registry.rs`, `bitloops/src/adapters/agents/adapters/types/descriptor.rs`, and lifecycle routing in `bitloops/src/host/checkpoints/lifecycle/adapters.rs`.
 
 ## Core Terms
 

@@ -6,11 +6,12 @@ This playbook explains how to extend the adapter model with package-shaped adapt
 
 It is based on the current implementation in:
 
-- `bitloops/src/engine/agent/adapters/types.rs`
-- `bitloops/src/engine/agent/adapters/registry.rs`
-- `bitloops/src/engine/agent/canonical/mod.rs`
-- `bitloops/src/engine/agent/policy.rs`
-- `bitloops/src/engine/lifecycle/mod.rs`
+- `bitloops/src/adapters/agents/adapters/types.rs`
+- `bitloops/src/adapters/agents/adapters/registry.rs`
+- `bitloops/src/adapters/agents/canonical.rs`
+- `bitloops/src/adapters/agents/policy.rs`
+- `bitloops/src/host/checkpoints/lifecycle.rs`
+- `bitloops/src/host/hooks/runtime/agent_runtime.rs`
 
 ## model summary
 
@@ -144,6 +145,6 @@ When adding a new packaged adapter or runtime extension:
 
 - First-party linked package descriptors are defined in built-in registrations.
 - Registry package discovery and validation report APIs are available in `AgentAdapterRegistry`.
-- Canonical rich contract types and builders are in `canonical/mod.rs`.
+- Canonical rich contract types and builders are in `canonical.rs` and `canonical/*`.
 - Policy/provenance/audit helpers are in `policy.rs`.
-- Lifecycle enrichment for rich/collapsed built-in paths is in `lifecycle/mod.rs`.
+- Lifecycle enrichment for rich/collapsed built-in paths is in `host/checkpoints/lifecycle.rs`, with hook routing in `host/hooks/runtime/agent_runtime.rs`.
