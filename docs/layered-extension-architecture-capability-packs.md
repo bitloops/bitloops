@@ -163,12 +163,11 @@ Registered ingesters are:
 - `test_harness.linkage`
 - `test_harness.coverage`
 - `test_harness.classification`
-- `test_harness.summaries`
 
 It also contributes:
 
 - schema module: `test_harness`
-- query examples for tests, coverage, and summary scaffolding
+- query examples for tests, coverage, and commit-level test harness snapshot (`test_harness_tests_summary`)
 
 ### Runtime design
 
@@ -186,7 +185,7 @@ The stages are mixed in maturity:
 - `tests` and `coverage` are real stage handlers
 - they call back into DevQL through `execute_devql_subquery(...)`
 - those subqueries target core stages such as `__core_test_links` and coverage-related internal stages
-- `test_harness_tests_summary` still returns a dependency-gated scaffold response
+- `test_harness_tests_summary` returns a commit-scoped snapshot (row counts and coverage presence) from the test-harness relational store when `query_context.resolved_commit_sha` is set
 
 So this pack is executable and useful today, but it still depends on some core DevQL query surfaces rather than fully owning every query path.
 
@@ -197,7 +196,6 @@ The ingesters cover:
 - test linkage and discovery
 - coverage ingestion from LCOV or LLVM JSON
 - coverage-derived classification rebuild
-- per-commit summary snapshots
 
 When the repository store is unavailable, the ingesters return a structured failure such as `test_harness_relational_store_unavailable`.
 

@@ -279,7 +279,7 @@ pub struct TestClassificationRecord {
     pub boundary_crossings: i64,
 }
 
-/// Row counts for test-harness tables scoped to a single commit (diagnostics / summaries ingester).
+/// Row counts for test-harness tables scoped to a single commit (e.g. `test_harness_tests_summary` stage).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestHarnessCommitCounts {
     pub test_suites: u64,

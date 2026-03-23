@@ -2,6 +2,9 @@ mod coverage;
 mod tests;
 mod tests_summary;
 
+use std::sync::{Arc, Mutex};
+
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::StageRegistration;
 
 use super::types::{
@@ -21,11 +24,13 @@ pub fn build_tests_stage() -> StageRegistration {
     )
 }
 
-pub fn build_tests_summary_stage() -> StageRegistration {
+pub fn build_tests_summary_stage(
+    test_harness: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
+) -> StageRegistration {
     StageRegistration::new(
         "test_harness",
         TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
-        std::sync::Arc::new(TestsSummaryStageHandler),
+        std::sync::Arc::new(TestsSummaryStageHandler(test_harness)),
     )
 }
 

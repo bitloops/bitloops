@@ -7,7 +7,6 @@ use crate::host::capability_host::CapabilityRegistrar;
 
 use super::ingesters::{
     build_classification_ingester, build_coverage_ingester, build_linkage_ingester,
-    build_summaries_ingester,
 };
 use super::query_examples::TEST_HARNESS_QUERY_EXAMPLES;
 use super::schema::TEST_HARNESS_SCHEMA_MODULE;
@@ -23,10 +22,9 @@ pub fn register_test_harness_pack(
     registrar.register_ingester(build_linkage_ingester(test_harness.clone()))?;
     registrar.register_ingester(build_coverage_ingester(test_harness.clone()))?;
     registrar.register_ingester(build_classification_ingester(test_harness.clone()))?;
-    registrar.register_ingester(build_summaries_ingester(test_harness))?;
     registrar.register_stage(build_tests_stage())?;
     registrar.register_stage(build_tests_stage_alias())?;
-    registrar.register_stage(build_tests_summary_stage())?;
+    registrar.register_stage(build_tests_summary_stage(test_harness.clone()))?;
     registrar.register_stage(build_coverage_stage())?;
     registrar.register_stage(build_coverage_stage_alias())?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
@@ -40,9 +38,8 @@ mod tests {
     use crate::capability_packs::test_harness::types::{
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID, TEST_HARNESS_COVERAGE_INGESTER_ID,
         TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID, TEST_HARNESS_COVERAGE_STAGE_ID,
-        TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_SUMMARIES_INGESTER_ID,
-        TEST_HARNESS_TESTS_STAGE_ALIAS_ID, TEST_HARNESS_TESTS_STAGE_ID,
-        TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+        TEST_HARNESS_LINKAGE_INGESTER_ID, TEST_HARNESS_TESTS_STAGE_ALIAS_ID,
+        TEST_HARNESS_TESTS_STAGE_ID, TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     };
     use crate::host::capability_host::{
         IngesterRegistration, QueryExample, SchemaModule, StageRegistration,
@@ -102,7 +99,6 @@ mod tests {
                 ("test_harness", TEST_HARNESS_LINKAGE_INGESTER_ID),
                 ("test_harness", TEST_HARNESS_COVERAGE_INGESTER_ID),
                 ("test_harness", TEST_HARNESS_CLASSIFICATION_INGESTER_ID),
-                ("test_harness", TEST_HARNESS_SUMMARIES_INGESTER_ID),
             ]
         );
         assert_eq!(registrar.schema_modules, vec![TEST_HARNESS_SCHEMA_MODULE]);

@@ -15,8 +15,6 @@ pub const TEST_HARNESS_CORE_COVERAGE_METADATA_STAGE_ID: &str = "__core_coverage_
 pub const TEST_HARNESS_LINKAGE_INGESTER_ID: &str = "test_harness.linkage";
 pub const TEST_HARNESS_COVERAGE_INGESTER_ID: &str = "test_harness.coverage";
 pub const TEST_HARNESS_CLASSIFICATION_INGESTER_ID: &str = "test_harness.classification";
-pub const TEST_HARNESS_SUMMARIES_INGESTER_ID: &str = "test_harness.summaries";
-pub const TEST_HARNESS_DEPENDENCY_GATED_REASON: &str = "Test Harness capability-pack scaffold is registered, but runtime behaviour is dependency-gated until coverage adapters, test-discovery adapters, and language-aware test discovery are integrated.";
 
 pub fn resolve_test_harness_config(view: &CapabilityConfigView) -> Option<&Value> {
     view.scoped()
@@ -35,16 +33,27 @@ pub fn resolve_test_harness_config(view: &CapabilityConfigView) -> Option<&Value
         })
 }
 
-pub fn dependency_gated_stage_response(
-    stage_name: &'static str,
-    limit: Option<usize>,
-) -> StageResponse {
-    StageResponse::json(json!({
-        "capability": TEST_HARNESS_CAPABILITY_ID,
-        "stage": stage_name,
-        "status": "dependency_gated",
-        "limit": limit,
-        "rows": [],
-        "reason": TEST_HARNESS_DEPENDENCY_GATED_REASON,
-    }))
+pub fn test_harness_relational_store_unavailable_stage_response() -> StageResponse {
+    StageResponse::new(
+        json!({
+            "capability": TEST_HARNESS_CAPABILITY_ID,
+            "stage": TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+            "status": "failed",
+            "reason": "test_harness_relational_store_unavailable",
+        }),
+        "test harness relational store is not available; configure stores.relational, create the database, and run `bitloops testlens init` if needed.",
+    )
+}
+
+pub fn test_harness_commit_sha_required_response(limit: Option<usize>) -> StageResponse {
+    StageResponse::new(
+        json!({
+            "capability": TEST_HARNESS_CAPABILITY_ID,
+            "stage": TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
+            "status": "failed",
+            "reason": "test_harness_commit_sha_required",
+            "limit": limit,
+        }),
+        "test_harness_tests_summary requires a resolved commit (use asOf(ref:...) or asOf(commit:...) in the DevQL query).",
+    )
 }
