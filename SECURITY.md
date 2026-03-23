@@ -6,13 +6,12 @@ The Bitloops team takes security issues seriously. We appreciate responsible
 disclosure and will make every effort to acknowledge valid reports and handle
 them carefully.
 
-If you believe you found a vulnerability, please report it privately. Do not
+**If you believe you found a vulnerability, please report it privately. Do not
 open a public issue for anything that could expose users, repositories,
-credentials, prompts, local metadata, or private code.
+credentials, prompts, local metadata, or private code.**
 
 Preferred reporting channels:
 
-- GitHub Security Advisories for this repository, if private reporting is enabled
 - Email [opencode@bitloops.com](mailto:opencode@bitloops.com) with `SECURITY` in
   the subject line
 
