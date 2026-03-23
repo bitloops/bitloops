@@ -7,43 +7,6 @@ use super::resolve::{
 };
 use super::store_config_utils::current_repo_root_or_cwd;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelationalProvider {
-    Sqlite,
-    Postgres,
-}
-
-impl RelationalProvider {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Sqlite => "sqlite",
-            Self::Postgres => "postgres",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventsProvider {
-    DuckDb,
-    ClickHouse,
-}
-
-impl EventsProvider {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::DuckDb => "duckdb",
-            Self::ClickHouse => "clickhouse",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlobStorageProvider {
-    Local,
-    S3,
-    Gcs,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreBackendConfig {
     pub relational: RelationalBackendConfig,
@@ -108,16 +71,6 @@ impl RelationalBackendConfig {
         self.postgres_dsn.is_some()
     }
 
-    /// Derived provider for dispatch (replaces the former `provider` field).
-    /// Postgres when DSN is present, SQLite otherwise.
-    pub fn provider(&self) -> RelationalProvider {
-        if self.has_postgres() {
-            RelationalProvider::Postgres
-        } else {
-            RelationalProvider::Sqlite
-        }
-    }
-
     pub fn resolve_sqlite_db_path(&self) -> Result<PathBuf> {
         resolve_sqlite_db_path(self.sqlite_path.as_deref())
     }
@@ -141,16 +94,6 @@ impl EventsBackendConfig {
     /// Returns `true` when a ClickHouse URL is configured.
     pub fn has_clickhouse(&self) -> bool {
         self.clickhouse_url.is_some()
-    }
-
-    /// Derived provider for dispatch (replaces the former `provider` field).
-    /// ClickHouse when URL is present, DuckDB otherwise.
-    pub fn provider(&self) -> EventsProvider {
-        if self.has_clickhouse() {
-            EventsProvider::ClickHouse
-        } else {
-            EventsProvider::DuckDb
-        }
     }
 
     pub fn duckdb_path_or_default(&self) -> PathBuf {
@@ -187,18 +130,6 @@ impl BlobStorageConfig {
     /// Returns `true` when any remote blob backend (S3 or GCS) is configured.
     pub fn has_remote(&self) -> bool {
         self.s3_bucket.is_some() || self.gcs_bucket.is_some()
-    }
-
-    /// Derived provider for dispatch (replaces the former `provider` field).
-    /// S3 when bucket is present, GCS when bucket is present, Local otherwise.
-    pub fn provider(&self) -> BlobStorageProvider {
-        if self.s3_bucket.is_some() {
-            BlobStorageProvider::S3
-        } else if self.gcs_bucket.is_some() {
-            BlobStorageProvider::Gcs
-        } else {
-            BlobStorageProvider::Local
-        }
     }
 
     #[allow(dead_code)]

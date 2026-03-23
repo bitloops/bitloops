@@ -115,8 +115,8 @@ fn build_capability_config_root(
                 "atlassian": providers.atlassian.as_ref().map(|cfg| serde_json::json!({ "site_url": cfg.site_url })),
             },
             "backends": {
-                "relational": backends.relational.provider().as_str(),
-                "events": backends.events.provider().as_str(),
+                "relational": if backends.relational.has_postgres() { "postgres" } else { "sqlite" },
+                "events": if backends.events.has_clickhouse() { "clickhouse" } else { "duckdb" },
             }
         },
         "host": {

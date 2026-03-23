@@ -14,9 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
-use crate::config::{
-    BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
-};
+use crate::config::{BlobStorageConfig, StoreBackendConfig, resolve_blob_local_path_for_repo};
 use crate::storage::SqliteConnectionPool;
 
 thread_local! {
@@ -120,23 +118,25 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
 }
 
 pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
-    match cfg.provider() {
-        BlobStorageProvider::Local => Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::from_config(cfg)?),
-            backend: "local",
-        }),
-        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+    if cfg.s3_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
             backend: "s3",
-        }),
-        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+        })
+    } else if cfg.gcs_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
             backend: "gcs",
-        }),
+        })
+    } else {
+        Ok(ResolvedBlobStore {
+            store: Box::new(LocalBlobStore::from_config(cfg)?),
+            backend: "local",
+        })
     }
 }
 
@@ -144,27 +144,27 @@ pub fn create_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
-    match cfg.provider() {
-        BlobStorageProvider::Local => {
-            let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
-                .context("resolving local blob store path for repository")?;
-            Ok(ResolvedBlobStore {
-                store: Box::new(LocalBlobStore::new(root)?),
-                backend: "local",
-            })
-        }
-        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+    if cfg.s3_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
             backend: "s3",
-        }),
-        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+        })
+    } else if cfg.gcs_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
             backend: "gcs",
-        }),
+        })
+    } else {
+        let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
+            .context("resolving local blob store path for repository")?;
+        Ok(ResolvedBlobStore {
+            store: Box::new(LocalBlobStore::new(root)?),
+            backend: "local",
+        })
     }
 }
 

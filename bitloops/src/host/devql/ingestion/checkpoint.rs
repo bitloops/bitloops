@@ -136,19 +136,20 @@ pub(super) enum CheckpointEventsStoreInner {
 
 impl CheckpointEventsStore {
     fn from_config(cfg: &DevqlConfig, events_cfg: &EventsBackendConfig) -> Self {
-        match events_cfg.provider() {
-            EventsProvider::ClickHouse => Self {
+        if events_cfg.has_clickhouse() {
+            Self {
                 inner: CheckpointEventsStoreInner::ClickHouse {
                     endpoint: cfg.clickhouse_endpoint(),
                     user: cfg.clickhouse_user.clone(),
                     password: cfg.clickhouse_password.clone(),
                 },
-            },
-            EventsProvider::DuckDb => Self {
+            }
+        } else {
+            Self {
                 inner: CheckpointEventsStoreInner::DuckDb {
                     path: events_cfg.duckdb_path_or_default(),
                 },
-            },
+            }
         }
     }
 

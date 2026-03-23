@@ -81,18 +81,15 @@ impl RelationalStorage {
         relational: &RelationalBackendConfig,
         command: &str,
     ) -> Result<Self> {
-        match relational.provider() {
-            RelationalProvider::Postgres => {
-                let pg_dsn = require_postgres_dsn(cfg, relational, command)?;
-                let client = connect_postgres_client(pg_dsn).await?;
-                Ok(Self::Postgres(client))
-            }
-            RelationalProvider::Sqlite => {
-                let path = relational
-                    .resolve_sqlite_db_path()
-                    .with_context(|| format!("resolving SQLite path for `{command}`"))?;
-                Ok(Self::Sqlite { path })
-            }
+        if relational.has_postgres() {
+            let pg_dsn = require_postgres_dsn(cfg, relational, command)?;
+            let client = connect_postgres_client(pg_dsn).await?;
+            Ok(Self::Postgres(client))
+        } else {
+            let path = relational
+                .resolve_sqlite_db_path()
+                .with_context(|| format!("resolving SQLite path for `{command}`"))?;
+            Ok(Self::Sqlite { path })
         }
     }
 

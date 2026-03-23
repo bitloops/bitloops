@@ -18,10 +18,10 @@ pub use resolve::{
     resolve_store_semantic_config, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, DashboardFileConfig,
-    EventsBackendConfig, EventsProvider, GithubProviderConfig, ProviderConfig,
-    RelationalBackendConfig, RelationalProvider, StoreBackendConfig, StoreEmbeddingConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
+    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
+    WatchRuntimeConfig,
 };
 
 #[cfg(test)]
