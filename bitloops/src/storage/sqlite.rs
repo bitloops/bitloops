@@ -41,7 +41,59 @@ impl SqliteConnectionPool {
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
-            .context("initialising SQLite DevQL schema")
+            .context("initialising SQLite DevQL schema")?;
+        self.migrate_devql_checkpoint_columns()
+            .context("migrating SQLite DevQL checkpoint columns")
+    }
+
+    fn migrate_devql_checkpoint_columns(&self) -> Result<()> {
+        let migrations = [
+            (
+                "artefacts_current",
+                "revision_kind",
+                "ALTER TABLE artefacts_current ADD COLUMN revision_kind TEXT NOT NULL DEFAULT 'commit';",
+            ),
+            (
+                "artefacts_current",
+                "revision_id",
+                "ALTER TABLE artefacts_current ADD COLUMN revision_id TEXT NOT NULL DEFAULT '';",
+            ),
+            (
+                "artefacts_current",
+                "temp_checkpoint_id",
+                "ALTER TABLE artefacts_current ADD COLUMN temp_checkpoint_id INTEGER;",
+            ),
+            (
+                "artefact_edges_current",
+                "revision_kind",
+                "ALTER TABLE artefact_edges_current ADD COLUMN revision_kind TEXT NOT NULL DEFAULT 'commit';",
+            ),
+            (
+                "artefact_edges_current",
+                "revision_id",
+                "ALTER TABLE artefact_edges_current ADD COLUMN revision_id TEXT NOT NULL DEFAULT '';",
+            ),
+            (
+                "artefact_edges_current",
+                "temp_checkpoint_id",
+                "ALTER TABLE artefact_edges_current ADD COLUMN temp_checkpoint_id INTEGER;",
+            ),
+        ];
+        self.with_connection(|conn| {
+            for (_table, column, sql) in migrations {
+                match conn.execute_batch(sql) {
+                    Ok(()) => {}
+                    Err(err)
+                        if err
+                            .to_string()
+                            .contains(&format!("duplicate column name: {column}")) => {}
+                    Err(err) => {
+                        return Err(err).with_context(|| format!("adding column {column}"));
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {

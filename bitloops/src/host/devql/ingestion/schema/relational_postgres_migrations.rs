@@ -148,6 +148,9 @@ ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB DEFAULT '
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS content_hash TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
 ALTER TABLE artefacts_current ALTER COLUMN canonical_kind DROP NOT NULL;
 UPDATE artefacts_current
 SET modifiers = '[]'::jsonb
@@ -199,6 +202,9 @@ ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS start_line INTEGER;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS end_line INTEGER;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
+ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
 
 DO $$
 BEGIN
