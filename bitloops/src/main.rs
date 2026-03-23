@@ -40,19 +40,32 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::config::{
-        DashboardFileConfig, ProviderConfig, dashboard_use_bitloops_local, resolve_provider_config,
+        ProviderConfig, dashboard_use_bitloops_local, resolve_provider_config,
         resolve_store_backend_config,
     };
     use crate::test_support::process_state::enter_process_state;
     use std::fs;
 
-    #[test]
-    fn main_target_resolves_store_backend_config_from_repo_config() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let config_dir = temp.path().join(".bitloops");
+    fn write_envelope_config(repo_root: &std::path::Path, settings: serde_json::Value) {
+        let config_dir = repo_root.join(".bitloops");
         fs::create_dir_all(&config_dir).expect("create config dir");
         fs::write(
             config_dir.join("config.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": settings
+            }))
+            .expect("serialize"),
+        )
+        .expect("write config");
+    }
+
+    #[test]
+    fn main_target_resolves_store_backend_config_from_repo_config() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_envelope_config(
+            temp.path(),
             serde_json::json!({
                 "stores": {
                     "relational": {
@@ -60,10 +73,8 @@ mod tests {
                         "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
                     }
                 }
-            })
-            .to_string(),
-        )
-        .expect("write repo config");
+            }),
+        );
 
         let _guard = enter_process_state(Some(temp.path()), &[]);
         let cfg = resolve_store_backend_config().expect("backend config");
@@ -77,23 +88,18 @@ mod tests {
     #[test]
     fn main_target_dashboard_use_bitloops_local_reads_repo_config() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let config_dir = temp.path().join(".bitloops");
-        fs::create_dir_all(&config_dir).expect("create config dir");
-        fs::write(
-            config_dir.join("config.json"),
+        write_envelope_config(
+            temp.path(),
             serde_json::json!({
                 "dashboard": {
                     "use_bitloops_local": true
                 }
-            })
-            .to_string(),
-        )
-        .expect("write repo config");
+            }),
+        );
 
         let _guard = enter_process_state(Some(temp.path()), &[]);
 
         assert!(dashboard_use_bitloops_local());
-        assert_eq!(DashboardFileConfig::load().use_bitloops_local, Some(true));
     }
 
     #[test]

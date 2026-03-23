@@ -124,21 +124,14 @@ impl DashboardFileConfig {
 
 impl WatchFileConfig {
     pub fn load_for_repo(repo_root: &Path) -> Self {
-        let mut merged = Self::default();
-
         let json_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
         if let Ok(data) = fs::read(&json_path)
             && let Ok(value) = serde_json::from_slice::<Value>(&data)
         {
-            merged = Self::from_json_value(&value);
+            return Self::from_json_value(&value);
         }
 
-        let toml_path = repo_root.join(BITLOOPS_CONFIG_TOML_RELATIVE_PATH);
-        if let Ok(data) = fs::read_to_string(&toml_path) {
-            merged.merge(Self::from_toml_str(&data));
-        }
-
-        merged
+        Self::default()
     }
 
     pub fn from_json_value(value: &Value) -> Self {
@@ -162,60 +155,6 @@ impl WatchFileConfig {
                 .or_else(|| read_any_u64_opt(devql_watch, &[WATCH_POLL_FALLBACK_MS_KEY]))
                 .or_else(|| read_any_u64_opt(devql, &[WATCH_POLL_FALLBACK_MS_KEY]))
                 .or_else(|| root.and_then(|map| read_any_u64(map, &[WATCH_POLL_FALLBACK_MS_KEY]))),
-        }
-    }
-
-    pub fn from_toml_str(input: &str) -> Self {
-        let mut cfg = Self::default();
-        let mut section: Vec<String> = Vec::new();
-
-        for raw_line in input.lines() {
-            let line = raw_line.split('#').next().unwrap_or_default().trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if line.starts_with('[') && line.ends_with(']') {
-                section = line[1..line.len() - 1]
-                    .split('.')
-                    .map(|part| part.trim().trim_matches('"').to_string())
-                    .filter(|part| !part.is_empty())
-                    .collect();
-                continue;
-            }
-
-            let Some((raw_key, raw_value)) = line.split_once('=') else {
-                continue;
-            };
-
-            let key = raw_key.trim().trim_matches('"');
-            let value = raw_value.trim().trim_matches('"').trim_matches('\'');
-            let in_watch_scope = section.is_empty()
-                || section.as_slice() == [WATCH_CONFIG_KEY]
-                || section.as_slice() == [DEVQL_CONFIG_KEY]
-                || section.as_slice() == [DEVQL_CONFIG_KEY, WATCH_CONFIG_KEY];
-            if !in_watch_scope {
-                continue;
-            }
-
-            match key {
-                WATCH_DEBOUNCE_MS_KEY => cfg.watch_debounce_ms = value.parse::<u64>().ok(),
-                WATCH_POLL_FALLBACK_MS_KEY => {
-                    cfg.watch_poll_fallback_ms = value.parse::<u64>().ok()
-                }
-                _ => {}
-            }
-        }
-
-        cfg
-    }
-
-    fn merge(&mut self, other: Self) {
-        if other.watch_debounce_ms.is_some() {
-            self.watch_debounce_ms = other.watch_debounce_ms;
-        }
-        if other.watch_poll_fallback_ms.is_some() {
-            self.watch_poll_fallback_ms = other.watch_poll_fallback_ms;
         }
     }
 }

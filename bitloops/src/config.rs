@@ -9,7 +9,7 @@ mod store_config_utils;
 mod types;
 pub mod unified_config;
 
-pub use constants::{BITLOOPS_CONFIG_RELATIVE_PATH, BITLOOPS_CONFIG_TOML_RELATIVE_PATH};
+pub use constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 pub use resolve::{
     dashboard_use_bitloops_local, resolve_blob_local_path, resolve_blob_local_path_for_repo,
     resolve_duckdb_db_path_for_repo, resolve_provider_config, resolve_provider_config_for_repo,

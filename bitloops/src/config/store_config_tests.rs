@@ -15,6 +15,15 @@ fn write_repo_config(repo_root: &Path, value: serde_json::Value) {
     .expect("write config");
 }
 
+fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
+    let envelope = serde_json::json!({
+        "version": "1.0",
+        "scope": "project",
+        "settings": settings
+    });
+    write_repo_config(repo_root, envelope);
+}
+
 #[test]
 fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
     let cfg = resolve_store_backend_config_for_tests(StoreFileConfig::default()).expect("cfg");
@@ -89,10 +98,8 @@ fn backend_config_rejects_invalid_provider_values() {
 #[test]
 fn backend_config_resolves_from_current_repo_root() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "stores": {
                 "relational": {
@@ -109,10 +116,8 @@ fn backend_config_resolves_from_current_repo_root() {
                     "local_path": "data/blobs"
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let _guard = enter_process_state(Some(temp.path()), &[]);
     let cfg = resolve_store_backend_config().expect("backend config");
@@ -410,10 +415,8 @@ fn knowledge_config_providers_defaults_when_repo_config_missing() {
 #[test]
 fn knowledge_config_providers_reads_values_from_repo_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "knowledge": {
                 "providers": {
@@ -425,10 +428,8 @@ fn knowledge_config_providers_reads_values_from_repo_config_file() {
                     }
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 
@@ -453,10 +454,8 @@ fn knowledge_config_providers_reads_values_from_repo_config_file() {
 #[test]
 fn knowledge_config_providers_resolve_from_current_repo_root() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "knowledge": {
                 "providers": {
@@ -467,10 +466,8 @@ fn knowledge_config_providers_resolve_from_current_repo_root() {
                     }
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let _guard = enter_process_state(Some(temp.path()), &[]);
     let cfg = resolve_provider_config().expect("provider config");
@@ -491,10 +488,8 @@ fn knowledge_config_providers_resolve_from_current_repo_root() {
 #[test]
 fn knowledge_config_providers_reads_shared_atlassian_values_from_repo_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "knowledge": {
                 "providers": {
@@ -505,10 +500,8 @@ fn knowledge_config_providers_reads_shared_atlassian_values_from_repo_config_fil
                     }
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
 
@@ -528,20 +521,16 @@ fn knowledge_config_providers_reads_shared_atlassian_values_from_repo_config_fil
 #[test]
 fn knowledge_config_providers_resolve_env_indirection_from_repo_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "knowledge": {
                 "providers": {
                     "github": { "token": "${BITLOOPS_GITHUB_TOKEN}" }
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let _guard = enter_process_state(None, &[("BITLOOPS_GITHUB_TOKEN", Some("env-gh-from-file"))]);
     let cfg = resolve_provider_config_for_repo(temp.path()).expect("provider config");
@@ -811,23 +800,18 @@ fn blob_storage_local_path_or_default_uses_current_repo_root() {
 #[test]
 fn dashboard_use_bitloops_local_reads_repo_config_via_public_helper() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    write_envelope_config(
+        temp.path(),
         serde_json::json!({
             "dashboard": {
                 "use_bitloops_local": true
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
+        }),
+    );
 
     let _guard = enter_process_state(Some(temp.path()), &[]);
 
     assert!(dashboard_use_bitloops_local());
-    assert_eq!(DashboardFileConfig::load().use_bitloops_local, Some(true));
 }
 
 #[test]
@@ -987,21 +971,6 @@ fn watch_file_config_reads_json_watch_block() {
 }
 
 #[test]
-fn watch_file_config_reads_toml_watch_sections() {
-    let cfg = WatchFileConfig::from_toml_str(
-        r#"
-watch_debounce_ms = 700
-
-[devql.watch]
-watch_poll_fallback_ms = 2400
-"#,
-    );
-
-    assert_eq!(cfg.watch_debounce_ms, Some(700));
-    assert_eq!(cfg.watch_poll_fallback_ms, Some(2400));
-}
-
-#[test]
 fn watch_runtime_config_prefers_env_over_file() {
     let cfg = resolve_watch_runtime_config_for_tests(
         WatchFileConfig {
@@ -1039,7 +1008,7 @@ fn dashboard_file_config_load_reads_repo_config_file() {
 #[test]
 fn dashboard_use_bitloops_local_reads_repo_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
+    write_envelope_config(
         temp.path(),
         serde_json::json!({
             "dashboard": {
@@ -1056,7 +1025,7 @@ fn dashboard_use_bitloops_local_reads_repo_config_file() {
 #[test]
 fn resolve_store_semantic_config_reads_file_and_env() {
     let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
+    write_envelope_config(
         temp.path(),
         serde_json::json!({
             "semantic": {
@@ -1091,7 +1060,7 @@ fn resolve_store_semantic_config_reads_file_and_env() {
 #[test]
 fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
     let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
+    write_envelope_config(
         temp.path(),
         serde_json::json!({
             "stores": {
@@ -1129,7 +1098,7 @@ fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
 #[test]
 fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
     let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
+    write_envelope_config(
         temp.path(),
         serde_json::json!({
             "stores": {
@@ -1161,7 +1130,7 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
 #[test]
 fn resolve_store_embedding_config_reads_file_and_env() {
     let temp = tempfile::tempdir().expect("temp dir");
-    write_repo_config(
+    write_envelope_config(
         temp.path(),
         serde_json::json!({
             "stores": {

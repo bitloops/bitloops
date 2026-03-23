@@ -32,10 +32,14 @@ async fn init_relational_schema_creates_test_harness_tables() {
         repo_root.join(".bitloops/config.json"),
         format!(
             r#"{{
-  "stores": {{
-    "relational": {{
-      "provider": "sqlite",
-      "sqlite_path": "{}"
+  "version": "1.0",
+  "scope": "project",
+  "settings": {{
+    "stores": {{
+      "relational": {{
+        "provider": "sqlite",
+        "sqlite_path": "{}"
+      }}
     }}
   }}
 }}"#,

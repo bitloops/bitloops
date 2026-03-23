@@ -231,6 +231,11 @@ pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
 // Consumer adapters: resolve subsystem configs from the merged unified tree.
 // ---------------------------------------------------------------------------
 
+use super::resolve::{
+    resolve_provider_config_from_value_with, resolve_store_backend_config_with,
+    resolve_store_embedding_config_with, resolve_store_semantic_config_with,
+    resolve_watch_runtime_config_with,
+};
 use super::types::{
     DashboardFileConfig, ProviderConfig, StoreBackendConfig, StoreEmbeddingConfig,
     StoreSemanticConfig, WatchRuntimeConfig,
@@ -239,49 +244,82 @@ use super::types::{
 /// Resolve store backend configuration (relational, events, blob) from merged
 /// [`UnifiedSettings`]. Applies defaults and resolves paths relative to `repo_root`.
 pub fn resolve_store_backend_from_unified(
-    _settings: &UnifiedSettings,
+    settings: &UnifiedSettings,
     _repo_root: &Path,
 ) -> Result<StoreBackendConfig> {
-    todo!()
+    let stores_value = settings
+        .stores
+        .clone()
+        .unwrap_or(Value::Object(Default::default()));
+    let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
+    resolve_store_backend_config_with(file_cfg)
 }
 
 /// Resolve semantic search configuration from merged [`UnifiedSettings`],
 /// with environment variables taking precedence where documented.
 pub fn resolve_semantic_from_unified<F: Fn(&str) -> Option<String>>(
-    _settings: &UnifiedSettings,
-    _env_lookup: F,
+    settings: &UnifiedSettings,
+    env_lookup: F,
 ) -> StoreSemanticConfig {
-    todo!()
+    // Build a synthetic value with semantic at root level so
+    // StoreFileConfig::from_json_value can find it via root.get("semantic").
+    let mut map = serde_json::Map::new();
+    if let Some(semantic) = &settings.semantic {
+        map.insert("semantic".into(), semantic.clone());
+    }
+    let file_cfg = super::types::StoreFileConfig::from_json_value(&Value::Object(map));
+    resolve_store_semantic_config_with(file_cfg, env_lookup)
 }
 
 /// Resolve embedding configuration from merged [`UnifiedSettings`],
 /// with environment variables taking precedence where documented.
 pub fn resolve_embedding_from_unified<F: Fn(&str) -> Option<String>>(
-    _settings: &UnifiedSettings,
-    _env_lookup: F,
+    settings: &UnifiedSettings,
+    env_lookup: F,
 ) -> StoreEmbeddingConfig {
-    todo!()
+    // Embedding fields live at root level inside the stores Value.
+    let stores_value = settings
+        .stores
+        .clone()
+        .unwrap_or(Value::Object(Default::default()));
+    let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
+    resolve_store_embedding_config_with(file_cfg, env_lookup)
 }
 
 /// Resolve watch runtime configuration from merged [`UnifiedSettings`] (JSON only,
 /// no TOML). Environment variables take precedence where documented.
 pub fn resolve_watch_from_unified<F: Fn(&str) -> Option<String>>(
-    _settings: &UnifiedSettings,
-    _env_lookup: F,
+    settings: &UnifiedSettings,
+    env_lookup: F,
 ) -> WatchRuntimeConfig {
-    todo!()
+    // Build a synthetic value with watch at root level for WatchFileConfig::from_json_value.
+    let mut map = serde_json::Map::new();
+    if let Some(watch) = &settings.watch {
+        map.insert("watch".into(), watch.clone());
+    }
+    let file_cfg = super::types::WatchFileConfig::from_json_value(&Value::Object(map));
+    resolve_watch_runtime_config_with(file_cfg, env_lookup)
 }
 
 /// Resolve knowledge provider configuration from merged [`UnifiedSettings`],
 /// supporting `${ENV_VAR}` indirection in JSON values.
 pub fn resolve_provider_from_unified<F: Fn(&str) -> Option<String>>(
-    _settings: &UnifiedSettings,
-    _env_lookup: F,
+    settings: &UnifiedSettings,
+    env_lookup: F,
 ) -> Result<ProviderConfig> {
-    todo!()
+    // Build a synthetic value with knowledge at root level for the provider resolver.
+    let mut map = serde_json::Map::new();
+    if let Some(knowledge) = &settings.knowledge {
+        map.insert("knowledge".into(), knowledge.clone());
+    }
+    resolve_provider_config_from_value_with(&Value::Object(map), env_lookup)
 }
 
 /// Resolve dashboard configuration from merged [`UnifiedSettings`].
-pub fn resolve_dashboard_from_unified(_settings: &UnifiedSettings) -> DashboardFileConfig {
-    todo!()
+pub fn resolve_dashboard_from_unified(settings: &UnifiedSettings) -> DashboardFileConfig {
+    let mut map = serde_json::Map::new();
+    if let Some(dashboard) = &settings.dashboard {
+        map.insert("dashboard".into(), dashboard.clone());
+    }
+    DashboardFileConfig::from_json_value(&Value::Object(map))
 }

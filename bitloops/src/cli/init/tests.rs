@@ -141,18 +141,22 @@ fn run_init_respects_repo_level_configured_store_paths() {
     std::fs::write(
         bitloops_dir.join("config.json"),
         r#"{
-  "stores": {
-    "relational": {
-      "provider": "sqlite",
-      "sqlite_path": ".custom/relational/custom-relational.db"
-    },
-    "event": {
-      "provider": "duckdb",
-      "duckdb_path": ".custom/event/custom-events.duckdb"
-    },
-    "blob": {
-      "provider": "local",
-      "local_path": ".custom/blob-store"
+  "version": "1.0",
+  "scope": "project",
+  "settings": {
+    "stores": {
+      "relational": {
+        "provider": "sqlite",
+        "sqlite_path": ".custom/relational/custom-relational.db"
+      },
+      "event": {
+        "provider": "duckdb",
+        "duckdb_path": ".custom/event/custom-events.duckdb"
+      },
+      "blob": {
+        "provider": "local",
+        "local_path": ".custom/blob-store"
+      }
     }
   }
 }"#,

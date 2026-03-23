@@ -53,10 +53,14 @@ fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
     std::fs::write(
         config_dir.join("config.json"),
         serde_json::to_vec_pretty(&json!({
-            "stores": {
-                "relational": {
-                    "provider": "sqlite",
-                    "sqlite_path": sqlite_path.to_string_lossy()
+            "version": "1.0",
+            "scope": "project",
+            "settings": {
+                "stores": {
+                    "relational": {
+                        "provider": "sqlite",
+                        "sqlite_path": sqlite_path.to_string_lossy()
+                    }
                 }
             }
         }))

@@ -343,10 +343,14 @@ mod tests {
             config_dir.join("config.json"),
             format!(
                 r#"{{
-  "stores": {{
-    "relational": {{
-      "provider": "sqlite",
-      "sqlite_path": "{}"
+  "version": "1.0",
+  "scope": "project",
+  "settings": {{
+    "stores": {{
+      "relational": {{
+        "provider": "sqlite",
+        "sqlite_path": "{}"
+      }}
     }}
   }}
 }}"#,
