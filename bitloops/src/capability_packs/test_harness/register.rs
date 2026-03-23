@@ -22,11 +22,11 @@ pub fn register_test_harness_pack(
     registrar.register_ingester(build_linkage_ingester(test_harness.clone()))?;
     registrar.register_ingester(build_coverage_ingester(test_harness.clone()))?;
     registrar.register_ingester(build_classification_ingester(test_harness.clone()))?;
-    registrar.register_stage(build_tests_stage())?;
-    registrar.register_stage(build_tests_stage_alias())?;
+    registrar.register_stage(build_tests_stage(test_harness.clone()))?;
+    registrar.register_stage(build_tests_stage_alias(test_harness.clone()))?;
     registrar.register_stage(build_tests_summary_stage(test_harness.clone()))?;
-    registrar.register_stage(build_coverage_stage())?;
-    registrar.register_stage(build_coverage_stage_alias())?;
+    registrar.register_stage(build_coverage_stage(test_harness.clone()))?;
+    registrar.register_stage(build_coverage_stage_alias(test_harness))?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
     registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
     Ok(())

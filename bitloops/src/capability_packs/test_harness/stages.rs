@@ -36,11 +36,13 @@ pub fn build_tests_summary_stage(
     )
 }
 
-pub fn build_coverage_stage() -> StageRegistration {
+pub fn build_coverage_stage(
+    test_harness: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
+) -> StageRegistration {
     StageRegistration::new(
         "test_harness",
         TEST_HARNESS_COVERAGE_STAGE_ID,
-        std::sync::Arc::new(CoverageStageHandler),
+        std::sync::Arc::new(CoverageStageHandler(test_harness)),
     )
 }
 
@@ -54,10 +56,12 @@ pub fn build_tests_stage_alias(
     )
 }
 
-pub fn build_coverage_stage_alias() -> StageRegistration {
+pub fn build_coverage_stage_alias(
+    test_harness: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
+) -> StageRegistration {
     StageRegistration::new(
         "test_harness",
         TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID,
-        std::sync::Arc::new(CoverageStageHandler),
+        std::sync::Arc::new(CoverageStageHandler(test_harness)),
     )
 }
