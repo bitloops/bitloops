@@ -12,6 +12,7 @@ pub const DEFAULT_GITHUB_API_URL: &str =
     "https://storage.googleapis.com/wwwbitloopscom/cli/latest.json";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+pub const DISABLE_VERSION_CHECK_ENV: &str = "BITLOOPS_DISABLE_VERSION_CHECK";
 #[cfg(test)]
 const CONFIG_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE";
 #[cfg(test)]
@@ -33,6 +34,12 @@ fn github_api_url() -> String {
     }
 
     DEFAULT_GITHUB_API_URL.to_string()
+}
+
+fn version_check_disabled() -> bool {
+    std::env::var(DISABLE_VERSION_CHECK_ENV)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
 }
 
 pub fn global_config_dir_path() -> io::Result<PathBuf> {
@@ -212,6 +219,10 @@ pub fn update_command() -> String {
 }
 
 pub fn check_and_notify(w: &mut dyn Write, current_version: &str) {
+    if version_check_disabled() {
+        return;
+    }
+
     if current_version == "dev" || current_version.is_empty() {
         return;
     }
@@ -244,6 +255,10 @@ pub fn check_and_notify(w: &mut dyn Write, current_version: &str) {
 }
 
 pub fn check_now(w: &mut dyn Write, current_version: &str) {
+    if version_check_disabled() {
+        return;
+    }
+
     if current_version.trim().is_empty() {
         let _ = writeln!(
             w,

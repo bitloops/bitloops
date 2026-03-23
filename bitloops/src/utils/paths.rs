@@ -197,7 +197,11 @@ pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
         }
         match dir.parent() {
             Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => return Err(anyhow!("not inside a git repository (no .git directory found)")),
+            _ => {
+                return Err(anyhow!(
+                    "not inside a git repository (no .git directory found)"
+                ));
+            }
         }
     }
 }

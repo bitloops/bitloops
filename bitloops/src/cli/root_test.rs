@@ -31,6 +31,21 @@ fn render_custom_help(path: &[&str], show_tree: bool) -> String {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestRootCommand_HooksDoNotAutostartWatcher() {
+    let parsed = Cli::try_parse_from(["bitloops", "hooks", "git", "post-commit"])
+        .expect("hooks command should parse");
+    let Some(command) = parsed.command else {
+        panic!("expected hooks command");
+    };
+
+    assert!(
+        !super::root::should_attempt_watcher_autostart(&command),
+        "hook commands should not attempt DevQL watcher autostart"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestRootCommand_Metadata() {
     let root = Cli::command();
     assert_eq!(root.get_name(), ROOT_NAME);

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,6 +18,7 @@ mod capture;
 
 const WATCHER_PID_FILE_NAME: &str = "devql-watcher.pid";
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
+pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -51,7 +53,17 @@ pub fn watcher_pid_file(repo_root: &Path) -> PathBuf {
         .join(WATCHER_PID_FILE_NAME)
 }
 
+fn watcher_autostart_disabled() -> bool {
+    env::var(DISABLE_WATCHER_AUTOSTART_ENV)
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
+}
+
 pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
+    if watcher_autostart_disabled() {
+        return Ok(());
+    }
+
     let pid_file = watcher_pid_file(repo_root);
     let restart_token = current_watcher_restart_token()?;
     if let Some(entry) = read_pid_file(&pid_file)?
@@ -426,6 +438,7 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::process_state::with_env_var;
     use std::fs;
 
     use tempfile::TempDir;
@@ -567,6 +580,21 @@ mod tests {
             entry.restart_token,
             Some(current_watcher_restart_token().expect("restart token")),
             "pid file written by WatcherPidGuard must carry the current restart token"
+        );
+    }
+
+    #[test]
+    fn ensure_watcher_running_returns_early_when_autostart_disabled_env_is_set() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = watcher_pid_file(dir.path());
+
+        with_env_var(DISABLE_WATCHER_AUTOSTART_ENV, Some("1"), || {
+            ensure_watcher_running(dir.path()).expect("autostart-disabled no-op should succeed");
+        });
+
+        assert!(
+            !pid_file.exists(),
+            "watcher pid file should not be created when autostart is disabled"
         );
     }
 

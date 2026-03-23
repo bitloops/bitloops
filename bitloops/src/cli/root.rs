@@ -258,6 +258,7 @@ pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -
         command,
         crate::cli::Commands::Clean(_)
             | crate::cli::Commands::Disable(_)
+            | crate::cli::Commands::Hooks(_)
             | crate::cli::Commands::Help(_)
             | crate::cli::Commands::Version(_)
             | crate::cli::Commands::Completion(_)
