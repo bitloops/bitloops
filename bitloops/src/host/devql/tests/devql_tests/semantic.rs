@@ -37,7 +37,6 @@ async fn init_relational_schema_creates_test_harness_tables() {
   "settings": {{
     "stores": {{
       "relational": {{
-        "provider": "sqlite",
         "sqlite_path": "{}"
       }}
     }}

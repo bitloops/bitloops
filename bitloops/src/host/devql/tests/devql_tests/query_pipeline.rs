@@ -1508,7 +1508,6 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
             "settings": {
                 "stores": {
                     "relational": {
-                        "provider": "sqlite",
                         "sqlite_path": sqlite_path.to_string_lossy()
                     }
                 }
@@ -1809,7 +1808,6 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
             "settings": {
                 "stores": {
                     "relational": {
-                        "provider": "sqlite",
                         "sqlite_path": sqlite_path.to_string_lossy()
                     }
                 }

@@ -104,7 +104,6 @@ mod tests {
         let _ = rusqlite::Connection::open(&sqlite_path)
             .context("creating sqlite file for connect_existing test")?;
         let file_cfg = StoreFileConfig {
-            relational_provider: Some("postgres".to_string()),
             sqlite_path: Some(sqlite_path.to_string_lossy().to_string()),
             pg_dsn: Some("postgres://bitloops:bitloops@localhost:5432/bitloops".to_string()),
             ..Default::default()

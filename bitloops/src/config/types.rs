@@ -140,12 +140,8 @@ impl BlobStorageConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct StoreFileConfig {
-    #[allow(dead_code)]
-    pub(crate) relational_provider: Option<String>,
     pub(crate) sqlite_path: Option<String>,
     pub(crate) pg_dsn: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) events_provider: Option<String>,
     pub(crate) duckdb_path: Option<String>,
     pub(crate) clickhouse_url: Option<String>,
     pub(crate) clickhouse_user: Option<String>,
@@ -158,8 +154,6 @@ pub struct StoreFileConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) blob_provider: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
     pub(crate) blob_s3_region: Option<String>,

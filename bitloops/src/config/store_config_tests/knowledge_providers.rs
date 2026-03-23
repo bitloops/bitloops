@@ -4,7 +4,7 @@ use super::*;
 fn knowledge_config_providers_defaults_when_block_missing() {
     let value = serde_json::json!({
         "stores": {
-            "relational": { "provider": "sqlite" }
+            "relational": { "sqlite_path": "data/relational.db" }
         }
     });
 

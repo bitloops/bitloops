@@ -340,7 +340,6 @@ mod tests {
   "settings": {{
     "stores": {{
       "relational": {{
-        "provider": "sqlite",
         "sqlite_path": "{}"
       }}
     }}

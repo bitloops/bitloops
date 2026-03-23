@@ -22,8 +22,8 @@ fn no_env(_key: &str) -> Option<String> {
 fn store_backend_from_unified_reads_relational_and_events() {
     let settings = UnifiedSettings {
         stores: Some(json!({
-            "relational": { "provider": "postgres", "postgres_dsn": "postgres://localhost/db" },
-            "events": { "provider": "duckdb" }
+            "relational": { "postgres_dsn": "postgres://localhost/db" },
+            "events": { "duckdb_path": "data/events.duckdb" }
         })),
         ..Default::default()
     };
@@ -53,13 +53,13 @@ fn store_backend_from_unified_applies_defaults() {
 fn store_backend_from_unified_merges_across_layers() {
     let global = UnifiedSettings {
         stores: Some(json!({
-            "relational": { "provider": "sqlite" }
+            "relational": { "sqlite_path": "data/relational.db" }
         })),
         ..Default::default()
     };
     let project = UnifiedSettings {
         stores: Some(json!({
-            "events": { "provider": "clickhouse", "clickhouse_url": "http://ch:8123" }
+            "events": { "clickhouse_url": "http://ch:8123" }
         })),
         ..Default::default()
     };

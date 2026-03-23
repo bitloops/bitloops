@@ -47,14 +47,10 @@ impl StoreFileConfig {
         let semantic = root.get(SEMANTIC_CONFIG_KEY).and_then(Value::as_object);
 
         Self {
-            relational_provider: read_any_string_opt(relational, &["provider"])
-                .or_else(|| read_any_string(root, &["relational_provider"])),
             sqlite_path: read_any_string_opt(relational, &["sqlite_path", "path"])
                 .or_else(|| read_any_string(root, &["sqlite_path"])),
             pg_dsn: read_any_string_opt(relational, &["postgres_dsn", "pg_dsn"])
                 .or_else(|| read_any_string(root, &["postgres_dsn", "pg_dsn"])),
-            events_provider: read_any_string_opt(events, &["provider"])
-                .or_else(|| read_any_string(root, &["events_provider", "event_provider"])),
             duckdb_path: read_any_string_opt(events, &["duckdb_path", "path"])
                 .or_else(|| read_any_string(root, &["duckdb_path"])),
             clickhouse_url: read_any_string_opt(events, &["clickhouse_url"])
@@ -79,8 +75,6 @@ impl StoreFileConfig {
             ),
             embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
             embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
-            blob_provider: read_any_string_opt(blobs, &["provider"])
-                .or_else(|| read_any_string(root, &["blob_provider"])),
             blob_local_path: read_any_string_opt(blobs, &["local_path"])
                 .or_else(|| read_any_string(root, &["blob_local_path"])),
             blob_s3_bucket: read_any_string_opt(blobs, &["s3_bucket"])

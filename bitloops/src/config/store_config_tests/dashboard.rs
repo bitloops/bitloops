@@ -43,7 +43,7 @@ fn dashboard_file_config_defaults_when_dashboard_block_missing() {
     let value = serde_json::json!({
         "stores": {
             "relational": {
-                "provider": "sqlite"
+                "sqlite_path": "data/relational.db"
             }
         }
     });

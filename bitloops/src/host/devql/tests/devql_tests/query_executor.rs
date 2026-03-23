@@ -57,7 +57,6 @@ fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
             "settings": {
                 "stores": {
                     "relational": {
-                        "provider": "sqlite",
                         "sqlite_path": sqlite_path.to_string_lossy()
                     }
                 }

@@ -69,7 +69,6 @@ mod tests {
             serde_json::json!({
                 "stores": {
                     "relational": {
-                        "provider": "postgres",
                         "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
                     }
                 }

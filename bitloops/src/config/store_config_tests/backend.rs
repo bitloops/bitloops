@@ -17,16 +17,16 @@ fn backend_config_reads_store_blocks_from_repo_config_shape() {
     let value = serde_json::json!({
         "stores": {
             "relational": {
-                "provider": "postgres",
+
                 "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
             },
             "event": {
-                "provider": "clickhouse",
+
                 "clickhouse_url": "http://localhost:8123",
                 "clickhouse_database": "bitloops"
             },
             "blob": {
-                "provider": "gcs",
+
                 "gcs_bucket": "bucket-a",
                 "gcs_credentials_path": "/tmp/gcs.json"
             }
@@ -62,16 +62,16 @@ fn backend_config_resolves_from_current_repo_root() {
         serde_json::json!({
             "stores": {
                 "relational": {
-                    "provider": "postgres",
+
                     "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
                 },
                 "events": {
-                    "provider": "clickhouse",
+
                     "clickhouse_url": "http://localhost:8123",
                     "clickhouse_database": "bitloops"
                 },
                 "blobs": {
-                    "provider": "local",
+
                     "local_path": "data/blobs"
                 }
             }
@@ -102,11 +102,11 @@ fn store_file_config_load_reads_repo_config_file() {
         serde_json::json!({
             "stores": {
                 "relational": {
-                    "provider": "sqlite",
+
                     "sqlite_path": "data/relational.sqlite"
                 },
                 "events": {
-                    "provider": "duckdb",
+
                     "duckdb_path": "data/events.duckdb"
                 }
             }
@@ -118,9 +118,7 @@ fn store_file_config_load_reads_repo_config_file() {
     let _guard = enter_process_state(Some(temp.path()), &[]);
     let cfg = StoreFileConfig::load();
 
-    assert_eq!(cfg.relational_provider.as_deref(), Some("sqlite"));
     assert_eq!(cfg.sqlite_path.as_deref(), Some("data/relational.sqlite"));
-    assert_eq!(cfg.events_provider.as_deref(), Some("duckdb"));
     assert_eq!(cfg.duckdb_path.as_deref(), Some("data/events.duckdb"));
 }
 
@@ -132,16 +130,16 @@ fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
         serde_json::json!({
             "stores": {
                 "relational": {
-                    "provider": "postgres",
+
                     "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops"
                 },
                 "events": {
-                    "provider": "clickhouse",
+
                     "clickhouse_url": "http://localhost:8123",
                     "clickhouse_database": "bitloops"
                 },
                 "blob": {
-                    "provider": "local",
+
                     "local_path": "tmp/blobs"
                 }
             }
@@ -170,11 +168,11 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
         serde_json::json!({
             "stores": {
                 "relational": {
-                    "provider": "sqlite",
+
                     "sqlite_path": "data/devql.sqlite"
                 },
                 "event": {
-                    "provider": "duckdb",
+
                     "duckdb_path": "data/events.duckdb"
                 }
             }

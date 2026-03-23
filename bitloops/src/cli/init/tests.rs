@@ -146,15 +146,12 @@ fn run_init_respects_repo_level_configured_store_paths() {
   "settings": {
     "stores": {
       "relational": {
-        "provider": "sqlite",
         "sqlite_path": ".custom/relational/custom-relational.db"
       },
       "event": {
-        "provider": "duckdb",
         "duckdb_path": ".custom/event/custom-events.duckdb"
       },
       "blob": {
-        "provider": "local",
         "local_path": ".custom/blob-store"
       }
     }

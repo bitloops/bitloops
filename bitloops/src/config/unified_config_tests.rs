@@ -32,7 +32,7 @@ fn parse_envelope_valid_project() {
         "scope": "project",
         "settings": {
             "enabled": true,
-            "stores": { "relational": { "provider": "sqlite" } }
+            "stores": { "relational": { "sqlite_path": "data/relational.db" } }
         }
     });
     let envelope =
@@ -198,13 +198,13 @@ fn merge_code_defaults_used_when_all_layers_absent() {
 fn merge_deep_objects_combine_keys() {
     let global = UnifiedSettings {
         stores: Some(json!({
-            "relational": { "provider": "sqlite" }
+            "relational": { "sqlite_path": "data/relational.db" }
         })),
         ..Default::default()
     };
     let project = UnifiedSettings {
         stores: Some(json!({
-            "events": { "provider": "duckdb" }
+            "events": { "duckdb_path": "data/events.duckdb" }
         })),
         ..Default::default()
     };
@@ -224,13 +224,13 @@ fn merge_deep_objects_combine_keys() {
 fn merge_deep_objects_nested_override() {
     let global = UnifiedSettings {
         stores: Some(json!({
-            "relational": { "provider": "sqlite", "sqlite_path": "/tmp/a.db" }
+            "relational": { "sqlite_path": "/tmp/a.db", "postgres_dsn": "postgres://old/db" }
         })),
         ..Default::default()
     };
     let project = UnifiedSettings {
         stores: Some(json!({
-            "relational": { "provider": "postgres" }
+            "relational": { "postgres_dsn": "postgres://new/db" }
         })),
         ..Default::default()
     };
@@ -238,9 +238,9 @@ fn merge_deep_objects_nested_override() {
     let stores = merged.stores.expect("stores should be present");
     let rel = stores.get("relational").expect("relational should exist");
     assert_eq!(
-        rel.get("provider").and_then(|v| v.as_str()),
-        Some("postgres"),
-        "project should override nested provider"
+        rel.get("postgres_dsn").and_then(|v| v.as_str()),
+        Some("postgres://new/db"),
+        "project should override nested postgres_dsn"
     );
     assert_eq!(
         rel.get("sqlite_path").and_then(|v| v.as_str()),
@@ -317,7 +317,7 @@ fn merge_null_clears_lower_layer_value() {
 
 #[test]
 fn merge_null_clears_nested_object() {
-    let global = json!({ "stores": { "relational": { "provider": "sqlite" } } });
+    let global = json!({ "stores": { "relational": { "sqlite_path": "data/relational.db" } } });
     let local = json!({ "stores": null });
     let merged = merge_json_layers(&[global, local]).unwrap();
     assert_eq!(
@@ -352,7 +352,7 @@ fn merge_enabled_overrides_from_project_local() {
 fn merge_enabled_coexists_with_stores() {
     let global = UnifiedSettings {
         enabled: Some(true),
-        stores: Some(json!({ "relational": { "provider": "sqlite" } })),
+        stores: Some(json!({ "relational": { "sqlite_path": "data/relational.db" } })),
         ..Default::default()
     };
     let local = UnifiedSettings {
@@ -394,7 +394,7 @@ fn load_effective_merges_global_and_project() {
             "scope": "global",
             "settings": {
                 "strategy": "manual-commit",
-                "stores": { "relational": { "provider": "sqlite" } }
+                "stores": { "relational": { "sqlite_path": "data/relational.db" } }
             }
         }),
     );
