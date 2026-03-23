@@ -166,7 +166,7 @@ fn read_child_stderr(child: &mut Child) -> String {
 
 async fn wait_until_ready(url: &str, child: &mut Child) {
     let client = reqwest::Client::new();
-    for _ in 0..80 {
+    for _ in 0..300 {
         if let Ok(response) = client.get(url).send().await
             && response.status().is_success()
         {
