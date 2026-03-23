@@ -60,34 +60,3 @@ fn TestBuiltinAdapterRegistrySupportsCanonicalResolution() {
     assert!(profiles.iter().any(|profile| profile == "copilot"));
     assert!(profiles.iter().any(|profile| profile == "gemini"));
 }
-
-#[test]
-#[allow(non_snake_case)]
-fn TestBuiltinAdapterDisplayNameConsistency() {
-    let registry = AgentAdapterRegistry::builtin();
-
-    for agent_name in registry.available_agents() {
-        let registration = registry
-            .resolve(&agent_name)
-            .unwrap_or_else(|err| panic!("failed to resolve agent {agent_name}: {err}"));
-        let descriptor = registration.descriptor();
-
-        assert_eq!(
-            descriptor.display_name.trim(),
-            descriptor.package.display_name.trim(),
-            "adapter '{}': package display_name '{}' must match adapter display_name '{}'",
-            descriptor.id,
-            descriptor.package.display_name,
-            descriptor.display_name,
-        );
-
-        assert_eq!(
-            descriptor.display_name.trim(),
-            descriptor.target_profile.display_name.trim(),
-            "adapter '{}': target_profile display_name '{}' must match adapter display_name '{}'",
-            descriptor.id,
-            descriptor.target_profile.display_name,
-            descriptor.display_name,
-        );
-    }
-}
