@@ -98,10 +98,15 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
 
     let row_id = sqlite.with_connection(|conn| {
         conn.execute(
-            "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
             rusqlite::params![repo_id, tree_hash],
         )?;
-        Ok(conn.last_insert_rowid())
+        conn.query_row(
+            "SELECT id FROM workspace_revisions WHERE repo_id = ?1 AND tree_hash = ?2",
+            rusqlite::params![repo_id, tree_hash],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
     })?;
 
     let revision_unix = current_unix_timestamp();

@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS workspace_revisions (
 CREATE INDEX IF NOT EXISTS workspace_revisions_repo_idx
 ON workspace_revisions (repo_id);
 
-CREATE INDEX IF NOT EXISTS workspace_revisions_tree_idx
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
 ON workspace_revisions (repo_id, tree_hash);
 "#
 }
