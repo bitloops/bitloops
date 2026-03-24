@@ -136,29 +136,6 @@ pub(crate) fn normalized_enumerated_doctest_key(
     format!("{}|{}|{}", path, item_name.to_ascii_lowercase(), start_line)
 }
 
-pub(crate) fn scenario_id_suffix(name: &str) -> String {
-    let normalized = name
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let collapsed = normalized
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-    if collapsed.is_empty() {
-        "scenario".to_string()
-    } else {
-        collapsed
-    }
-}
-
 pub(crate) fn imported_path_matches_production_path(
     imported_path: &str,
     production_path: &str,

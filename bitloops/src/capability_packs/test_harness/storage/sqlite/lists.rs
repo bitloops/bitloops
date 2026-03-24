@@ -95,9 +95,10 @@ pub(super) fn load_listed_test_suites(
     let mut stmt = conn
         .prepare(
             r#"
-SELECT suite_id, symbol_fqn, path, start_line, end_line
-FROM test_suites
+SELECT artefact_id, symbol_fqn, path, start_line, end_line
+FROM test_artefacts_current
 WHERE commit_sha = ?1
+  AND canonical_kind = 'test_suite'
 ORDER BY path ASC, start_line ASC
 "#,
         )
@@ -128,9 +129,10 @@ pub(super) fn load_listed_test_scenarios(
     let mut stmt = conn
         .prepare(
             r#"
-SELECT scenario_id, symbol_fqn, path, start_line, end_line
-FROM test_scenarios
+SELECT artefact_id, symbol_fqn, path, start_line, end_line
+FROM test_artefacts_current
 WHERE commit_sha = ?1
+  AND canonical_kind = 'test_scenario'
 ORDER BY path ASC, start_line ASC
 "#,
         )

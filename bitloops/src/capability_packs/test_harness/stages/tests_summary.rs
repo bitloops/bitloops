@@ -27,10 +27,9 @@ fn build_test_harness_commit_snapshot(
     let coverage_present = repo.coverage_exists_for_commit(commit_sha)?;
 
     let human = format!(
-        "test harness snapshot for commit {commit_sha}: suites={}, scenarios={}, links={}, classifications={}, coverage_captures={}, coverage_hits={}, coverage_indexed={}",
-        counts.test_suites,
-        counts.test_scenarios,
-        counts.test_links,
+        "test harness snapshot for commit {commit_sha}: test_artefacts={}, test_artefact_edges={}, classifications={}, coverage_captures={}, coverage_hits={}, coverage_indexed={}",
+        counts.test_artefacts,
+        counts.test_artefact_edges,
         counts.test_classifications,
         counts.coverage_captures,
         counts.coverage_hits,
@@ -43,9 +42,8 @@ fn build_test_harness_commit_snapshot(
         "status": "ok",
         "commit_sha": commit_sha,
         "counts": {
-            "test_suites": counts.test_suites,
-            "test_scenarios": counts.test_scenarios,
-            "test_links": counts.test_links,
+            "test_artefacts": counts.test_artefacts,
+            "test_artefact_edges": counts.test_artefact_edges,
             "test_classifications": counts.test_classifications,
             "coverage_captures": counts.coverage_captures,
             "coverage_hits": counts.coverage_hits,
@@ -101,15 +99,13 @@ mod tests {
 
     use super::TestsSummaryStageHandler;
     use crate::capability_packs::test_harness::storage::{
-        BitloopsTestHarnessRepository, SqliteTestHarnessRepository,
+        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
     use crate::host::capability_host::gateways::{CanonicalGraphGateway, RelationalGateway};
     use crate::host::capability_host::runtime_contexts::LocalCanonicalGraphGateway;
     use crate::host::capability_host::{CapabilityExecutionContext, StageHandler, StageRequest};
     use crate::host::devql::RepoIdentity;
-    use crate::storage::init::init_test_domain_database;
-
     struct DummyExecCtx {
         repo: RepoIdentity,
         graph: LocalCanonicalGraphGateway,
@@ -205,8 +201,8 @@ mod tests {
         assert_eq!(resp.payload["commit_sha"], "deadbeef");
         assert_eq!(resp.payload["stage"], TEST_HARNESS_TESTS_SUMMARY_STAGE_ID);
         let counts = resp.payload["counts"].as_object().expect("counts object");
-        assert_eq!(counts["test_suites"], 0);
-        assert_eq!(counts["test_scenarios"], 0);
+        assert_eq!(counts["test_artefacts"], 0);
+        assert_eq!(counts["test_artefact_edges"], 0);
         assert!(resp.human_output.contains("deadbeef"));
     }
 }

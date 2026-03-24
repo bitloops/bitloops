@@ -8,7 +8,7 @@ use crate::capability_packs::test_harness::mapping::model::{
 };
 use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
-use crate::models::ProductionArtefact;
+use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 use crate::telemetry::logging;
 use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::with_cwd;
@@ -63,6 +63,26 @@ fn cell_to_opt(cell: &str) -> Option<&str> {
 
 fn regex(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap_or_else(|err| panic!("invalid step regex `{pattern}`: {err}"))
+}
+
+fn link_metadata(link: &TestArtefactEdgeCurrentRecord) -> Value {
+    serde_json::from_str(&link.metadata)
+        .unwrap_or_else(|err| panic!("invalid link metadata `{}`: {err}", link.metadata))
+}
+
+fn link_confidence(link: &TestArtefactEdgeCurrentRecord) -> f64 {
+    link_metadata(link)
+        .get("confidence")
+        .and_then(Value::as_f64)
+        .expect("link metadata should include confidence")
+}
+
+fn link_status(link: &TestArtefactEdgeCurrentRecord) -> String {
+    link_metadata(link)
+        .get("linkage_status")
+        .and_then(Value::as_str)
+        .expect("link metadata should include linkage_status")
+        .to_string()
 }
 
 fn noop_waker() -> Waker {
@@ -517,48 +537,66 @@ fn run_test_discovery(world: &mut DevqlBddWorld) {
         let commit_sha = "test-commit";
 
         for suite in &suites {
-            let suite_id = format!("test_suite:{commit_sha}:{path}:{}", suite.start_line);
-            world
-                .discovered_suites
-                .push(crate::models::TestSuiteRecord {
-                    suite_id: suite_id.clone(),
-                    repo_id: repo_id.to_string(),
-                    commit_sha: commit_sha.to_string(),
-                    language: "rust".to_string(),
-                    path: path.clone(),
-                    name: suite.name.clone(),
-                    symbol_fqn: Some(suite.name.clone()),
-                    start_line: suite.start_line,
-                    end_line: suite.end_line,
-                    start_byte: None,
-                    end_byte: None,
-                    signature: None,
-                    discovery_source: "source".to_string(),
-                });
+            let suite_symbol_id = format!("test_suite:{commit_sha}:{path}:{}", suite.start_line);
+            let suite_artefact_id = format!("test_artefact:{suite_symbol_id}");
+            world.discovered_suites.push(TestArtefactCurrentRecord {
+                artefact_id: suite_artefact_id.clone(),
+                symbol_id: suite_symbol_id.clone(),
+                repo_id: repo_id.to_string(),
+                commit_sha: commit_sha.to_string(),
+                blob_sha: format!("blob:{commit_sha}:{path}"),
+                path: path.clone(),
+                language: "rust".to_string(),
+                canonical_kind: "test_suite".to_string(),
+                language_kind: None,
+                symbol_fqn: Some(suite.name.clone()),
+                name: suite.name.clone(),
+                parent_artefact_id: None,
+                parent_symbol_id: None,
+                start_line: suite.start_line,
+                end_line: suite.end_line,
+                start_byte: None,
+                end_byte: None,
+                signature: None,
+                modifiers: "[]".to_string(),
+                docstring: None,
+                content_hash: None,
+                discovery_source: "source".to_string(),
+                revision_kind: "commit".to_string(),
+                revision_id: commit_sha.to_string(),
+            });
 
             for scenario in &suite.scenarios {
-                let scenario_id = format!(
+                let scenario_symbol_id = format!(
                     "test_case:{commit_sha}:{path}:{}:{}",
                     scenario.start_line, scenario.name
                 );
-                world
-                    .discovered_scenarios
-                    .push(crate::models::TestScenarioRecord {
-                        scenario_id,
-                        suite_id: suite_id.clone(),
-                        repo_id: repo_id.to_string(),
-                        commit_sha: commit_sha.to_string(),
-                        language: "rust".to_string(),
-                        path: path.clone(),
-                        name: scenario.name.clone(),
-                        symbol_fqn: Some(format!("{}.{}", suite.name, scenario.name)),
-                        start_line: scenario.start_line,
-                        end_line: scenario.end_line,
-                        start_byte: None,
-                        end_byte: None,
-                        signature: None,
-                        discovery_source: scenario.discovery_source.as_str().to_string(),
-                    });
+                world.discovered_scenarios.push(TestArtefactCurrentRecord {
+                    artefact_id: format!("test_artefact:{scenario_symbol_id}"),
+                    symbol_id: scenario_symbol_id,
+                    repo_id: repo_id.to_string(),
+                    commit_sha: commit_sha.to_string(),
+                    blob_sha: format!("blob:{commit_sha}:{path}"),
+                    path: path.clone(),
+                    language: "rust".to_string(),
+                    canonical_kind: "test_scenario".to_string(),
+                    language_kind: None,
+                    symbol_fqn: Some(format!("{}.{}", suite.name, scenario.name)),
+                    name: scenario.name.clone(),
+                    parent_artefact_id: Some(suite_artefact_id.clone()),
+                    parent_symbol_id: Some(suite_symbol_id.clone()),
+                    start_line: scenario.start_line,
+                    end_line: scenario.end_line,
+                    start_byte: None,
+                    end_byte: None,
+                    signature: None,
+                    modifiers: "[]".to_string(),
+                    docstring: None,
+                    content_hash: None,
+                    discovery_source: scenario.discovery_source.as_str().to_string(),
+                    revision_kind: "commit".to_string(),
+                    revision_id: commit_sha.to_string(),
+                });
             }
         }
     }
@@ -591,9 +629,8 @@ fn run_linkage_resolution(world: &mut DevqlBddWorld) {
     let production_index = build_production_index(&production_artefacts);
 
     // Discover test files and materialize links
-    let mut suites = Vec::new();
-    let mut scenarios = Vec::new();
-    let mut links = Vec::new();
+    let mut test_artefacts = Vec::new();
+    let mut test_edges = Vec::new();
     let mut link_keys = HashSet::new();
     let mut stats = StructuralMappingStats::default();
 
@@ -626,16 +663,25 @@ fn run_linkage_resolution(world: &mut DevqlBddWorld) {
         commit_sha: "test-commit",
         production: &production_artefacts,
         production_index: &production_index,
-        suites: &mut suites,
-        scenarios: &mut scenarios,
-        links: &mut links,
+        test_artefacts: &mut test_artefacts,
+        test_edges: &mut test_edges,
         link_keys: &mut link_keys,
         stats: &mut stats,
     };
 
     materialize_source_discovery(&mut materialization, &discovered_files);
 
-    world.materialized_links = links;
+    world.discovered_suites = test_artefacts
+        .iter()
+        .filter(|artefact| artefact.canonical_kind == "test_suite")
+        .cloned()
+        .collect();
+    world.discovered_scenarios = test_artefacts
+        .iter()
+        .filter(|artefact| artefact.canonical_kind == "test_scenario")
+        .cloned()
+        .collect();
+    world.materialized_links = test_edges;
 }
 
 fn when_test_discovery(
@@ -664,26 +710,33 @@ fn when_linkage_and_tests_query(
         run_linkage_resolution(world);
 
         let artefact_name = &ctx.matches[1].1;
-        let matching_link = world
-            .materialized_links
-            .iter()
-            .find(|link| link.production_artefact_id.contains(artefact_name));
+        let matching_link = world.materialized_links.iter().find(|link| {
+            link.to_artefact_id
+                .as_deref()
+                .is_some_and(|artefact_id| artefact_id.contains(artefact_name))
+        });
 
         if let Some(link) = matching_link {
             let covering_tests: Vec<Value> = world
                 .materialized_links
                 .iter()
-                .filter(|l| l.production_artefact_id == link.production_artefact_id)
+                .filter(|l| l.to_artefact_id == link.to_artefact_id)
                 .map(|l| {
-                    let scenario_name = l
-                        .test_scenario_id
-                        .rsplit(':')
-                        .next()
-                        .unwrap_or(&l.test_scenario_id);
+                    let scenario_name = world
+                        .discovered_scenarios
+                        .iter()
+                        .find(|scenario| scenario.symbol_id == l.from_symbol_id)
+                        .map(|scenario| scenario.name.as_str())
+                        .unwrap_or_else(|| {
+                            l.from_symbol_id
+                                .rsplit(':')
+                                .next()
+                                .unwrap_or(l.from_symbol_id.as_str())
+                        });
                     serde_json::json!({
                         "test_name": scenario_name,
-                        "confidence": l.confidence,
-                        "linkage_status": l.linkage_status,
+                        "confidence": link_confidence(l),
+                        "linkage_status": link_status(l),
                     })
                 })
                 .collect();
@@ -751,7 +804,7 @@ fn then_test_suites_include(
             let actual_count = world
                 .discovered_scenarios
                 .iter()
-                .filter(|s| s.suite_id == suite.suite_id)
+                .filter(|scenario| scenario.parent_symbol_id.as_deref() == Some(&suite.symbol_id))
                 .count();
 
             assert_eq!(
@@ -810,9 +863,11 @@ fn then_direct_links_include(
                 .expect("linkage_status column should exist");
 
             let found = world.materialized_links.iter().any(|link| {
-                link.production_artefact_id.contains(production_name)
-                    && (link.confidence - expected_confidence).abs() < 0.01
-                    && link.linkage_status == *expected_status
+                link.to_artefact_id
+                    .as_deref()
+                    .is_some_and(|artefact_id| artefact_id.contains(production_name))
+                    && (link_confidence(link) - expected_confidence).abs() < 0.01
+                    && link_status(link) == expected_status.as_str()
             });
 
             assert!(
@@ -821,7 +876,13 @@ fn then_direct_links_include(
                 world
                     .materialized_links
                     .iter()
-                    .map(|l| (&l.production_artefact_id, l.confidence, &l.linkage_status))
+                    .map(|l| {
+                        (
+                            l.to_artefact_id.as_deref().unwrap_or("<unresolved>"),
+                            link_confidence(l),
+                            link_status(l).to_string(),
+                        )
+                    })
                     .collect::<Vec<_>>()
             );
         }
@@ -850,9 +911,14 @@ fn then_no_links_to_from(
         let test_name = &ctx.matches[2].1;
 
         let found = world.materialized_links.iter().any(|link| {
-            link.production_artefact_id
-                .contains(production_name.as_str())
-                && link.test_scenario_id.contains(test_name.as_str())
+            link.to_artefact_id
+                .as_deref()
+                .is_some_and(|artefact_id| artefact_id.contains(production_name.as_str()))
+                && world
+                    .discovered_scenarios
+                    .iter()
+                    .find(|scenario| scenario.symbol_id == link.from_symbol_id)
+                    .is_some_and(|scenario| scenario.name.contains(test_name.as_str()))
         });
 
         assert!(
@@ -950,10 +1016,11 @@ fn when_coverage_ingested_and_query(
         run_linkage_resolution(world);
 
         let artefact_name = &ctx.matches[1].1;
-        let matching_link = world
-            .materialized_links
-            .iter()
-            .find(|link| link.production_artefact_id.contains(artefact_name));
+        let matching_link = world.materialized_links.iter().find(|link| {
+            link.to_artefact_id
+                .as_deref()
+                .is_some_and(|artefact_id| artefact_id.contains(artefact_name))
+        });
 
         // Build a synthetic coverage response based on the artefact existence
         if matching_link.is_some() {

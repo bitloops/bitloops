@@ -47,9 +47,8 @@ pub(crate) fn execute(
     }
 
     let mut stats = StructuralMappingStats::default();
-    let mut suites = Vec::new();
-    let mut scenarios = Vec::new();
-    let mut links = Vec::new();
+    let mut test_artefacts = Vec::new();
+    let mut test_edges = Vec::new();
     let mut link_keys = std::collections::HashSet::new();
 
     let mut materialization = MaterializationContext {
@@ -57,9 +56,8 @@ pub(crate) fn execute(
         commit_sha,
         production,
         production_index: &production_index,
-        suites: &mut suites,
-        scenarios: &mut scenarios,
-        links: &mut links,
+        test_artefacts: &mut test_artefacts,
+        test_edges: &mut test_edges,
         link_keys: &mut link_keys,
         stats: &mut stats,
     };
@@ -89,9 +87,8 @@ pub(crate) fn execute(
     }
 
     Ok(StructuralMappingOutput {
-        suites,
-        scenarios,
-        links,
+        test_artefacts,
+        test_edges,
         stats,
         enumeration_status,
         enumeration_notes,

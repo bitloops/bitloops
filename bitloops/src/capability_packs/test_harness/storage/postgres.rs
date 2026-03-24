@@ -19,17 +19,17 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
     ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
-    StageCoveringTestRecord, StageLineCoverageRecord, TestClassificationRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord,
-    TestRunRecord, TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
 use self::helpers::{
     clear_existing_test_discovery_data, get, get_i64, get_opt_i64,
     load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
-    upsert_test_classification, upsert_test_discovery_diagnostic, upsert_test_discovery_run,
-    upsert_test_link, upsert_test_run, upsert_test_scenario, upsert_test_suite,
+    upsert_test_artefact_current, upsert_test_artefact_edge_current, upsert_test_classification,
+    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
 };
 
 pub struct PostgresTestHarnessRepository {
@@ -170,10 +170,13 @@ impl TestHarnessRepository for PostgresTestHarnessRepository {
                 let rows = client
                     .query(
                         r#"
-SELECT ts.scenario_id, ts.path, COALESCE(s.name, ''), ts.name
-FROM test_scenarios ts
-LEFT JOIN test_suites s ON s.suite_id = ts.suite_id
+SELECT ts.symbol_id, ts.path, COALESCE(parent.name, ''), ts.name
+FROM test_artefacts_current ts
+LEFT JOIN test_artefacts_current parent
+  ON parent.repo_id = ts.repo_id
+ AND parent.symbol_id = ts.parent_symbol_id
 WHERE ts.commit_sha = $1
+  AND ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
                         &[&commit_sha],
@@ -204,16 +207,14 @@ ORDER BY ts.path ASC, ts.start_line ASC
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,
-        suites: &[TestSuiteRecord],
-        scenarios: &[TestScenarioRecord],
-        links: &[TestLinkRecord],
+        test_artefacts: &[TestArtefactCurrentRecord],
+        test_edges: &[TestArtefactEdgeCurrentRecord],
         discovery_run: &TestDiscoveryRunRecord,
         diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         let commit_sha = commit_sha.to_string();
-        let suites = suites.to_vec();
-        let scenarios = scenarios.to_vec();
-        let links = links.to_vec();
+        let test_artefacts = test_artefacts.to_vec();
+        let test_edges = test_edges.to_vec();
         let discovery_run = discovery_run.clone();
         let diagnostics = diagnostics.to_vec();
         self.with_client(move |client| {
@@ -228,14 +229,11 @@ ORDER BY ts.path ASC, ts.start_line ASC
                 for diagnostic in diagnostics {
                     upsert_test_discovery_diagnostic(&tx, &diagnostic).await?;
                 }
-                for suite in suites {
-                    upsert_test_suite(&tx, &suite).await?;
+                for artefact in test_artefacts {
+                    upsert_test_artefact_current(&tx, &artefact).await?;
                 }
-                for scenario in scenarios {
-                    upsert_test_scenario(&tx, &scenario).await?;
-                }
-                for link in links {
-                    upsert_test_link(&tx, &link).await?;
+                for edge in test_edges {
+                    upsert_test_artefact_edge_current(&tx, &edge).await?;
                 }
 
                 tx.commit()
@@ -282,7 +280,7 @@ ORDER BY ts.path ASC, ts.start_line ASC
                         r#"
 INSERT INTO coverage_captures (
   capture_id, repo_id, commit_sha, tool, format, scope_kind,
-  subject_test_scenario_id, line_truth, branch_truth, captured_at, status, metadata_json
+  subject_test_symbol_id, line_truth, branch_truth, captured_at, status, metadata_json
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT(capture_id) DO UPDATE SET
   repo_id = excluded.repo_id,
@@ -290,7 +288,7 @@ ON CONFLICT(capture_id) DO UPDATE SET
   tool = excluded.tool,
   format = excluded.format,
   scope_kind = excluded.scope_kind,
-  subject_test_scenario_id = excluded.subject_test_scenario_id,
+  subject_test_symbol_id = excluded.subject_test_symbol_id,
   line_truth = excluded.line_truth,
   branch_truth = excluded.branch_truth,
   captured_at = excluded.captured_at,
@@ -304,7 +302,7 @@ ON CONFLICT(capture_id) DO UPDATE SET
                             &capture.tool,
                             &capture.format.as_str(),
                             &capture.scope_kind.as_str(),
-                            &capture.subject_test_scenario_id,
+                            &capture.subject_test_symbol_id,
                             &(capture.line_truth as i64),
                             &(capture.branch_truth as i64),
                             &capture.captured_at,
@@ -334,16 +332,16 @@ ON CONFLICT(capture_id) DO UPDATE SET
                     tx.execute(
                         r#"
 INSERT INTO coverage_hits (
-  capture_id, production_artefact_id, file_path, line, branch_id, covered, hit_count
+  capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
+ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
   file_path = excluded.file_path,
   covered = excluded.covered,
   hit_count = excluded.hit_count
 "#,
                         &[
                             &hit.capture_id,
-                            &hit.production_artefact_id,
+                            &hit.production_symbol_id,
                             &hit.file_path,
                             &hit.line,
                             &hit.branch_id,
@@ -354,8 +352,8 @@ ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
                     .await
                     .with_context(|| {
                         format!(
-                            "failed inserting coverage hit for capture {} artefact {} line {}",
-                            hit.capture_id, hit.production_artefact_id, hit.line
+                            "failed inserting coverage hit for capture {} symbol {} line {}",
+                            hit.capture_id, hit.production_symbol_id, hit.line
                         )
                     })?;
                 }
@@ -441,12 +439,12 @@ ON CONFLICT(diagnostic_id) DO UPDATE SET
                 let rows = client
                     .query(
                         r#"
-SELECT cc.repo_id, cc.subject_test_scenario_id, ch.production_artefact_id, ch.file_path
+SELECT cc.repo_id, cc.subject_test_symbol_id, ch.production_symbol_id, ch.file_path
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = $1
   AND cc.scope_kind = 'test_scenario'
-  AND cc.subject_test_scenario_id IS NOT NULL
+  AND cc.subject_test_symbol_id IS NOT NULL
   AND ch.covered = 1
 "#,
                         &[&commit_sha],
@@ -458,8 +456,8 @@ WHERE cc.commit_sha = $1
                     HashMap::new();
                 for row in rows {
                     let repo_id: String = get(&row, 0, "repo_id")?;
-                    let test_scenario_id: String = get(&row, 1, "test_scenario_id")?;
-                    let artefact_id: String = get(&row, 2, "artefact_id")?;
+                    let test_symbol_id: String = get(&row, 1, "test_symbol_id")?;
+                    let production_symbol_id: String = get(&row, 2, "production_symbol_id")?;
                     let path: String = get(&row, 3, "artefact_path")?;
 
                     let directory = std::path::Path::new(&path)
@@ -468,14 +466,14 @@ WHERE cc.commit_sha = $1
                         .unwrap_or_default();
 
                     let entry = grouped
-                        .entry(test_scenario_id)
+                        .entry(test_symbol_id)
                         .or_insert_with(|| (repo_id, HashSet::new(), HashSet::new()));
-                    entry.1.insert(artefact_id);
+                    entry.1.insert(production_symbol_id);
                     entry.2.insert(directory);
                 }
 
                 let mut inserted = 0usize;
-                for (test_scenario_id, (repo_id, artefacts, directories)) in grouped {
+                for (test_symbol_id, (repo_id, artefacts, directories)) in grouped {
                     let fan_out = artefacts.len() as i64;
                     if fan_out == 0 {
                         continue;
@@ -483,10 +481,10 @@ WHERE cc.commit_sha = $1
                     let boundary_crossings = directories.len() as i64;
                     let classification = derive_test_classification(fan_out, boundary_crossings);
                     let record = TestClassificationRecord {
-                        classification_id: format!("class:{commit_sha}:{test_scenario_id}"),
+                        classification_id: format!("class:{commit_sha}:{test_symbol_id}"),
                         repo_id,
                         commit_sha: commit_sha.to_string(),
-                        test_scenario_id,
+                        test_symbol_id,
                         classification: classification.to_string(),
                         classification_source: "coverage_derived".to_string(),
                         fan_out,
@@ -617,37 +615,39 @@ LIMIT 1
     fn load_covering_tests(
         &self,
         commit_sha: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Vec<CoveringTestRecord>> {
         let commit_sha = commit_sha.to_string();
-        let production_artefact_id = production_artefact_id.to_string();
+        let production_symbol_id = production_symbol_id.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
                 let rows = client
                     .query(
                         r#"
 SELECT
-  ts.scenario_id,
+  ts.symbol_id,
   ts.symbol_fqn,
   ts.signature,
   ts.path,
-  s.name AS suite_name,
+  parent.name AS suite_name,
   tc.classification,
   tc.classification_source,
   tc.fan_out
-FROM test_links tl
-JOIN test_scenarios ts
-  ON ts.scenario_id = tl.test_scenario_id
-LEFT JOIN test_suites s
-  ON s.suite_id = ts.suite_id
+FROM test_artefact_edges_current te
+JOIN test_artefacts_current ts
+  ON ts.repo_id = te.repo_id
+ AND ts.symbol_id = te.from_symbol_id
+LEFT JOIN test_artefacts_current parent
+  ON parent.repo_id = ts.repo_id
+ AND parent.symbol_id = ts.parent_symbol_id
 LEFT JOIN test_classifications tc
-  ON tc.test_scenario_id = ts.scenario_id
+  ON tc.test_symbol_id = ts.symbol_id
   AND tc.commit_sha = $1
-WHERE tl.commit_sha = $1
-  AND tl.production_artefact_id = $2
+WHERE te.commit_sha = $1
+  AND (te.to_symbol_id = $2 OR te.to_artefact_id = $2)
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
-                        &[&commit_sha, &production_artefact_id],
+                        &[&commit_sha, &production_symbol_id],
                     )
                     .await
                     .context("failed executing covering tests query")?;
@@ -677,10 +677,10 @@ ORDER BY ts.path ASC, ts.start_line ASC
                 let rows = client
                     .query(
                         r#"
-SELECT test_scenario_id, COUNT(DISTINCT production_artefact_id)
-FROM test_links
+SELECT from_symbol_id, COUNT(DISTINCT COALESCE(to_symbol_id, to_symbol_ref))
+FROM test_artefact_edges_current
 WHERE commit_sha = $1
-GROUP BY test_scenario_id
+GROUP BY from_symbol_id
 "#,
                         &[&commit_sha],
                     )
@@ -689,7 +689,7 @@ GROUP BY test_scenario_id
 
                 let mut output = HashMap::new();
                 for row in rows {
-                    output.insert(get(&row, 0, "test_scenario_id")?, get(&row, 1, "fan_out")?);
+                    output.insert(get(&row, 0, "from_symbol_id")?, get(&row, 1, "fan_out")?);
                 }
                 Ok(output)
             })
@@ -715,12 +715,12 @@ GROUP BY test_scenario_id
     fn load_coverage_pair_stats(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
-        artefact_id: &str,
+        test_symbol_id: &str,
+        production_symbol_id: &str,
     ) -> Result<CoveragePairStats> {
         let commit_sha = commit_sha.to_string();
-        let test_scenario_id = test_scenario_id.to_string();
-        let artefact_id = artefact_id.to_string();
+        let test_symbol_id = test_symbol_id.to_string();
+        let production_symbol_id = production_symbol_id.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
                 let row = client
@@ -733,10 +733,10 @@ FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = $1
   AND cc.scope_kind = 'test_scenario'
-  AND cc.subject_test_scenario_id = $2
-  AND ch.production_artefact_id = $3
+  AND cc.subject_test_symbol_id = $2
+  AND ch.production_symbol_id = $3
 "#,
-                        &[&commit_sha, &test_scenario_id, &artefact_id],
+                        &[&commit_sha, &test_symbol_id, &production_symbol_id],
                     )
                     .await
                     .context("failed querying pair coverage stats")?;
@@ -752,10 +752,10 @@ WHERE cc.commit_sha = $1
     fn load_latest_test_run(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
+        test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>> {
         let commit_sha = commit_sha.to_string();
-        let test_scenario_id = test_scenario_id.to_string();
+        let test_symbol_id = test_symbol_id.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
                 let row = client
@@ -763,12 +763,12 @@ WHERE cc.commit_sha = $1
                         r#"
 SELECT status, duration_ms, commit_sha
 FROM test_runs
-WHERE test_scenario_id = $1
+WHERE test_symbol_id = $1
   AND commit_sha = $2
 ORDER BY ran_at DESC
 LIMIT 1
 "#,
-                        &[&test_scenario_id, &commit_sha],
+                        &[&test_symbol_id, &commit_sha],
                     )
                     .await
                     .context("failed querying last run")?;
@@ -788,10 +788,10 @@ LIMIT 1
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Option<CoverageSummaryRecord>> {
         let commit_sha = commit_sha.to_string();
-        let artefact_id = artefact_id.to_string();
+        let production_symbol_id = production_symbol_id.to_string();
         self.with_client(move |client| {
             Box::pin(async move {
                 let line_rows = client
@@ -801,12 +801,12 @@ SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = $1
-  AND ch.production_artefact_id = $2
+  AND ch.production_symbol_id = $2
   AND ch.branch_id = -1
 GROUP BY ch.line
 ORDER BY ch.line
 "#,
-                        &[&commit_sha, &artefact_id],
+                        &[&commit_sha, &production_symbol_id],
                     )
                     .await
                     .context("failed querying line coverage summary")?;
@@ -831,12 +831,12 @@ SELECT
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = $1
-  AND ch.production_artefact_id = $2
+  AND ch.production_symbol_id = $2
   AND ch.branch_id != -1
 GROUP BY ch.line, ch.branch_id
 ORDER BY ch.line, ch.branch_id
 "#,
-                        &[&commit_sha, &artefact_id],
+                        &[&commit_sha, &production_symbol_id],
                     )
                     .await
                     .context("failed querying branch coverage summary")?;
