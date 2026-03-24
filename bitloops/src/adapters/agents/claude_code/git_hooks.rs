@@ -120,13 +120,55 @@ struct HookSpec {
     content: String,
 }
 
+/// Builds a small shell snippet that lets hook-invoked `bitloops` locate
+/// dynamically linked DuckDB runtimes in development test builds.
+fn duckdb_runtime_linker_bootstrap(cmd_prefix: &str) -> String {
+    format!(
+        "# Resolve DuckDB runtime library when using dynamic (non-bundled) builds.\n\
+         _bitloops_add_lib_path() {{\n\
+             _candidate=\"$1\"\n\
+             if [ ! -d \"$_candidate\" ]; then\n\
+                 return 1\n\
+             fi\n\
+             if [ -f \"$_candidate/libduckdb.dylib\" ]; then\n\
+                 case \":${{DYLD_LIBRARY_PATH:-}}:\" in\n\
+                     *\":$_candidate:\"*) ;;\n\
+                     *) export DYLD_LIBRARY_PATH=\"$_candidate${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}\" ;;\n\
+                 esac\n\
+                 return 0\n\
+             fi\n\
+             if [ -f \"$_candidate/libduckdb.so\" ]; then\n\
+                 case \":${{LD_LIBRARY_PATH:-}}:\" in\n\
+                     *\":$_candidate:\"*) ;;\n\
+                     *) export LD_LIBRARY_PATH=\"$_candidate${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\" ;;\n\
+                 esac\n\
+                 return 0\n\
+             fi\n\
+             return 1\n\
+         }}\n\
+         _bitloops_bin=\"$(command -v \"{cmd_prefix}\" 2>/dev/null || true)\"\n\
+         if [ -n \"$_bitloops_bin\" ]; then\n\
+             _bitloops_bin_dir=\"$(cd \"$(dirname \"$_bitloops_bin\")\" && pwd)\"\n\
+             if ! _bitloops_add_lib_path \"$_bitloops_bin_dir/deps\"; then\n\
+                 if ! _bitloops_add_lib_path \"$_bitloops_bin_dir/../deps\"; then\n\
+                     for _candidate in \"$_bitloops_bin_dir\"/../duckdb-download/*/*; do\n\
+                         _bitloops_add_lib_path \"$_candidate\" && break\n\
+                     done\n\
+                 fi\n\
+             fi\n\
+         fi\n"
+    )
+}
+
 /// Builds the content of all 4 hook scripts.
 fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
+    let runtime_bootstrap = duckdb_runtime_linker_bootstrap(cmd_prefix);
     vec![
         HookSpec {
             name: "prepare-commit-msg",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  {cmd_prefix} hooks git prepare-commit-msg \"$1\" \"$2\" 2>/dev/null || true\n"
             ),
         },
@@ -134,6 +176,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "commit-msg",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Commit-msg: `bitloops hooks git commit-msg` (default manual-commit: no-op)\n\
                  {cmd_prefix} hooks git commit-msg \"$1\" || exit 1\n"
             ),
@@ -142,6 +185,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "post-commit",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Post-commit: session/checkpoint bookkeeping; failures must not block git\n\
                  {cmd_prefix} hooks git post-commit 2>/dev/null || true\n"
             ),
@@ -150,6 +194,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "pre-push",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Pre-push: `bitloops hooks git pre-push` (default manual-commit: no-op)\n\
                  # $1 is the remote name (e.g., \"origin\")\n\
                  {cmd_prefix} hooks git pre-push \"$1\" || true\n"
@@ -204,6 +249,13 @@ fn detect_hook_managers(repo_root: &Path) -> Vec<HookManager> {
 
 /// Returns the first non-comment/non-shebang command line from hook content.
 fn extract_command_line(hook_content: &str) -> String {
+    for line in hook_content.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains(" hooks git ") {
+            return trimmed.to_string();
+        }
+    }
+
     for line in hook_content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {

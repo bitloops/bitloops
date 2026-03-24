@@ -55,7 +55,7 @@ impl MockServer {
         let response_body = body.to_string();
 
         let handle = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_millis(250);
+            let deadline = Instant::now() + Duration::from_millis(1000);
 
             loop {
                 match listener.accept() {
