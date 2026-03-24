@@ -13,9 +13,10 @@ How to get your code into Bitloops.
 # Create a branch from main
 git checkout -b your-feature main
 
-# Make your changes, then verify
+# Make your changes, then verify (from bitloops/)
+cd bitloops
 cargo check
-cargo test-all
+./scripts/test-summary.sh
 cargo fmt
 cargo clippy
 ```

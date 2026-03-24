@@ -12,36 +12,58 @@ on:
 permissions:
   contents: read
 
+# Parallel jobs: GitHub schedules each on an available self-hosted runner (use multiple runners for wall time).
+# shared-key shares dependency cache across jobs. Tests run once inside the coverage job (llvm-cov), not duplicated.
+
 jobs:
-  linux:
-    name: Linux quality gate
+  rust-file-size:
+    name: Rust file size
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, llvm-tools-preview
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: bitloops
-
       - name: Check Rust file size limits
         run: bash scripts/check-rust-file-size.sh
 
-      - name: Format
+  fmt:
+    name: Format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt
         run: cargo fmt --all --check --manifest-path bitloops/Cargo.toml
 
-      - name: Clippy
+  clippy:
+    name: Clippy
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-ci
+      - name: cargo clippy
         run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --all-features -- -D warnings
 
-      - name: Tests
-        run: cargo test-all --manifest-path bitloops/Cargo.toml
-
-      - name: Coverage baseline
+  coverage:
+    name: Coverage baseline
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-ci
+      - name: coverage-baseline-check
         working-directory: bitloops
         run: bash scripts/coverage-baseline-check.sh check

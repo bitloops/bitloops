@@ -32,7 +32,7 @@ There are no repo-enforced git hooks. To match what runs on pull requests to `de
 
 ```bash
 bash scripts/check-dev.sh           # file-size, fmt --check, clippy
-bash scripts/check-dev.sh --test   # also full test suite (cargo test-all)
+bash scripts/check-dev.sh --test   # also ./scripts/test-summary.sh (full suite + combined summaries)
 bash scripts/check-dev.sh --full   # also coverage baseline check
 ```
 
@@ -43,25 +43,21 @@ If you previously pointed `core.hooksPath` at this repository, run `bash scripts
 Run from the `bitloops/` directory:
 
 ```bash
-# Test type aliases
-# - core: lib crate tests (domain/application/core logic)
-cargo test-core
-
-# - cli: bin crate tests (CLI adapter/command wiring)
-cargo test-cli
-
-# - integration: tests/*.rs (includes e2e-style scenarios)
-cargo test-integration
-
-# - all: full suite
-cargo test-all
-
-# Run tests and print one combined summary block at the end
+# Full suite (recommended): one command, combined “test result:” summaries at the end
 ./scripts/test-summary.sh
+# Equivalent without the script:
+cargo test --no-fail-fast
 
-# Run tests with coverage (single run) and print coverage summary at the end
+# Optional cargo aliases (see .cargo/config.toml): test-core, test-cli, test-integration, test-all
+# Those aliases are NOT visible if you run cargo from the git repo root with
+# `--manifest-path bitloops/Cargo.toml` — use `cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast`
+# or `working-directory: bitloops` in CI.
+
+# Tests with coverage (single llvm-cov run) + coverage summary tables
 ./scripts/test-summary.sh --coverage
-# (prints overall lines/functions/branches plus lowest-coverage files)
+
+# HTML + LCOV reports (separate from the baseline gate)
+./scripts/test-coverage.sh baseline
 
 # Coverage setup (once)
 brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)

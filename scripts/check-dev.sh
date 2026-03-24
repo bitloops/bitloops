@@ -9,8 +9,8 @@ usage() {
 Usage: bash scripts/check-dev.sh [--test] [--full]
 
   Default: Rust file-size check, cargo fmt --check, cargo clippy.
-  --test   Also run the full test suite (cargo test-all).
-  --full   Implies --test; also run coverage baseline check (cargo-llvm-cov).
+  --test   Also run the full suite via bitloops/scripts/test-summary.sh (cargo test --no-fail-fast + combined summaries).
+  --full   Run coverage baseline check only (llvm-cov runs the full test suite once; no duplicate plain test run).
 EOF
 }
 
@@ -39,17 +39,13 @@ for arg in "$@"; do
   esac
 done
 
-if [[ "$RUN_FULL" == 1 ]]; then
-  RUN_TEST=1
-fi
-
 bash "$ROOT/scripts/check-rust-file-size.sh" "$BL"
 
 cargo fmt --all --check --manifest-path "$BL/Cargo.toml"
 cargo clippy --manifest-path "$BL/Cargo.toml" --all-targets --all-features -- -D warnings
 
-if [[ "$RUN_TEST" == 1 ]]; then
-  cargo test-all --manifest-path "$BL/Cargo.toml"
+if [[ "$RUN_TEST" == 1 ]] && [[ "$RUN_FULL" == 0 ]]; then
+  (cd "$BL" && bash scripts/test-summary.sh)
 fi
 
 if [[ "$RUN_FULL" == 1 ]]; then

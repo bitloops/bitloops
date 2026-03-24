@@ -33,7 +33,7 @@ generate_reports() {
 
 run_baseline() {
   cargo llvm-cov clean --workspace
-  cargo llvm-cov --workspace --all-features --all-targets --html --output-dir target/llvm-cov-html
+  cargo llvm-cov --workspace --all-features --all-targets --no-fail-fast --html --output-dir target/llvm-cov-html
   cargo llvm-cov report --lcov --output-path target/llvm-cov.info
   echo "Coverage reports generated:"
   echo "  HTML: ${PROJECT_ROOT}/target/llvm-cov-html/index.html"
