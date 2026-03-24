@@ -67,9 +67,8 @@ Mirrors `artefacts_current`. Primary key: `(repo_id, symbol_id)`.
 | `docstring` | TEXT | |
 | `content_hash` | TEXT | For skip-if-unchanged optimization (Phase 2) |
 | `discovery_source` | TEXT NOT NULL | `'source'`, `'macro_generated'`, `'doctest'`, `'enumeration'` |
-| `revision_kind` | TEXT NOT NULL DEFAULT 'commit' | |
-| `revision_id` | TEXT NOT NULL DEFAULT '' | |
-| `temp_checkpoint_id` | INTEGER | |
+| `revision_kind` | TEXT NOT NULL DEFAULT 'commit' | `'commit'` or `'temporary'` — tracks provenance |
+| `revision_id` | TEXT NOT NULL DEFAULT '' | Specific revision identifier (e.g. commit SHA) |
 | `updated_at` | TEXT DEFAULT (datetime('now')) | |
 
 Indexes:
@@ -98,9 +97,8 @@ Mirrors `artefact_edges_current`. Links test symbols to production symbols.
 | `start_line` | INTEGER | |
 | `end_line` | INTEGER | |
 | `metadata` | TEXT DEFAULT '{}' | Evidence JSON, confidence, link_source, linkage_status |
-| `revision_kind` | TEXT NOT NULL DEFAULT 'commit' | Mirrors production edge pattern |
+| `revision_kind` | TEXT NOT NULL DEFAULT 'commit' | `'commit'` or `'temporary'` |
 | `revision_id` | TEXT NOT NULL DEFAULT '' | |
-| `temp_checkpoint_id` | INTEGER | |
 | `updated_at` | TEXT DEFAULT (datetime('now')) | |
 
 Constraints:
@@ -204,7 +202,6 @@ pub struct TestArtefactCurrentRecord {
     pub discovery_source: String,
     pub revision_kind: String,
     pub revision_id: String,
-    pub temp_checkpoint_id: Option<i64>,
 }
 
 pub struct TestArtefactEdgeCurrentRecord {
@@ -225,7 +222,6 @@ pub struct TestArtefactEdgeCurrentRecord {
     pub metadata: String,
     pub revision_kind: String,
     pub revision_id: String,
-    pub temp_checkpoint_id: Option<i64>,
 }
 ```
 
