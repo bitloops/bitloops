@@ -154,6 +154,56 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
 }
 
 #[test]
+fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_classifications(
+) -> Result<()> {
+    let Some(postgres) = TempPostgres::start()? else {
+        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
+        return Ok(());
+    };
+
+    let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
+    initialise_postgres_repository(&repository)?;
+    seed_production_state(&repository)?;
+
+    repository.replace_test_discovery(
+        COMMIT_SHA,
+        &stale_test_artefacts(),
+        &stale_test_edges(),
+        &stale_discovery_run(),
+        &[stale_diagnostic()],
+    )?;
+    repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
+    repository.insert_coverage_capture(&coverage_capture_record())?;
+    repository.insert_coverage_hits(&coverage_hits())?;
+    assert_eq!(repository.rebuild_classifications_from_coverage(COMMIT_SHA)?, 1);
+
+    assert_eq!(table_count(&repository, "test_runs")?, 1);
+    assert_eq!(table_count(&repository, "coverage_captures")?, 1);
+    assert_eq!(table_count(&repository, "coverage_hits")?, 6);
+    assert_eq!(table_count(&repository, "test_classifications")?, 1);
+
+    repository.replace_test_discovery(
+        COMMIT_SHA,
+        &test_artefacts(),
+        &test_edges(),
+        &discovery_run_record(),
+        &[diagnostic_record()],
+    )?;
+
+    assert_eq!(table_count(&repository, "test_runs")?, 0);
+    assert_eq!(table_count(&repository, "coverage_captures")?, 0);
+    assert_eq!(table_count(&repository, "coverage_hits")?, 0);
+    assert_eq!(table_count(&repository, "test_classifications")?, 0);
+    assert_eq!(table_count(&repository, "test_artefacts_current")?, 2);
+    assert_eq!(table_count(&repository, "test_artefact_edges_current")?, 1);
+
+    let scenarios = repository.load_test_scenarios(COMMIT_SHA)?;
+    assert_eq!(scenarios.len(), 1);
+    assert_eq!(scenarios[0].scenario_id, SCENARIO_ID);
+    Ok(())
+}
+
+#[test]
 fn postgres_repository_insert_coverage_diagnostics_empty_slice_is_noop() -> Result<()> {
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
