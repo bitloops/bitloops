@@ -887,4 +887,40 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn is_valid_artefact_id_enforces_lowercase_uuid_shape() {
+        assert!(is_valid_artefact_id("aaaaaaaa-1111-2222-3333-444444444444"));
+        assert!(!is_valid_artefact_id(
+            "AAAAAAAA-1111-2222-3333-444444444444"
+        ));
+        assert!(!is_valid_artefact_id("bbbbbbbb-1111-2222-3333-44444444444"));
+        assert!(!is_valid_artefact_id(
+            "bbbbbbbb-1111-2222-3333-4444444444444"
+        ));
+    }
+
+    #[test]
+    fn resolve_commit_sha_rejects_empty_and_invalid_refs() -> Result<()> {
+        let temp = TempDir::new()?;
+        let (ctx, _) = build_context(&temp)?;
+
+        let empty_err =
+            resolve_commit_sha(ctx.repo_root(), "   ").expect_err("whitespace ref must fail");
+        assert!(
+            empty_err
+                .to_string()
+                .contains("commit sha must not be empty")
+        );
+
+        let invalid_err = resolve_commit_sha(ctx.repo_root(), "not-a-real-rev")
+            .expect_err("invalid rev should fail");
+        assert!(
+            invalid_err
+                .to_string()
+                .contains("validating commit `not-a-real-rev`")
+        );
+
+        Ok(())
+    }
 }

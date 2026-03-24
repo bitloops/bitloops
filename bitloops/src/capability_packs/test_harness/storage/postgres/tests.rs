@@ -211,6 +211,59 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn postgres_repository_insert_coverage_diagnostics_empty_slice_is_noop() -> Result<()> {
+    let Some(postgres) = TempPostgres::start()? else {
+        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
+        return Ok(());
+    };
+
+    let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
+    initialise_postgres_repository(&repository)?;
+    seed_production_state(&repository)?;
+
+    repository.insert_coverage_diagnostics(&[])?;
+    assert_eq!(table_count(&repository, "coverage_diagnostics")?, 0);
+    Ok(())
+}
+
+#[test]
+fn postgres_repository_rebuild_classifications_returns_zero_without_covered_hits() -> Result<()> {
+    let Some(postgres) = TempPostgres::start()? else {
+        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
+        return Ok(());
+    };
+
+    let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
+    initialise_postgres_repository(&repository)?;
+    seed_production_state(&repository)?;
+
+    let inserted = repository.rebuild_classifications_from_coverage(COMMIT_SHA)?;
+    assert_eq!(inserted, 0);
+    assert_eq!(table_count(&repository, "test_classifications")?, 0);
+    Ok(())
+}
+
+#[test]
+fn postgres_repository_load_artefacts_for_file_lines_supports_exact_and_suffix_match() -> Result<()>
+{
+    let Some(postgres) = TempPostgres::start()? else {
+        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
+        return Ok(());
+    };
+
+    let repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
+    initialise_postgres_repository(&repository)?;
+    seed_production_state(&repository)?;
+
+    let exact = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER)?;
+    assert_eq!(exact, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
+
+    let suffix = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
+    assert_eq!(suffix, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
+    Ok(())
+}
+
 fn initialise_postgres_repository(repository: &PostgresTestHarnessRepository) -> Result<()> {
     repository.postgres.execute_batch(devql_schema::sql())?;
     repository.initialise_schema()?;
