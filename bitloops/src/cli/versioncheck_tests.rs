@@ -57,7 +57,9 @@ impl MockServer {
         let response_body = body.to_string();
 
         let handle = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_millis(1000);
+            // CI can be heavily contended; keep the mock listener alive long enough
+            // for the test thread to reach the outbound request path.
+            let deadline = Instant::now() + Duration::from_secs(10);
 
             loop {
                 match listener.accept() {
