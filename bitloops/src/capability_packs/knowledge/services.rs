@@ -174,9 +174,14 @@ impl KnowledgeIngestionService {
         let mut inserted_knowledge_item_version = None;
 
         if existing_knowledge_item_version.is_none() {
-            let payload_key =
-                knowledge_payload_key(&ctx.repo().repo_id, &item_id, &derived_knowledge_item_version_id);
-            let payload_ref = ctx.blob_payloads().write_payload(&payload_key, &payload_bytes)?;
+            let payload_key = knowledge_payload_key(
+                &ctx.repo().repo_id,
+                &item_id,
+                &derived_knowledge_item_version_id,
+            );
+            let payload_ref = ctx
+                .blob_payloads()
+                .write_payload(&payload_key, &payload_bytes)?;
 
             let document_row = KnowledgeDocumentVersionRow {
                 knowledge_item_version_id: derived_knowledge_item_version_id.clone(),

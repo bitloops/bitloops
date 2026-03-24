@@ -56,7 +56,11 @@ impl SqliteKnowledgeRelationalRepository {
         })
     }
 
-    pub fn persist_ingestion(&self, source: &KnowledgeSourceRow, item: &KnowledgeItemRow) -> Result<()> {
+    pub fn persist_ingestion(
+        &self,
+        source: &KnowledgeSourceRow,
+        item: &KnowledgeItemRow,
+    ) -> Result<()> {
         self.sqlite.with_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
                 .context("starting SQLite knowledge transaction")?;
@@ -81,7 +85,10 @@ impl SqliteKnowledgeRelationalRepository {
         })
     }
 
-    pub fn insert_relation_assertion(&self, relation: &KnowledgeRelationAssertionRow) -> Result<()> {
+    pub fn insert_relation_assertion(
+        &self,
+        relation: &KnowledgeRelationAssertionRow,
+    ) -> Result<()> {
         self.sqlite
             .with_connection(|conn| insert_relation_assertion_with_conn(conn, relation))
     }
@@ -138,7 +145,10 @@ impl SqliteKnowledgeRelationalRepository {
         })
     }
 
-    pub fn find_source_by_id(&self, knowledge_source_id: &str) -> Result<Option<KnowledgeSourceRow>> {
+    pub fn find_source_by_id(
+        &self,
+        knowledge_source_id: &str,
+    ) -> Result<Option<KnowledgeSourceRow>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
                 "SELECT knowledge_source_id, provider, source_kind, canonical_external_id, canonical_url, provenance_json
@@ -162,7 +172,11 @@ impl SqliteKnowledgeRelationalRepository {
         })
     }
 
-    pub fn list_items_for_repo(&self, repo_id: &str, limit: usize) -> Result<Vec<KnowledgeItemRow>> {
+    pub fn list_items_for_repo(
+        &self,
+        repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<KnowledgeItemRow>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -199,7 +213,11 @@ impl KnowledgeRelationalRepository for SqliteKnowledgeRelationalRepository {
         SqliteKnowledgeRelationalRepository::initialise_schema(self)
     }
 
-    fn persist_ingestion(&self, source: &KnowledgeSourceRow, item: &KnowledgeItemRow) -> Result<()> {
+    fn persist_ingestion(
+        &self,
+        source: &KnowledgeSourceRow,
+        item: &KnowledgeItemRow,
+    ) -> Result<()> {
         SqliteKnowledgeRelationalRepository::persist_ingestion(self, source, item)
     }
 

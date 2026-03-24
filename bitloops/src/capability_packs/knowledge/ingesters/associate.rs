@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::host::capability_host::{
-    KnowledgeIngestContext, IngestRequest, IngestResult, KnowledgeIngesterHandler,
+    IngestRequest, IngestResult, KnowledgeIngestContext, KnowledgeIngesterHandler,
 };
 
 use super::super::services::KnowledgeServices;

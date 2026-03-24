@@ -12,6 +12,9 @@ use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
 use crate::capability_packs::knowledge::services::KnowledgeServices;
+use crate::capability_packs::knowledge::storage::{
+    KnowledgeDocumentRepository, KnowledgeRelationalRepository, SqliteKnowledgeRelationalRepository,
+};
 use crate::capability_packs::knowledge::url::parse_knowledge_url;
 use crate::capability_packs::knowledge::{
     AssociateKnowledgeResult, IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeProvider,
@@ -19,10 +22,6 @@ use crate::capability_packs::knowledge::{
 use crate::capability_packs::knowledge::{
     storage::{BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore},
     types::KnowledgePayloadData,
-};
-use crate::capability_packs::knowledge::storage::{
-    KnowledgeDocumentRepository, KnowledgeRelationalRepository,
-    SqliteKnowledgeRelationalRepository,
 };
 use crate::config::{
     AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, ProviderConfig,

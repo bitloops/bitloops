@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 
 use crate::host::devql::knowledge_schema_sql_duckdb;
 
-use super::models::{KnowledgeDocumentVersionRow, ensure_parent_dir};
 use super::document_repository::KnowledgeDocumentRepository;
+use super::models::{KnowledgeDocumentVersionRow, ensure_parent_dir};
 
 pub struct DuckdbKnowledgeDocumentStore {
     path: std::path::PathBuf,

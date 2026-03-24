@@ -112,7 +112,10 @@ mod tests {
         let store =
             BlobKnowledgePayloadStore::from_backend_config(&repo_root, &backends).expect("store");
         let payload = store
-            .write_payload("knowledge/repo-1/item-1/version-1/payload.json", b"{\"ok\":true}")
+            .write_payload(
+                "knowledge/repo-1/item-1/version-1/payload.json",
+                b"{\"ok\":true}",
+            )
             .expect("write payload");
 
         assert!(store.payload_exists(&payload.storage_path).expect("exists"));

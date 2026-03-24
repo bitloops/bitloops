@@ -362,8 +362,9 @@ mod tests {
     fn make_migration_context() -> MigrationContext {
         let temp = make_repo_root();
         let repo_root = prepare_repo_root(&temp);
-        let sqlite_pool = SqliteConnectionPool::connect(paths::default_relational_db_path(&repo_root))
-            .expect("sqlite pool");
+        let sqlite_pool =
+            SqliteConnectionPool::connect(paths::default_relational_db_path(&repo_root))
+                .expect("sqlite pool");
         let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
         let documents =
             DuckdbKnowledgeDocumentStore::new(paths::default_events_db_path(&repo_root));

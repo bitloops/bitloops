@@ -333,11 +333,11 @@ mod tests {
         KnowledgeRelationAssertionRow, KnowledgeRelationalRepository, KnowledgeSourceRow,
     };
     use crate::config::ProviderConfig;
+    use crate::host::capability_host::CapabilityIngestContext;
     use crate::host::capability_host::config_view::CapabilityConfigView;
     use crate::host::capability_host::gateways::{
         BlobPayloadGateway, BlobPayloadRef, ProvenanceBuilder, RelationalGateway,
     };
-    use crate::host::capability_host::CapabilityIngestContext;
     use crate::host::devql::RepoIdentity;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
