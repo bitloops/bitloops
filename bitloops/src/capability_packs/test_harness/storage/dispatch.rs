@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 
 use super::{
     PostgresTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessCoverageGateway,
-    TestHarnessQueryRepository, TestHarnessRepository,
+    TestHarnessQueryRepository, TestHarnessRepository, init_test_domain_database,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::models::{
@@ -15,8 +15,6 @@ use crate::models::{
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
 };
-use crate::storage::init::init_test_domain_database;
-
 pub enum BitloopsTestHarnessRepository {
     Sqlite(SqliteTestHarnessRepository),
     Postgres(PostgresTestHarnessRepository),

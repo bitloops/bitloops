@@ -2,9 +2,11 @@
 // records and delegate raw SQL and transaction details to an implementation.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use rusqlite::Connection;
 
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
@@ -124,6 +126,37 @@ pub trait TestHarnessQueryRepository {
 pub use dispatch::{BitloopsTestHarnessRepository, init_schema_for_repo, open_repository_for_repo};
 pub use postgres::PostgresTestHarnessRepository;
 pub use sqlite::SqliteTestHarnessRepository;
+
+pub fn init_test_domain_database(db_path: &Path) -> Result<()> {
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for db path {}",
+                db_path.display()
+            )
+        })?;
+    }
+
+    let conn = Connection::open(db_path).with_context(|| {
+        format!(
+            "failed to open or create sqlite database at {}",
+            db_path.display()
+        )
+    })?;
+
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .context("failed to enable foreign keys")?;
+    conn.execute_batch(schema::sqlite_test_domain_schema_sql())
+        .context("failed to create test-harness test-domain schema")?;
+
+    println!(
+        "test-harness test-domain schema initialized at {}",
+        db_path.display()
+    );
+    Ok(())
+}
 
 pub fn open_sqlite_repository(db_path: &Path) -> Result<SqliteTestHarnessRepository> {
     SqliteTestHarnessRepository::open_existing(db_path)
