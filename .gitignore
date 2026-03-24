@@ -32,3 +32,5 @@ ref/
 .cursor/
 .claude/
 bitloops/.fastembed_cache
+
+docs/superpowers
