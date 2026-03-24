@@ -23,14 +23,14 @@ flowchart TD
 
 ## Responsibilities by module
 
-| Module | Responsibility |
-| --- | --- |
-| `host/devql` | Composition root for DevQL ingest, init, query, language-pack selection, and capability-pack reporting. |
-| `host/capability_host` | Executable capability-pack runtime, invocation policy, migrations, health checks, and runtime contexts. |
-| `host/extension_host` | Descriptor registry for language packs and extension capability packs, plus compatibility, readiness, and diagnostics. |
-| `host/hooks` | Agent and Git hook dispatch plus shared hook runtime. |
-| `host/checkpoints` | Session state machine, strategies, transcript parsing, checkpoint storage, and history. |
-| `host/validation`, `host/db_status` | Validation and backend-status helpers used by higher layers. |
+| Module                              | Responsibility                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `host/devql`                        | Composition root for DevQL ingest, init, query, language-pack selection, and capability-pack reporting.                |
+| `host/capability_host`              | Executable capability-pack runtime, invocation policy, migrations, health checks, and runtime contexts.                |
+| `host/extension_host`               | Descriptor registry for language packs and extension capability packs, plus compatibility, readiness, and diagnostics. |
+| `host/hooks`                        | Agent and Git hook dispatch plus shared hook runtime.                                                                  |
+| `host/checkpoints`                  | Session state machine, strategies, transcript parsing, checkpoint storage, and history.                                |
+| `host/validation`, `host/db_status` | Validation and backend-status helpers used by higher layers.                                                           |
 
 ## `DevqlCapabilityHost`: executable pack runtime
 
@@ -42,11 +42,15 @@ The main contract is defined by:
 
 - `CapabilityPack`
 - `CapabilityRegistrar`
-- `StageHandler`
-- `IngesterHandler`
+- `StageHandler` and `IngesterHandler` (core/non-knowledge)
+- `KnowledgeStageHandler` and `KnowledgeIngesterHandler` (knowledge)
 - `CapabilityExecutionContext`
 - `CapabilityIngestContext`
 - `CapabilityMigrationContext`
+- `KnowledgeExecutionContext`
+- `KnowledgeIngestContext`
+- `KnowledgeMigrationContext`
+- `MigrationRunner::Core` and `MigrationRunner::Knowledge`
 - `CapabilityHealthContext`
 
 ### Main runtime object
@@ -69,8 +73,9 @@ The main contract is defined by:
 
 - repo identity and repo root
 - merged config root
-- knowledge relational store
-- knowledge document store
+- host relational gateway
+- knowledge relational repository
+- knowledge document repository
 - blob payload store
 - connector registry
 - provenance builder
@@ -89,6 +94,11 @@ This is how packs access storage and connectors without opening their own infras
 - cross-pack grants for registered-stage composition
 
 This means the host, not the pack, decides wall-clock limits and cross-pack access.
+
+Migration execution is also host-owned and typed:
+
+- `MigrationRunner::Core` receives `CapabilityMigrationContext`
+- `MigrationRunner::Knowledge` receives `KnowledgeMigrationContext`
 
 ### Reporting
 

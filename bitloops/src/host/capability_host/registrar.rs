@@ -2,11 +2,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
+use super::contexts::{
+    CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
+    KnowledgeIngestContext,
+};
 use super::descriptor::CapabilityDescriptor;
 use super::health::CapabilityHealthCheck;
 use super::migrations::CapabilityMigration;
@@ -32,6 +35,17 @@ pub trait CapabilityRegistrar {
 
     fn register_ingester(&mut self, ingester: IngesterRegistration) -> Result<()>;
 
+    fn register_knowledge_stage(&mut self, _stage: KnowledgeStageRegistration) -> Result<()> {
+        bail!("knowledge stage registration is not supported by this registrar")
+    }
+
+    fn register_knowledge_ingester(
+        &mut self,
+        _ingester: KnowledgeIngesterRegistration,
+    ) -> Result<()> {
+        bail!("knowledge ingester registration is not supported by this registrar")
+    }
+
     fn register_schema_module(&mut self, module: SchemaModule) -> Result<()>;
 
     fn register_query_examples(&mut self, examples: &'static [QueryExample]) -> Result<()>;
@@ -50,6 +64,22 @@ pub trait IngesterHandler: Send + Sync {
         &'a self,
         request: IngestRequest,
         ctx: &'a mut dyn CapabilityIngestContext,
+    ) -> BoxFuture<'a, Result<IngestResult>>;
+}
+
+pub trait KnowledgeStageHandler: Send + Sync {
+    fn execute<'a>(
+        &'a self,
+        request: StageRequest,
+        ctx: &'a mut dyn KnowledgeExecutionContext,
+    ) -> BoxFuture<'a, Result<StageResponse>>;
+}
+
+pub trait KnowledgeIngesterHandler: Send + Sync {
+    fn ingest<'a>(
+        &'a self,
+        request: IngestRequest,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> BoxFuture<'a, Result<IngestResult>>;
 }
 
@@ -203,6 +233,48 @@ impl IngesterRegistration {
     }
 }
 
+#[derive(Clone)]
+pub struct KnowledgeStageRegistration {
+    pub capability_id: &'static str,
+    pub stage_name: &'static str,
+    pub handler: Arc<dyn KnowledgeStageHandler>,
+}
+
+impl KnowledgeStageRegistration {
+    pub fn new(
+        capability_id: &'static str,
+        stage_name: &'static str,
+        handler: Arc<dyn KnowledgeStageHandler>,
+    ) -> Self {
+        Self {
+            capability_id,
+            stage_name,
+            handler,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct KnowledgeIngesterRegistration {
+    pub capability_id: &'static str,
+    pub ingester_name: &'static str,
+    pub handler: Arc<dyn KnowledgeIngesterHandler>,
+}
+
+impl KnowledgeIngesterRegistration {
+    pub fn new(
+        capability_id: &'static str,
+        ingester_name: &'static str,
+        handler: Arc<dyn KnowledgeIngesterHandler>,
+    ) -> Self {
+        Self {
+            capability_id,
+            ingester_name,
+            handler,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +364,28 @@ mod tests {
             }
         }
 
+        struct DummyKnowledgeStageHandler;
+        impl KnowledgeStageHandler for DummyKnowledgeStageHandler {
+            fn execute<'a>(
+                &'a self,
+                _request: StageRequest,
+                _ctx: &'a mut dyn KnowledgeExecutionContext,
+            ) -> BoxFuture<'a, Result<StageResponse>> {
+                Box::pin(async move { Ok(StageResponse::new(json!({}), "")) })
+            }
+        }
+
+        struct DummyKnowledgeIngesterHandler;
+        impl KnowledgeIngesterHandler for DummyKnowledgeIngesterHandler {
+            fn ingest<'a>(
+                &'a self,
+                _request: IngestRequest,
+                _ctx: &'a mut dyn KnowledgeIngestContext,
+            ) -> BoxFuture<'a, Result<IngestResult>> {
+                Box::pin(async move { Ok(IngestResult::new(json!({}), "")) })
+            }
+        }
+
         let stage =
             StageRegistration::new("knowledge", "knowledge.stage", Arc::new(DummyStageHandler));
         let ingester = IngesterRegistration::new(
@@ -299,10 +393,24 @@ mod tests {
             "knowledge.ingest",
             Arc::new(DummyIngesterHandler),
         );
+        let knowledge_stage = KnowledgeStageRegistration::new(
+            "knowledge",
+            "knowledge.stage",
+            Arc::new(DummyKnowledgeStageHandler),
+        );
+        let knowledge_ingester = KnowledgeIngesterRegistration::new(
+            "knowledge",
+            "knowledge.ingest",
+            Arc::new(DummyKnowledgeIngesterHandler),
+        );
 
         assert_eq!(stage.capability_id, "knowledge");
         assert_eq!(stage.stage_name, "knowledge.stage");
         assert_eq!(ingester.capability_id, "knowledge");
         assert_eq!(ingester.ingester_name, "knowledge.ingest");
+        assert_eq!(knowledge_stage.capability_id, "knowledge");
+        assert_eq!(knowledge_stage.stage_name, "knowledge.stage");
+        assert_eq!(knowledge_ingester.capability_id, "knowledge");
+        assert_eq!(knowledge_ingester.ingester_name, "knowledge.ingest");
     }
 }

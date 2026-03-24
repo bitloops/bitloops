@@ -18,7 +18,8 @@ pub use composition::{
 pub use config_view::CapabilityConfigView;
 pub use contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
-    CapabilityMigrationContext,
+    CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
+    KnowledgeMigrationContext,
 };
 pub use descriptor::{CapabilityDependency, CapabilityDescriptor};
 pub use diagnostics::{
@@ -33,6 +34,7 @@ pub use policy::{
 };
 pub use registrar::{
     BoxFuture, CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult, IngesterHandler,
-    IngesterRegistration, QueryExample, SchemaModule, StageHandler, StageRegistration,
-    StageRequest, StageResponse,
+    IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
+    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
+    StageRegistration, StageRequest, StageResponse,
 };

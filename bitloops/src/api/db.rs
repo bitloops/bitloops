@@ -648,3 +648,117 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
         pools,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn ok_health() -> BackendHealth {
+        BackendHealth::ok("ok")
+    }
+
+    fn skip_health() -> BackendHealth {
+        BackendHealth::skip("skip")
+    }
+
+    fn fail_health() -> BackendHealth {
+        BackendHealth::fail("fail")
+    }
+
+    #[test]
+    fn backend_health_status_label_ok_skip_fail() {
+        assert_eq!(ok_health().status_label(), "OK");
+        assert_eq!(skip_health().status_label(), "SKIP");
+        assert_eq!(fail_health().status_label(), "FAIL");
+    }
+
+    #[test]
+    fn dashboard_health_has_failures_true_when_relational_fail() {
+        let health = DashboardDbHealth::with_compat_fields(fail_health(), ok_health(), true, true);
+        assert!(health.has_failures());
+    }
+
+    #[test]
+    fn dashboard_health_has_failures_true_when_events_fail() {
+        let health = DashboardDbHealth::with_compat_fields(ok_health(), fail_health(), true, true);
+        assert!(health.has_failures());
+    }
+
+    #[test]
+    fn dashboard_health_has_failures_false_when_only_skip_or_ok() {
+        let health = DashboardDbHealth::with_compat_fields(ok_health(), skip_health(), true, false);
+        assert!(!health.has_failures());
+    }
+
+    #[test]
+    fn ensure_sqlite_file_exists_missing_file_errors_with_guidance() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.sqlite");
+
+        let err = ensure_sqlite_file_exists(&missing).expect_err("missing sqlite file must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("SQLite database file not found"));
+        assert!(msg.contains("bitloops init"));
+    }
+
+    #[test]
+    fn ensure_duckdb_file_exists_missing_file_errors_with_guidance() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.duckdb");
+
+        let err = ensure_duckdb_file_exists(&missing).expect_err("missing duckdb file must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("DuckDB database file not found"));
+        assert!(msg.contains("bitloops init"));
+    }
+
+    #[test]
+    fn clickhouse_config_endpoint_handles_trailing_slash() {
+        let cfg = ClickHouseConfig {
+            url: "http://localhost:8123/".to_string(),
+            database: "analytics".to_string(),
+            user: None,
+            password: None,
+        };
+
+        assert_eq!(cfg.endpoint(), "http://localhost:8123/?database=analytics");
+    }
+
+    #[test]
+    fn clickhouse_config_endpoint_keeps_ipv6_and_appends_database_query() {
+        let cfg = ClickHouseConfig {
+            url: "http://[::1]:8123".to_string(),
+            database: "events".to_string(),
+            user: None,
+            password: None,
+        };
+
+        let endpoint = cfg.endpoint();
+        let parsed = Url::parse(&endpoint).expect("endpoint must be a valid URL");
+        assert_eq!(parsed.host_str().expect("host must exist"), "[::1]");
+        assert_eq!(parsed.port(), Some(8123));
+        let params = parsed.query_pairs().collect::<Vec<_>>();
+        assert!(params.iter().any(|(k, v)| k == "database" && v == "events"));
+    }
+
+    #[test]
+    fn open_sqlite_connection_existing_missing_file_errors() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.sqlite");
+
+        let err = open_sqlite_connection_existing(&missing).expect_err("missing sqlite must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("SQLite database file not found"));
+    }
+
+    #[test]
+    fn open_duckdb_connection_existing_missing_file_errors() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.duckdb");
+
+        let err = open_duckdb_connection_existing(&missing).expect_err("missing duckdb must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("DuckDB database file not found"));
+    }
+}

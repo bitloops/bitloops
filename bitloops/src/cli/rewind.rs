@@ -525,3 +525,97 @@ impl EmptyFallback for String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::explain::RewindPoint;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_strategy_config(repo_root: &Path, strategy: &str) {
+        let config_dir = repo_root.join(".bitloops");
+        fs::create_dir_all(&config_dir).expect("create .bitloops");
+        fs::write(
+            config_dir.join("config.json"),
+            format!(r#"{{"strategy":"{strategy}"}}"#),
+        )
+        .expect("write config");
+    }
+
+    fn sample_point() -> RewindPoint {
+        RewindPoint {
+            id: "abcdef1234567890".to_string(),
+            message: "sample".to_string(),
+            date: "2026-03-24T00:00:00Z".to_string(),
+            checkpoint_id: "chk1234567890".to_string(),
+            session_id: String::new(),
+            session_prompt: String::new(),
+            is_logs_only: true,
+            is_task_checkpoint: false,
+            tool_use_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn point_matches_accepts_full_id_and_short_prefix() {
+        let point = sample_point();
+
+        assert!(point_matches(&point, "abcdef1234567890"));
+        assert!(point_matches(&point, "abcdef1"));
+        assert!(!point_matches(&point, "abc"));
+    }
+
+    #[test]
+    fn point_matches_accepts_checkpoint_prefix() {
+        let point = sample_point();
+        assert!(point_matches(&point, "chk1234"));
+        assert!(!point_matches(&point, "missing"));
+    }
+
+    #[test]
+    fn is_session_not_found_error_detects_expected_text() {
+        let not_found = anyhow::anyhow!("Session 123 not found");
+        let unrelated = anyhow::anyhow!("permission denied");
+
+        assert!(is_session_not_found_error(&not_found));
+        assert!(!is_session_not_found_error(&unrelated));
+    }
+
+    #[test]
+    fn handle_logs_only_restore_errors_when_checkpoint_id_missing() {
+        let temp = TempDir::new().expect("tempdir");
+        let point = RewindPoint {
+            checkpoint_id: String::new(),
+            ..sample_point()
+        };
+
+        let err = handle_logs_only_restore(temp.path(), &point, false)
+            .expect_err("missing checkpoint id must fail");
+        assert!(format!("{err:#}").contains("logs-only checkpoint metadata is missing"));
+    }
+
+    #[test]
+    fn perform_full_rewind_errors_when_commit_id_missing() {
+        let temp = TempDir::new().expect("tempdir");
+        let point = RewindPoint {
+            id: String::new(),
+            ..sample_point()
+        };
+
+        let err =
+            perform_full_rewind(temp.path(), &point).expect_err("missing commit id must fail");
+        assert!(format!("{err:#}").contains("cannot rewind: selected point has no commit id"));
+    }
+
+    #[test]
+    fn requires_clean_worktree_for_rewind_manual_commit_false_other_true() {
+        let manual = TempDir::new().expect("tempdir");
+        write_strategy_config(manual.path(), "manual-commit");
+        assert!(!requires_clean_worktree_for_rewind(manual.path()));
+
+        let auto = TempDir::new().expect("tempdir");
+        write_strategy_config(auto.path(), "auto-commit");
+        assert!(requires_clean_worktree_for_rewind(auto.path()));
+    }
+}

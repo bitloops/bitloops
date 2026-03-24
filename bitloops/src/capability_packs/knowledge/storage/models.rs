@@ -7,13 +7,7 @@ use sha2::Digest;
 
 use crate::host::devql::deterministic_uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KnowledgePayloadRef {
-    pub storage_backend: String,
-    pub storage_path: String,
-    pub mime_type: String,
-    pub size_bytes: i64,
-}
+pub type KnowledgePayloadRef = crate::host::capability_host::gateways::BlobPayloadRef;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnowledgeSourceRow {

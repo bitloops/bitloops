@@ -1,6 +1,7 @@
 use super::root::{
-    CompletionShell, ROOT_NAME, ROOT_SHORT_ABOUT, has_hidden_in_chain,
-    run_curl_bash_post_install_command_with_io, write_completion, write_help, write_version,
+    CompletionShell, ROOT_NAME, ROOT_SHORT_ABOUT, build_commit, build_date, build_target,
+    build_version, has_hidden_in_chain, run_curl_bash_post_install_command_with_io,
+    should_attempt_watcher_autostart, write_completion, write_help, write_version,
 };
 use super::{Cli, Commands};
 use crate::test_support::process_state::with_env_vars;
@@ -39,9 +40,18 @@ fn TestRootCommand_HooksDoNotAutostartWatcher() {
     };
 
     assert!(
-        !super::root::should_attempt_watcher_autostart(&command),
+        !should_attempt_watcher_autostart(&command),
         "hook commands should not attempt DevQL watcher autostart"
     );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_BuildMetadataFallbackValuesAreNonEmpty() {
+    assert!(!build_version().is_empty());
+    assert!(!build_commit().is_empty());
+    assert!(!build_target().is_empty());
+    assert!(!build_date().is_empty());
 }
 
 #[test]
@@ -144,6 +154,42 @@ fn TestRootCommand_HiddenVisibilityForInternalCommands() {
         assert!(
             cmd.is_hide_set(),
             "{name} should stay hidden in root command wiring"
+        );
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_HasHiddenInChain_MixedValues() {
+    assert!(has_hidden_in_chain(&[false, true, false]));
+    assert!(!has_hidden_in_chain(&[false, false, false]));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_WatcherAutostartMatrix() {
+    let cases = [
+        (["bitloops", "clean"].as_slice(), false),
+        (["bitloops", "disable"].as_slice(), false),
+        (["bitloops", "help"].as_slice(), false),
+        (["bitloops", "version"].as_slice(), false),
+        (["bitloops", "status"].as_slice(), true),
+        (["bitloops", "dashboard"].as_slice(), true),
+        (["bitloops", "doctor"].as_slice(), true),
+        (["bitloops", "resume", "main"].as_slice(), true),
+    ];
+
+    for (argv, expected) in cases {
+        let parsed = Cli::try_parse_from(argv).expect("command should parse");
+        let Some(command) = parsed.command else {
+            panic!("expected subcommand for {:?}", argv);
+        };
+
+        assert_eq!(
+            should_attempt_watcher_autostart(&command),
+            expected,
+            "unexpected watcher autostart decision for {:?}",
+            argv
         );
     }
 }

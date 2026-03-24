@@ -17,19 +17,22 @@ use super::migrations::CapabilityMigration;
 use super::policy::{CrossPackAccessPolicy, HostInvocationPolicy, with_timeout};
 use super::registrar::{
     CapabilityPack, CapabilityRegistrar, IngestRequest, IngestResult, IngesterHandler,
-    IngesterRegistration, QueryExample, SchemaModule, StageHandler, StageRegistration,
-    StageRequest, StageResponse,
+    IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
+    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
+    StageRegistration, StageRequest, StageResponse,
 };
 use super::runtime_contexts::LocalCapabilityRuntimeResources;
 
 #[derive(Clone)]
 enum RegisteredStage {
     Core(Arc<dyn StageHandler>),
+    Knowledge(Arc<dyn KnowledgeStageHandler>),
 }
 
 #[derive(Clone)]
 enum RegisteredIngester {
     Core(Arc<dyn IngesterHandler>),
+    Knowledge(Arc<dyn KnowledgeIngesterHandler>),
 }
 
 pub struct DevqlCapabilityHost {
@@ -303,6 +306,14 @@ impl DevqlCapabilityHost {
                 )
                 .await
             }
+            RegisteredIngester::Knowledge(h) => {
+                with_timeout(
+                    "capability ingester",
+                    limit,
+                    h.ingest(request, &mut runtime),
+                )
+                .await
+            }
         }
     }
 
@@ -327,6 +338,9 @@ impl DevqlCapabilityHost {
         let limit = self.invocation_policy.stage_timeout;
         match handler {
             RegisteredStage::Core(h) => {
+                with_timeout("capability stage", limit, h.execute(request, &mut runtime)).await
+            }
+            RegisteredStage::Knowledge(h) => {
                 with_timeout("capability stage", limit, h.execute(request, &mut runtime)).await
             }
         }
@@ -398,6 +412,43 @@ impl CapabilityRegistrar for DevqlCapabilityHost {
         }
         self.ingesters
             .insert(key, RegisteredIngester::Core(ingester.handler));
+        Ok(())
+    }
+
+    fn register_knowledge_stage(&mut self, stage: KnowledgeStageRegistration) -> Result<()> {
+        let key = (
+            stage.capability_id.to_string(),
+            stage.stage_name.to_string(),
+        );
+        if self.stages.contains_key(&key) {
+            bail!(
+                "[capability_pack:{}] [stage:{}] duplicate registration",
+                stage.capability_id,
+                stage.stage_name
+            );
+        }
+        self.stages
+            .insert(key, RegisteredStage::Knowledge(stage.handler));
+        Ok(())
+    }
+
+    fn register_knowledge_ingester(
+        &mut self,
+        ingester: KnowledgeIngesterRegistration,
+    ) -> Result<()> {
+        let key = (
+            ingester.capability_id.to_string(),
+            ingester.ingester_name.to_string(),
+        );
+        if self.ingesters.contains_key(&key) {
+            bail!(
+                "[capability_pack:{}] [ingester:{}] duplicate registration",
+                ingester.capability_id,
+                ingester.ingester_name
+            );
+        }
+        self.ingesters
+            .insert(key, RegisteredIngester::Knowledge(ingester.handler));
         Ok(())
     }
 

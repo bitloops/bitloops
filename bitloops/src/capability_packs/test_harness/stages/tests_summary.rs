@@ -102,7 +102,7 @@ mod tests {
         BitloopsTestHarnessRepository, SqliteTestHarnessRepository, init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
-    use crate::host::capability_host::gateways::CanonicalGraphGateway;
+    use crate::host::capability_host::gateways::{CanonicalGraphGateway, RelationalGateway};
     use crate::host::capability_host::runtime_contexts::LocalCanonicalGraphGateway;
     use crate::host::capability_host::{CapabilityExecutionContext, StageHandler, StageRequest};
     use crate::host::devql::RepoIdentity;
@@ -122,6 +122,10 @@ mod tests {
 
         fn graph(&self) -> &dyn CanonicalGraphGateway {
             &self.graph
+        }
+
+        fn host_relational(&self) -> &dyn RelationalGateway {
+            panic!("test context does not provide host relational access")
         }
     }
 

@@ -24,6 +24,13 @@ pub fn init_schema_for_repo(repo_root: &Path) -> Result<()> {
     let backends = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving Bitloops store config for test-harness schema init")?;
 
+    init_schema_for_backends(repo_root, backends)
+}
+
+fn init_schema_for_backends(
+    repo_root: &Path,
+    backends: crate::config::StoreBackendConfig,
+) -> Result<()> {
     if backends.relational.has_postgres() {
         let dsn = backends.relational.postgres_dsn.ok_or_else(|| {
             anyhow!("test-harness schema init requires stores.relational.postgres_dsn")
@@ -45,6 +52,13 @@ pub fn open_repository_for_repo(repo_root: &Path) -> Result<BitloopsTestHarnessR
     let backends = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving Bitloops store config for `bitloops testlens`")?;
 
+    open_repository_for_backends(repo_root, backends)
+}
+
+fn open_repository_for_backends(
+    repo_root: &Path,
+    backends: crate::config::StoreBackendConfig,
+) -> Result<BitloopsTestHarnessRepository> {
     if backends.relational.has_postgres() {
         let dsn = backends.relational.postgres_dsn.ok_or_else(|| {
             anyhow!("`bitloops testlens` requires stores.relational.postgres_dsn")
@@ -354,33 +368,44 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::init_schema_for_repo;
+    use super::{
+        BitloopsTestHarnessRepository, init_schema_for_backends, init_schema_for_repo,
+        open_repository_for_backends, open_repository_for_repo,
+    };
     use anyhow::Result;
+    use serde_json::json;
+    use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    fn write_repo_config(repo_root: &Path, value: serde_json::Value) -> Result<()> {
+        let config_dir = repo_root.join(".bitloops");
+        fs::create_dir_all(&config_dir)?;
+        fs::write(
+            config_dir.join("config.json"),
+            serde_json::to_vec_pretty(&value)?,
+        )?;
+        Ok(())
+    }
 
     #[test]
     fn init_schema_for_repo_initialises_sqlite_test_harness_tables() -> Result<()> {
         let temp = TempDir::new()?;
         let repo_root = temp.path();
         let sqlite_path = repo_root.join("stores").join("relational.sqlite");
-        let config_dir = repo_root.join(".bitloops");
-        std::fs::create_dir_all(&config_dir)?;
-        std::fs::write(
-            config_dir.join("config.json"),
-            format!(
-                r#"{{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {{
-    "stores": {{
-      "relational": {{
-        "sqlite_path": "{}"
-      }}
-    }}
-  }}
-}}"#,
-                sqlite_path.display()
-            ),
+        write_repo_config(
+            repo_root,
+            json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": {
+                    "stores": {
+                        "relational": {
+                            "sqlite_path": sqlite_path.display().to_string()
+                        }
+                    }
+                }
+            }),
         )?;
 
         init_schema_for_repo(repo_root)?;
@@ -401,6 +426,102 @@ mod tests {
             assert_eq!(exists, 1, "expected SQLite test-domain table `{table}`");
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn init_schema_for_repo_falls_back_to_sqlite_when_postgres_dsn_missing() -> Result<()> {
+        let temp = TempDir::new()?;
+        let repo_root = temp.path();
+        let sqlite_path = repo_root.join("stores").join("relational.sqlite");
+        write_repo_config(
+            repo_root,
+            json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": {
+                    "stores": {
+                        "relational": {
+                            "sqlite_path": sqlite_path.display().to_string(),
+                            "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops"
+                        }
+                    }
+                }
+            }),
+        )?;
+
+        let mut backends = crate::config::resolve_store_backend_config_for_repo(repo_root)?;
+        assert!(backends.relational.has_postgres());
+        backends.relational.postgres_dsn = None;
+
+        init_schema_for_backends(repo_root, backends)?;
+        assert!(sqlite_path.exists(), "expected sqlite fallback schema init");
+
+        Ok(())
+    }
+
+    #[test]
+    fn open_repository_for_repo_returns_sqlite_variant_when_sqlite_configured() -> Result<()> {
+        let temp = TempDir::new()?;
+        let repo_root = temp.path();
+        let sqlite_path = repo_root.join("stores").join("relational.sqlite");
+        write_repo_config(
+            repo_root,
+            json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": {
+                    "stores": {
+                        "relational": {
+                            "sqlite_path": sqlite_path.display().to_string()
+                        }
+                    }
+                }
+            }),
+        )?;
+
+        init_schema_for_repo(repo_root)?;
+        let repository = open_repository_for_repo(repo_root)?;
+
+        assert!(
+            matches!(repository, BitloopsTestHarnessRepository::Sqlite(_)),
+            "expected sqlite variant"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn open_repository_for_backends_returns_postgres_variant_when_dsn_is_present() -> Result<()> {
+        let temp = TempDir::new()?;
+        let repo_root = temp.path();
+        let sqlite_path = repo_root.join("stores").join("relational.sqlite");
+        write_repo_config(
+            repo_root,
+            json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": {
+                    "stores": {
+                        "relational": {
+                            "sqlite_path": sqlite_path.display().to_string(),
+                            "postgres_dsn": "postgres://127.0.0.1:1/bitloops"
+                        }
+                    }
+                }
+            }),
+        )?;
+
+        let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)?;
+        assert!(backends.relational.has_postgres());
+
+        assert!(
+            matches!(
+                open_repository_for_backends(repo_root, backends)?,
+                BitloopsTestHarnessRepository::Postgres(_)
+            ),
+            "expected postgres variant when dsn is configured"
+        );
         Ok(())
     }
 }

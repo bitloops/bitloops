@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::host::capability_host::{
-    CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
+    KnowledgeExecutionContext, KnowledgeIngestContext, StageRequest,
 };
 use crate::host::devql::RepoIdentity;
 
@@ -14,7 +14,7 @@ use super::refs::{ResolvedKnowledgeTargetRef, resolve_source_ref, resolve_target
 use super::storage::{
     KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgeRelationAssertionRow,
     KnowledgeSourceRow, content_hash, knowledge_item_id, knowledge_item_version_id,
-    knowledge_source_id, relation_assertion_id, serialize_payload,
+    knowledge_payload_key, knowledge_source_id, relation_assertion_id, serialize_payload,
 };
 use super::types::{
     AssociateKnowledgeRequest, AssociateKnowledgeResult, DocumentVersionSummary,
@@ -52,7 +52,7 @@ impl KnowledgeIngestionService {
     pub fn ingest_source<'a>(
         &'a self,
         request: IngestKnowledgeRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<IngestKnowledgeResult>> {
         Box::pin(async move {
             let (parsed, fetched) = Self::fetch_document(ctx, &request.url).await?;
@@ -63,20 +63,18 @@ impl KnowledgeIngestionService {
     pub fn refresh_source<'a>(
         &'a self,
         request: RefreshSourceRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<RefreshSourceResult>> {
         Box::pin(async move {
             let resolved = resolve_source_ref(ctx, &request.knowledge_ref)?;
             let item = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &resolved.knowledge_item_id)?
                 .ok_or_else(|| {
                     anyhow!("knowledge item `{}` not found", resolved.knowledge_item_id)
                 })?;
             let source = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .knowledge_relational()
                 .find_source_by_id(&item.knowledge_source_id)?
                 .ok_or_else(|| {
                     anyhow!(
@@ -105,7 +103,7 @@ impl KnowledgeIngestionService {
     }
 
     async fn fetch_document(
-        ctx: &mut dyn CapabilityIngestContext,
+        ctx: &mut dyn KnowledgeIngestContext,
         url: &str,
     ) -> Result<(super::types::ParsedKnowledgeUrl, FetchedKnowledgeDocument)> {
         let parsed = parse_knowledge_url(url)?;
@@ -116,7 +114,7 @@ impl KnowledgeIngestionService {
 
     fn materialize_document(
         &self,
-        ctx: &mut dyn CapabilityIngestContext,
+        ctx: &mut dyn KnowledgeIngestContext,
         parsed: &super::types::ParsedKnowledgeUrl,
         fetched: FetchedKnowledgeDocument,
         labels: IngestWriteLabels,
@@ -135,12 +133,10 @@ impl KnowledgeIngestionService {
             serde_json::to_string(&provenance).context("serialising knowledge provenance")?;
 
         let existing_item = ctx
-            .relational()
-            .expect("knowledge pack requires relational gateway")
+            .knowledge_relational()
             .find_item(&ctx.repo().repo_id, &source_id)?;
         let existing_knowledge_item_version = ctx
-            .documents()
-            .expect("knowledge pack requires documents gateway")
+            .knowledge_documents()
             .has_knowledge_item_version(&item_id, &hash)?;
         let item_status = if existing_item.is_some() {
             KnowledgeItemStatus::Reused
@@ -178,12 +174,14 @@ impl KnowledgeIngestionService {
         let mut inserted_knowledge_item_version = None;
 
         if existing_knowledge_item_version.is_none() {
-            let payload_ref = ctx.blob_payloads().write_payload(
+            let payload_key = knowledge_payload_key(
                 &ctx.repo().repo_id,
                 &item_id,
                 &derived_knowledge_item_version_id,
-                &payload_bytes,
-            )?;
+            );
+            let payload_ref = ctx
+                .blob_payloads()
+                .write_payload(&payload_key, &payload_bytes)?;
 
             let document_row = KnowledgeDocumentVersionRow {
                 knowledge_item_version_id: derived_knowledge_item_version_id.clone(),
@@ -207,8 +205,7 @@ impl KnowledgeIngestionService {
             };
 
             if let Err(err) = ctx
-                .documents()
-                .expect("knowledge pack requires documents gateway")
+                .knowledge_documents()
                 .insert_knowledge_item_version(&document_row)
             {
                 let _ = ctx.blob_payloads().delete_payload(&payload_ref);
@@ -220,14 +217,12 @@ impl KnowledgeIngestionService {
         }
 
         if let Err(err) = ctx
-            .relational()
-            .expect("knowledge pack requires relational gateway")
+            .knowledge_relational()
             .persist_ingestion(&source_row, &item_row)
         {
             if let Some(knowledge_item_version_id) = inserted_knowledge_item_version.as_deref() {
                 let _ = ctx
-                    .documents()
-                    .expect("knowledge pack requires documents gateway")
+                    .knowledge_documents()
                     .delete_knowledge_item_version(knowledge_item_version_id);
             }
             if let Some(payload) = written_payload.as_ref() {
@@ -253,7 +248,7 @@ pub struct KnowledgeRelationService;
 impl KnowledgeRelationService {
     pub fn associate_to_commit<'a>(
         &'a self,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
         ingest_result: &'a IngestKnowledgeResult,
         commit: &'a str,
     ) -> super::types::BoxFuture<'a, Result<AssociateKnowledgeResult>> {
@@ -281,7 +276,7 @@ impl KnowledgeRelationService {
 
     pub fn associate_by_refs<'a>(
         &'a self,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
         source_ref: &'a str,
         target_ref: &'a str,
     ) -> super::types::BoxFuture<'a, Result<AssociateKnowledgeResult>> {
@@ -325,7 +320,7 @@ impl KnowledgeRelationService {
 
     pub fn associate(
         &self,
-        ctx: &mut dyn CapabilityIngestContext,
+        ctx: &mut dyn KnowledgeIngestContext,
         request: AssociateKnowledgeRequest,
     ) -> Result<AssociateKnowledgeResult> {
         let target_type = request.target.target_type().to_string();
@@ -367,8 +362,7 @@ impl KnowledgeRelationService {
             provenance_json,
         };
 
-        ctx.relational()
-            .expect("knowledge pack requires relational gateway")
+        ctx.knowledge_relational()
             .insert_relation_assertion(&relation)?;
 
         Ok(AssociateKnowledgeResult {
@@ -388,19 +382,17 @@ impl KnowledgeRetrievalService {
         &self,
         repo: &RepoIdentity,
         request: &StageRequest,
-        ctx: &mut dyn CapabilityExecutionContext,
+        ctx: &mut dyn KnowledgeExecutionContext,
     ) -> Result<Vec<Value>> {
         let limit = request.limit().unwrap_or(100).max(1);
         let items = ctx
-            .relational()
-            .expect("knowledge pack requires relational gateway")
+            .knowledge_relational()
             .list_items_for_repo(&repo.repo_id, limit)?;
 
         let mut rows = Vec::with_capacity(items.len());
         for item in items {
             let Some(version) = ctx
-                .documents()
-                .expect("knowledge pack requires documents gateway")
+                .knowledge_documents()
                 .find_knowledge_item_version(&item.latest_knowledge_item_version_id)?
             else {
                 continue;
@@ -425,13 +417,12 @@ impl KnowledgeRetrievalService {
     pub fn list_versions<'a>(
         &'a self,
         request: ListVersionsRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::types::BoxFuture<'a, Result<ListVersionsResult>> {
         Box::pin(async move {
             let resolved = resolve_source_ref(ctx, &request.knowledge_ref)?;
             let versions = ctx
-                .documents()
-                .expect("knowledge pack requires documents gateway")
+                .knowledge_documents()
                 .list_versions_for_item(&resolved.knowledge_item_id)?
                 .into_iter()
                 .map(|row| DocumentVersionSummary {
@@ -466,7 +457,8 @@ mod tests {
         ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
     use crate::capability_packs::knowledge::storage::{
-        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore,
+        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentRepository,
+        KnowledgeRelationalRepository, SqliteKnowledgeRelationalRepository,
     };
     use crate::capability_packs::knowledge::url::parse_knowledge_url;
     use crate::config::{
@@ -476,11 +468,11 @@ mod tests {
     use crate::host::capability_host::config_view::CapabilityConfigView;
     use crate::host::capability_host::gateways::SqliteRelationalGateway;
     use crate::host::capability_host::gateways::{
-        BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
-        RelationalGateway,
+        BlobPayloadGateway, CanonicalGraphGateway, ProvenanceBuilder, RelationalGateway,
     };
     use crate::host::capability_host::{
-        CapabilityExecutionContext, CapabilityIngestContext, StageRequest,
+        CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
+        KnowledgeIngestContext, StageRequest,
     };
     use crate::host::devql::RepoIdentity;
     use crate::storage::SqliteConnectionPool;
@@ -561,6 +553,7 @@ mod tests {
         repo: RepoIdentity,
         config_root: Value,
         relational: SqliteRelationalGateway,
+        knowledge_relational: SqliteKnowledgeRelationalRepository,
         documents: DuckdbKnowledgeDocumentStore,
         blobs: BlobKnowledgePayloadStore,
         connectors: StubConnectorRegistry,
@@ -583,12 +576,8 @@ mod tests {
             &self.graph
         }
 
-        fn relational(&self) -> Option<&dyn RelationalGateway> {
-            Some(&self.relational)
-        }
-
-        fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-            Some(&self.documents)
+        fn host_relational(&self) -> &dyn RelationalGateway {
+            &self.relational
         }
     }
 
@@ -624,6 +613,10 @@ mod tests {
             &self.provenance
         }
 
+        fn host_relational(&self) -> &dyn RelationalGateway {
+            &self.relational
+        }
+
         fn invoking_capability_id(&self) -> Option<&str> {
             self.invoking_capability_id
         }
@@ -631,13 +624,25 @@ mod tests {
         fn invoking_ingester_id(&self) -> Option<&str> {
             self.invoking_ingester_id
         }
+    }
 
-        fn relational(&self) -> Option<&dyn RelationalGateway> {
-            Some(&self.relational)
+    impl KnowledgeExecutionContext for TestRuntimeContext {
+        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+            &self.knowledge_relational
         }
 
-        fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-            Some(&self.documents)
+        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+            &self.documents
+        }
+    }
+
+    impl KnowledgeIngestContext for TestRuntimeContext {
+        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+            &self.knowledge_relational
+        }
+
+        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+            &self.documents
         }
     }
 
@@ -745,8 +750,10 @@ mod tests {
         let repo = test_repo_identity(repo_root.as_path());
         let backends = test_backends(temp);
         let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
-        let relational = SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path)?);
-        relational.initialise_schema()?;
+        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path)?;
+        let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
+        let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
+        knowledge_relational.initialise_schema()?;
         let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
         documents.initialise_schema()?;
         let blobs = BlobKnowledgePayloadStore::from_backend_config(repo_root.as_path(), &backends)?;
@@ -768,6 +775,7 @@ mod tests {
                 }
             }),
             relational,
+            knowledge_relational,
             documents,
             blobs,
             connectors,
