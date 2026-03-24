@@ -1,0 +1,176 @@
+/**
+ * Bitloops branded Docusaurus theme
+ * Colors derived from https://bitloops.com
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,300;0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800;1,6..12,400&display=swap');
+
+:root {
+  /* Primary: Bitloops Purple */
+  --ifm-color-primary: #7404e4;
+  --ifm-color-primary-dark: #6803cd;
+  --ifm-color-primary-darker: #6203c1;
+  --ifm-color-primary-darkest: #51029f;
+  --ifm-color-primary-light: #8218eb;
+  --ifm-color-primary-lighter: #8b27ed;
+  --ifm-color-primary-lightest: #a04ff1;
+
+  /* Accent: Bitloops Cyan */
+  --bitloops-cyan: #2ab4d9;
+  --bitloops-cyan-dark: #24a2c4;
+  --bitloops-gradient: linear-gradient(135deg, #8952e0, #2ab4d9);
+
+  /* Typography */
+  --ifm-font-family-base: 'Nunito Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  --ifm-heading-font-family: 'Nunito Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  --ifm-font-weight-semibold: 600;
+  --ifm-heading-font-weight: 700;
+
+  /* Layout */
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(116, 4, 228, 0.1);
+  --ifm-navbar-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --ifm-global-radius: 0.5rem;
+
+  /* Links */
+  --ifm-link-color: #7404e4;
+  --ifm-link-hover-color: #6203c1;
+
+  /* Footer */
+  --ifm-footer-background-color: #0e1012;
+  --ifm-footer-color: #d1d5db;
+  --ifm-footer-link-color: #d1d5db;
+  --ifm-footer-link-hover-color: #ffffff;
+}
+
+/* Dark mode — lighter purples for readability on dark backgrounds */
+[data-theme='dark'] {
+  --ifm-color-primary: #a04ff1;
+  --ifm-color-primary-dark: #8f31ee;
+  --ifm-color-primary-darker: #8722ed;
+  --ifm-color-primary-darkest: #6f09d7;
+  --ifm-color-primary-light: #b16df4;
+  --ifm-color-primary-lighter: #b97cf5;
+  --ifm-color-primary-lightest: #d1a8f8;
+
+  --ifm-background-color: #0e1012;
+  --ifm-background-surface-color: #171a1d;
+  --ifm-navbar-background-color: rgba(14, 16, 18, 0.85);
+
+  --ifm-link-color: #b97cf5;
+  --ifm-link-hover-color: #d1a8f8;
+
+  --docusaurus-highlighted-code-line-bg: rgba(160, 79, 241, 0.15);
+}
+
+/* Navbar */
+.navbar {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(116, 4, 228, 0.08);
+}
+
+.navbar__title {
+  color: #7404e4;
+  font-weight: 700;
+}
+
+[data-theme='dark'] .navbar {
+  border-bottom: 1px solid rgba(160, 79, 241, 0.12);
+}
+
+/* Sidebar */
+.menu__link--active:not(.menu__link--sublist) {
+  border-left: 3px solid var(--ifm-color-primary);
+  padding-left: calc(var(--ifm-menu-link-padding-horizontal) - 3px);
+}
+
+/* Hero banner on homepage */
+.hero .hero__title {
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.hero .hero__subtitle {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.25rem;
+}
+
+.hero .button--secondary {
+  background-color: #ffffff;
+  color: #7404e4;
+  border: none;
+  font-weight: 700;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hero .button--secondary:hover {
+  background-color: #f3f4f6;
+  color: #6203c1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Feature cards on homepage */
+.feature-card {
+  background: var(--ifm-background-surface-color, #f9fafa);
+  border-radius: 0.75rem;
+  padding: 2rem;
+  text-align: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  border: 1px solid rgba(116, 4, 228, 0.06);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.feature-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(116, 4, 228, 0.08);
+}
+
+[data-theme='dark'] .feature-card {
+  background: #171a1d;
+  border: 1px solid rgba(160, 79, 241, 0.1);
+}
+
+[data-theme='dark'] .feature-card:hover {
+  box-shadow: 0 8px 24px rgba(160, 79, 241, 0.1);
+}
+
+.feature-card__icon {
+  font-size: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #8952e0, #2ab4d9);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Doc page improvements */
+.markdown h1 {
+  font-weight: 800;
+}
+
+.markdown h2 {
+  font-weight: 700;
+  border-bottom: 1px solid rgba(116, 4, 228, 0.08);
+  padding-bottom: 0.5rem;
+}
+
+[data-theme='dark'] .markdown h2 {
+  border-bottom: 1px solid rgba(160, 79, 241, 0.1);
+}
+
+/* Table of contents active link */
+.table-of-contents__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+}
+
+/* Footer is handled by custom component at src/theme/Footer */
