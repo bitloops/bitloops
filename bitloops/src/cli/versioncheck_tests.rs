@@ -21,6 +21,8 @@ fn with_test_overrides<T>(
         &[
             (CONFIG_DIR_OVERRIDE_ENV, config_dir_str.as_deref()),
             (GITHUB_API_URL_OVERRIDE_ENV, server_url),
+            // Ensure CI/global env does not disable checks unless a test explicitly sets it.
+            (DISABLE_VERSION_CHECK_ENV, None),
         ],
         f,
     )
@@ -474,6 +476,11 @@ fn test_check_and_notify_prints_notification_when_outdated() {
     with_test_paths(&tmp_home, &server.url, || {
         let mut buf = Vec::new();
         check_and_notify(&mut buf, "1.0.0");
+
+        assert!(
+            server.hits() > 0,
+            "expected check_and_notify to fetch latest version, but no request was observed"
+        );
 
         let output = String::from_utf8_lossy(&buf).to_string();
         assert!(

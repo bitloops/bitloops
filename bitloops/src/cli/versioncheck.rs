@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const GLOBAL_CONFIG_DIR_NAME: &str = ".config/bitloops";
 pub const CACHE_FILE_NAME: &str = "version_check.json";
 pub const DEFAULT_GITHUB_API_URL: &str =
-    "https://storage.googleapis.com/wwwbitloopscom/cli/latest.json";
+    "https://api.github.com/repos/bitloops/bitloops/releases/latest";
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const DISABLE_VERSION_CHECK_ENV: &str = "BITLOOPS_DISABLE_VERSION_CHECK";
