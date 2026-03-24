@@ -452,6 +452,41 @@ mod guardrail_tests {
     }
 
     #[tokio::test]
+    async fn tests_stage_falls_back_to_artefact_id_when_symbol_id_is_missing() {
+        let repo = FakeRepo::default().with_response(
+            "artefact-a",
+            vec![StageCoveringTestRecord {
+                test_id: "test-a".into(),
+                test_name: "covers_a".into(),
+                suite_name: None,
+                file_path: "tests/a.rs".into(),
+                confidence: 0.8,
+                discovery_source: "static".into(),
+                linkage_source: "coverage".into(),
+                linkage_status: "linked".into(),
+            }],
+        );
+
+        let resp = execute(
+            &repo,
+            json!({
+                "input_rows": [
+                    {"artefact_id": "artefact-a", "symbol_fqn": "tests::a", "canonical_kind": "test_case", "path": "tests/a.rs", "start_line": 10, "end_line": 12},
+                    "ignore-me"
+                ],
+                "limit": 10
+            }),
+        )
+        .await;
+
+        let rows = resp.payload.as_array().expect("array");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
+        assert_eq!(repo.calls().len(), 1);
+        assert_eq!(repo.calls()[0].production_symbol_id, "artefact-a");
+    }
+
+    #[tokio::test]
     async fn tests_stage_forwards_min_confidence_and_linkage_source() {
         let repo = FakeRepo::default().with_response(
             "symbol-a",

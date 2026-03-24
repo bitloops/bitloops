@@ -518,6 +518,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn coverage_stage_falls_back_to_artefact_id_when_symbol_id_is_missing() {
+        let repo = FakeRepo::default()
+            .with_metadata(Some(StageCoverageMetadataRecord {
+                coverage_source: "llvm-json".into(),
+                branch_truth: 1,
+            }))
+            .with_line_response(
+                "artefact-a",
+                vec![StageLineCoverageRecord {
+                    line: 42,
+                    covered: true,
+                }],
+            )
+            .with_branch_response(
+                "artefact-a",
+                vec![StageBranchCoverageRecord {
+                    line: 42,
+                    branch_id: 7,
+                    covered: true,
+                    hit_count: 1,
+                }],
+            );
+
+        let resp = execute(
+            &repo,
+            json!({
+                "input_rows": [
+                    {"artefact_id": "artefact-a", "symbol_fqn": "tests::a", "canonical_kind": "test_case", "path": "tests/a.rs", "start_line": 10, "end_line": 12},
+                    123
+                ]
+            }),
+        )
+        .await;
+
+        let rows = resp.payload.as_array().expect("array");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
+        let coverage = rows[0]["coverage"].as_object().expect("coverage object");
+        assert_eq!(coverage["coverage_source"], "llvm-json");
+        assert_eq!(coverage["branch_data_available"], true);
+        let branches = coverage["branches"].as_array().expect("branches array");
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0]["branch"], 7);
+        assert_eq!(repo.metadata_calls().len(), 1);
+        assert_eq!(repo.line_calls().len(), 1);
+        assert_eq!(repo.branch_calls().len(), 1);
+        assert_eq!(repo.line_calls()[0].1, "artefact-a");
+        assert_eq!(repo.branch_calls()[0].1, "artefact-a");
+    }
+
+    #[tokio::test]
     async fn coverage_stage_handles_missing_coverage_data() {
         let repo = FakeRepo::default();
 
