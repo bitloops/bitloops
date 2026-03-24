@@ -274,22 +274,6 @@ mod tests {
     }
 
     impl TestHarnessQueryRepository for FakeRepo {
-        fn find_artefact(
-            &self,
-            _commit_sha: &str,
-            _artefact_query: &str,
-        ) -> Result<crate::models::QueriedArtefactRecord> {
-            unreachable!("unused in coverage stage guardrails")
-        }
-
-        fn list_artefacts(
-            &self,
-            _commit_sha: &str,
-            _kind: Option<&str>,
-        ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
-            unreachable!("unused in coverage stage guardrails")
-        }
-
         fn load_covering_tests(
             &self,
             _commit_sha: &str,

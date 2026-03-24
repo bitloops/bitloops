@@ -10,8 +10,8 @@ use rusqlite::Connection;
 
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ProductionIngestionBatch,
+    ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
@@ -57,16 +57,26 @@ pub trait TestHarnessRepository {
 }
 
 pub trait TestHarnessQueryRepository {
+    #[cfg(test)]
     fn find_artefact(
         &self,
         commit_sha: &str,
         artefact_query: &str,
-    ) -> Result<QueriedArtefactRecord>;
+    ) -> Result<crate::models::QueriedArtefactRecord> {
+        let _ = (commit_sha, artefact_query);
+        unreachable!("legacy artefact lookup is unavailable in test-harness production builds")
+    }
+
+    #[cfg(test)]
     fn list_artefacts(
         &self,
         commit_sha: &str,
         kind: Option<&str>,
-    ) -> Result<Vec<ListedArtefactRecord>>;
+    ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
+        let _ = (commit_sha, kind);
+        unreachable!("legacy artefact listing is unavailable in test-harness production builds")
+    }
+
     fn load_covering_tests(
         &self,
         commit_sha: &str,
