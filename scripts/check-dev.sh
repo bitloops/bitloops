@@ -11,8 +11,19 @@ Usage: bash scripts/check-dev.sh [--test] [--full]
   Default: Rust file-size check, cargo fmt --check, cargo clippy.
   --test   Also run the full suite via bitloops/scripts/test-summary.sh (cargo test --no-fail-fast + combined summaries).
   --full   Run coverage baseline check only (llvm-cov runs the full test suite once; no duplicate plain test run).
+
+  DuckDB: by default uses official prebuilt libduckdb (fast). Set DUCKDB_USE_BUNDLED=1 to compile from source instead.
 EOF
 }
+
+# Fast path: download official libduckdb for this host (linux-gnu, macOS universal, win-msvc). Bundled C++ compile if unset.
+if [[ "${DUCKDB_USE_BUNDLED:-}" == "1" ]]; then
+  unset DUCKDB_DOWNLOAD_LIB || true
+  DUCKDB_CARGO_FEATURES=()
+else
+  export DUCKDB_DOWNLOAD_LIB="${DUCKDB_DOWNLOAD_LIB:-1}"
+  DUCKDB_CARGO_FEATURES=(--no-default-features)
+fi
 
 sanitize_git_env_for_coverage() {
   unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM
@@ -42,7 +53,7 @@ done
 bash "$ROOT/scripts/check-rust-file-size.sh" "$BL"
 
 cargo fmt --all --check --manifest-path "$BL/Cargo.toml"
-cargo clippy --manifest-path "$BL/Cargo.toml" --all-targets --all-features -- -D warnings
+cargo clippy --manifest-path "$BL/Cargo.toml" --all-targets "${DUCKDB_CARGO_FEATURES[@]}" -- -D warnings
 
 if [[ "$RUN_TEST" == 1 ]] && [[ "$RUN_FULL" == 0 ]]; then
   (cd "$BL" && bash scripts/test-summary.sh)

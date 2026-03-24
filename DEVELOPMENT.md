@@ -26,6 +26,23 @@ Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.jso
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
+### DuckDB (optional speed-up)
+
+By default, `cargo build` uses the **`duckdb-bundled`** feature and compiles DuckDB C++ locally (slow, but works offline and for exotic targets).
+
+For **much faster** builds on supported hosts, disable that default and let `libduckdb-sys` download the official DuckDB release for your target (linux-gnu amd64/arm64, macOS universal, Windows MSVC):
+
+```bash
+export DUCKDB_DOWNLOAD_LIB=1
+cargo check --no-default-features
+```
+
+`./scripts/test-summary.sh`, `./scripts/coverage-baseline-check.sh`, and `bash scripts/check-dev.sh` do this automatically unless **`DUCKDB_USE_BUNDLED=1`** (force source build).
+
+To use a **local** unpack instead of download, set **`DUCKDB_LIB_DIR`** (and **`DUCKDB_INCLUDE_DIR`** if headers are not beside the lib) and build with **`--no-default-features`**.
+
+**Unsupported** for prebuilts: **linux-musl** and other triples without an official `libduckdb-*.zip` — keep default features (bundled) for those, e.g. `cargo build --release --target x86_64-unknown-linux-musl`.
+
 ## Local checks (optional)
 
 There are no repo-enforced git hooks. To match what runs on pull requests to `develop`, run from the repo root:

@@ -65,6 +65,8 @@ For HTML/LCOV artifacts (not the baseline gate):
 ./scripts/test-coverage.sh baseline
 ```
 
+**DuckDB:** `test-summary.sh` and `check-dev.sh` use prebuilt DuckDB libraries when possible (`DUCKDB_DOWNLOAD_LIB=1` and `--no-default-features`). Set `DUCKDB_USE_BUNDLED=1` to compile from source instead. See `DEVELOPMENT.md` for details.
+
 ## Test Coverage
 
 We use `cargo-llvm-cov` for coverage. Install it:

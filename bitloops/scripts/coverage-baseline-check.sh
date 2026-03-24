@@ -5,9 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [[ "${DUCKDB_USE_BUNDLED:-}" == "1" ]]; then
+  unset DUCKDB_DOWNLOAD_LIB || true
+  duckdb_no_bundle_flags=()
+else
+  export DUCKDB_DOWNLOAD_LIB="${DUCKDB_DOWNLOAD_LIB:-1}"
+  duckdb_no_bundle_flags=(--no-default-features)
+fi
+
 BASELINE_FILE_JSONL="$PROJECT_ROOT/.coverage-baseline.jsonl"
 COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
-CANONICAL_CMD="cargo llvm-cov --workspace --all-features --all-targets --no-fail-fast --lcov --output-path target/llvm-cov.info"
+CANONICAL_CMD="cargo llvm-cov --workspace --no-default-features --all-targets --no-fail-fast --lcov --output-path target/llvm-cov.info"
 EPSILON="0.05"
 
 sanitize_git_env() {
@@ -39,7 +47,7 @@ ensure_llvm_cov() {
 
 run_coverage() {
   rm -f "$COVERAGE_FILE"
-  cargo llvm-cov --workspace --all-features --all-targets --no-fail-fast --lcov --output-path "$COVERAGE_FILE"
+  cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$COVERAGE_FILE"
   if [[ ! -f "$COVERAGE_FILE" ]]; then
     echo "Coverage file was not generated: $COVERAGE_FILE"
     exit 1

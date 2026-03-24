@@ -24,6 +24,12 @@ permissions:
 #   or pin/downgrade fastembed/onnxruntime to artifacts built for older manylinux, or drop fastembed for coverage-only builds.
 #
 # Clippy is merge-blocking; coverage is informational (continue-on-error). Require only the blocking job names in branch protection.
+#
+# DuckDB: use official prebuilt libduckdb (no C++ compile) via libduckdb-sys. Requires --no-default-features so
+# `duckdb-bundled` is off. Do not set DUCKDB_DOWNLOAD_LIB for linux-musl cross builds (no prebuilt archive).
+
+env:
+  DUCKDB_DOWNLOAD_LIB: "1"
 
 jobs:
   rust-file-size:
@@ -60,7 +66,7 @@ jobs:
           workspaces: bitloops
           shared-key: dev-ci
       - name: cargo clippy
-        run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --all-features -- -D warnings
+        run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
 
   coverage-baseline:
     name: Coverage baseline (informational)
