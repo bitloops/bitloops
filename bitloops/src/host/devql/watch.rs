@@ -86,7 +86,9 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
         .unwrap_or_else(|_| repo_root.to_path_buf());
     let mut command = build_watcher_spawn_command(&repo_root)?;
     command
-        .current_dir(&repo_root)
+        // Avoid pinning the repository directory as the watcher cwd. Temp test
+        // repos can be deleted while the detached watcher is still alive.
+        .current_dir(std::env::temp_dir())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -182,6 +184,10 @@ fn run_notify_loop(
     let mut window_start: Option<Instant> = None;
 
     while !shutdown.load(Ordering::SeqCst) {
+        if watcher_repo_root_missing(&cfg.repo_root) {
+            return Ok(());
+        }
+
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
                 for path in event.paths {
@@ -197,6 +203,9 @@ fn run_notify_loop(
                 }
             }
             Ok(Err(err)) => {
+                if watcher_repo_root_missing(&cfg.repo_root) {
+                    return Ok(());
+                }
                 log::warn!("devql watcher event error: {err:#}");
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -223,6 +232,10 @@ fn run_notify_loop(
     }
 
     Ok(())
+}
+
+fn watcher_repo_root_missing(repo_root: &Path) -> bool {
+    repo_root.try_exists().map(|exists| !exists).unwrap_or(true)
 }
 
 fn should_ignore_path(repo_root: &Path, path: &Path) -> bool {
@@ -596,6 +609,18 @@ mod tests {
             !pid_file.exists(),
             "watcher pid file should not be created when autostart is disabled"
         );
+    }
+
+    #[test]
+    fn watcher_repo_root_missing_returns_true_after_repo_is_deleted() {
+        let dir = TempDir::new().expect("temp dir");
+        let repo_root = dir.path().to_path_buf();
+
+        assert!(!watcher_repo_root_missing(&repo_root));
+
+        drop(dir);
+
+        assert!(watcher_repo_root_missing(&repo_root));
     }
 
     // ── restart token mismatch detection ─────────────────────────────────────
