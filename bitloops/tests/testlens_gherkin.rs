@@ -795,6 +795,7 @@ WHERE cc.commit_sha = ?1
 }
 
 #[tokio::test]
+#[ignore = "slow E2E: spawns bitloops binary per step; run with `cargo test -- --ignored`"]
 async fn testlens_bdd_features_pass() {
     let feature_dir = format!("{}/tests/features/test_harness", env!("CARGO_MANIFEST_DIR"));
 
