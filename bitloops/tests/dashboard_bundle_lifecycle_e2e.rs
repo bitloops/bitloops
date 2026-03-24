@@ -1,3 +1,5 @@
+use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -237,6 +239,8 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         .env("HOME", dashboard_home.path())
         .env("USERPROFILE", dashboard_home.path())
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
