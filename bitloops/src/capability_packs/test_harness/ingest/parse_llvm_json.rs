@@ -147,7 +147,99 @@ fn extract_line_hits(segments: &[Vec<serde_json::Value>]) -> Vec<(i64, i64)> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use anyhow::Result;
+
     use super::*;
+    use crate::capability_packs::knowledge::storage::{
+        KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
+    };
+    use crate::host::capability_host::gateways::RelationalGateway;
+
+    #[derive(Default)]
+    struct FakeRelationalGateway {
+        artefacts_by_file: HashMap<String, Vec<(String, i64, i64)>>,
+    }
+
+    impl RelationalGateway for FakeRelationalGateway {
+        fn initialise_schema(&self) -> Result<()> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn persist_ingestion(
+            &self,
+            _source: &KnowledgeSourceRow,
+            _item: &KnowledgeItemRow,
+        ) -> Result<()> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn insert_relation_assertion(
+            &self,
+            _relation: &KnowledgeRelationAssertionRow,
+        ) -> Result<()> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn find_item_by_id(
+            &self,
+            _repo_id: &str,
+            _knowledge_item_id: &str,
+        ) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn find_source_by_id(
+            &self,
+            _knowledge_source_id: &str,
+        ) -> Result<Option<KnowledgeSourceRow>> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn list_items_for_repo(
+            &self,
+            _repo_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<KnowledgeItemRow>> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn resolve_checkpoint_id(&self, _repo_id: &str, _checkpoint_ref: &str) -> Result<String> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn artefact_exists(&self, _repo_id: &str, _artefact_id: &str) -> Result<bool> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn load_production_artefacts(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            unreachable!("unused in llvm ingest tests")
+        }
+
+        fn load_artefacts_for_file_lines(
+            &self,
+            _commit_sha: &str,
+            file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            Ok(self
+                .artefacts_by_file
+                .get(file_path)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
 
     #[test]
     fn extracts_line_hits_from_segments() {
@@ -177,5 +269,111 @@ mod tests {
         assert!(hits.contains(&(11, 5)));
         assert!(hits.contains(&(12, 5)));
         assert!(hits.contains(&(13, 0)));
+    }
+
+    #[test]
+    fn extract_line_hits_skips_invalid_segments_and_boolean_false_counts() {
+        let segments = vec![
+            vec![serde_json::json!(1)],
+            vec![
+                serde_json::json!(10),
+                serde_json::json!(1),
+                serde_json::json!(2),
+                serde_json::json!(true),
+                serde_json::json!(true),
+                serde_json::json!(false),
+            ],
+            vec![
+                serde_json::json!(12),
+                serde_json::json!(1),
+                serde_json::json!(5),
+                serde_json::json!(false),
+                serde_json::json!(true),
+                serde_json::json!(false),
+            ],
+            vec![
+                serde_json::json!(13),
+                serde_json::json!(1),
+                serde_json::json!(7),
+                serde_json::json!(1),
+                serde_json::json!(true),
+                serde_json::json!(false),
+            ],
+        ];
+
+        let hits = extract_line_hits(&segments);
+
+        assert_eq!(hits, vec![(10, 2), (11, 2), (13, 7)]);
+    }
+
+    #[test]
+    fn ingest_llvm_json_maps_hits_to_symbols_and_reports_unmapped_files() {
+        let relational = FakeRelationalGateway {
+            artefacts_by_file: HashMap::from([(
+                "src/lib.rs".to_string(),
+                vec![
+                    ("prod:service".to_string(), 10, 12),
+                    ("prod:branch".to_string(), 13, 13),
+                ],
+            )]),
+        };
+        let temp = tempfile::NamedTempFile::new().expect("temp llvm json");
+        std::fs::write(
+            temp.path(),
+            serde_json::json!({
+                "data": [
+                    {
+                        "files": [
+                            {
+                                "filename": "src/lib.rs",
+                                "segments": [
+                                    [10, 1, 5, true, true, false],
+                                    [13, 1, 0, true, true, false]
+                                ]
+                            },
+                            {
+                                "filename": "src/missing.rs",
+                                "segments": [
+                                    [20, 1, 1, true, true, false]
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write llvm json");
+
+        let (hits, diagnostics) = ingest_llvm_json(
+            &relational,
+            temp.path(),
+            "commit-sha-123",
+            "repo:test",
+            "capture:test",
+        )
+        .expect("ingest llvm json");
+
+        assert_eq!(hits.len(), 4);
+        assert!(hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:service"
+                && hit.file_path == "src/lib.rs"
+                && hit.line == 10
+                && hit.branch_id == -1
+                && hit.covered
+                && hit.hit_count == 5
+        }));
+        assert!(hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:service" && hit.line == 12 && hit.hit_count == 5
+        }));
+        assert!(hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:branch"
+                && hit.line == 13
+                && !hit.covered
+                && hit.hit_count == 0
+        }));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "unmapped_file");
+        assert_eq!(diagnostics[0].path.as_deref(), Some("src/missing.rs"));
     }
 }

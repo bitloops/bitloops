@@ -149,7 +149,158 @@ fn map_jest_status(status: &str) -> Result<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_jest_status, normalize_test_path};
+    use anyhow::Result;
+
+    use super::{execute, map_jest_status, normalize_test_path};
+    use crate::capability_packs::knowledge::storage::{
+        KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
+    };
+    use crate::capability_packs::test_harness::storage::TestHarnessRepository;
+    use crate::host::capability_host::gateways::RelationalGateway;
+    use crate::models::{
+        CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
+        ProductionIngestionBatch, ResolvedTestScenarioRecord, TestArtefactCurrentRecord,
+        TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+        TestRunRecord,
+    };
+
+    #[derive(Default)]
+    struct FakeRepository {
+        scenarios: Vec<ResolvedTestScenarioRecord>,
+        replaced_commit_sha: Option<String>,
+        replaced_runs: Vec<TestRunRecord>,
+    }
+
+    impl TestHarnessRepository for FakeRepository {
+        fn load_test_scenarios(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<Vec<ResolvedTestScenarioRecord>> {
+            Ok(self.scenarios.clone())
+        }
+
+        fn replace_production_artefacts(
+            &mut self,
+            _batch: &ProductionIngestionBatch,
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn replace_test_discovery(
+            &mut self,
+            _commit_sha: &str,
+            _test_artefacts: &[TestArtefactCurrentRecord],
+            _test_edges: &[TestArtefactEdgeCurrentRecord],
+            _discovery_run: &TestDiscoveryRunRecord,
+            _diagnostics: &[TestDiscoveryDiagnosticRecord],
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn replace_test_runs(&mut self, commit_sha: &str, runs: &[TestRunRecord]) -> Result<()> {
+            self.replaced_commit_sha = Some(commit_sha.to_string());
+            self.replaced_runs = runs.to_vec();
+            Ok(())
+        }
+
+        fn insert_coverage_capture(&mut self, _capture: &CoverageCaptureRecord) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn insert_coverage_hits(&mut self, _hits: &[CoverageHitRecord]) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn insert_coverage_diagnostics(
+            &mut self,
+            _diagnostics: &[CoverageDiagnosticRecord],
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn rebuild_classifications_from_coverage(&mut self, _commit_sha: &str) -> Result<usize> {
+            unreachable!("unused in results tests")
+        }
+    }
+
+    struct FakeRelationalGateway {
+        repo_id: String,
+    }
+
+    impl RelationalGateway for FakeRelationalGateway {
+        fn initialise_schema(&self) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn persist_ingestion(
+            &self,
+            _source: &KnowledgeSourceRow,
+            _item: &KnowledgeItemRow,
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn insert_relation_assertion(
+            &self,
+            _relation: &KnowledgeRelationAssertionRow,
+        ) -> Result<()> {
+            unreachable!("unused in results tests")
+        }
+
+        fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in results tests")
+        }
+
+        fn find_item_by_id(
+            &self,
+            _repo_id: &str,
+            _knowledge_item_id: &str,
+        ) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in results tests")
+        }
+
+        fn find_source_by_id(
+            &self,
+            _knowledge_source_id: &str,
+        ) -> Result<Option<KnowledgeSourceRow>> {
+            unreachable!("unused in results tests")
+        }
+
+        fn list_items_for_repo(
+            &self,
+            _repo_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<KnowledgeItemRow>> {
+            unreachable!("unused in results tests")
+        }
+
+        fn resolve_checkpoint_id(&self, _repo_id: &str, _checkpoint_ref: &str) -> Result<String> {
+            unreachable!("unused in results tests")
+        }
+
+        fn artefact_exists(&self, _repo_id: &str, _artefact_id: &str) -> Result<bool> {
+            unreachable!("unused in results tests")
+        }
+
+        fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
+            Ok(self.repo_id.clone())
+        }
+
+        fn load_production_artefacts(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            unreachable!("unused in results tests")
+        }
+
+        fn load_artefacts_for_file_lines(
+            &self,
+            _commit_sha: &str,
+            _file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            unreachable!("unused in results tests")
+        }
+    }
 
     #[test]
     fn maps_jest_status_values() {
@@ -163,5 +314,117 @@ mod tests {
         let normalized =
             normalize_test_path("/Users/dev/repo/testlens-fixture/tests/UserService.test.ts");
         assert_eq!(normalized, "tests/UserService.test.ts");
+    }
+
+    #[test]
+    fn execute_ingests_matched_runs_using_test_symbol_ids() {
+        let mut repository = FakeRepository {
+            scenarios: vec![ResolvedTestScenarioRecord {
+                scenario_id: "test-symbol:user-service:returns-user".to_string(),
+                path: "tests/UserService.test.ts".to_string(),
+                suite_name: "UserService".to_string(),
+                test_name: "returns user".to_string(),
+            }],
+            ..Default::default()
+        };
+        let relational = FakeRelationalGateway {
+            repo_id: "repo:test".to_string(),
+        };
+        let temp = tempfile::NamedTempFile::new().expect("temp jest json");
+        std::fs::write(
+            temp.path(),
+            serde_json::json!({
+                "testResults": [
+                    {
+                        "name": "/tmp/project/tests/UserService.test.ts",
+                        "assertionResults": [
+                            {
+                                "title": "returns user",
+                                "status": "passed",
+                                "ancestorTitles": ["api", "UserService"],
+                                "duration": 7
+                            },
+                            {
+                                "title": "does not match",
+                                "status": "failed",
+                                "ancestorTitles": ["api", "OtherSuite"],
+                                "duration": null
+                            }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write jest json");
+
+        let summary = execute(&mut repository, &relational, temp.path(), "commit-sha-123")
+            .expect("execute results ingest");
+
+        assert_eq!(summary.ingested, 1);
+        assert_eq!(summary.unmatched, 1);
+        assert_eq!(
+            repository.replaced_commit_sha.as_deref(),
+            Some("commit-sha-123")
+        );
+        assert_eq!(repository.replaced_runs.len(), 1);
+        let run = &repository.replaced_runs[0];
+        assert_eq!(
+            run.run_id,
+            "run:commit-sha-123:test-symbol:user-service:returns-user"
+        );
+        assert_eq!(run.repo_id, "repo:test");
+        assert_eq!(run.commit_sha, "commit-sha-123");
+        assert_eq!(run.test_symbol_id, "test-symbol:user-service:returns-user");
+        assert_eq!(run.status, "pass");
+        assert_eq!(run.duration_ms, Some(7));
+        assert!(!run.ran_at.is_empty());
+    }
+
+    #[test]
+    fn execute_rejects_unsupported_jest_status() {
+        let mut repository = FakeRepository {
+            scenarios: vec![ResolvedTestScenarioRecord {
+                scenario_id: "test-symbol:user-service:returns-user".to_string(),
+                path: "tests/UserService.test.ts".to_string(),
+                suite_name: "UserService".to_string(),
+                test_name: "returns user".to_string(),
+            }],
+            ..Default::default()
+        };
+        let relational = FakeRelationalGateway {
+            repo_id: "repo:test".to_string(),
+        };
+        let temp = tempfile::NamedTempFile::new().expect("temp jest json");
+        std::fs::write(
+            temp.path(),
+            serde_json::json!({
+                "testResults": [
+                    {
+                        "name": "tests/UserService.test.ts",
+                        "assertionResults": [
+                            {
+                                "title": "returns user",
+                                "status": "flaky",
+                                "ancestorTitles": ["UserService"],
+                                "duration": 7
+                            }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write jest json");
+
+        let error = execute(&mut repository, &relational, temp.path(), "commit-sha-123")
+            .expect_err("unsupported status should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported Jest status 'flaky'")
+        );
+        assert!(repository.replaced_runs.is_empty());
     }
 }
