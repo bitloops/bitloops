@@ -87,7 +87,7 @@ impl RelationalStorage {
             Ok(Self::Postgres(client))
         } else {
             let path = relational
-                .resolve_sqlite_db_path()
+                .resolve_sqlite_db_path_for_repo(&cfg.repo_root)
                 .with_context(|| format!("resolving SQLite path for `{command}`"))?;
             Ok(Self::Sqlite { path })
         }

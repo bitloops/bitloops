@@ -306,6 +306,100 @@ pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Re
     run_baseline_ingestion(cfg, &relational).await
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PostCommitArtefactRefreshStats {
+    pub files_seen: usize,
+    pub files_indexed: usize,
+    pub files_deleted: usize,
+    pub files_failed: usize,
+}
+
+pub async fn run_post_commit_artefact_refresh(
+    cfg: &DevqlConfig,
+    commit_sha: &str,
+    changed_files: &[String],
+) -> Result<PostCommitArtefactRefreshStats> {
+    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .context("resolving DevQL backend config for post-commit artefact refresh")?;
+    let relational = RelationalStorage::connect(
+        cfg,
+        &backends.relational,
+        "git post-commit artefact refresh",
+    )
+    .await?;
+
+    ensure_repository_row(cfg, &relational).await?;
+
+    let commit_info = checkpoint_commit_info_from_sha(&cfg.repo_root, commit_sha).unwrap_or(
+        CheckpointCommitInfo {
+            commit_sha: commit_sha.to_string(),
+            commit_unix: 0,
+            author_name: String::new(),
+            author_email: String::new(),
+            subject: String::new(),
+        },
+    );
+    upsert_commit_metadata_row(cfg, &relational, &commit_info).await?;
+
+    let mut stats = PostCommitArtefactRefreshStats::default();
+    for raw_path in changed_files {
+        let path = normalize_repo_path(raw_path);
+        if path.is_empty() {
+            continue;
+        }
+        stats.files_seen += 1;
+
+        let refresh_result = async {
+            let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, commit_sha, &path)
+                .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, commit_sha, raw_path));
+            if let Some(blob_sha) = blob_sha {
+                upsert_file_state_row(&cfg.repo.repo_id, &relational, commit_sha, &path, &blob_sha)
+                    .await?;
+                let file_artefact = upsert_file_artefact_row(
+                    &cfg.repo.repo_id,
+                    &cfg.repo_root,
+                    &relational,
+                    &path,
+                    &blob_sha,
+                )
+                .await?;
+                upsert_language_artefacts(
+                    cfg,
+                    &relational,
+                    &FileRevision {
+                        commit_sha,
+                        revision: TemporalRevisionRef {
+                            kind: TemporalRevisionKind::Commit,
+                            id: commit_sha,
+                            temp_checkpoint_id: None,
+                        },
+                        commit_unix: commit_info.commit_unix,
+                        path: &path,
+                        blob_sha: &blob_sha,
+                    },
+                    &file_artefact,
+                )
+                .await?;
+                stats.files_indexed += 1;
+            } else {
+                delete_current_state_for_path(cfg, &relational, &path).await?;
+                stats.files_deleted += 1;
+            }
+            Result::<(), anyhow::Error>::Ok(())
+        }
+        .await;
+
+        if let Err(err) = refresh_result {
+            stats.files_failed += 1;
+            eprintln!(
+                "[bitloops] Warning: DevQL post-commit refresh failed for `{path}` at commit {commit_sha}: {err:#}"
+            );
+        }
+    }
+
+    Ok(stats)
+}
+
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
@@ -604,7 +698,6 @@ pub async fn run_query(cfg: &DevqlConfig, query: &str, compact: bool) -> Result<
     Ok(())
 }
 
-#[allow(dead_code)] // Compiled in both bin/lib crates; used by lib hook runtime path.
 pub async fn execute_query_json_for_repo_root(repo_root: &Path, query: &str) -> Result<Value> {
     let repo = resolve_repo_identity(repo_root)?;
     let cfg = DevqlConfig::from_env(repo_root.to_path_buf(), repo)?;

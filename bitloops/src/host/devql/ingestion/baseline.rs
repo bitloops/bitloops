@@ -78,7 +78,7 @@ pub(super) async fn run_baseline_ingestion(
             subject: String::new(),
         },
     );
-    upsert_baseline_commit_row(cfg, relational, &commit_info).await?;
+    upsert_commit_metadata_row(cfg, relational, &commit_info).await?;
 
     if files.is_empty() {
         upsert_sync_state_value(cfg, relational, BASELINE_SYNC_STATE_KEY, &head_sha).await?;
@@ -274,7 +274,7 @@ async fn count_rows(relational: &RelationalStorage, sql: &str) -> Result<usize> 
     Ok(count)
 }
 
-async fn upsert_baseline_commit_row(
+pub(super) async fn upsert_commit_metadata_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     commit_info: &CheckpointCommitInfo,

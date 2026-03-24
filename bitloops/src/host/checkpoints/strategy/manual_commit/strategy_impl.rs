@@ -336,11 +336,17 @@ impl Strategy for ManualCommitStrategy {
         let Some(head) = try_head_hash(&self.repo_root)? else {
             return Ok(());
         };
+        let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
+        if let Err(err) = run_devql_post_commit_refresh(&self.repo_root, &head, &committed_files) {
+            eprintln!(
+                "[bitloops] Warning: DevQL post-commit artefact refresh failed for commit {}: {err:#}",
+                head
+            );
+        }
         if commit_has_checkpoint_mapping(&self.repo_root, &head)? {
             return Ok(());
         }
 
-        let committed_files = files_changed_in_commit(&self.repo_root, &head).unwrap_or_default();
         let sessions = self.backend.list_sessions().unwrap_or_default();
         let checkpoint_id = generate_checkpoint_id();
         let mut condensed_any_session = false;
@@ -419,6 +425,48 @@ impl Strategy for ManualCommitStrategy {
     fn pre_push(&self, _remote: &str) -> Result<()> {
         Ok(())
     }
+}
+
+fn run_devql_post_commit_refresh(
+    repo_root: &Path,
+    commit_sha: &str,
+    committed_files: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
+    changed_files.sort();
+
+    let refresh_future = async {
+        let repo = crate::host::devql::resolve_repo_identity(repo_root)
+            .context("resolving repository identity for post-commit DevQL refresh")?;
+        let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
+            .context("building DevQL config for post-commit refresh")?;
+        let stats =
+            crate::host::devql::run_post_commit_artefact_refresh(&cfg, commit_sha, &changed_files)
+                .await
+                .context("refreshing DevQL artefacts for post-commit files")?;
+
+        if stats.files_failed > 0 {
+            eprintln!(
+                "[bitloops] Warning: DevQL post-commit artefact refresh partially succeeded for commit {} (seen={}, indexed={}, deleted={}, failed={})",
+                commit_sha,
+                stats.files_seen,
+                stats.files_indexed,
+                stats.files_deleted,
+                stats.files_failed
+            );
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return tokio::task::block_in_place(|| handle.block_on(refresh_future));
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime for post-commit DevQL refresh")?;
+    runtime.block_on(refresh_future)
 }
 
 pub(crate) fn open_commit_checkpoint_mapping_db(
