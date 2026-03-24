@@ -26,20 +26,17 @@ Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.jso
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
-## Local git hooks (one-time setup)
+## Local checks (optional)
 
-Run once from the repo root:
+There are no repo-enforced git hooks. To match what runs on pull requests to `develop`, run from the repo root:
 
 ```bash
-bash scripts/setup-hooks.sh
+bash scripts/check-dev.sh           # file-size, fmt --check, clippy
+bash scripts/check-dev.sh --test   # also full test suite (cargo test-all)
+bash scripts/check-dev.sh --full   # also coverage baseline check
 ```
 
-This configures git to use the versioned hooks in `.githooks/` (local `core.hooksPath` only — not committed):
-
-- `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
-- `pre-push`: strict coverage non-regression check via `./bitloops/scripts/coverage-baseline-check.sh check`
-
-These hooks do **not** run `bitloops enable` or call the Bitloops CLI. Developing this repo does not require installing Bitloops in your working tree. If you want session/checkpoint git integration here, run `bitloops enable` separately (it manages `.git/hooks` or merges with your hooks setup — see CLI docs).
+If you previously pointed `core.hooksPath` at this repository, run `bash scripts/setup-hooks.sh` once to clear it.
 
 ## Testing
 
@@ -100,7 +97,7 @@ Coverage outputs:
 
 Coverage gate policy:
 
-- Enforced in local `pre-push`.
+- Enforced in GitHub Actions for pull requests to `develop` (`.github/workflows/dev-ci.yml`) and runnable locally via `bash scripts/check-dev.sh --full`.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
 - Baseline source on check: latest JSONL record (`tail -n 1`).

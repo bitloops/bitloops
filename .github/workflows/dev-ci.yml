@@ -1,0 +1,47 @@
+name: Develop CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "bitloops/**"
+      - "scripts/check-rust-file-size.sh"
+      - ".github/workflows/dev-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux quality gate
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+
+      - name: Check Rust file size limits
+        run: bash scripts/check-rust-file-size.sh
+
+      - name: Format
+        run: cargo fmt --all --check --manifest-path bitloops/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test-all --manifest-path bitloops/Cargo.toml
+
+      - name: Coverage baseline
+        working-directory: bitloops
+        run: bash scripts/coverage-baseline-check.sh check

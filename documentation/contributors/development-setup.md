@@ -31,17 +31,17 @@ cargo build
 cargo run -- --version
 ```
 
-## Set Up Git Hooks
+## Local checks (optional)
 
-We have pre-commit hooks for formatting and linting:
+There are no required git hooks. From the repository root you can run the same checks as CI (for PRs into `develop`):
 
 ```bash
-./scripts/setup-hooks.sh
+bash scripts/check-dev.sh           # file-size, fmt, clippy
+bash scripts/check-dev.sh --test   # + full tests
+bash scripts/check-dev.sh --full   # + coverage baseline
 ```
 
-This installs:
-- **Pre-commit** — runs `cargo fmt` and `cargo clippy`
-- **Pre-push** — runs coverage checks against the baseline
+If an older setup pointed `core.hooksPath` here, run `bash scripts/setup-hooks.sh` once to clear it.
 
 ## Running Tests
 
@@ -68,7 +68,7 @@ We use `cargo-llvm-cov` for coverage. Install it:
 cargo install cargo-llvm-cov
 ```
 
-The project maintains a coverage baseline in `.coverage-baseline.jsonl`. The pre-push hook checks that coverage doesn't regress beyond a 5% tolerance.
+The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI on pull requests to `develop` checks that coverage does not regress beyond a 5% tolerance; locally use `bash scripts/check-dev.sh --full`.
 
 ## Quick Reference
 
