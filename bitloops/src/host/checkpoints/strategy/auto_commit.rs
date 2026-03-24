@@ -528,6 +528,16 @@ impl Strategy for AutoCommitStrategy {
     fn pre_push(&self, remote: &str) -> Result<()> {
         self.inner.pre_push(remote)
     }
+
+    fn post_checkout(
+        &self,
+        previous_head: &str,
+        new_head: &str,
+        is_branch_checkout: bool,
+    ) -> Result<()> {
+        self.inner
+            .post_checkout(previous_head, new_head, is_branch_checkout)
+    }
 }
 
 #[cfg(test)]

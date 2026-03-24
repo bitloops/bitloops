@@ -270,6 +270,11 @@ fn test_extract_command_line() {
             "#!/bin/sh\n# comment 1\n# comment 2\nbitloops hooks git pre-push \"$1\" || true\n",
             "bitloops hooks git pre-push \"$1\" || true",
         ),
+        (
+            "post-checkout forwards all hook args",
+            "#!/bin/sh\n# comment\nbitloops hooks git post-checkout \"$@\" 2>/dev/null || true\n",
+            "bitloops hooks git post-checkout \"$@\" 2>/dev/null || true",
+        ),
         ("empty content", "", ""),
         ("only comments", "#!/bin/sh\n# just a comment\n", ""),
         (
@@ -399,12 +404,12 @@ fn get_hooks_dir_in_path_core_hooks_path() {
 }
 
 #[test]
-fn install_creates_four_scripts() {
+fn install_creates_managed_scripts() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
     let count = install_git_hooks(dir.path(), false).unwrap();
-    assert_eq!(count, 4, "should install 4 hooks");
+    assert_eq!(count, HOOK_NAMES.len(), "should install all managed hooks");
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
     for name in HOOK_NAMES {
@@ -514,7 +519,7 @@ fn uninstall_removes_bitloops_hooks() {
     install_git_hooks(dir.path(), false).unwrap();
 
     let removed = uninstall_git_hooks(dir.path()).unwrap();
-    assert_eq!(removed, 4, "should remove 4 hooks");
+    assert_eq!(removed, HOOK_NAMES.len(), "should remove all managed hooks");
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
     for name in HOOK_NAMES {

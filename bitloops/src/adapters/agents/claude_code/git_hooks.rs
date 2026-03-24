@@ -1,7 +1,7 @@
 //! Git hook installation / uninstallation for the manual-commit strategy.
 //!
-//! Installs 4 shell scripts into `.git/hooks/` (or `core.hooksPath`):
-//!   prepare-commit-msg, commit-msg, post-commit, pre-push
+//! Installs 5 shell scripts into `.git/hooks/` (or `core.hooksPath`):
+//!   prepare-commit-msg, commit-msg, post-commit, post-checkout, pre-push
 //!
 //! Each script calls `bitloops hooks git <verb>` and can chain to a
 //! pre-existing hook backed up with the `.pre-bitloops` suffix.
@@ -24,11 +24,12 @@ const HOOK_MARKER: &str = "# Bitloops git hooks";
 /// Suffix appended to pre-existing hooks when backing them up.
 const BACKUP_SUFFIX: &str = ".pre-bitloops";
 
-/// The 4 git hooks managed by Bitloops CLI.
+/// The git hooks managed by Bitloops CLI.
 static HOOK_NAMES: &[&str] = &[
     "prepare-commit-msg",
     "commit-msg",
     "post-commit",
+    "post-checkout",
     "pre-push",
 ];
 
@@ -160,7 +161,7 @@ fn duckdb_runtime_linker_bootstrap(cmd_prefix: &str) -> String {
     )
 }
 
-/// Builds the content of all 4 hook scripts.
+/// Builds the content of all managed hook scripts.
 fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
     let runtime_bootstrap = duckdb_runtime_linker_bootstrap(cmd_prefix);
     vec![
@@ -188,6 +189,15 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
                  {runtime_bootstrap}\
                  # Post-commit: session/checkpoint bookkeeping; failures must not block git\n\
                  {cmd_prefix} hooks git post-commit 2>/dev/null || true\n"
+            ),
+        },
+        HookSpec {
+            name: "post-checkout",
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Post-checkout: branch seeding and bookkeeping; failures must not block git\n\
+                 {cmd_prefix} hooks git post-checkout \"$@\" 2>/dev/null || true\n"
             ),
         },
         HookSpec {
@@ -371,7 +381,7 @@ fn write_hook_file(path: &Path, content: &str) -> Result<bool> {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-/// Installs the 4 git hook scripts into `.git/hooks/`.
+/// Installs the managed git hook scripts into `.git/hooks/`.
 ///
 /// Pre-existing hooks that don't contain the marker are backed up to
 /// `<hook-name>.pre-bitloops` and chained at the end of the new script.
@@ -467,7 +477,7 @@ pub fn uninstall_git_hooks(repo_root: &Path) -> Result<usize> {
     Ok(removed)
 }
 
-/// Returns `true` if all 4 Bitloops git hook scripts are installed.
+/// Returns `true` if all Bitloops git hook scripts are installed.
 pub fn is_git_hook_installed(repo_root: &Path) -> bool {
     let hooks_dir = match get_hooks_dir(repo_root) {
         Ok(d) => d,

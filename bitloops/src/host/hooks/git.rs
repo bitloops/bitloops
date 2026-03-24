@@ -128,6 +128,17 @@ pub enum GitHookVerb {
         /// Remote name (e.g., "origin"), provided by git as $1.
         remote: String,
     },
+
+    /// Handle the post-checkout git hook.
+    #[command(name = "post-checkout")]
+    PostCheckout {
+        /// Previous HEAD commit (provided by git as $1).
+        previous_head: String,
+        /// New HEAD commit (provided by git as $2).
+        new_head: String,
+        /// `1` when switching branches, `0` otherwise (provided by git as $3).
+        is_branch_checkout: i32,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -175,6 +186,13 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
                 strategy.pre_push(&remote)
             })
         }
+        GitHookVerb::PostCheckout {
+            previous_head,
+            new_head,
+            is_branch_checkout,
+        } => run_git_hook_with_logging(&repo_root, "post-checkout", &strategy_name, || {
+            strategy.post_checkout(&previous_head, &new_head, is_branch_checkout != 0)
+        }),
     };
 
     if let Err(e) = result {

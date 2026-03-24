@@ -4,10 +4,20 @@ const BASELINE_BATCH_SIZE: usize = 200;
 const BASELINE_SYNC_STATE_KEY: &str = "baseline_commit_sha";
 
 pub(super) fn discover_baseline_files(repo_root: &Path) -> Result<Vec<String>> {
-    let tree_output = match run_git(repo_root, &["ls-tree", "-r", "--full-tree", "HEAD"]) {
+    discover_baseline_files_at_revision(repo_root, "HEAD")
+}
+
+pub(super) fn discover_baseline_files_at_revision(
+    repo_root: &Path,
+    revision: &str,
+) -> Result<Vec<String>> {
+    let tree_output = match run_git(repo_root, &["ls-tree", "-r", "--full-tree", revision]) {
         Ok(output) => output,
         Err(err) if is_missing_head_error(&err) => return Ok(Vec::new()),
-        Err(err) => return Err(err).context("listing tracked files at HEAD"),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("listing tracked files at revision `{revision}`"));
+        }
     };
 
     let mut files = tree_output

@@ -127,4 +127,16 @@ pub trait Strategy: Send + Sync {
     fn pre_push(&self, _remote: &str) -> Result<()> {
         Ok(())
     }
+
+    /// Called by the `post-checkout` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn post_checkout(
+        &self,
+        _previous_head: &str,
+        _new_head: &str,
+        _is_branch_checkout: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
