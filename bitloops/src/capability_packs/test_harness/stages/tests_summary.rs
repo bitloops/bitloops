@@ -100,7 +100,7 @@ mod tests {
 
     use super::TestsSummaryStageHandler;
     use crate::capability_packs::test_harness::storage::{
-        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessQueryRepository,
+        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessRepository,
         init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
@@ -108,7 +108,6 @@ mod tests {
     use crate::host::capability_host::runtime_contexts::LocalCanonicalGraphGateway;
     use crate::host::capability_host::{CapabilityExecutionContext, StageHandler, StageRequest};
     use crate::host::devql::RepoIdentity;
-    use crate::models::TestHarnessCommitCounts;
     struct DummyExecCtx {
         repo: RepoIdentity,
         graph: LocalCanonicalGraphGateway,
@@ -209,139 +208,122 @@ mod tests {
         assert!(resp.human_output.contains("deadbeef"));
     }
 
-    #[derive(Debug, Clone)]
-    struct FakeRepo {
-        counts: TestHarnessCommitCounts,
-        coverage_present: bool,
-    }
+    #[tokio::test]
+    async fn summary_stage_reads_pack_owned_counts_only() {
+        let temp = TempDir::new().expect("tempdir");
+        let db_path = temp.path().join("harness.db");
+        init_test_domain_database(&db_path).expect("init");
 
-    impl TestHarnessQueryRepository for FakeRepo {
-        fn find_artefact(
-            &self,
-            _commit_sha: &str,
-            _artefact_query: &str,
-        ) -> Result<crate::models::QueriedArtefactRecord> {
-            unreachable!("unused in summary stage guardrails")
-        }
+        let mut repo = BitloopsTestHarnessRepository::Sqlite(
+            SqliteTestHarnessRepository::open_existing(&db_path).expect("open"),
+        );
+        seed_pack_owned_rows(&mut repo, "commit-123").expect("seed pack rows");
 
-        fn list_artefacts(
-            &self,
-            _commit_sha: &str,
-            _kind: Option<&str>,
-        ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_covering_tests(
-            &self,
-            _commit_sha: &str,
-            _production_symbol_id: &str,
-        ) -> Result<Vec<crate::models::CoveringTestRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_linked_fan_out_by_test(
-            &self,
-            _commit_sha: &str,
-        ) -> Result<std::collections::HashMap<String, i64>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn coverage_exists_for_commit(&self, _commit_sha: &str) -> Result<bool> {
-            Ok(self.coverage_present)
-        }
-
-        fn load_coverage_pair_stats(
-            &self,
-            _commit_sha: &str,
-            _test_symbol_id: &str,
-            _production_symbol_id: &str,
-        ) -> Result<crate::models::CoveragePairStats> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_latest_test_run(
-            &self,
-            _commit_sha: &str,
-            _test_symbol_id: &str,
-        ) -> Result<Option<crate::models::LatestTestRunRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_coverage_summary(
-            &self,
-            _commit_sha: &str,
-            _production_symbol_id: &str,
-        ) -> Result<Option<crate::models::CoverageSummaryRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_test_harness_commit_counts(
-            &self,
-            _commit_sha: &str,
-        ) -> Result<TestHarnessCommitCounts> {
-            Ok(self.counts)
-        }
-
-        fn load_stage_covering_tests(
-            &self,
-            _repo_id: &str,
-            _production_symbol_id: &str,
-            _min_confidence: Option<f64>,
-            _linkage_source: Option<&str>,
-            _limit: usize,
-        ) -> Result<Vec<crate::models::StageCoveringTestRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_stage_line_coverage(
-            &self,
-            _repo_id: &str,
-            _production_symbol_id: &str,
-            _commit_sha: Option<&str>,
-        ) -> Result<Vec<crate::models::StageLineCoverageRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_stage_branch_coverage(
-            &self,
-            _repo_id: &str,
-            _production_symbol_id: &str,
-            _commit_sha: Option<&str>,
-        ) -> Result<Vec<crate::models::StageBranchCoverageRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-
-        fn load_stage_coverage_metadata(
-            &self,
-            _repo_id: &str,
-            _commit_sha: Option<&str>,
-        ) -> Result<Option<crate::models::StageCoverageMetadataRecord>> {
-            unreachable!("unused in summary stage guardrails")
-        }
-    }
-
-    #[test]
-    fn summary_stage_reads_pack_owned_counts_only() {
-        let repo = FakeRepo {
-            counts: TestHarnessCommitCounts {
-                test_artefacts: 3,
-                test_artefact_edges: 2,
-                test_classifications: 1,
-                coverage_captures: 4,
-                coverage_hits: 5,
-            },
-            coverage_present: true,
+        let handler = TestsSummaryStageHandler(Some(Arc::new(Mutex::new(repo))));
+        let mut ctx = DummyExecCtx {
+            repo: test_repo(),
+            graph: LocalCanonicalGraphGateway,
         };
+        let req = StageRequest::new(json!({
+            "limit": 10,
+            "query_context": { "resolved_commit_sha": "commit-123" }
+        }));
+        let resp = handler.execute(req, &mut ctx).await.expect("execute");
+        assert_eq!(resp.payload["status"], "ok");
+        assert_eq!(resp.payload["commit_sha"], "commit-123");
+        let counts = resp.payload["counts"].as_object().expect("counts object");
+        assert_eq!(counts["test_artefacts"], 1);
+        assert_eq!(counts["test_artefact_edges"], 1);
+        assert_eq!(counts["coverage_captures"], 1);
+        assert_eq!(counts["coverage_hits"], 1);
+        assert_eq!(resp.payload["coverage_present"], true);
+        assert!(resp.human_output.contains("commit-123"));
+    }
 
-        let (payload, human) =
-            super::build_test_harness_commit_snapshot(&repo, "commit-123").expect("snapshot");
+    fn seed_pack_owned_rows(repo: &mut impl TestHarnessRepository, commit_sha: &str) -> Result<()> {
+        let discovery_run = crate::models::TestDiscoveryRunRecord {
+            discovery_run_id: format!("discovery:{commit_sha}"),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            language: Some("rust".into()),
+            started_at: "2026-03-24T00:00:00Z".into(),
+            finished_at: Some("2026-03-24T00:00:01Z".into()),
+            status: "complete".into(),
+            enumeration_status: Some("complete".into()),
+            notes_json: None,
+            stats_json: None,
+        };
+        let artefact = crate::models::TestArtefactCurrentRecord {
+            artefact_id: "test-artefact-1".into(),
+            symbol_id: "test-symbol-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            blob_sha: "blob-1".into(),
+            path: "tests/example.rs".into(),
+            language: "rust".into(),
+            canonical_kind: "test_scenario".into(),
+            language_kind: None,
+            symbol_fqn: Some("tests::example".into()),
+            name: "example".into(),
+            parent_artefact_id: None,
+            parent_symbol_id: None,
+            start_line: 1,
+            end_line: 10,
+            start_byte: None,
+            end_byte: None,
+            signature: None,
+            modifiers: "[]".into(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static".into(),
+            revision_kind: "commit".into(),
+            revision_id: commit_sha.into(),
+        };
+        let edge = crate::models::TestArtefactEdgeCurrentRecord {
+            edge_id: "edge-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            blob_sha: "blob-1".into(),
+            path: "tests/example.rs".into(),
+            from_artefact_id: "test-artefact-1".into(),
+            from_symbol_id: "test-symbol-1".into(),
+            to_artefact_id: None,
+            to_symbol_id: Some("prod-symbol-1".into()),
+            to_symbol_ref: None,
+            edge_kind: "covers".into(),
+            language: "rust".into(),
+            start_line: Some(1),
+            end_line: Some(10),
+            metadata: "{}".into(),
+            revision_kind: "commit".into(),
+            revision_id: commit_sha.into(),
+        };
+        repo.replace_test_discovery(commit_sha, &[artefact], &[edge], &discovery_run, &[])?;
 
-        assert_eq!(payload["status"], "ok");
-        assert_eq!(payload["commit_sha"], "commit-123");
-        assert_eq!(payload["counts"]["test_artefacts"], 3);
-        assert_eq!(payload["counts"]["coverage_hits"], 5);
-        assert_eq!(payload["coverage_present"], true);
-        assert!(human.contains("commit-123"));
+        let capture = crate::models::CoverageCaptureRecord {
+            capture_id: "capture-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            tool: "lcov".into(),
+            format: crate::models::CoverageFormat::Lcov,
+            scope_kind: crate::models::ScopeKind::TestScenario,
+            subject_test_symbol_id: Some("test-symbol-1".into()),
+            line_truth: true,
+            branch_truth: false,
+            captured_at: "2026-03-24T00:00:02Z".into(),
+            status: "complete".into(),
+            metadata_json: None,
+        };
+        repo.insert_coverage_capture(&capture)?;
+        repo.insert_coverage_hits(&[crate::models::CoverageHitRecord {
+            capture_id: "capture-1".into(),
+            production_symbol_id: "prod-symbol-1".into(),
+            file_path: "src/example.rs".into(),
+            line: 42,
+            branch_id: -1,
+            covered: true,
+            hit_count: 1,
+        }])?;
+        Ok(())
     }
 }

@@ -503,6 +503,13 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
         assert_eq!(rows[1]["artefact"]["artefact_id"], "artefact-b");
+        let coverage = rows[0]["coverage"].as_object().expect("coverage object");
+        assert_eq!(coverage["coverage_source"], "llvm-json");
+        assert_eq!(coverage["branch_data_available"], true);
+        let branches = coverage["branches"].as_array().expect("branches array");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0]["branch"], 1);
+        assert_eq!(branches[1]["branch"], 2);
         assert_eq!(repo.metadata_calls().len(), 1);
         assert_eq!(repo.line_calls().len(), 2);
         assert_eq!(repo.branch_calls().len(), 2);
