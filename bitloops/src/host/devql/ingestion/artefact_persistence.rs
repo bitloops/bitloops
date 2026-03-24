@@ -300,16 +300,17 @@ pub(super) async fn upsert_language_artefacts(
         &items,
         &source_content,
     );
+    let mut historical_sql_batch =
+        Vec::with_capacity(symbol_records.len() + dependency_edges.len().saturating_mul(2));
     for record in &symbol_records {
-        persist_historical_artefact(
+        historical_sql_batch.push(build_upsert_historical_artefact_sql(
             cfg,
             relational,
             rev.path,
             rev.blob_sha,
             &file_artefact.language,
             record,
-        )
-        .await?;
+        ));
     }
 
     let mut historical_lookup = HashMap::new();
@@ -333,8 +334,16 @@ pub(super) async fn upsert_language_artefacts(
         &historical_lookup,
     );
     for record in &historical_edge_records {
-        persist_historical_edge(cfg, relational, rev.blob_sha, record).await?;
+        historical_sql_batch.push(build_upsert_historical_edge_sql(
+            cfg,
+            relational,
+            rev.blob_sha,
+            record,
+        ));
     }
+    relational
+        .exec_batch_transactional(&historical_sql_batch)
+        .await?;
 
     refresh_current_state_for_path(
         cfg,

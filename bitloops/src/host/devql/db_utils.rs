@@ -4,6 +4,30 @@ pub(crate) async fn postgres_exec(pg_client: &tokio_postgres::Client, sql: &str)
     run_postgres_exec(pg_client, sql).await
 }
 
+pub(super) async fn postgres_exec_batch_transactional(
+    pg_client: &tokio_postgres::Client,
+    statements: &[String],
+) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+
+    let mut sql = String::from("BEGIN;");
+    for statement in statements {
+        let trimmed = statement.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        sql.push_str(trimmed);
+        if !trimmed.ends_with(';') {
+            sql.push(';');
+        }
+    }
+    sql.push_str("COMMIT;");
+
+    run_postgres_exec(pg_client, &sql).await
+}
+
 pub(super) async fn pg_query_rows(
     pg_client: &tokio_postgres::Client,
     sql: &str,
@@ -282,6 +306,52 @@ pub(super) async fn sqlite_exec_path_inner(
     .context("joining SQLite execute task")?
 }
 
+pub(super) async fn sqlite_exec_batch_transactional_path(
+    path: &Path,
+    statements: &[String],
+) -> Result<()> {
+    let db_path = path.to_path_buf();
+    let statements = statements.to_vec();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if !db_path.is_file() {
+            bail!(
+                "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
+
+        let mut conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        conn.busy_timeout(std::time::Duration::from_secs(30))
+            .context("setting SQLite busy timeout")?;
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+            .context("configuring SQLite WAL transaction settings")?;
+
+        let tx = conn
+            .transaction()
+            .context("starting SQLite transactional batch execution")?;
+        for (index, statement) in statements.iter().enumerate() {
+            if statement.trim().is_empty() {
+                continue;
+            }
+            tx.execute_batch(statement).with_context(|| {
+                format!(
+                    "executing SQLite transactional statement {}",
+                    index.saturating_add(1)
+                )
+            })?;
+        }
+        tx.commit()
+            .context("committing SQLite transactional batch execution")?;
+        Ok(())
+    })
+    .await
+    .context("joining SQLite transactional batch task")?
+}
+
 pub(super) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
@@ -514,4 +584,79 @@ pub(super) fn format_ch_array(values: &[String]) -> String {
 
 pub(super) fn glob_to_sql_like(glob: &str) -> String {
     glob.replace("**", "%").replace('*', "%")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_exec_batch_transactional_path_rolls_back_on_failure() -> Result<()> {
+        let tmp = tempfile::TempDir::new().context("creating temp dir")?;
+        let sqlite_path = tmp.path().join("devql.sqlite");
+        let conn = rusqlite::Connection::open(&sqlite_path).context("opening test sqlite")?;
+        conn.execute_batch(
+            "CREATE TABLE sample (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                value TEXT NOT NULL
+            );",
+        )
+        .context("creating sample table")?;
+        drop(conn);
+
+        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        let statements = vec![
+            "INSERT INTO sample (value) VALUES ('one');".to_string(),
+            "INSERT INTO missing_table (value) VALUES ('boom');".to_string(),
+        ];
+        let result = runtime.block_on(sqlite_exec_batch_transactional_path(
+            &sqlite_path,
+            &statements,
+        ));
+        assert!(
+            result.is_err(),
+            "expected transactional batch to fail when one statement errors"
+        );
+
+        let conn = rusqlite::Connection::open(&sqlite_path).context("re-opening test sqlite")?;
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get(0))
+            .context("counting sample rows")?;
+        assert_eq!(
+            row_count, 0,
+            "failed transactional batches must rollback prior writes"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_exec_batch_transactional_path_enables_wal_mode() -> Result<()> {
+        let tmp = tempfile::TempDir::new().context("creating temp dir")?;
+        let sqlite_path = tmp.path().join("devql.sqlite");
+        let conn = rusqlite::Connection::open(&sqlite_path).context("opening test sqlite")?;
+        conn.execute_batch("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT);")
+            .context("creating sample table")?;
+        drop(conn);
+
+        let runtime = tokio::runtime::Runtime::new().context("creating tokio runtime")?;
+        runtime
+            .block_on(sqlite_exec_batch_transactional_path(
+                &sqlite_path,
+                &["INSERT INTO sample (id, value) VALUES (1, 'ok');".to_string()],
+            ))
+            .context("executing transactional batch")?;
+
+        let conn = rusqlite::Connection::open(&sqlite_path).context("re-opening test sqlite")?;
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+            .context("reading journal_mode pragma")?;
+        assert_eq!(
+            journal_mode.to_ascii_lowercase(),
+            "wal",
+            "transactional batch execution should enable WAL mode"
+        );
+
+        Ok(())
+    }
 }

@@ -2,6 +2,22 @@ use super::*;
 
 // File state row, file artefact upsert, and revision comparison/management.
 
+pub(super) fn build_upsert_file_state_sql(
+    repo_id: &str,
+    commit_sha: &str,
+    path: &str,
+    blob_sha: &str,
+) -> String {
+    format!(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha",
+        esc_pg(repo_id),
+        esc_pg(commit_sha),
+        esc_pg(path),
+        esc_pg(blob_sha),
+    )
+}
+
 pub(super) async fn upsert_file_state_row(
     repo_id: &str,
     relational: &RelationalStorage,
@@ -9,14 +25,7 @@ pub(super) async fn upsert_file_state_row(
     path: &str,
     blob_sha: &str,
 ) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha",
-        esc_pg(repo_id),
-        esc_pg(commit_sha),
-        esc_pg(path),
-        esc_pg(blob_sha),
-    );
+    let sql = build_upsert_file_state_sql(repo_id, commit_sha, path, blob_sha);
 
     relational.exec(&sql).await
 }
@@ -246,4 +255,26 @@ WHERE repo_id = '{}' AND path = '{}'",
     relational.exec(&edges_sql).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_upsert_file_state_sql_escapes_and_targets_expected_table() {
+        let sql = build_upsert_file_state_sql("repo'id", "commit'sha", "src/path.rs", "blob'sha");
+        assert!(
+            sql.contains("INSERT INTO file_state"),
+            "builder should target file_state upsert"
+        );
+        assert!(
+            sql.contains("repo''id"),
+            "builder should escape single quotes in repo_id"
+        );
+        assert!(
+            sql.contains("ON CONFLICT (repo_id, commit_sha, path)"),
+            "builder should preserve conflict target"
+        );
+    }
 }

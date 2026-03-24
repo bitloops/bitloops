@@ -107,6 +107,13 @@ impl RelationalStorage {
         }
     }
 
+    pub async fn exec_batch_transactional(&self, statements: &[String]) -> Result<()> {
+        match self {
+            Self::Postgres(client) => postgres_exec_batch_transactional(client, statements).await,
+            Self::Sqlite { path } => sqlite_exec_batch_transactional_path(path, statements).await,
+        }
+    }
+
     pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
         match self {
             Self::Postgres(client) => pg_query_rows(client, sql).await,
