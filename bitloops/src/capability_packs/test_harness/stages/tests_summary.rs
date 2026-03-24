@@ -94,18 +94,21 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
+    use anyhow::Result;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::TestsSummaryStageHandler;
     use crate::capability_packs::test_harness::storage::{
-        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, init_test_domain_database,
+        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessQueryRepository,
+        init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
     use crate::host::capability_host::gateways::{CanonicalGraphGateway, RelationalGateway};
     use crate::host::capability_host::runtime_contexts::LocalCanonicalGraphGateway;
     use crate::host::capability_host::{CapabilityExecutionContext, StageHandler, StageRequest};
     use crate::host::devql::RepoIdentity;
+    use crate::models::TestHarnessCommitCounts;
     struct DummyExecCtx {
         repo: RepoIdentity,
         graph: LocalCanonicalGraphGateway,
@@ -204,5 +207,141 @@ mod tests {
         assert_eq!(counts["test_artefacts"], 0);
         assert_eq!(counts["test_artefact_edges"], 0);
         assert!(resp.human_output.contains("deadbeef"));
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeRepo {
+        counts: TestHarnessCommitCounts,
+        coverage_present: bool,
+    }
+
+    impl TestHarnessQueryRepository for FakeRepo {
+        fn find_artefact(
+            &self,
+            _commit_sha: &str,
+            _artefact_query: &str,
+        ) -> Result<crate::models::QueriedArtefactRecord> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn list_artefacts(
+            &self,
+            _commit_sha: &str,
+            _kind: Option<&str>,
+        ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_covering_tests(
+            &self,
+            _commit_sha: &str,
+            _production_symbol_id: &str,
+        ) -> Result<Vec<crate::models::CoveringTestRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_linked_fan_out_by_test(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<std::collections::HashMap<String, i64>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn coverage_exists_for_commit(&self, _commit_sha: &str) -> Result<bool> {
+            Ok(self.coverage_present)
+        }
+
+        fn load_coverage_pair_stats(
+            &self,
+            _commit_sha: &str,
+            _test_symbol_id: &str,
+            _production_symbol_id: &str,
+        ) -> Result<crate::models::CoveragePairStats> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_latest_test_run(
+            &self,
+            _commit_sha: &str,
+            _test_symbol_id: &str,
+        ) -> Result<Option<crate::models::LatestTestRunRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_coverage_summary(
+            &self,
+            _commit_sha: &str,
+            _production_symbol_id: &str,
+        ) -> Result<Option<crate::models::CoverageSummaryRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_test_harness_commit_counts(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<TestHarnessCommitCounts> {
+            Ok(self.counts)
+        }
+
+        fn load_stage_covering_tests(
+            &self,
+            _repo_id: &str,
+            _production_symbol_id: &str,
+            _min_confidence: Option<f64>,
+            _linkage_source: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<crate::models::StageCoveringTestRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_stage_line_coverage(
+            &self,
+            _repo_id: &str,
+            _production_symbol_id: &str,
+            _commit_sha: Option<&str>,
+        ) -> Result<Vec<crate::models::StageLineCoverageRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_stage_branch_coverage(
+            &self,
+            _repo_id: &str,
+            _production_symbol_id: &str,
+            _commit_sha: Option<&str>,
+        ) -> Result<Vec<crate::models::StageBranchCoverageRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+
+        fn load_stage_coverage_metadata(
+            &self,
+            _repo_id: &str,
+            _commit_sha: Option<&str>,
+        ) -> Result<Option<crate::models::StageCoverageMetadataRecord>> {
+            unreachable!("unused in summary stage guardrails")
+        }
+    }
+
+    #[test]
+    fn summary_stage_reads_pack_owned_counts_only() {
+        let repo = FakeRepo {
+            counts: TestHarnessCommitCounts {
+                test_artefacts: 3,
+                test_artefact_edges: 2,
+                test_classifications: 1,
+                coverage_captures: 4,
+                coverage_hits: 5,
+            },
+            coverage_present: true,
+        };
+
+        let (payload, human) =
+            super::build_test_harness_commit_snapshot(&repo, "commit-123").expect("snapshot");
+
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["commit_sha"], "commit-123");
+        assert_eq!(payload["counts"]["test_artefacts"], 3);
+        assert_eq!(payload["counts"]["coverage_hits"], 5);
+        assert_eq!(payload["coverage_present"], true);
+        assert!(human.contains("commit-123"));
     }
 }
