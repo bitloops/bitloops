@@ -7,27 +7,37 @@ use crate::utils::paths;
 
 use super::constants::*;
 use super::store_config_utils::{
-    current_repo_root_or_cwd_result, load_repo_config_value, normalize_blob_path,
-    normalize_sqlite_path, parse_blob_storage_provider, parse_events_provider,
-    parse_relational_provider, read_non_empty_env, resolve_configured_path,
-    resolve_required_provider_string,
+    current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
+    normalize_sqlite_path, read_non_empty_env, resolve_configured_path,
+    resolve_required_provider_string, user_home_dir,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, DashboardFileConfig,
-    EventsBackendConfig, EventsProvider, GithubProviderConfig, ProviderConfig,
-    RelationalBackendConfig, RelationalProvider, StoreBackendConfig, StoreEmbeddingConfig,
+    AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, GithubProviderConfig,
+    ProviderConfig, RelationalBackendConfig, StoreBackendConfig, StoreEmbeddingConfig,
     StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
+use super::unified_config::{
+    UnifiedSettings, load_effective_config, resolve_dashboard_from_unified,
+    resolve_embedding_from_unified, resolve_provider_from_unified, resolve_semantic_from_unified,
+    resolve_store_backend_from_unified, resolve_watch_from_unified,
+};
+
+fn effective_settings_for_repo(repo_root: &Path) -> Result<UnifiedSettings> {
+    let global_dir = user_home_dir();
+    load_effective_config(global_dir.as_deref(), repo_root)
+}
 
 pub fn dashboard_use_bitloops_local() -> bool {
-    DashboardFileConfig::load()
+    let repo_root = current_repo_root_or_cwd();
+    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_dashboard_from_unified(&settings)
         .use_bitloops_local
         .unwrap_or(false)
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {
-    let file_cfg = WatchFileConfig::load_for_repo(repo_root);
-    resolve_watch_runtime_config_with(file_cfg, |key| env::var(key).ok())
+    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
+    resolve_watch_from_unified(&settings, |key| env::var(key).ok())
 }
 
 pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
@@ -36,13 +46,14 @@ pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
 }
 
 pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
-    let file_cfg = StoreFileConfig::load_for_repo(repo_root);
-    resolve_store_backend_config_with(file_cfg)
+    let settings = effective_settings_for_repo(repo_root)?;
+    resolve_store_backend_from_unified(&settings, repo_root)
 }
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
-    let file_cfg = StoreFileConfig::load();
-    resolve_store_semantic_config_with(file_cfg, |key| env::var(key).ok())
+    let repo_root = current_repo_root_or_cwd();
+    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_semantic_from_unified(&settings, |key| env::var(key).ok())
 }
 
 pub fn resolve_provider_config() -> Result<ProviderConfig> {
@@ -51,13 +62,14 @@ pub fn resolve_provider_config() -> Result<ProviderConfig> {
 }
 
 pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConfig> {
-    let value = load_repo_config_value(repo_root).unwrap_or(Value::Object(Map::new()));
-    resolve_provider_config_from_value_with(&value, |key| env::var(key).ok())
+    let settings = effective_settings_for_repo(repo_root)?;
+    resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
 
 pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
-    let file_cfg = StoreFileConfig::load();
-    resolve_store_embedding_config_with(file_cfg, |key| env::var(key).ok())
+    let repo_root = current_repo_root_or_cwd();
+    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_embedding_from_unified(&settings, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -98,42 +110,34 @@ pub fn resolve_blob_local_path_for_repo(
     }
 }
 
-fn resolve_store_backend_config_with(file_cfg: StoreFileConfig) -> Result<StoreBackendConfig> {
-    let relational_provider = if let Some(raw) = file_cfg.relational_provider {
-        parse_relational_provider(&raw)?
-    } else {
-        RelationalProvider::Sqlite
-    };
+/// Default relative paths for local backends (resolved against repo_root at use-time).
+const DEFAULT_SQLITE_PATH: &str = ".bitloops/stores/relational/relational.db";
+const DEFAULT_DUCKDB_PATH: &str = ".bitloops/stores/event/events.duckdb";
+const DEFAULT_BLOB_LOCAL_PATH: &str = ".bitloops/stores/blob";
 
-    let events_provider = if let Some(raw) = file_cfg.events_provider {
-        parse_events_provider(&raw)?
-    } else {
-        EventsProvider::DuckDb
-    };
-
-    let blob_provider = if let Some(raw) = file_cfg.blob_provider {
-        parse_blob_storage_provider(&raw)?
-    } else {
-        BlobStorageProvider::Local
-    };
-
+pub(crate) fn resolve_store_backend_config_with(
+    file_cfg: StoreFileConfig,
+) -> Result<StoreBackendConfig> {
     Ok(StoreBackendConfig {
         relational: RelationalBackendConfig {
-            provider: relational_provider,
-            sqlite_path: file_cfg.sqlite_path,
+            sqlite_path: file_cfg
+                .sqlite_path
+                .or_else(|| Some(DEFAULT_SQLITE_PATH.to_string())),
             postgres_dsn: file_cfg.pg_dsn,
         },
         events: EventsBackendConfig {
-            provider: events_provider,
-            duckdb_path: file_cfg.duckdb_path,
+            duckdb_path: file_cfg
+                .duckdb_path
+                .or_else(|| Some(DEFAULT_DUCKDB_PATH.to_string())),
             clickhouse_url: file_cfg.clickhouse_url,
             clickhouse_user: file_cfg.clickhouse_user,
             clickhouse_password: file_cfg.clickhouse_password,
             clickhouse_database: file_cfg.clickhouse_database,
         },
         blobs: BlobStorageConfig {
-            provider: blob_provider,
-            local_path: file_cfg.blob_local_path,
+            local_path: file_cfg
+                .blob_local_path
+                .or_else(|| Some(DEFAULT_BLOB_LOCAL_PATH.to_string())),
             s3_bucket: file_cfg.blob_s3_bucket,
             s3_region: file_cfg.blob_s3_region,
             s3_access_key_id: file_cfg.blob_s3_access_key_id,
@@ -144,7 +148,7 @@ fn resolve_store_backend_config_with(file_cfg: StoreFileConfig) -> Result<StoreB
     })
 }
 
-fn resolve_provider_config_from_value_with<F>(
+pub(crate) fn resolve_provider_config_from_value_with<F>(
     value: &Value,
     env_lookup: F,
 ) -> Result<ProviderConfig>
@@ -201,7 +205,7 @@ where
     })
 }
 
-fn resolve_store_semantic_config_with<F>(
+pub(crate) fn resolve_store_semantic_config_with<F>(
     file_cfg: StoreFileConfig,
     env_lookup: F,
 ) -> StoreSemanticConfig
@@ -252,7 +256,7 @@ where
     })
 }
 
-fn resolve_watch_runtime_config_with<F>(
+pub(crate) fn resolve_watch_runtime_config_with<F>(
     file_cfg: WatchFileConfig,
     env_lookup: F,
 ) -> WatchRuntimeConfig
@@ -273,7 +277,7 @@ where
     }
 }
 
-fn resolve_store_embedding_config_with<F>(
+pub(crate) fn resolve_store_embedding_config_with<F>(
     file_cfg: StoreFileConfig,
     env_lookup: F,
 ) -> StoreEmbeddingConfig

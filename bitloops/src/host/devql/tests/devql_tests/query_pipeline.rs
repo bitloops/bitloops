@@ -1503,10 +1503,13 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     std::fs::write(
         config_dir.join("config.json"),
         serde_json::to_vec_pretty(&json!({
-            "stores": {
-                "relational": {
-                    "provider": "sqlite",
-                    "sqlite_path": sqlite_path.to_string_lossy()
+            "version": "1.0",
+            "scope": "project",
+            "settings": {
+                "stores": {
+                    "relational": {
+                        "sqlite_path": sqlite_path.to_string_lossy()
+                    }
                 }
             }
         }))
@@ -1800,10 +1803,13 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     std::fs::write(
         config_dir.join("config.json"),
         serde_json::to_vec_pretty(&json!({
-            "stores": {
-                "relational": {
-                    "provider": "sqlite",
-                    "sqlite_path": sqlite_path.to_string_lossy()
+            "version": "1.0",
+            "scope": "project",
+            "settings": {
+                "stores": {
+                    "relational": {
+                        "sqlite_path": sqlite_path.to_string_lossy()
+                    }
                 }
             }
         }))

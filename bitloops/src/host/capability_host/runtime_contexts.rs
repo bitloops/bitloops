@@ -8,7 +8,7 @@ use crate::capability_packs::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
 };
 use crate::config::{
-    ProviderConfig, RelationalProvider, StoreBackendConfig, resolve_provider_config_for_repo,
+    ProviderConfig, StoreBackendConfig, resolve_provider_config_for_repo,
     resolve_store_backend_config_for_repo,
 };
 use crate::host::devql::RelationalStorage;
@@ -115,8 +115,8 @@ fn build_capability_config_root(
                 "atlassian": providers.atlassian.as_ref().map(|cfg| serde_json::json!({ "site_url": cfg.site_url })),
             },
             "backends": {
-                "relational": backends.relational.provider.as_str(),
-                "events": backends.events.provider.as_str(),
+                "relational": if backends.relational.has_postgres() { "postgres" } else { "sqlite" },
+                "events": if backends.events.has_clickhouse() { "clickhouse" } else { "duckdb" },
             }
         },
         "host": {
@@ -269,7 +269,7 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
     }
 
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()> {
-        if self.backends.relational.provider != RelationalProvider::Sqlite {
+        if self.backends.relational.has_postgres() {
             return Ok(());
         }
         let path = self

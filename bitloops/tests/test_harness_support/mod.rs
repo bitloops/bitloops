@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::utils::paths;
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -680,9 +682,23 @@ fn init_git_repo(repo_dir: &Path) {
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {
+    let isolated_home = tempfile::tempdir().expect("create isolated home for test command");
+    let xdg_config_home = isolated_home.path().join("xdg");
+    fs::create_dir_all(&xdg_config_home).expect("create isolated xdg config home");
+
     Command::new(env!("CARGO_BIN_EXE_bitloops"))
         .current_dir(workdir)
         .args(args)
+        .env("HOME", isolated_home.path())
+        .env("USERPROFILE", isolated_home.path())
+        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(DISABLE_VERSION_CHECK_ENV, "1")
+        .env_remove("BITLOOPS_DEVQL_PG_DSN")
+        .env_remove("BITLOOPS_DEVQL_CH_URL")
+        .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
+        .env_remove("BITLOOPS_DEVQL_CH_USER")
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD")
         .output()
         .expect("execute bitloops command")
 }

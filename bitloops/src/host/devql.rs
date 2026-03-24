@@ -17,9 +17,9 @@ use crate::capability_packs::semantic_clones::{
     upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
 };
 use crate::config::{
-    EventsBackendConfig, EventsProvider, RelationalBackendConfig, RelationalProvider,
-    StoreBackendConfig, resolve_store_backend_config, resolve_store_backend_config_for_repo,
-    resolve_store_embedding_config, resolve_store_semantic_config,
+    EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
+    resolve_store_backend_config_for_repo, resolve_store_embedding_config,
+    resolve_store_semantic_config,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
@@ -269,9 +269,10 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
         .context("resolving DevQL backend config for `devql init`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql init").await?;
 
-    match backends.events.provider {
-        EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
-        EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
+    if backends.events.has_clickhouse() {
+        init_clickhouse_schema(cfg).await?;
+    } else {
+        init_duckdb_schema(&backends.events).await?;
     }
 
     init_relational_schema(cfg, &relational).await?;
@@ -298,9 +299,10 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         Some(&cfg.repo_root),
     )?;
     if init {
-        match backends.events.provider {
-            EventsProvider::ClickHouse => init_clickhouse_schema(cfg).await?,
-            EventsProvider::DuckDb => init_duckdb_schema(&backends.events).await?,
+        if backends.events.has_clickhouse() {
+            init_clickhouse_schema(cfg).await?;
+        } else {
+            init_duckdb_schema(&backends.events).await?;
         }
         init_relational_schema(cfg, &relational).await?;
     }

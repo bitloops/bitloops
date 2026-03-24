@@ -54,8 +54,8 @@ pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
         return Ok(());
     }
 
-    let project_path = Path::new(".bitloops").join("settings.json");
-    let local_path = Path::new(".bitloops").join("settings.local.json");
+    let project_path = Path::new(".bitloops").join("config.json");
+    let local_path = Path::new(".bitloops").join("config.local.json");
     let project_exists = project_path.exists();
     let local_exists = local_path.exists();
 
@@ -328,14 +328,14 @@ mod tests {
 
     fn write_project_settings(repo_root: &Path, json: &str) {
         let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("settings dir");
-        fs::write(settings_dir.join("settings.json"), json).expect("project settings");
+        fs::create_dir_all(&settings_dir).expect("config dir");
+        fs::write(settings_dir.join("config.json"), json).expect("shared config");
     }
 
     fn write_local_settings(repo_root: &Path, json: &str) {
         let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("settings dir");
-        fs::write(settings_dir.join("settings.local.json"), json).expect("local settings");
+        fs::create_dir_all(&settings_dir).expect("config dir");
+        fs::write(settings_dir.join("config.local.json"), json).expect("local config");
     }
 
     // CLI-576
@@ -707,6 +707,82 @@ mod tests {
         assert!(
             output.is_empty(),
             "expected no output when all sessions are ended, got: {output}"
+        );
+    }
+
+    // ── CLI-1469: unified config file pair ──────────────────────────────
+
+    fn write_config(repo_root: &Path, json: &str) {
+        let dir = repo_root.join(".bitloops");
+        fs::create_dir_all(&dir).expect("config dir");
+        fs::write(dir.join("config.json"), json).expect("shared config");
+    }
+
+    fn write_local_config(repo_root: &Path, json: &str) {
+        let dir = repo_root.join(".bitloops");
+        fs::create_dir_all(&dir).expect("config dir");
+        fs::write(dir.join("config.local.json"), json).expect("local config");
+    }
+
+    #[test]
+    fn unified_config_status_reads_config_json() {
+        let repo = setup_status_test_repo();
+        write_config(
+            repo.path(),
+            r#"{"strategy":"manual-commit","enabled":true}"#,
+        );
+
+        let mut stdout = Cursor::new(Vec::new());
+        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        assert!(err.is_ok(), "run_status returned error: {err:?}");
+
+        let output = String::from_utf8(stdout.into_inner()).expect("utf8");
+        assert!(
+            output.contains("Enabled"),
+            "status should read config.json and show Enabled, got: {output}"
+        );
+    }
+
+    #[test]
+    fn unified_config_status_reads_config_local_json() {
+        let repo = setup_status_test_repo();
+        write_config(
+            repo.path(),
+            r#"{"strategy":"manual-commit","enabled":true}"#,
+        );
+        write_local_config(repo.path(), r#"{"strategy":"auto-commit","enabled":false}"#);
+
+        let mut stdout = Cursor::new(Vec::new());
+        let err = with_cwd(repo.path(), || run_status(&mut stdout, true));
+        assert!(err.is_ok(), "run_status returned error: {err:?}");
+
+        let output = String::from_utf8(stdout.into_inner()).expect("utf8");
+        assert!(
+            output.contains("Disabled (auto-commit)"),
+            "status should read config.local.json override and show Disabled, got: {output}"
+        );
+    }
+
+    #[test]
+    fn unified_config_status_ignores_legacy_settings_json() {
+        let repo = setup_status_test_repo();
+        // Write directly to legacy settings.json — status should NOT find it
+        let settings_dir = repo.path().join(".bitloops");
+        fs::create_dir_all(&settings_dir).expect("dir");
+        fs::write(
+            settings_dir.join("settings.json"),
+            r#"{"strategy":"manual-commit","enabled":true}"#,
+        )
+        .expect("legacy file");
+
+        let mut stdout = Cursor::new(Vec::new());
+        let err = with_cwd(repo.path(), || run_status(&mut stdout, false));
+        assert!(err.is_ok(), "run_status returned error: {err:?}");
+
+        let output = String::from_utf8(stdout.into_inner()).expect("utf8");
+        assert!(
+            output.contains("not set up"),
+            "status must not read legacy settings.json; should show 'not set up', got: {output}"
         );
     }
 }

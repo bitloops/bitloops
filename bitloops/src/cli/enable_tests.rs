@@ -311,7 +311,7 @@ fn setup_bitloops_dir_writes_all_required_gitignore_entries() {
 
     for required in [
         "tmp/",
-        "settings.local.json",
+        "config.local.json",
         "metadata/",
         "logs/",
         "stores/",
@@ -331,7 +331,7 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
     fs::create_dir_all(&bitloops_dir).unwrap();
     fs::write(
         bitloops_dir.join(".gitignore"),
-        "custom-entry/\nsettings.local.json\n",
+        "custom-entry/\nconfig.local.json\n",
     )
     .unwrap();
 
@@ -344,7 +344,7 @@ fn setup_bitloops_dir_preserves_existing_gitignore_content() {
     );
     for required in [
         "tmp/",
-        "settings.local.json",
+        "config.local.json",
         "metadata/",
         "logs/",
         "stores/",
@@ -876,4 +876,156 @@ fn initialized_agents_detects_copilot() {
         let agents = initialized_agents(dir.path());
         assert!(agents.contains(&"copilot".to_string()));
     });
+}
+
+// ── CLI-1469: unified config file pair ──────────────────────────────────
+
+#[test]
+fn unified_config_gitignore_includes_config_local_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_bitloops_dir(dir.path()).unwrap();
+
+    let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore")).unwrap();
+    assert!(
+        gitignore.contains("config.local.json"),
+        ".bitloops/.gitignore must include config.local.json:\n{gitignore}"
+    );
+}
+
+#[test]
+fn unified_config_gitignore_excludes_settings_local_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_bitloops_dir(dir.path()).unwrap();
+
+    let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore")).unwrap();
+    assert!(
+        !gitignore.contains("settings.local.json"),
+        ".bitloops/.gitignore must not include legacy settings.local.json:\n{gitignore}"
+    );
+}
+
+#[test]
+fn unified_config_enable_creates_config_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_repo_cwd(dir.path(), || {
+        run_enable_command(EnableArgs {
+            local: false,
+            project: false,
+            force: false,
+            agent: None,
+        })
+        .unwrap();
+    });
+
+    assert!(
+        dir.path().join(".bitloops/config.json").exists(),
+        "enable must create .bitloops/config.json"
+    );
+    assert!(
+        !dir.path().join(".bitloops/settings.json").exists(),
+        "enable must not create legacy .bitloops/settings.json"
+    );
+}
+
+#[test]
+fn unified_config_enable_local_creates_config_local_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_repo_cwd(dir.path(), || {
+        run_enable_command(EnableArgs {
+            local: true,
+            project: false,
+            force: false,
+            agent: None,
+        })
+        .unwrap();
+    });
+
+    assert!(
+        dir.path().join(".bitloops/config.local.json").exists(),
+        "enable --local must create .bitloops/config.local.json"
+    );
+    assert!(
+        !dir.path().join(".bitloops/settings.local.json").exists(),
+        "enable --local must not create legacy .bitloops/settings.local.json"
+    );
+}
+
+#[test]
+fn unified_config_disable_writes_config_local_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+
+    let mut out = Vec::new();
+    run_disable(dir.path(), &mut out, false).unwrap();
+
+    assert!(
+        dir.path().join(".bitloops/config.local.json").exists(),
+        "disable must write to .bitloops/config.local.json"
+    );
+}
+
+#[test]
+fn unified_config_disable_project_writes_config_json() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+
+    let mut out = Vec::new();
+    run_disable(dir.path(), &mut out, true).unwrap();
+
+    let content = fs::read_to_string(dir.path().join(".bitloops/config.json"))
+        .expect("disable --project must write to .bitloops/config.json");
+    assert!(
+        content.contains("\"enabled\": false"),
+        "config.json should have enabled: false, got: {content}"
+    );
+}
+
+#[test]
+fn unified_config_determine_target_returns_config_json_paths() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // No flags, no existing file → config.json
+    let (path, _) = determine_settings_target(dir.path(), false, false);
+    let filename = path.file_name().unwrap().to_str().unwrap();
+    assert_eq!(
+        filename, "config.json",
+        "default target should be config.json, got: {filename}"
+    );
+
+    // Explicit --local → config.local.json
+    let (path, _) = determine_settings_target(dir.path(), true, false);
+    let filename = path.file_name().unwrap().to_str().unwrap();
+    assert_eq!(
+        filename, "config.local.json",
+        "--local target should be config.local.json, got: {filename}"
+    );
+
+    // Explicit --project → config.json
+    let (path, _) = determine_settings_target(dir.path(), false, true);
+    let filename = path.file_name().unwrap().to_str().unwrap();
+    assert_eq!(
+        filename, "config.json",
+        "--project target should be config.json, got: {filename}"
+    );
+}
+
+#[test]
+fn unified_config_enable_help_references_config_not_settings() {
+    let help_text = Cli::try_parse_from(["bitloops", "enable", "--help"])
+        .err()
+        .expect("--help should return a clap error")
+        .to_string();
+
+    assert!(
+        !help_text.contains("settings.json"),
+        "enable --help must not reference legacy 'settings.json':\n{help_text}"
+    );
+    assert!(
+        !help_text.contains("settings.local.json"),
+        "enable --help must not reference legacy 'settings.local.json':\n{help_text}"
+    );
 }

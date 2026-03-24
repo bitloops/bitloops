@@ -470,8 +470,8 @@ mod tests {
     };
     use crate::capability_packs::knowledge::url::parse_knowledge_url;
     use crate::config::{
-        BlobStorageConfig, BlobStorageProvider, EventsBackendConfig, EventsProvider,
-        ProviderConfig, RelationalBackendConfig, RelationalProvider, StoreBackendConfig,
+        BlobStorageConfig, EventsBackendConfig, ProviderConfig, RelationalBackendConfig,
+        StoreBackendConfig,
     };
     use crate::host::capability_host::config_view::CapabilityConfigView;
     use crate::host::capability_host::gateways::{
@@ -643,7 +643,6 @@ mod tests {
     fn test_backends(temp: &TempDir) -> StoreBackendConfig {
         StoreBackendConfig {
             relational: RelationalBackendConfig {
-                provider: RelationalProvider::Sqlite,
                 sqlite_path: Some(
                     temp.path()
                         .join("knowledge-relational.sqlite")
@@ -653,7 +652,6 @@ mod tests {
                 postgres_dsn: None,
             },
             events: EventsBackendConfig {
-                provider: EventsProvider::DuckDb,
                 duckdb_path: Some(
                     temp.path()
                         .join("knowledge-documents.duckdb")
@@ -666,7 +664,6 @@ mod tests {
                 clickhouse_database: None,
             },
             blobs: BlobStorageConfig {
-                provider: BlobStorageProvider::Local,
                 local_path: Some(
                     temp.path()
                         .join("knowledge-blobs")

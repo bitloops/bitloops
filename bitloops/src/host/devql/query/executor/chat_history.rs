@@ -8,69 +8,66 @@ pub(crate) async fn blob_shas_changed_in_events(
     agent: Option<&str>,
     since: Option<&str>,
 ) -> Result<Vec<String>> {
-    let commit_shas = match events_cfg.provider {
-        EventsProvider::ClickHouse => {
-            let mut conditions = vec![
-                format!("repo_id = '{}'", esc_ch(repo_id)),
-                "event_type = 'checkpoint_committed'".to_string(),
-                "commit_sha != ''".to_string(),
-            ];
+    let commit_shas = if events_cfg.has_clickhouse() {
+        let mut conditions = vec![
+            format!("repo_id = '{}'", esc_ch(repo_id)),
+            "event_type = 'checkpoint_committed'".to_string(),
+            "commit_sha != ''".to_string(),
+        ];
 
-            if let Some(agent) = agent {
-                conditions.push(format!("agent = '{}'", esc_ch(agent)));
-            }
-            if let Some(since) = since {
-                conditions.push(format!(
-                    "event_time >= parseDateTime64BestEffortOrZero('{}')",
-                    esc_ch(since)
-                ));
-            }
+        if let Some(agent) = agent {
+            conditions.push(format!("agent = '{}'", esc_ch(agent)));
+        }
+        if let Some(since) = since {
+            conditions.push(format!(
+                "event_time >= parseDateTime64BestEffortOrZero('{}')",
+                esc_ch(since)
+            ));
+        }
 
-            let sql = format!(
-                "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000 FORMAT JSON",
-                conditions.join(" AND ")
-            );
-            let data = clickhouse_query_data(cfg, &sql).await?;
-            data.as_array()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|row| {
-                    row.get("commit_sha")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                })
-                .collect::<Vec<_>>()
+        let sql = format!(
+            "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000 FORMAT JSON",
+            conditions.join(" AND ")
+        );
+        let data = clickhouse_query_data(cfg, &sql).await?;
+        data.as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|row| {
+                row.get("commit_sha")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let mut conditions = vec![
+            format!("repo_id = '{}'", esc_pg(repo_id)),
+            "event_type = 'checkpoint_committed'".to_string(),
+            "commit_sha <> ''".to_string(),
+        ];
+        if let Some(agent) = agent {
+            conditions.push(format!("agent = '{}'", esc_pg(agent)));
         }
-        EventsProvider::DuckDb => {
-            let mut conditions = vec![
-                format!("repo_id = '{}'", esc_pg(repo_id)),
-                "event_type = 'checkpoint_committed'".to_string(),
-                "commit_sha <> ''".to_string(),
-            ];
-            if let Some(agent) = agent {
-                conditions.push(format!("agent = '{}'", esc_pg(agent)));
-            }
-            if let Some(since) = since {
-                conditions.push(format!("event_time >= '{}'", esc_pg(since)));
-            }
-            let sql = format!(
-                "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000",
-                conditions.join(" AND ")
-            );
-            let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
-            rows.into_iter()
-                .filter_map(|row| {
-                    row.get("commit_sha")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                })
-                .collect::<Vec<_>>()
+        if let Some(since) = since {
+            conditions.push(format!("event_time >= '{}'", esc_pg(since)));
         }
+        let sql = format!(
+            "SELECT DISTINCT commit_sha FROM checkpoint_events WHERE {} LIMIT 20000",
+            conditions.join(" AND ")
+        );
+        let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
+        rows.into_iter()
+            .filter_map(|row| {
+                row.get("commit_sha")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>()
     };
 
     if commit_shas.is_empty() {
@@ -214,75 +211,72 @@ pub(crate) async fn checkpoint_events_for_commits(
         return Ok(vec![]);
     }
 
-    match events_cfg.provider {
-        EventsProvider::ClickHouse => {
-            let path_candidates = build_path_candidates(path);
-            let path_has_clause = if path_candidates.is_empty() {
-                None
-            } else {
-                Some(
-                    path_candidates
-                        .iter()
-                        .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
-                        .collect::<Vec<_>>()
-                        .join(" OR "),
-                )
-            };
+    if events_cfg.has_clickhouse() {
+        let path_candidates = build_path_candidates(path);
+        let path_has_clause = if path_candidates.is_empty() {
+            None
+        } else {
+            Some(
+                path_candidates
+                    .iter()
+                    .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
+                    .collect::<Vec<_>>()
+                    .join(" OR "),
+            )
+        };
 
-            let mut conditions = vec![
-                format!("repo_id = '{}'", esc_ch(repo_id)),
-                "event_type = 'checkpoint_committed'".to_string(),
-                format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
-            ];
-            if let Some(path_has_clause) = path_has_clause {
-                conditions.push(format!("({path_has_clause})"));
-            }
-
-            let sql = format!(
-                "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
-                conditions.join(" AND ")
-            );
-            let data = clickhouse_query_data(cfg, &sql).await?;
-            Ok(data.as_array().cloned().unwrap_or_default())
+        let mut conditions = vec![
+            format!("repo_id = '{}'", esc_ch(repo_id)),
+            "event_type = 'checkpoint_committed'".to_string(),
+            format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
+        ];
+        if let Some(path_has_clause) = path_has_clause {
+            conditions.push(format!("({path_has_clause})"));
         }
-        EventsProvider::DuckDb => {
-            let path_candidates = build_path_candidates(path);
-            let path_has_clause = if path_candidates.is_empty() {
-                None
-            } else {
-                Some(
-                    path_candidates
-                        .iter()
-                        .map(|candidate| {
-                            format!(
-                                "files_touched LIKE '%\"{}\"%'",
-                                esc_pg(candidate).replace('%', "\\%")
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" OR "),
-                )
-            };
 
-            let mut conditions = vec![
-                format!("repo_id = '{}'", esc_pg(repo_id)),
-                "event_type = 'checkpoint_committed'".to_string(),
-                format!("commit_sha IN ({})", sql_string_list_pg(commit_shas)),
-            ];
-            if let Some(path_has_clause) = path_has_clause {
-                conditions.push(format!("({path_has_clause})"));
-            }
+        let sql = format!(
+            "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
+            conditions.join(" AND ")
+        );
+        let data = clickhouse_query_data(cfg, &sql).await?;
+        Ok(data.as_array().cloned().unwrap_or_default())
+    } else {
+        let path_candidates = build_path_candidates(path);
+        let path_has_clause = if path_candidates.is_empty() {
+            None
+        } else {
+            Some(
+                path_candidates
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "files_touched LIKE '%\"{}\"%'",
+                            esc_pg(candidate).replace('%', "\\%")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" OR "),
+            )
+        };
 
-            let sql = format!(
-                "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200",
-                conditions.join(" AND ")
-            );
-            let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
-            Ok(rows
-                .into_iter()
-                .map(normalise_duckdb_event_row)
-                .collect::<Vec<_>>())
+        let mut conditions = vec![
+            format!("repo_id = '{}'", esc_pg(repo_id)),
+            "event_type = 'checkpoint_committed'".to_string(),
+            format!("commit_sha IN ({})", sql_string_list_pg(commit_shas)),
+        ];
+        if let Some(path_has_clause) = path_has_clause {
+            conditions.push(format!("({path_has_clause})"));
         }
+
+        let sql = format!(
+            "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200",
+            conditions.join(" AND ")
+        );
+        let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
+        Ok(rows
+            .into_iter()
+            .map(normalise_duckdb_event_row)
+            .collect::<Vec<_>>())
     }
 }
 

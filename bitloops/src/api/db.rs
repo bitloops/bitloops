@@ -9,9 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::time::{Duration, timeout};
 use tokio_postgres::NoTls;
 
-use crate::config::{
-    EventsProvider, RelationalProvider, StoreBackendConfig, resolve_store_backend_config,
-};
+use crate::config::{StoreBackendConfig, resolve_store_backend_config};
 
 const POSTGRES_POOL_SIZE: usize = 4;
 /// Max time allowed per backend health ping so /api/db/health stays responsive.
@@ -78,24 +76,18 @@ impl DashboardDbHealth {
     fn with_compat_fields(
         relational: BackendHealth,
         events: BackendHealth,
-        relational_provider: RelationalProvider,
-        events_provider: EventsProvider,
+        has_postgres: bool,
+        has_clickhouse: bool,
     ) -> Self {
-        let postgres = if relational_provider == RelationalProvider::Postgres {
+        let postgres = if has_postgres {
             relational.clone()
         } else {
-            BackendHealth::skip(format!(
-                "inactive compatibility key (relational.provider={})",
-                relational_provider.as_str()
-            ))
+            BackendHealth::skip("inactive compatibility key (relational: sqlite)")
         };
-        let clickhouse = if events_provider == EventsProvider::ClickHouse {
+        let clickhouse = if has_clickhouse {
             events.clone()
         } else {
-            BackendHealth::skip(format!(
-                "inactive compatibility key (events.provider={})",
-                events_provider.as_str()
-            ))
+            BackendHealth::skip("inactive compatibility key (events: duckdb)")
         };
 
         Self {
@@ -118,32 +110,20 @@ pub(super) struct DashboardDbInit {
     pub(super) startup_health: DashboardDbHealth,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct DashboardDbPools {
-    pub(super) relational_provider: RelationalProvider,
-    pub(super) events_provider: EventsProvider,
+    pub(super) has_postgres: bool,
+    pub(super) has_clickhouse: bool,
     pub(super) relational: Option<Arc<dyn RelationalHealthStore>>,
     pub(super) clickhouse: Option<ClickHousePool>,
     pub(super) duckdb: Option<DuckDbPool>,
 }
 
-impl Default for DashboardDbPools {
-    fn default() -> Self {
-        Self {
-            relational_provider: RelationalProvider::Sqlite,
-            events_provider: EventsProvider::DuckDb,
-            relational: None,
-            clickhouse: None,
-            duckdb: None,
-        }
-    }
-}
-
 impl fmt::Debug for DashboardDbPools {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DashboardDbPools")
-            .field("relational_provider", &self.relational_provider.as_str())
-            .field("events_provider", &self.events_provider.as_str())
+            .field("has_postgres", &self.has_postgres)
+            .field("has_clickhouse", &self.has_clickhouse)
             .field("relational_enabled", &self.relational.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
             .field("duckdb_enabled", &self.duckdb.is_some())
@@ -190,19 +170,18 @@ impl DashboardDbPools {
 
         let (relational_backend, clickhouse, duckdb) =
             tokio::join!(relational_fut, clickhouse_fut, duckdb_fut);
-        let relational = match self.relational_provider {
-            RelationalProvider::Postgres | RelationalProvider::Sqlite => relational_backend.clone(),
-        };
-        let events = match self.events_provider {
-            EventsProvider::ClickHouse => clickhouse.clone(),
-            EventsProvider::DuckDb => duckdb.clone(),
+        let relational = relational_backend;
+        let events = if self.has_clickhouse {
+            clickhouse.clone()
+        } else {
+            duckdb.clone()
         };
 
         DashboardDbHealth::with_compat_fields(
             relational,
             events,
-            self.relational_provider,
-            self.events_provider,
+            self.has_postgres,
+            self.has_clickhouse,
         )
     }
 }
@@ -558,52 +537,46 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
                 startup_health: DashboardDbHealth::with_compat_fields(
                     failure.clone(),
                     failure,
-                    RelationalProvider::Sqlite,
-                    EventsProvider::DuckDb,
+                    false,
+                    false,
                 ),
             };
         }
     };
 
+    let has_postgres = cfg.backends.relational.has_postgres();
+    let has_clickhouse = cfg.backends.events.has_clickhouse();
+
     let mut pools = DashboardDbPools {
-        relational_provider: cfg.backends.relational.provider,
-        events_provider: cfg.backends.events.provider,
+        has_postgres,
+        has_clickhouse,
         relational: None,
         clickhouse: None,
         duckdb: None,
     };
     let relational_health: BackendHealth;
-    let mut events_health = match pools.events_provider {
-        EventsProvider::ClickHouse => BackendHealth::skip("not configured"),
-        EventsProvider::DuckDb => BackendHealth::skip("not configured"),
-    };
+    let events_health: BackendHealth;
 
-    match pools.relational_provider {
-        RelationalProvider::Postgres => {
-            if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
-                match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
-                    Ok(pool) => {
-                        let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
-                        match relational_store.ping().await {
-                            Ok(value) => {
-                                pools.relational = Some(relational_store);
-                                relational_health =
-                                    BackendHealth::ok(format!("SELECT 1 => {value}"));
-                            }
-                            Err(err) => {
-                                relational_health = BackendHealth::fail(format!("{err:#}"));
-                            }
-                        }
+    if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
+        match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
+            Ok(pool) => {
+                let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
+                match relational_store.ping().await {
+                    Ok(value) => {
+                        pools.relational = Some(relational_store);
+                        relational_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
                     }
                     Err(err) => {
                         relational_health = BackendHealth::fail(format!("{err:#}"));
                     }
                 }
-            } else {
-                relational_health = BackendHealth::skip("postgres_dsn is not configured");
+            }
+            Err(err) => {
+                relational_health = BackendHealth::fail(format!("{err:#}"));
             }
         }
-        RelationalProvider::Sqlite => match cfg.sqlite_db_path() {
+    } else {
+        match cfg.sqlite_db_path() {
             Ok(db_path) => {
                 let db_label = db_path.display().to_string();
                 match SqlitePool::connect(db_path).await {
@@ -628,10 +601,10 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
             Err(err) => {
                 relational_health = BackendHealth::fail(format!("{err:#}"));
             }
-        },
+        }
     }
 
-    if pools.events_provider == EventsProvider::ClickHouse {
+    if has_clickhouse {
         let ch_cfg = cfg.clickhouse_config();
         match ClickHousePool::build(&ch_cfg) {
             Ok(pool) => match pool.ping().await {
@@ -647,7 +620,7 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
                 events_health = BackendHealth::fail(format!("{err:#}"));
             }
         }
-    } else if pools.events_provider == EventsProvider::DuckDb {
+    } else {
         let duckdb_path = cfg.duckdb_path();
         match DuckDbPool::connect(duckdb_path).await {
             Ok(pool) => match pool.ping().await {
@@ -669,8 +642,8 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
         startup_health: DashboardDbHealth::with_compat_fields(
             relational_health,
             events_health,
-            pools.relational_provider,
-            pools.events_provider,
+            has_postgres,
+            has_clickhouse,
         ),
         pools,
     }

@@ -23,9 +23,8 @@ use crate::capability_packs::knowledge::{
     types::KnowledgePayloadData,
 };
 use crate::config::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, EventsBackendConfig,
-    EventsProvider, ProviderConfig, RelationalBackendConfig, RelationalProvider,
-    StoreBackendConfig,
+    AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, ProviderConfig,
+    RelationalBackendConfig, StoreBackendConfig,
 };
 use crate::host::capability_host::CapabilityConfigView;
 use crate::host::capability_host::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
@@ -593,12 +592,10 @@ impl KnowledgeBddHarness {
 fn test_backends(base: &Path) -> StoreBackendConfig {
     StoreBackendConfig {
         relational: RelationalBackendConfig {
-            provider: RelationalProvider::Sqlite,
             sqlite_path: Some(base.join("relational.db").to_string_lossy().to_string()),
             postgres_dsn: None,
         },
         events: EventsBackendConfig {
-            provider: EventsProvider::DuckDb,
             duckdb_path: Some(base.join("events.duckdb").to_string_lossy().to_string()),
             clickhouse_url: None,
             clickhouse_user: None,
@@ -606,7 +603,6 @@ fn test_backends(base: &Path) -> StoreBackendConfig {
             clickhouse_database: None,
         },
         blobs: BlobStorageConfig {
-            provider: BlobStorageProvider::Local,
             local_path: Some(base.join("blobs").to_string_lossy().to_string()),
             s3_bucket: None,
             s3_region: None,

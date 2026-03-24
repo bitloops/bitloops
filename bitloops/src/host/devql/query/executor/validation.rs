@@ -245,9 +245,10 @@ pub(crate) async fn execute_devql_query(
     }
 
     if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
-        return match events_cfg.provider {
-            EventsProvider::ClickHouse => execute_clickhouse_pipeline(cfg, parsed).await,
-            EventsProvider::DuckDb => execute_duckdb_pipeline(cfg, events_cfg, parsed).await,
+        return if events_cfg.has_clickhouse() {
+            execute_clickhouse_pipeline(cfg, parsed).await
+        } else {
+            execute_duckdb_pipeline(cfg, events_cfg, parsed).await
         };
     }
 

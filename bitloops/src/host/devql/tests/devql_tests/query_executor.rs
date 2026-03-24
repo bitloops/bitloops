@@ -25,9 +25,8 @@ fn executor_test_cfg() -> DevqlConfig {
     }
 }
 
-fn executor_events_cfg(provider: EventsProvider) -> EventsBackendConfig {
+fn executor_events_cfg() -> EventsBackendConfig {
     EventsBackendConfig {
-        provider,
         duckdb_path: None,
         clickhouse_url: None,
         clickhouse_user: None,
@@ -53,10 +52,13 @@ fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
     std::fs::write(
         config_dir.join("config.json"),
         serde_json::to_vec_pretty(&json!({
-            "stores": {
-                "relational": {
-                    "provider": "sqlite",
-                    "sqlite_path": sqlite_path.to_string_lossy()
+            "version": "1.0",
+            "scope": "project",
+            "settings": {
+                "stores": {
+                    "relational": {
+                        "sqlite_path": sqlite_path.to_string_lossy()
+                    }
                 }
             }
         }))
@@ -150,7 +152,6 @@ async fn execute_duckdb_pipeline_reads_telemetry_rows() {
     let cfg = executor_test_cfg();
     let parsed = parse_devql_query("telemetry()").expect("parsed devql query");
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -225,7 +226,6 @@ async fn checkpoint_events_for_commits_reads_duckdb_rows() {
     .await;
     let cfg = executor_test_cfg();
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -290,7 +290,6 @@ async fn blob_shas_changed_in_events_reads_duckdb_and_sqlite_stores() {
     .await;
     let cfg = executor_test_cfg();
     let events_cfg = EventsBackendConfig {
-        provider: EventsProvider::DuckDb,
         duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
         clickhouse_url: None,
         clickhouse_user: None,
@@ -321,7 +320,7 @@ async fn attach_chat_history_to_artefacts_uses_empty_history_when_blob_is_missin
 
     let rows = attach_chat_history_to_artefacts(
         &cfg,
-        &executor_events_cfg(EventsProvider::DuckDb),
+        &executor_events_cfg(),
         &relational,
         "repo-1",
         vec![json!({

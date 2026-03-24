@@ -417,6 +417,35 @@ fn test_check_and_notify_skips_empty_version() {
 }
 
 #[test]
+fn test_check_and_notify_skips_when_disabled_via_env() {
+    let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
+    let tmp_home = tempfile::tempdir().expect("create temp dir");
+    let config_dir = tmp_home.path().join(GLOBAL_CONFIG_DIR_NAME);
+    let config_dir_str = config_dir.to_string_lossy().into_owned();
+    with_env_vars(
+        &[
+            (CONFIG_DIR_OVERRIDE_ENV, Some(config_dir_str.as_str())),
+            (GITHUB_API_URL_OVERRIDE_ENV, Some(server.url.as_str())),
+            (DISABLE_VERSION_CHECK_ENV, Some("1")),
+        ],
+        || {
+            let mut buf = Vec::new();
+            check_and_notify(&mut buf, "1.0.0");
+            assert!(
+                buf.is_empty(),
+                "expected no output when version checks are disabled, got: {}",
+                String::from_utf8_lossy(&buf)
+            );
+            assert_eq!(
+                server.hits(),
+                0,
+                "version check should not make network requests when disabled"
+            );
+        },
+    );
+}
+
+#[test]
 fn test_check_and_notify_skips_when_cache_is_fresh() {
     let server = MockServer::start(200, r#"{"tag_name":"v9.9.9","prerelease":false}"#);
     let tmp_home = tempfile::tempdir().expect("create temp dir");

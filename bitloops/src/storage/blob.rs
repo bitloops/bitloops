@@ -14,9 +14,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{OptionalExtension, params};
 use tokio::runtime::{Builder, Runtime};
 
-use crate::config::{
-    BlobStorageConfig, BlobStorageProvider, StoreBackendConfig, resolve_blob_local_path_for_repo,
-};
+use crate::config::{BlobStorageConfig, StoreBackendConfig, resolve_blob_local_path_for_repo};
 use crate::storage::SqliteConnectionPool;
 
 thread_local! {
@@ -119,24 +117,37 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
     Ok(create_blob_store_with_backend(cfg)?.store)
 }
 
+fn reject_conflicting_remote_blob_backends(cfg: &BlobStorageConfig) -> Result<()> {
+    if cfg.s3_bucket.is_some() && cfg.gcs_bucket.is_some() {
+        bail!(
+            "blob storage configuration conflict: both s3_bucket and gcs_bucket are set; \
+             configure exactly one remote backend (or neither for local storage)"
+        );
+    }
+    Ok(())
+}
+
 pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
-    match cfg.provider {
-        BlobStorageProvider::Local => Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::from_config(cfg)?),
-            backend: "local",
-        }),
-        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+    reject_conflicting_remote_blob_backends(cfg)?;
+    if cfg.s3_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
             backend: "s3",
-        }),
-        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+        })
+    } else if cfg.gcs_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
             backend: "gcs",
-        }),
+        })
+    } else {
+        Ok(ResolvedBlobStore {
+            store: Box::new(LocalBlobStore::from_config(cfg)?),
+            backend: "local",
+        })
     }
 }
 
@@ -144,27 +155,28 @@ pub fn create_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
-    match cfg.provider {
-        BlobStorageProvider::Local => {
-            let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
-                .context("resolving local blob store path for repository")?;
-            Ok(ResolvedBlobStore {
-                store: Box::new(LocalBlobStore::new(root)?),
-                backend: "local",
-            })
-        }
-        BlobStorageProvider::S3 => Ok(ResolvedBlobStore {
+    reject_conflicting_remote_blob_backends(cfg)?;
+    if cfg.s3_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 S3BlobStore::from_config(cfg).context("initialising S3 blob storage backend")?,
             ),
             backend: "s3",
-        }),
-        BlobStorageProvider::Gcs => Ok(ResolvedBlobStore {
+        })
+    } else if cfg.gcs_bucket.is_some() {
+        Ok(ResolvedBlobStore {
             store: Box::new(
                 GcsBlobStore::from_config(cfg).context("initialising GCS blob storage backend")?,
             ),
             backend: "gcs",
-        }),
+        })
+    } else {
+        let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
+            .context("resolving local blob store path for repository")?;
+        Ok(ResolvedBlobStore {
+            store: Box::new(LocalBlobStore::new(root)?),
+            backend: "local",
+        })
     }
 }
 
@@ -287,9 +299,8 @@ mod tests {
     use crate::storage::SqliteConnectionPool;
     use tempfile::TempDir;
 
-    fn test_blob_config(provider: BlobStorageProvider, local_path: String) -> BlobStorageConfig {
+    fn test_blob_config(local_path: String) -> BlobStorageConfig {
         BlobStorageConfig {
-            provider,
             local_path: Some(local_path),
             s3_bucket: None,
             s3_region: None,
@@ -307,38 +318,38 @@ mod tests {
     }
 
     #[test]
-    fn create_blob_store_returns_error_when_s3_config_invalid() {
+    fn create_blob_store_dispatches_to_s3_when_bucket_set() {
         let temp = TempDir::new().expect("temp dir");
-        let cfg = test_blob_config(
-            BlobStorageProvider::S3,
-            temp.path().to_string_lossy().to_string(),
-        );
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
 
-        let err = match create_blob_store_with_backend(&cfg) {
-            Ok(_) => panic!("invalid S3 config must fail"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("initialising S3 blob storage backend")
-        );
+        let resolved = create_blob_store_with_backend(&cfg).expect("S3 dispatch should succeed");
+        assert_eq!(resolved.backend, "s3");
     }
 
     #[test]
-    fn create_blob_store_returns_error_when_gcs_config_invalid() {
+    fn create_blob_store_dispatches_to_gcs_when_bucket_set() {
         let temp = TempDir::new().expect("temp dir");
-        let cfg = test_blob_config(
-            BlobStorageProvider::Gcs,
-            temp.path().to_string_lossy().to_string(),
-        );
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.gcs_bucket = Some("test-bucket".to_string());
 
-        let err = match create_blob_store_with_backend(&cfg) {
-            Ok(_) => panic!("invalid GCS config must fail"),
-            Err(err) => err,
-        };
+        let resolved = create_blob_store_with_backend(&cfg).expect("GCS dispatch should succeed");
+        assert_eq!(resolved.backend, "gcs");
+    }
+
+    #[test]
+    fn create_blob_store_rejects_both_s3_and_gcs() {
+        let temp = TempDir::new().expect("temp dir");
+        let mut cfg = test_blob_config(temp.path().to_string_lossy().to_string());
+        cfg.s3_bucket = Some("s3-bucket".to_string());
+        cfg.gcs_bucket = Some("gcs-bucket".to_string());
+
+        let err = create_blob_store_with_backend(&cfg)
+            .err()
+            .expect("should reject conflicting remote backends");
         assert!(
-            err.to_string()
-                .contains("initialising GCS blob storage backend")
+            err.to_string().contains("s3_bucket") && err.to_string().contains("gcs_bucket"),
+            "error should name the conflicting fields, got: {err}"
         );
     }
 

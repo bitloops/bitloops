@@ -6,7 +6,7 @@ use super::{
     PostgresTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessCoverageGateway,
     TestHarnessQueryRepository, TestHarnessRepository,
 };
-use crate::config::{RelationalProvider, resolve_store_backend_config_for_repo};
+use crate::config::resolve_store_backend_config_for_repo;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
@@ -25,24 +25,20 @@ pub fn init_schema_for_repo(repo_root: &Path) -> Result<()> {
     let backends = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving Bitloops store config for test-harness schema init")?;
 
-    match backends.relational.provider {
-        RelationalProvider::Sqlite => {
-            let sqlite_path = backends
-                .relational
-                .resolve_sqlite_db_path_for_repo(repo_root)
-                .context("resolving SQLite path for test-harness schema init")?;
-            init_test_domain_database(&sqlite_path)
-        }
-        RelationalProvider::Postgres => {
-            let dsn = backends
-                .relational
-                .postgres_dsn
-                .ok_or_else(|| anyhow!("test-harness schema init requires stores.relational.postgres_dsn when stores.relational.provider=postgres"))?;
-            let repository = PostgresTestHarnessRepository::connect(dsn)?;
-            repository.initialise_schema()?;
-            println!("Postgres test-harness schema initialized");
-            Ok(())
-        }
+    if backends.relational.has_postgres() {
+        let dsn = backends.relational.postgres_dsn.ok_or_else(|| {
+            anyhow!("test-harness schema init requires stores.relational.postgres_dsn")
+        })?;
+        let repository = PostgresTestHarnessRepository::connect(dsn)?;
+        repository.initialise_schema()?;
+        println!("Postgres test-harness schema initialized");
+        Ok(())
+    } else {
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .context("resolving SQLite path for test-harness schema init")?;
+        init_test_domain_database(&sqlite_path)
     }
 }
 
@@ -50,25 +46,21 @@ pub fn open_repository_for_repo(repo_root: &Path) -> Result<BitloopsTestHarnessR
     let backends = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving Bitloops store config for `bitloops testlens`")?;
 
-    match backends.relational.provider {
-        RelationalProvider::Sqlite => {
-            let sqlite_path = backends
-                .relational
-                .resolve_sqlite_db_path_for_repo(repo_root)
-                .context("resolving SQLite path for `bitloops testlens`")?;
-            Ok(BitloopsTestHarnessRepository::Sqlite(
-                SqliteTestHarnessRepository::open_existing(&sqlite_path)?,
-            ))
-        }
-        RelationalProvider::Postgres => {
-            let dsn = backends
-                .relational
-                .postgres_dsn
-                .ok_or_else(|| anyhow!("`bitloops testlens` requires stores.relational.postgres_dsn when stores.relational.provider=postgres"))?;
-            Ok(BitloopsTestHarnessRepository::Postgres(
-                PostgresTestHarnessRepository::connect(dsn)?,
-            ))
-        }
+    if backends.relational.has_postgres() {
+        let dsn = backends.relational.postgres_dsn.ok_or_else(|| {
+            anyhow!("`bitloops testlens` requires stores.relational.postgres_dsn")
+        })?;
+        Ok(BitloopsTestHarnessRepository::Postgres(
+            PostgresTestHarnessRepository::connect(dsn)?,
+        ))
+    } else {
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .context("resolving SQLite path for `bitloops testlens`")?;
+        Ok(BitloopsTestHarnessRepository::Sqlite(
+            SqliteTestHarnessRepository::open_existing(&sqlite_path)?,
+        ))
     }
 }
 
@@ -343,10 +335,13 @@ mod tests {
             config_dir.join("config.json"),
             format!(
                 r#"{{
-  "stores": {{
-    "relational": {{
-      "provider": "sqlite",
-      "sqlite_path": "{}"
+  "version": "1.0",
+  "scope": "project",
+  "settings": {{
+    "stores": {{
+      "relational": {{
+        "sqlite_path": "{}"
+      }}
     }}
   }}
 }}"#,

@@ -35,68 +35,65 @@ pub(crate) async fn collect_connection_status_rows(
 }
 
 fn relational_status_label(cfg: &RelationalBackendConfig) -> &'static str {
-    match cfg.provider {
-        RelationalProvider::Sqlite => RELATIONAL_SQLITE_LABEL,
-        RelationalProvider::Postgres => RELATIONAL_POSTGRES_LABEL,
+    if cfg.has_postgres() {
+        RELATIONAL_POSTGRES_LABEL
+    } else {
+        RELATIONAL_SQLITE_LABEL
     }
 }
 
 fn events_status_label(cfg: &EventsBackendConfig) -> &'static str {
-    match cfg.provider {
-        EventsProvider::DuckDb => EVENTS_DUCKDB_LABEL,
-        EventsProvider::ClickHouse => EVENTS_CLICKHOUSE_LABEL,
+    if cfg.has_clickhouse() {
+        EVENTS_CLICKHOUSE_LABEL
+    } else {
+        EVENTS_DUCKDB_LABEL
     }
 }
 
 async fn relational_connection_status(cfg: &RelationalBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
-        RelationalProvider::Sqlite => match cfg.resolve_sqlite_db_path() {
+    if let Some(dsn) = cfg.postgres_dsn.as_deref() {
+        match check_postgres_connection(dsn).await {
+            Ok(_) => DatabaseConnectionStatus::Connected,
+            Err(err) => classify_connection_error(&err.to_string()),
+        }
+    } else {
+        match cfg.resolve_sqlite_db_path() {
             Ok(path) => match check_sqlite_connection(&path).await {
                 Ok(_) => DatabaseConnectionStatus::Connected,
                 Err(err) => classify_connection_error(&err.to_string()),
             },
             Err(err) => classify_connection_error(&err.to_string()),
-        },
-        RelationalProvider::Postgres => match cfg.postgres_dsn.as_deref() {
-            Some(dsn) => match check_postgres_connection(dsn).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            },
-            None => DatabaseConnectionStatus::NotConfigured,
-        },
+        }
     }
 }
 
 async fn events_connection_status(cfg: &EventsBackendConfig) -> DatabaseConnectionStatus {
-    match cfg.provider {
-        EventsProvider::DuckDb => {
-            let duckdb_path = cfg.duckdb_path_or_default();
-            match check_duckdb_connection(&duckdb_path).await {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
+    if cfg.has_clickhouse() {
+        let clickhouse_url = cfg
+            .clickhouse_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:8123".to_string());
+        let clickhouse_database = cfg
+            .clickhouse_database
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
+        match run_clickhouse_sql_http(
+            &endpoint,
+            cfg.clickhouse_user.as_deref(),
+            cfg.clickhouse_password.as_deref(),
+            "SELECT 1 FORMAT TabSeparated",
+        )
+        .await
+        {
+            Ok(_) => DatabaseConnectionStatus::Connected,
+            Err(err) => classify_connection_error(&err.to_string()),
         }
-        EventsProvider::ClickHouse => {
-            let clickhouse_url = cfg
-                .clickhouse_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:8123".to_string());
-            let clickhouse_database = cfg
-                .clickhouse_database
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let endpoint = clickhouse_endpoint(&clickhouse_url, &clickhouse_database);
-            match run_clickhouse_sql_http(
-                &endpoint,
-                cfg.clickhouse_user.as_deref(),
-                cfg.clickhouse_password.as_deref(),
-                "SELECT 1 FORMAT TabSeparated",
-            )
-            .await
-            {
-                Ok(_) => DatabaseConnectionStatus::Connected,
-                Err(err) => classify_connection_error(&err.to_string()),
-            }
+    } else {
+        let duckdb_path = cfg.duckdb_path_or_default();
+        match check_duckdb_connection(&duckdb_path).await {
+            Ok(_) => DatabaseConnectionStatus::Connected,
+            Err(err) => classify_connection_error(&err.to_string()),
         }
     }
 }

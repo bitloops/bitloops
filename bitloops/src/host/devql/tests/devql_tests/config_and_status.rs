@@ -31,11 +31,9 @@ fn devql_file_config_parses_nested_block() {
     let value = serde_json::json!({
         "stores": {
             "relational": {
-                "provider": "postgres",
                 "postgres_dsn": "postgres://user:pass@localhost:5432/bitloops"
             },
             "event": {
-                "provider": "clickhouse",
                 "clickhouse_url": "http://localhost:8123",
                 "clickhouse_database": "default"
             }
@@ -55,11 +53,9 @@ fn devql_file_config_parses_nested_block() {
 fn devql_file_config_parses_root_store_keys_without_wrapper() {
     let value = serde_json::json!({
         "relational": {
-            "provider": "postgres",
             "postgres_dsn": "postgres://x/y"
         },
         "event": {
-            "provider": "clickhouse",
             "clickhouse_url": "http://ch:8123",
             "clickhouse_database": "analytics"
         }

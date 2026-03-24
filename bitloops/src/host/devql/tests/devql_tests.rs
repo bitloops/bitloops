@@ -1,7 +1,7 @@
 use super::*;
 use crate::cli::devql::{DevqlArgs, DevqlCommand, DevqlInitArgs, run as run_devql_command};
 use crate::cli::{Cli, Commands};
-use crate::config::{BlobStorageConfig, BlobStorageProvider, StoreFileConfig};
+use crate::config::{BlobStorageConfig, StoreFileConfig};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
@@ -44,12 +44,10 @@ fn test_cfg_with_repo_id(repo_suffix: &str, dsn: &str) -> DevqlConfig {
 fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> StoreBackendConfig {
     StoreBackendConfig {
         relational: RelationalBackendConfig {
-            provider: RelationalProvider::Sqlite,
             sqlite_path,
             postgres_dsn: None,
         },
         events: EventsBackendConfig {
-            provider: EventsProvider::DuckDb,
             duckdb_path,
             clickhouse_url: None,
             clickhouse_user: None,
@@ -57,7 +55,6 @@ fn backend_cfg(sqlite_path: Option<String>, duckdb_path: Option<String>) -> Stor
             clickhouse_database: None,
         },
         blobs: BlobStorageConfig {
-            provider: BlobStorageProvider::Local,
             local_path: None,
             s3_bucket: None,
             s3_region: None,
@@ -77,7 +74,6 @@ async fn postgres_relational_store(cfg: &DevqlConfig, dsn: &str) -> RelationalSt
     RelationalStorage::connect(
         cfg,
         &RelationalBackendConfig {
-            provider: RelationalProvider::Postgres,
             sqlite_path: None,
             postgres_dsn: Some(dsn.to_string()),
         },

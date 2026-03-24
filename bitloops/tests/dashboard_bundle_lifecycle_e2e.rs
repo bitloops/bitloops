@@ -1,3 +1,5 @@
+use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::env;
@@ -42,7 +44,7 @@ fn ensure_dashboard_store_files(repo_root: &Path) {
     let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
         .expect("resolve backend config");
 
-    if cfg.relational.provider == bitloops::config::RelationalProvider::Sqlite {
+    if !cfg.relational.has_postgres() {
         let sqlite_path = if let Some(path) = cfg.relational.sqlite_path.as_deref() {
             bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
                 .expect("resolve configured sqlite path")
@@ -56,7 +58,7 @@ fn ensure_dashboard_store_files(repo_root: &Path) {
             .expect("initialise checkpoint schema");
     }
 
-    if cfg.events.provider == bitloops::config::EventsProvider::DuckDb {
+    if !cfg.events.has_clickhouse() {
         let duckdb_path = if let Some(path) = cfg.events.duckdb_path.as_deref() {
             bitloops::config::resolve_duckdb_db_path_for_repo(repo_root, Some(path))
         } else {
@@ -237,6 +239,8 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         .env("HOME", dashboard_home.path())
         .env("USERPROFILE", dashboard_home.path())
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")

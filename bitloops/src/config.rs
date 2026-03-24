@@ -7,8 +7,9 @@ mod resolve;
 pub mod settings;
 mod store_config_utils;
 mod types;
+pub mod unified_config;
 
-pub use constants::{BITLOOPS_CONFIG_RELATIVE_PATH, BITLOOPS_CONFIG_TOML_RELATIVE_PATH};
+pub use constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 pub use resolve::{
     dashboard_use_bitloops_local, resolve_blob_local_path, resolve_blob_local_path_for_repo,
     resolve_duckdb_db_path_for_repo, resolve_provider_config, resolve_provider_config_for_repo,
@@ -17,10 +18,10 @@ pub use resolve::{
     resolve_store_semantic_config, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, BlobStorageProvider, DashboardFileConfig,
-    EventsBackendConfig, EventsProvider, GithubProviderConfig, ProviderConfig,
-    RelationalBackendConfig, RelationalProvider, StoreBackendConfig, StoreEmbeddingConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
+    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
+    WatchRuntimeConfig,
 };
 
 #[cfg(test)]
@@ -38,3 +39,7 @@ pub(crate) use resolve::{
 
 #[cfg(test)]
 mod store_config_tests;
+#[cfg(test)]
+mod unified_config_tests;
+#[cfg(test)]
+mod unified_consumer_tests;
