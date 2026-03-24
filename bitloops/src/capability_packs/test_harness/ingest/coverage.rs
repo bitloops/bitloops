@@ -347,9 +347,6 @@ mod tests {
     use anyhow::Result;
 
     use super::{execute, format_summary, parse_lcov_report};
-    use crate::capability_packs::knowledge::storage::{
-        KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
-    };
     use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
     use crate::host::capability_host::gateways::RelationalGateway;
     use crate::models::{
@@ -398,52 +395,6 @@ mod tests {
     }
 
     impl RelationalGateway for FakeRelationalGateway {
-        fn initialise_schema(&self) -> Result<()> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn persist_ingestion(
-            &self,
-            _source: &KnowledgeSourceRow,
-            _item: &KnowledgeItemRow,
-        ) -> Result<()> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn insert_relation_assertion(
-            &self,
-            _relation: &KnowledgeRelationAssertionRow,
-        ) -> Result<()> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn find_item_by_id(
-            &self,
-            _repo_id: &str,
-            _knowledge_item_id: &str,
-        ) -> Result<Option<KnowledgeItemRow>> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn find_source_by_id(
-            &self,
-            _knowledge_source_id: &str,
-        ) -> Result<Option<KnowledgeSourceRow>> {
-            unreachable!("unused in coverage tests")
-        }
-
-        fn list_items_for_repo(
-            &self,
-            _repo_id: &str,
-            _limit: usize,
-        ) -> Result<Vec<KnowledgeItemRow>> {
-            unreachable!("unused in coverage tests")
-        }
-
         fn resolve_checkpoint_id(&self, _repo_id: &str, _checkpoint_ref: &str) -> Result<String> {
             unreachable!("unused in coverage tests")
         }
