@@ -55,13 +55,13 @@ Mirrors `artefacts_current`. Primary key: `(repo_id, symbol_id)`.
 | `canonical_kind` | TEXT NOT NULL | `'test_suite'` or `'test_scenario'` |
 | `language_kind` | TEXT | e.g. `'describe_block'`, `'test_fn'`, `'#[test]'` |
 | `symbol_fqn` | TEXT | |
-| `name` | TEXT NOT NULL | |
+| `name` | TEXT NOT NULL | Human-readable test name (intentional divergence from production which uses only `symbol_fqn`) |
 | `parent_artefact_id` | TEXT | Suite's artefact_id (for scenarios) |
 | `parent_symbol_id` | TEXT | Suite's symbol_id (for scenarios) |
 | `start_line` | INTEGER NOT NULL | |
 | `end_line` | INTEGER NOT NULL | |
-| `start_byte` | INTEGER | |
-| `end_byte` | INTEGER | |
+| `start_byte` | INTEGER | Nullable — enumerated/macro-generated scenarios may not have byte offsets |
+| `end_byte` | INTEGER | Nullable — same reason as start_byte |
 | `signature` | TEXT | |
 | `modifiers` | TEXT NOT NULL DEFAULT '[]' | |
 | `docstring` | TEXT | |
@@ -75,6 +75,7 @@ Mirrors `artefacts_current`. Primary key: `(repo_id, symbol_id)`.
 Indexes:
 - `(repo_id, path)`
 - `(repo_id, canonical_kind)`
+- `(repo_id, parent_symbol_id)` — supports "find all scenarios for a suite" queries
 
 ### `test_artefact_edges_current`
 
@@ -82,7 +83,7 @@ Mirrors `artefact_edges_current`. Links test symbols to production symbols.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `edge_id` | TEXT PRIMARY KEY | |
+| `edge_id` | TEXT PRIMARY KEY | Deterministic — see identity section |
 | `repo_id` | TEXT NOT NULL | |
 | `commit_sha` | TEXT NOT NULL | |
 | `blob_sha` | TEXT NOT NULL | |
@@ -97,11 +98,19 @@ Mirrors `artefact_edges_current`. Links test symbols to production symbols.
 | `start_line` | INTEGER | |
 | `end_line` | INTEGER | |
 | `metadata` | TEXT DEFAULT '{}' | Evidence JSON, confidence, link_source, linkage_status |
+| `revision_kind` | TEXT NOT NULL DEFAULT 'commit' | Mirrors production edge pattern |
+| `revision_id` | TEXT NOT NULL DEFAULT '' | |
+| `temp_checkpoint_id` | INTEGER | |
 | `updated_at` | TEXT DEFAULT (datetime('now')) | |
+
+Constraints:
+- `CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL)` — at least one target reference must exist
+- `UNIQUE (repo_id, from_symbol_id, edge_kind, to_symbol_id, to_symbol_ref)` — natural key prevents duplicate edges
 
 Indexes:
 - `(repo_id, from_symbol_id)`
 - `(repo_id, to_symbol_id)`
+- `(repo_id, path)` — supports per-file edge cleanup
 
 ### Operational table FK changes
 
@@ -113,6 +122,8 @@ These tables stay as separate tables. Only their foreign key columns change:
 | `test_classifications` | `test_scenario_id` | `test_symbol_id` | `test_artefacts_current.symbol_id` |
 | `coverage_captures` | `subject_test_scenario_id` | `subject_test_symbol_id` | `test_artefacts_current.symbol_id` |
 | `coverage_hits` | `production_artefact_id` | `production_symbol_id` | `artefacts_current.symbol_id` |
+
+**`coverage_hits` primary key change:** The current PK is `(capture_id, production_artefact_id, line, branch_id)`. This becomes `(capture_id, production_symbol_id, line, branch_id)`. Since `capture_id` already scopes to a specific capture run, and `symbol_id` is unique per logical symbol, the deduplication semantics remain correct — you cannot have two coverage hits for the same symbol+line+branch within the same capture.
 
 Tables unchanged: `test_discovery_runs`, `test_discovery_diagnostics`, `coverage_diagnostics`.
 
@@ -212,6 +223,9 @@ pub struct TestArtefactEdgeCurrentRecord {
     pub start_line: Option<i64>,
     pub end_line: Option<i64>,
     pub metadata: String,
+    pub revision_kind: String,
+    pub revision_id: String,
+    pub temp_checkpoint_id: Option<i64>,
 }
 ```
 
@@ -234,7 +248,7 @@ Pack-owned identity functions following the same algorithm as core:
 
 - `test_structural_symbol_id(...)` — deterministic symbol identity from semantic properties
 - `test_revision_artefact_id(repo_id, blob_sha, symbol_id)` — blob-specific artefact identity
-- `test_edge_id(...)` — deterministic edge identity
+- `test_edge_id(repo_id, from_symbol_id, edge_kind, to_symbol_id_or_ref)` — deterministic edge identity derived from: `repo_id | from_symbol_id | edge_kind | to_symbol_id OR to_symbol_ref`
 
 These duplicate the core algorithm intentionally — the test harness capability pack does not import core internals.
 
@@ -247,9 +261,17 @@ These duplicate the core algorithm intentionally — the test harness capability
 - `upsert_test_artefact_current()` — INSERT ... ON CONFLICT (repo_id, symbol_id) DO UPDATE
 - `upsert_test_artefact_edge_current()` — INSERT ... ON CONFLICT (edge_id) DO UPDATE
 - `delete_stale_test_artefacts_for_path()` — remove symbols no longer present in file
+- `delete_stale_test_edges_for_path()` — remove edges whose `from_symbol_id` no longer exists (edges are not FK-cascaded from artefacts, so explicit cleanup is required)
 - `repair_test_edges()` — set `to_artefact_id = NULL` for edges pointing to deleted production symbols
 
 In Phase 1, every `ingest-tests` does a full reparse — `blob_sha` and `content_hash` are populated but not compared.
+
+### Cleanup strategy replacing `clear_existing_test_discovery_data`
+
+The current `clear_existing_test_discovery_data()` function deletes from `test_links`, `test_scenarios`, `test_suites` by `commit_sha`. With `_current` tables (UPSERT on `symbol_id`, not commit-scoped rows), this changes fundamentally:
+
+- **Before ingest:** no bulk delete by commit_sha
+- **Per-file processing:** after reparsing a file, compute the set of surviving `symbol_id`s. Delete any `test_artefacts_current` rows for that `(repo_id, path)` whose `symbol_id` is not in the surviving set. Then delete orphaned edges via `delete_stale_test_edges_for_path()`.
 
 ### Edge resolution
 
@@ -276,6 +298,7 @@ Replace current methods on `TestHarnessRepository`:
 
 Add:
 - `delete_stale_test_artefacts_for_path(repo_id, path, surviving_symbol_ids)`
+- `delete_stale_test_edges_for_path(repo_id, path, surviving_from_symbol_ids)`
 - `repair_test_edges(repo_id, deleted_production_symbol_ids)`
 - `load_test_artefacts_for_path(repo_id, path)` — for future Phase 2 comparison
 
@@ -296,6 +319,17 @@ WHERE te.repo_id = ? AND te.to_symbol_id = ?
 
 Confidence, link_source, and linkage_status move into `test_artefact_edges_current.metadata` (JSON).
 
+### Stage handler caller changes
+
+Current stage handlers pass a production `artefact_id` to query functions like `load_stage_covering_tests`. After migration, callers must resolve the production artefact's `symbol_id` (from the query context or by looking up `artefacts_current`) before calling into test harness queries that now filter on `to_symbol_id`.
+
+### Coverage stage queries
+
+The `coverage()` stage queries in `stage_serving.rs` that filter on `ch.production_artefact_id` must be rewritten to filter on `ch.production_symbol_id`. This includes:
+- `load_stage_coverage_pair_stats` — coverage hit lookups by production target
+- `load_stage_line_coverage` / `load_stage_branch_coverage` — per-line/branch queries
+- Any summary queries that aggregate by production artefact
+
 ## Ingestion path changes
 
 | File | Change |
@@ -304,6 +338,14 @@ Confidence, link_source, and linkage_status move into `test_artefact_edges_curre
 | `ingest/tests.rs` | Call new persistence path, write `test_artefacts_current` + `test_artefact_edges_current` |
 | `ingest/coverage.rs` | Resolve against `test_artefacts_current.symbol_id` and `artefacts_current.symbol_id` |
 | `ingest/results.rs` | Resolve against `test_artefacts_current.symbol_id` |
+
+## Schema applies to both SQLite and Postgres
+
+The test harness currently has two schema definitions:
+- SQLite: `storage/init.rs` (`TEST_DOMAIN_SCHEMA_SQL`)
+- Postgres: `capability_packs/test_harness/storage/schema.rs`
+
+Both must be updated. Type differences follow existing conventions: `INTEGER` (SQLite) vs `BIGINT` (Postgres), `TEXT DEFAULT (datetime('now'))` (SQLite) vs `TIMESTAMPTZ DEFAULT now()` (Postgres).
 
 ## Migration policy
 
@@ -330,6 +372,14 @@ No backward-compatible DB migration. Bump schema version. Old DBs must be recrea
 - `test_artefact_edges_current.to_symbol_id` points to valid production symbols in `artefacts_current` (or NULL if unresolved)
 - Deleting test artefacts does not affect production artefacts
 - Deleting production artefacts does not delete test data (edges get NULL targets)
+
+### Cleanup
+- After removing a test from a file and re-ingesting, the old `test_artefacts_current` row and its edges are deleted
+- After deleting a production artefact and re-ingesting tests, edges targeting it have `to_symbol_id`/`to_artefact_id` set to NULL
+
+### Migration
+- Schema version is bumped; opening an old DB with new code fails fast with a clear error
+- Both SQLite and Postgres schemas are updated
 
 ---
 
