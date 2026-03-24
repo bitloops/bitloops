@@ -99,15 +99,13 @@ mod tests {
 
     use super::TestsSummaryStageHandler;
     use crate::capability_packs::test_harness::storage::{
-        BitloopsTestHarnessRepository, SqliteTestHarnessRepository,
+        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
     use crate::host::capability_host::gateways::CanonicalGraphGateway;
     use crate::host::capability_host::runtime_contexts::LocalCanonicalGraphGateway;
     use crate::host::capability_host::{CapabilityExecutionContext, StageHandler, StageRequest};
     use crate::host::devql::RepoIdentity;
-    use crate::storage::init::init_test_domain_database;
-
     struct DummyExecCtx {
         repo: RepoIdentity,
         graph: LocalCanonicalGraphGateway,
