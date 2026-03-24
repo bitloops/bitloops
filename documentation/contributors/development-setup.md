@@ -73,7 +73,7 @@ We use `cargo-llvm-cov` for coverage. Install it:
 cargo install cargo-llvm-cov
 ```
 
-The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI on pull requests to `develop` checks that coverage does not regress beyond a 5% tolerance; locally use `bash scripts/check-dev.sh --full`.
+The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI runs that check on pull requests to `develop` **informationally** (merge is not blocked by it). To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
 
 ## Quick Reference
 

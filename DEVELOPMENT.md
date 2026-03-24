@@ -93,7 +93,7 @@ Coverage outputs:
 
 Coverage gate policy:
 
-- Enforced in GitHub Actions for pull requests to `develop` (`.github/workflows/dev-ci.yml`) and runnable locally via `bash scripts/check-dev.sh --full`.
+- On pull requests to `develop`, CI runs the same check **informationally** (does not block merge); enforce locally with `bash scripts/check-dev.sh --full` before merge if you rely on the baseline.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
 - Baseline source on check: latest JSONL record (`tail -n 1`).
