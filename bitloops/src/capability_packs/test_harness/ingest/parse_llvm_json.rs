@@ -74,14 +74,14 @@ pub fn ingest_llvm_json(
                 continue;
             }
 
-            for (artefact_id, start_line, end_line) in &artefacts {
+            for (production_symbol_id, start_line, end_line) in &artefacts {
                 for (line, count) in &line_hits {
                     if *line < *start_line || *line > *end_line {
                         continue;
                     }
                     hits.push(CoverageHitRecord {
                         capture_id: capture_id.to_string(),
-                        production_artefact_id: artefact_id.clone(),
+                        production_symbol_id: production_symbol_id.clone(),
                         file_path: file.filename.clone(),
                         line: *line,
                         branch_id: -1,

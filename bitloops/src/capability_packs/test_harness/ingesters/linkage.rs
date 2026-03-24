@@ -65,9 +65,8 @@ impl IngesterHandler for LinkageIngester {
                     "commit_sha": payload.commit_sha,
                     "summary": {
                         "files": summary.files,
-                        "suites": summary.suites,
-                        "scenarios": summary.scenarios,
-                        "links": summary.links,
+                        "test_artefacts": summary.test_artefacts,
+                        "test_edges": summary.test_edges,
                         "enumeration_status": summary.enumeration_status,
                         "enumerated_scenarios": summary.enumerated_scenarios,
                     }

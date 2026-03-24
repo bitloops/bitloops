@@ -11,8 +11,8 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
-    StageLineCoverageRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
 };
 
 pub mod dispatch;
@@ -39,9 +39,8 @@ pub trait TestHarnessRepository {
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,
-        suites: &[TestSuiteRecord],
-        scenarios: &[TestScenarioRecord],
-        links: &[TestLinkRecord],
+        test_artefacts: &[TestArtefactCurrentRecord],
+        test_edges: &[TestArtefactEdgeCurrentRecord],
         discovery_run: &TestDiscoveryRunRecord,
         diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()>;
@@ -69,25 +68,25 @@ pub trait TestHarnessQueryRepository {
     fn load_covering_tests(
         &self,
         commit_sha: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Vec<CoveringTestRecord>>;
     fn load_linked_fan_out_by_test(&self, commit_sha: &str) -> Result<HashMap<String, i64>>;
     fn coverage_exists_for_commit(&self, commit_sha: &str) -> Result<bool>;
     fn load_coverage_pair_stats(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
-        artefact_id: &str,
+        test_symbol_id: &str,
+        production_symbol_id: &str,
     ) -> Result<CoveragePairStats>;
     fn load_latest_test_run(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
+        test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>>;
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Option<CoverageSummaryRecord>>;
 
     fn load_test_harness_commit_counts(&self, commit_sha: &str) -> Result<TestHarnessCommitCounts>;
@@ -95,7 +94,7 @@ pub trait TestHarnessQueryRepository {
     fn load_stage_covering_tests(
         &self,
         repo_id: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -104,14 +103,14 @@ pub trait TestHarnessQueryRepository {
     fn load_stage_line_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageLineCoverageRecord>>;
 
     fn load_stage_branch_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageBranchCoverageRecord>>;
 

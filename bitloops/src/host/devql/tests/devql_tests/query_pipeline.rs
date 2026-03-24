@@ -1465,6 +1465,20 @@ async fn execute_devql_query_rejects_tests_with_non_test_harness_registered_stag
 #[tokio::test]
 async fn execute_registered_tests_stage_returns_covering_tests() {
     let temp = tempdir().expect("tempdir");
+    let home = TempDir::new().expect("home dir");
+    let home_path = home.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            ("HOME", Some(home_path.as_str())),
+            ("USERPROFILE", Some(home_path.as_str())),
+            ("BITLOOPS_DEVQL_PG_DSN", None),
+            ("BITLOOPS_DEVQL_CH_URL", None),
+            ("BITLOOPS_DEVQL_CH_USER", None),
+            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+            ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ],
+    );
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
@@ -1508,51 +1522,51 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     // Create test harness tables (not part of the DevQL relational schema)
     conn.execute_batch(
         r#"
-        CREATE TABLE IF NOT EXISTS test_suites (
-            suite_id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS test_artefacts_current (
+            artefact_id TEXT NOT NULL,
+            symbol_id TEXT NOT NULL,
             repo_id TEXT NOT NULL,
             commit_sha TEXT NOT NULL,
-            language TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
             path TEXT NOT NULL,
-            name TEXT NOT NULL,
+            language TEXT NOT NULL,
+            canonical_kind TEXT NOT NULL,
+            language_kind TEXT,
             symbol_fqn TEXT,
+            name TEXT NOT NULL,
+            parent_artefact_id TEXT,
+            parent_symbol_id TEXT,
             start_line BIGINT NOT NULL,
             end_line BIGINT NOT NULL,
             start_byte BIGINT,
             end_byte BIGINT,
             signature TEXT,
+            modifiers TEXT NOT NULL DEFAULT '[]',
+            docstring TEXT,
+            content_hash TEXT,
             discovery_source TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
+            revision_kind TEXT NOT NULL DEFAULT 'commit',
+            revision_id TEXT NOT NULL,
+            PRIMARY KEY (repo_id, symbol_id)
         );
-        CREATE TABLE IF NOT EXISTS test_scenarios (
-            scenario_id TEXT PRIMARY KEY,
-            suite_id TEXT REFERENCES test_suites(suite_id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS test_artefact_edges_current (
+            edge_id TEXT PRIMARY KEY,
             repo_id TEXT NOT NULL,
             commit_sha TEXT NOT NULL,
-            language TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
             path TEXT NOT NULL,
-            name TEXT NOT NULL,
-            symbol_fqn TEXT,
-            start_line BIGINT NOT NULL,
-            end_line BIGINT NOT NULL,
-            start_byte BIGINT,
-            end_byte BIGINT,
-            signature TEXT,
-            discovery_source TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS test_links (
-            test_link_id TEXT PRIMARY KEY,
-            repo_id TEXT NOT NULL,
-            commit_sha TEXT NOT NULL,
-            test_scenario_id TEXT NOT NULL REFERENCES test_scenarios(scenario_id) ON DELETE CASCADE,
-            production_artefact_id TEXT NOT NULL,
-            production_symbol_id TEXT,
-            link_source TEXT NOT NULL DEFAULT 'static_analysis',
-            evidence_json TEXT DEFAULT '{}',
-            confidence REAL NOT NULL DEFAULT 0.6,
-            linkage_status TEXT NOT NULL DEFAULT 'resolved',
-            created_at TEXT DEFAULT (datetime('now'))
+            from_artefact_id TEXT NOT NULL,
+            from_symbol_id TEXT NOT NULL,
+            to_artefact_id TEXT,
+            to_symbol_id TEXT,
+            to_symbol_ref TEXT,
+            edge_kind TEXT NOT NULL,
+            language TEXT NOT NULL,
+            start_line BIGINT,
+            end_line BIGINT,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            revision_kind TEXT NOT NULL DEFAULT 'commit',
+            revision_id TEXT NOT NULL
         );
         "#,
     )
@@ -1588,64 +1602,90 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
 
     // Insert test harness data
     conn.execute(
-        "INSERT INTO test_suites (
-            suite_id, repo_id, commit_sha, language, path, name,
-            start_line, end_line, discovery_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO test_artefacts_current (
+            artefact_id, symbol_id, repo_id, commit_sha, blob_sha, path, language,
+            canonical_kind, symbol_fqn, name, start_line, end_line, modifiers,
+            discovery_source, revision_kind, revision_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
+            "test-artefact::suite::tests",
             "suite::tests",
             cfg.repo.repo_id.as_str(),
             "commit-1",
-            "rust",
+            "blob-test-1",
             "src/user/service_tests.rs",
+            "rust",
+            "test_suite",
             "tests",
-            1,
-            10,
+            "tests",
+            1i64,
+            10i64,
+            "[]",
             "source",
+            "commit",
+            "commit-1",
         ],
     )
     .expect("insert test suite");
 
     conn.execute(
-        "INSERT INTO test_scenarios (
-            scenario_id, suite_id, repo_id, commit_sha, language, path, name,
-            start_line, end_line, discovery_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO test_artefacts_current (
+            artefact_id, symbol_id, repo_id, commit_sha, blob_sha, path, language,
+            canonical_kind, symbol_fqn, name, parent_artefact_id, parent_symbol_id,
+            start_line, end_line, modifiers, discovery_source, revision_kind, revision_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         rusqlite::params![
+            "test-artefact::scenario::test_create_user",
             "scenario::test_create_user",
-            "suite::tests",
             cfg.repo.repo_id.as_str(),
             "commit-1",
-            "rust",
+            "blob-test-1",
             "src/user/service_tests.rs",
+            "rust",
+            "test_scenario",
+            "tests.test_create_user",
             "test_create_user",
-            5,
-            8,
+            "test-artefact::suite::tests",
+            "suite::tests",
+            5i64,
+            8i64,
+            "[]",
             "source",
+            "commit",
+            "commit-1",
         ],
     )
     .expect("insert test scenario");
 
     conn.execute(
-        "INSERT INTO test_links (
-            test_link_id, repo_id, commit_sha, test_scenario_id, production_artefact_id,
-            link_source, confidence, linkage_status
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO test_artefact_edges_current (
+            edge_id, repo_id, commit_sha, blob_sha, path, from_artefact_id, from_symbol_id,
+            to_artefact_id, to_symbol_id, edge_kind, language, start_line, end_line,
+            metadata, revision_kind, revision_id
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             "link::1",
             cfg.repo.repo_id.as_str(),
             "commit-1",
+            "blob-test-1",
+            "src/user/service_tests.rs",
+            "test-artefact::scenario::test_create_user",
             "scenario::test_create_user",
             "artefact::create_user",
-            "static_analysis",
-            0.6,
-            "resolved",
+            "sym::create_user",
+            "tests",
+            "rust",
+            5i64,
+            8i64,
+            "{\"confidence\":0.6,\"link_source\":\"static_analysis\",\"linkage_status\":\"resolved\"}",
+            "commit",
+            "commit-1",
         ],
     )
     .expect("insert test link");
     let covering_rows_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM test_links WHERE repo_id = ?1",
+            "SELECT COUNT(*) FROM test_artefact_edges_current WHERE repo_id = ?1",
             rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get(0),
         )
@@ -1765,6 +1805,20 @@ async fn execute_devql_query_rejects_coverage_with_non_test_harness_registered_s
 #[tokio::test]
 async fn execute_registered_coverage_stage_returns_coverage_data() {
     let temp = tempdir().expect("tempdir");
+    let home = TempDir::new().expect("home dir");
+    let home_path = home.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            ("HOME", Some(home_path.as_str())),
+            ("USERPROFILE", Some(home_path.as_str())),
+            ("BITLOOPS_DEVQL_PG_DSN", None),
+            ("BITLOOPS_DEVQL_CH_URL", None),
+            ("BITLOOPS_DEVQL_CH_USER", None),
+            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+            ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ],
+    );
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
@@ -1815,7 +1869,7 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
             tool TEXT NOT NULL DEFAULT 'unknown',
             format TEXT NOT NULL DEFAULT 'lcov',
             scope_kind TEXT NOT NULL DEFAULT 'workspace',
-            subject_test_scenario_id TEXT,
+            subject_test_symbol_id TEXT,
             line_truth INTEGER NOT NULL DEFAULT 1,
             branch_truth INTEGER NOT NULL DEFAULT 0,
             captured_at TEXT NOT NULL,
@@ -1824,13 +1878,13 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
         );
         CREATE TABLE IF NOT EXISTS coverage_hits (
             capture_id TEXT NOT NULL REFERENCES coverage_captures(capture_id) ON DELETE CASCADE,
-            production_artefact_id TEXT NOT NULL,
+            production_symbol_id TEXT NOT NULL,
             file_path TEXT NOT NULL,
             line INTEGER NOT NULL,
             branch_id INTEGER NOT NULL DEFAULT -1,
             covered INTEGER NOT NULL,
             hit_count INTEGER DEFAULT 0,
-            PRIMARY KEY (capture_id, production_artefact_id, line, branch_id)
+            PRIMARY KEY (capture_id, production_symbol_id, line, branch_id)
         );
         "#,
     )
@@ -1887,11 +1941,11 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     for (line, covered) in [(42, 1), (43, 1), (44, 1), (45, 0), (46, 0)] {
         conn.execute(
             "INSERT INTO coverage_hits (
-                capture_id, production_artefact_id, file_path, line, branch_id, covered, hit_count
+                capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 "capture-1",
-                "artefact::create_user",
+                "sym::create_user",
                 "src/user/service.rs",
                 line,
                 -1,
@@ -1906,11 +1960,11 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     for (line, branch_id, covered, hit_count) in [(48, 0, 1, 3), (48, 1, 0, 0)] {
         conn.execute(
             "INSERT INTO coverage_hits (
-                capture_id, production_artefact_id, file_path, line, branch_id, covered, hit_count
+                capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 "capture-1",
-                "artefact::create_user",
+                "sym::create_user",
                 "src/user/service.rs",
                 line,
                 branch_id,
@@ -1922,8 +1976,8 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     }
     let line_rows_count: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM coverage_hits WHERE production_artefact_id = ?1 AND branch_id = -1",
-            rusqlite::params!["artefact::create_user"],
+            "SELECT COUNT(*) FROM coverage_hits WHERE production_symbol_id = ?1 AND branch_id = -1",
+            rusqlite::params!["sym::create_user"],
             |row| row.get(0),
         )
         .expect("count line coverage rows");

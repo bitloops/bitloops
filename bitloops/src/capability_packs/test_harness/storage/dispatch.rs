@@ -12,8 +12,8 @@ use crate::models::{
     CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
     ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
-    StageLineCoverageRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
 };
 use crate::storage::init::init_test_domain_database;
 
@@ -83,26 +83,23 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,
-        suites: &[TestSuiteRecord],
-        scenarios: &[TestScenarioRecord],
-        links: &[TestLinkRecord],
+        test_artefacts: &[TestArtefactCurrentRecord],
+        test_edges: &[TestArtefactEdgeCurrentRecord],
         discovery_run: &TestDiscoveryRunRecord,
         diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
         match self {
             Self::Sqlite(repository) => repository.replace_test_discovery(
                 commit_sha,
-                suites,
-                scenarios,
-                links,
+                test_artefacts,
+                test_edges,
                 discovery_run,
                 diagnostics,
             ),
             Self::Postgres(repository) => repository.replace_test_discovery(
                 commit_sha,
-                suites,
-                scenarios,
-                links,
+                test_artefacts,
+                test_edges,
                 discovery_run,
                 diagnostics,
             ),
@@ -199,14 +196,14 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_covering_tests(
         &self,
         commit_sha: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Vec<CoveringTestRecord>> {
         match self {
             Self::Sqlite(repository) => {
-                repository.load_covering_tests(commit_sha, production_artefact_id)
+                repository.load_covering_tests(commit_sha, production_symbol_id)
             }
             Self::Postgres(repository) => {
-                repository.load_covering_tests(commit_sha, production_artefact_id)
+                repository.load_covering_tests(commit_sha, production_symbol_id)
             }
         }
     }
@@ -231,30 +228,32 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_coverage_pair_stats(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
-        artefact_id: &str,
+        test_symbol_id: &str,
+        production_symbol_id: &str,
     ) -> Result<CoveragePairStats> {
         match self {
-            Self::Sqlite(repository) => {
-                repository.load_coverage_pair_stats(commit_sha, test_scenario_id, artefact_id)
-            }
-            Self::Postgres(repository) => {
-                repository.load_coverage_pair_stats(commit_sha, test_scenario_id, artefact_id)
-            }
+            Self::Sqlite(repository) => repository.load_coverage_pair_stats(
+                commit_sha,
+                test_symbol_id,
+                production_symbol_id,
+            ),
+            Self::Postgres(repository) => repository.load_coverage_pair_stats(
+                commit_sha,
+                test_symbol_id,
+                production_symbol_id,
+            ),
         }
     }
 
     fn load_latest_test_run(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
+        test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>> {
         match self {
-            Self::Sqlite(repository) => {
-                repository.load_latest_test_run(commit_sha, test_scenario_id)
-            }
+            Self::Sqlite(repository) => repository.load_latest_test_run(commit_sha, test_symbol_id),
             Self::Postgres(repository) => {
-                repository.load_latest_test_run(commit_sha, test_scenario_id)
+                repository.load_latest_test_run(commit_sha, test_symbol_id)
             }
         }
     }
@@ -262,11 +261,15 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Option<CoverageSummaryRecord>> {
         match self {
-            Self::Sqlite(repository) => repository.load_coverage_summary(commit_sha, artefact_id),
-            Self::Postgres(repository) => repository.load_coverage_summary(commit_sha, artefact_id),
+            Self::Sqlite(repository) => {
+                repository.load_coverage_summary(commit_sha, production_symbol_id)
+            }
+            Self::Postgres(repository) => {
+                repository.load_coverage_summary(commit_sha, production_symbol_id)
+            }
         }
     }
 
@@ -280,7 +283,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_stage_covering_tests(
         &self,
         repo_id: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -288,14 +291,14 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.load_stage_covering_tests(
                 repo_id,
-                production_artefact_id,
+                production_symbol_id,
                 min_confidence,
                 linkage_source,
                 limit,
             ),
             Self::Postgres(repository) => repository.load_stage_covering_tests(
                 repo_id,
-                production_artefact_id,
+                production_symbol_id,
                 min_confidence,
                 linkage_source,
                 limit,
@@ -306,15 +309,15 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_stage_line_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageLineCoverageRecord>> {
         match self {
             Self::Sqlite(repository) => {
-                repository.load_stage_line_coverage(repo_id, artefact_id, commit_sha)
+                repository.load_stage_line_coverage(repo_id, production_symbol_id, commit_sha)
             }
             Self::Postgres(repository) => {
-                repository.load_stage_line_coverage(repo_id, artefact_id, commit_sha)
+                repository.load_stage_line_coverage(repo_id, production_symbol_id, commit_sha)
             }
         }
     }
@@ -322,15 +325,15 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
     fn load_stage_branch_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageBranchCoverageRecord>> {
         match self {
             Self::Sqlite(repository) => {
-                repository.load_stage_branch_coverage(repo_id, artefact_id, commit_sha)
+                repository.load_stage_branch_coverage(repo_id, production_symbol_id, commit_sha)
             }
             Self::Postgres(repository) => {
-                repository.load_stage_branch_coverage(repo_id, artefact_id, commit_sha)
+                repository.load_stage_branch_coverage(repo_id, production_symbol_id, commit_sha)
             }
         }
     }
@@ -386,9 +389,8 @@ mod tests {
 
         let conn = rusqlite::Connection::open(&sqlite_path)?;
         for table in [
-            "test_suites",
-            "test_scenarios",
-            "test_links",
+            "test_artefacts_current",
+            "test_artefact_edges_current",
             "coverage_captures",
             "coverage_hits",
             "test_discovery_runs",

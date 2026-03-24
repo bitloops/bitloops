@@ -12,55 +12,63 @@ use super::helpers::{get, get_i64};
 pub(super) async fn load_stage_covering_tests(
     client: &mut tokio_postgres::Client,
     repo_id: String,
-    production_artefact_id: String,
+    production_symbol_id: String,
     linkage_source_owned: Option<String>,
     min_confidence: Option<f64>,
     limit: usize,
 ) -> Result<Vec<StageCoveringTestRecord>> {
     let limit = limit.max(1);
     let mut sql = String::from(
-        "SELECT ts.scenario_id AS test_id, ts.name AS test_name, \
-         su.name AS suite_name, ts.path AS file_path, \
-         tl.confidence, ts.discovery_source, \
-         tl.link_source AS linkage_source, tl.linkage_status \
-         FROM test_links tl \
-         JOIN test_scenarios ts ON ts.scenario_id = tl.test_scenario_id \
-         LEFT JOIN test_suites su ON su.suite_id = ts.suite_id \
-         WHERE tl.repo_id = $1 AND tl.production_artefact_id = $2",
+        "SELECT ts.symbol_id AS test_id, ts.name AS test_name, \
+         parent.name AS suite_name, ts.path AS file_path, \
+         COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) AS confidence, \
+         ts.discovery_source, \
+         COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') AS linkage_source, \
+         COALESCE(te.metadata::jsonb ->> 'linkage_status', 'unknown') AS linkage_status \
+         FROM test_artefact_edges_current te \
+         JOIN test_artefacts_current ts \
+           ON ts.repo_id = te.repo_id \
+          AND ts.symbol_id = te.from_symbol_id \
+         LEFT JOIN test_artefacts_current parent \
+           ON parent.repo_id = ts.repo_id \
+          AND parent.symbol_id = ts.parent_symbol_id \
+         WHERE te.repo_id = $1 \
+           AND (te.to_symbol_id = $2 OR te.to_artefact_id = $2) \
+           AND ts.canonical_kind = 'test_scenario'",
     );
     let mut next_param = 3usize;
     if min_confidence.is_some() {
-        sql.push_str(&format!(" AND tl.confidence >= ${next_param}"));
+        sql.push_str(&format!(
+            " AND COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) >= ${next_param}"
+        ));
         next_param += 1;
     }
     if linkage_source_owned.is_some() {
-        sql.push_str(&format!(" AND tl.link_source = ${next_param}"));
+        sql.push_str(&format!(
+            " AND COALESCE(te.metadata::jsonb ->> 'link_source', 'unknown') = ${next_param}"
+        ));
     }
     sql.push_str(&format!(
-        " ORDER BY tl.confidence DESC, ts.path, ts.name LIMIT {limit}"
+        " ORDER BY confidence DESC, ts.path, ts.name LIMIT {limit}"
     ));
 
     let rows = match (min_confidence, linkage_source_owned.as_deref()) {
         (Some(mc), Some(ls)) => {
             client
-                .query(&sql, &[&repo_id, &production_artefact_id, &mc, &ls])
+                .query(&sql, &[&repo_id, &production_symbol_id, &mc, &ls])
                 .await
         }
         (Some(mc), None) => {
             client
-                .query(&sql, &[&repo_id, &production_artefact_id, &mc])
+                .query(&sql, &[&repo_id, &production_symbol_id, &mc])
                 .await
         }
         (None, Some(ls)) => {
             client
-                .query(&sql, &[&repo_id, &production_artefact_id, &ls])
+                .query(&sql, &[&repo_id, &production_symbol_id, &ls])
                 .await
         }
-        (None, None) => {
-            client
-                .query(&sql, &[&repo_id, &production_artefact_id])
-                .await
-        }
+        (None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
     }
     .context("failed querying stage covering tests")?;
 
@@ -83,31 +91,52 @@ pub(super) async fn load_stage_covering_tests(
 pub(super) async fn load_stage_line_coverage(
     client: &mut tokio_postgres::Client,
     repo_id: String,
-    artefact_id: String,
+    production_symbol_id: String,
     commit_sha: Option<String>,
 ) -> Result<Vec<StageLineCoverageRecord>> {
     let sql_no_commit = concat!(
         "SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any ",
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
-        "WHERE cc.repo_id = $1 AND ch.production_artefact_id = $2 AND ch.branch_id = -1 ",
+        "WHERE cc.repo_id = $1 ",
+        "AND (",
+        "  ch.production_symbol_id = $2 ",
+        "  OR EXISTS (",
+        "    SELECT 1 FROM artefacts_current ac ",
+        "    WHERE ac.repo_id = cc.repo_id ",
+        "      AND ac.artefact_id = $2 ",
+        "      AND ac.symbol_id = ch.production_symbol_id",
+        "  )",
+        ") ",
+        "AND ch.branch_id = -1 ",
         "GROUP BY ch.line ORDER BY ch.line",
     );
     let sql_with_commit = concat!(
         "SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any ",
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
-        "WHERE cc.repo_id = $1 AND ch.production_artefact_id = $2 ",
+        "WHERE cc.repo_id = $1 ",
+        "AND (",
+        "  ch.production_symbol_id = $2 ",
+        "  OR EXISTS (",
+        "    SELECT 1 FROM artefacts_current ac ",
+        "    WHERE ac.repo_id = cc.repo_id ",
+        "      AND ac.artefact_id = $2 ",
+        "      AND ac.symbol_id = ch.production_symbol_id",
+        "  )",
+        ") ",
         "AND ch.branch_id = -1 AND cc.commit_sha = $3 ",
         "GROUP BY ch.line ORDER BY ch.line",
     );
 
     let rows = if let Some(ref sha) = commit_sha {
         client
-            .query(sql_with_commit, &[&repo_id, &artefact_id, sha])
+            .query(sql_with_commit, &[&repo_id, &production_symbol_id, sha])
             .await
     } else {
-        client.query(sql_no_commit, &[&repo_id, &artefact_id]).await
+        client
+            .query(sql_no_commit, &[&repo_id, &production_symbol_id])
+            .await
     }
     .context("failed querying stage line coverage")?;
 
@@ -124,7 +153,7 @@ pub(super) async fn load_stage_line_coverage(
 pub(super) async fn load_stage_branch_coverage(
     client: &mut tokio_postgres::Client,
     repo_id: String,
-    artefact_id: String,
+    production_symbol_id: String,
     commit_sha: Option<String>,
 ) -> Result<Vec<StageBranchCoverageRecord>> {
     let sql_no_commit = concat!(
@@ -133,7 +162,17 @@ pub(super) async fn load_stage_branch_coverage(
         "MAX(ch.hit_count) AS hit_count ",
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
-        "WHERE cc.repo_id = $1 AND ch.production_artefact_id = $2 AND ch.branch_id != -1 ",
+        "WHERE cc.repo_id = $1 ",
+        "AND (",
+        "  ch.production_symbol_id = $2 ",
+        "  OR EXISTS (",
+        "    SELECT 1 FROM artefacts_current ac ",
+        "    WHERE ac.repo_id = cc.repo_id ",
+        "      AND ac.artefact_id = $2 ",
+        "      AND ac.symbol_id = ch.production_symbol_id",
+        "  )",
+        ") ",
+        "AND ch.branch_id != -1 ",
         "GROUP BY ch.line, ch.branch_id ORDER BY ch.line, ch.branch_id",
     );
     let sql_with_commit = concat!(
@@ -142,17 +181,28 @@ pub(super) async fn load_stage_branch_coverage(
         "MAX(ch.hit_count) AS hit_count ",
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
-        "WHERE cc.repo_id = $1 AND ch.production_artefact_id = $2 ",
+        "WHERE cc.repo_id = $1 ",
+        "AND (",
+        "  ch.production_symbol_id = $2 ",
+        "  OR EXISTS (",
+        "    SELECT 1 FROM artefacts_current ac ",
+        "    WHERE ac.repo_id = cc.repo_id ",
+        "      AND ac.artefact_id = $2 ",
+        "      AND ac.symbol_id = ch.production_symbol_id",
+        "  )",
+        ") ",
         "AND ch.branch_id != -1 AND cc.commit_sha = $3 ",
         "GROUP BY ch.line, ch.branch_id ORDER BY ch.line, ch.branch_id",
     );
 
     let rows = if let Some(ref sha) = commit_sha {
         client
-            .query(sql_with_commit, &[&repo_id, &artefact_id, sha])
+            .query(sql_with_commit, &[&repo_id, &production_symbol_id, sha])
             .await
     } else {
-        client.query(sql_no_commit, &[&repo_id, &artefact_id]).await
+        client
+            .query(sql_no_commit, &[&repo_id, &production_symbol_id])
+            .await
     }
     .context("failed querying stage branch coverage")?;
 

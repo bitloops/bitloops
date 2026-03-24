@@ -65,7 +65,7 @@ pub fn execute(
         tool: tool.to_string(),
         format,
         scope_kind,
-        subject_test_scenario_id: test_artefact_id.map(|s| s.to_string()),
+        subject_test_symbol_id: test_artefact_id.map(|s| s.to_string()),
         line_truth: true,
         branch_truth: has_branches,
         captured_at,
@@ -154,14 +154,14 @@ fn ingest_lcov(
             continue;
         }
 
-        for (artefact_id, start_line, end_line) in &artefacts {
+        for (production_symbol_id, start_line, end_line) in &artefacts {
             for (&line_number, &hit_count) in &file.line_hits {
                 if line_number < *start_line || line_number > *end_line {
                     continue;
                 }
                 hits.push(CoverageHitRecord {
                     capture_id: capture_id.to_string(),
-                    production_artefact_id: artefact_id.clone(),
+                    production_symbol_id: production_symbol_id.clone(),
                     file_path: file.source_file.clone(),
                     line: line_number,
                     branch_id: -1,
@@ -176,7 +176,7 @@ fn ingest_lcov(
                 }
                 hits.push(CoverageHitRecord {
                     capture_id: capture_id.to_string(),
-                    production_artefact_id: artefact_id.clone(),
+                    production_symbol_id: production_symbol_id.clone(),
                     file_path: file.source_file.clone(),
                     line: branch.line,
                     branch_id: branch.branch_id,

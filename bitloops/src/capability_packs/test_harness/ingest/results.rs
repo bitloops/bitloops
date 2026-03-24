@@ -71,7 +71,7 @@ pub fn execute(
                 .unwrap_or_default();
             let key = format!("{}|{}|{}", suite_path, suite_name, assertion.title);
 
-            let Some(test_scenario_id) = scenario_map.get(&key) else {
+            let Some(test_symbol_id) = scenario_map.get(&key) else {
                 eprintln!(
                     "warning: unmatched Jest result (file: {}, suite: {}, test: {})",
                     suite_path, suite_name, assertion.title
@@ -81,12 +81,12 @@ pub fn execute(
             };
 
             let status = map_jest_status(&assertion.status)?;
-            let run_id = format!("run:{commit_sha}:{test_scenario_id}");
+            let run_id = format!("run:{commit_sha}:{test_symbol_id}");
             runs.push(TestRunRecord {
                 run_id,
                 repo_id: repo_id.clone(),
                 commit_sha: commit_sha.to_string(),
-                test_scenario_id: test_scenario_id.clone(),
+                test_symbol_id: test_symbol_id.clone(),
                 status: status.to_string(),
                 duration_ms: assertion.duration,
                 ran_at: ran_at.clone(),

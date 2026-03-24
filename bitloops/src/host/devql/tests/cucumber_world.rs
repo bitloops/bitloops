@@ -2,7 +2,7 @@ use super::*;
 use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::capability_packs::test_harness::mapping::model::DiscoveryIssue;
 use crate::host::devql::knowledge_support::KnowledgeBddHarness;
-use crate::models::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,9 +36,9 @@ pub(super) struct DevqlBddWorld {
     // Test harness state
     pub(super) production_sources: Vec<(String, String)>,
     pub(super) test_sources: Vec<(String, String)>,
-    pub(super) discovered_suites: Vec<TestSuiteRecord>,
-    pub(super) discovered_scenarios: Vec<TestScenarioRecord>,
-    pub(super) materialized_links: Vec<TestLinkRecord>,
+    pub(super) discovered_suites: Vec<TestArtefactCurrentRecord>,
+    pub(super) discovered_scenarios: Vec<TestArtefactCurrentRecord>,
+    pub(super) materialized_links: Vec<TestArtefactEdgeCurrentRecord>,
     pub(super) discovery_issues: Vec<DiscoveryIssue>,
     pub(super) tests_query_response: Option<Value>,
     pub(super) knowledge: Option<KnowledgeBddHarness>,

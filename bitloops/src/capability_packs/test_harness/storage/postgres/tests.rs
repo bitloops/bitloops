@@ -14,8 +14,9 @@ use crate::capability_packs::test_harness::storage::{
 use crate::models::{
     CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
     CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
-    ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestLinkRecord, TestRunRecord, TestScenarioRecord, TestSuiteRecord,
+    ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestArtefactCurrentRecord,
+    TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+    TestRunRecord,
 };
 
 mod devql_schema {
@@ -41,6 +42,8 @@ const SYMBOL_CREATE_USER: &str = "symbol:function:create_user";
 const SUITE_ID: &str = "suite:user-service";
 const SCENARIO_ID: &str = "scenario:checks-email-domain";
 const TEST_LINK_ID: &str = "link:checks-email-domain:create-user";
+const SUITE_ARTEFACT_ID: &str = "test-artefact:suite:user-service";
+const SCENARIO_ARTEFACT_ID: &str = "test-artefact:scenario:checks-email-domain";
 const DISCOVERY_RUN_ID: &str = "discovery:user-service";
 const DIAGNOSTIC_ID: &str = "diag:user-service";
 const RUN_ID: &str = "run:checks-email-domain";
@@ -86,24 +89,21 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
 
     repository.replace_test_discovery(
         COMMIT_SHA,
-        &[stale_suite()],
-        &[stale_scenario()],
-        &[stale_link()],
+        &stale_test_artefacts(),
+        &stale_test_edges(),
         &stale_discovery_run(),
         &[stale_diagnostic()],
     )?;
     repository.replace_test_discovery(
         COMMIT_SHA,
-        &[suite_record()],
-        &[scenario_record()],
-        &[link_record()],
+        &test_artefacts(),
+        &test_edges(),
         &discovery_run_record(),
         &[diagnostic_record()],
     )?;
 
-    assert_eq!(table_count(&repository, "test_suites")?, 1);
-    assert_eq!(table_count(&repository, "test_scenarios")?, 1);
-    assert_eq!(table_count(&repository, "test_links")?, 1);
+    assert_eq!(table_count(&repository, "test_artefacts_current")?, 2);
+    assert_eq!(table_count(&repository, "test_artefact_edges_current")?, 1);
     assert_eq!(table_count(&repository, "test_discovery_runs")?, 1);
     assert_eq!(table_count(&repository, "test_discovery_diagnostics")?, 1);
 
@@ -148,7 +148,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert!(!repository.coverage_exists_for_commit(COMMIT_SHA)?);
     assert!(
         repository
-            .load_coverage_summary(COMMIT_SHA, ARTEFACT_CREATE_USER)?
+            .load_coverage_summary(COMMIT_SHA, SYMBOL_CREATE_USER)?
             .is_none()
     );
     assert!(
@@ -169,7 +169,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert!(repository.coverage_exists_for_commit(COMMIT_SHA)?);
 
     let pair_stats =
-        repository.load_coverage_pair_stats(COMMIT_SHA, SCENARIO_ID, ARTEFACT_CREATE_USER)?;
+        repository.load_coverage_pair_stats(COMMIT_SHA, SCENARIO_ID, SYMBOL_CREATE_USER)?;
     assert_eq!(pair_stats.total_rows, 4);
     assert_eq!(pair_stats.covered_rows, 2);
 
@@ -177,14 +177,14 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert_eq!(classifications, 1);
     assert_eq!(table_count(&repository, "test_classifications")?, 1);
 
-    let covering_tests = repository.load_covering_tests(COMMIT_SHA, ARTEFACT_CREATE_USER)?;
+    let covering_tests = repository.load_covering_tests(COMMIT_SHA, SYMBOL_CREATE_USER)?;
     assert_eq!(covering_tests.len(), 1);
     assert_eq!(covering_tests[0].test_id, SCENARIO_ID);
     assert_eq!(covering_tests[0].classification.as_deref(), Some("unit"));
     assert_eq!(covering_tests[0].fan_out, Some(2));
 
     let summary = repository
-        .load_coverage_summary(COMMIT_SHA, ARTEFACT_CREATE_USER)?
+        .load_coverage_summary(COMMIT_SHA, SYMBOL_CREATE_USER)?
         .expect("coverage summary should exist");
     assert_eq!(summary.line_total, 2);
     assert_eq!(summary.line_covered, 1);
@@ -280,56 +280,83 @@ fn table_count(repository: &PostgresTestHarnessRepository, table: &str) -> Resul
     })
 }
 
-fn stale_suite() -> TestSuiteRecord {
-    TestSuiteRecord {
-        suite_id: "suite:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: "rust".to_string(),
-        path: "tests/stale.rs".to_string(),
-        name: "StaleSuite".to_string(),
-        symbol_fqn: Some("tests/stale.rs::StaleSuite".to_string()),
-        start_line: 1,
-        end_line: 10,
-        start_byte: Some(0),
-        end_byte: Some(100),
-        signature: None,
-        discovery_source: "static_analysis".to_string(),
-    }
+fn stale_test_artefacts() -> Vec<TestArtefactCurrentRecord> {
+    vec![
+        TestArtefactCurrentRecord {
+            artefact_id: "test-artefact:suite:stale".to_string(),
+            symbol_id: "suite:stale".to_string(),
+            repo_id: REPO_ID.to_string(),
+            commit_sha: COMMIT_SHA.to_string(),
+            blob_sha: "blob:test:stale".to_string(),
+            path: "tests/stale.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "test_suite".to_string(),
+            language_kind: None,
+            symbol_fqn: Some("tests/stale.rs::StaleSuite".to_string()),
+            name: "StaleSuite".to_string(),
+            parent_artefact_id: None,
+            parent_symbol_id: None,
+            start_line: 1,
+            end_line: 10,
+            start_byte: Some(0),
+            end_byte: Some(100),
+            signature: None,
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static_analysis".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: COMMIT_SHA.to_string(),
+        },
+        TestArtefactCurrentRecord {
+            artefact_id: "test-artefact:scenario:stale".to_string(),
+            symbol_id: "scenario:stale".to_string(),
+            repo_id: REPO_ID.to_string(),
+            commit_sha: COMMIT_SHA.to_string(),
+            blob_sha: "blob:test:stale".to_string(),
+            path: "tests/stale.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "test_scenario".to_string(),
+            language_kind: None,
+            symbol_fqn: Some("tests/stale.rs::stale_test".to_string()),
+            name: "stale_test".to_string(),
+            parent_artefact_id: Some("test-artefact:suite:stale".to_string()),
+            parent_symbol_id: Some("suite:stale".to_string()),
+            start_line: 3,
+            end_line: 5,
+            start_byte: Some(20),
+            end_byte: Some(60),
+            signature: Some("fn stale_test()".to_string()),
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static_analysis".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: COMMIT_SHA.to_string(),
+        },
+    ]
 }
 
-fn stale_scenario() -> TestScenarioRecord {
-    TestScenarioRecord {
-        scenario_id: "scenario:stale".to_string(),
-        suite_id: "suite:stale".to_string(),
+fn stale_test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
+    vec![TestArtefactEdgeCurrentRecord {
+        edge_id: "link:stale".to_string(),
         repo_id: REPO_ID.to_string(),
         commit_sha: COMMIT_SHA.to_string(),
-        language: "rust".to_string(),
+        blob_sha: "blob:test:stale".to_string(),
         path: "tests/stale.rs".to_string(),
-        name: "stale_test".to_string(),
-        symbol_fqn: Some("tests/stale.rs::stale_test".to_string()),
-        start_line: 3,
-        end_line: 5,
-        start_byte: Some(20),
-        end_byte: Some(60),
-        signature: Some("fn stale_test()".to_string()),
-        discovery_source: "static_analysis".to_string(),
-    }
-}
-
-fn stale_link() -> TestLinkRecord {
-    TestLinkRecord {
-        test_link_id: "link:stale".to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        test_scenario_id: "scenario:stale".to_string(),
-        production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
-        production_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
-        link_source: "static_analysis".to_string(),
-        evidence_json: "{\"imports\":[\"create_user\"]}".to_string(),
-        confidence: 0.6,
-        linkage_status: "resolved".to_string(),
-    }
+        from_artefact_id: "test-artefact:scenario:stale".to_string(),
+        from_symbol_id: "scenario:stale".to_string(),
+        to_artefact_id: Some(ARTEFACT_CREATE_USER.to_string()),
+        to_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
+        to_symbol_ref: None,
+        edge_kind: "tests".to_string(),
+        language: "rust".to_string(),
+        start_line: Some(3),
+        end_line: Some(5),
+        metadata: "{\"imports\":[\"create_user\"]}".to_string(),
+        revision_kind: "commit".to_string(),
+        revision_id: COMMIT_SHA.to_string(),
+    }]
 }
 
 fn stale_discovery_run() -> TestDiscoveryRunRecord {
@@ -362,56 +389,83 @@ fn stale_diagnostic() -> TestDiscoveryDiagnosticRecord {
     }
 }
 
-fn suite_record() -> TestSuiteRecord {
-    TestSuiteRecord {
-        suite_id: SUITE_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        language: "rust".to_string(),
-        path: "tests/user_service.rs".to_string(),
-        name: "UserService".to_string(),
-        symbol_fqn: Some("tests/user_service.rs::UserService".to_string()),
-        start_line: 1,
-        end_line: 30,
-        start_byte: Some(0),
-        end_byte: Some(400),
-        signature: None,
-        discovery_source: "hybrid_enumeration".to_string(),
-    }
+fn test_artefacts() -> Vec<TestArtefactCurrentRecord> {
+    vec![
+        TestArtefactCurrentRecord {
+            artefact_id: SUITE_ARTEFACT_ID.to_string(),
+            symbol_id: SUITE_ID.to_string(),
+            repo_id: REPO_ID.to_string(),
+            commit_sha: COMMIT_SHA.to_string(),
+            blob_sha: "blob:test:user-service".to_string(),
+            path: "tests/user_service.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "test_suite".to_string(),
+            language_kind: None,
+            symbol_fqn: Some("tests/user_service.rs::UserService".to_string()),
+            name: "UserService".to_string(),
+            parent_artefact_id: None,
+            parent_symbol_id: None,
+            start_line: 1,
+            end_line: 30,
+            start_byte: Some(0),
+            end_byte: Some(400),
+            signature: None,
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "hybrid_enumeration".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: COMMIT_SHA.to_string(),
+        },
+        TestArtefactCurrentRecord {
+            artefact_id: SCENARIO_ARTEFACT_ID.to_string(),
+            symbol_id: SCENARIO_ID.to_string(),
+            repo_id: REPO_ID.to_string(),
+            commit_sha: COMMIT_SHA.to_string(),
+            blob_sha: "blob:test:user-service".to_string(),
+            path: "tests/user_service.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "test_scenario".to_string(),
+            language_kind: None,
+            symbol_fqn: Some("tests/user_service.rs::checks_email_domain".to_string()),
+            name: "checks_email_domain".to_string(),
+            parent_artefact_id: Some(SUITE_ARTEFACT_ID.to_string()),
+            parent_symbol_id: Some(SUITE_ID.to_string()),
+            start_line: 8,
+            end_line: 14,
+            start_byte: Some(80),
+            end_byte: Some(220),
+            signature: Some("fn checks_email_domain()".to_string()),
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "hybrid_enumeration".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: COMMIT_SHA.to_string(),
+        },
+    ]
 }
 
-fn scenario_record() -> TestScenarioRecord {
-    TestScenarioRecord {
-        scenario_id: SCENARIO_ID.to_string(),
-        suite_id: SUITE_ID.to_string(),
+fn test_edges() -> Vec<TestArtefactEdgeCurrentRecord> {
+    vec![TestArtefactEdgeCurrentRecord {
+        edge_id: TEST_LINK_ID.to_string(),
         repo_id: REPO_ID.to_string(),
         commit_sha: COMMIT_SHA.to_string(),
-        language: "rust".to_string(),
+        blob_sha: "blob:test:user-service".to_string(),
         path: "tests/user_service.rs".to_string(),
-        name: "checks_email_domain".to_string(),
-        symbol_fqn: Some("tests/user_service.rs::checks_email_domain".to_string()),
-        start_line: 8,
-        end_line: 14,
-        start_byte: Some(80),
-        end_byte: Some(220),
-        signature: Some("fn checks_email_domain()".to_string()),
-        discovery_source: "hybrid_enumeration".to_string(),
-    }
-}
-
-fn link_record() -> TestLinkRecord {
-    TestLinkRecord {
-        test_link_id: TEST_LINK_ID.to_string(),
-        repo_id: REPO_ID.to_string(),
-        commit_sha: COMMIT_SHA.to_string(),
-        test_scenario_id: SCENARIO_ID.to_string(),
-        production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
-        production_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
-        link_source: "static_analysis".to_string(),
-        evidence_json: "{\"calls\":[\"create_user\"]}".to_string(),
-        confidence: 0.6,
-        linkage_status: "resolved".to_string(),
-    }
+        from_artefact_id: SCENARIO_ARTEFACT_ID.to_string(),
+        from_symbol_id: SCENARIO_ID.to_string(),
+        to_artefact_id: Some(ARTEFACT_CREATE_USER.to_string()),
+        to_symbol_id: Some(SYMBOL_CREATE_USER.to_string()),
+        to_symbol_ref: None,
+        edge_kind: "tests".to_string(),
+        language: "rust".to_string(),
+        start_line: Some(8),
+        end_line: Some(14),
+        metadata: "{\"calls\":[\"create_user\"]}".to_string(),
+        revision_kind: "commit".to_string(),
+        revision_id: COMMIT_SHA.to_string(),
+    }]
 }
 
 fn discovery_run_record() -> TestDiscoveryRunRecord {
@@ -449,7 +503,7 @@ fn test_run_record() -> TestRunRecord {
         run_id: RUN_ID.to_string(),
         repo_id: REPO_ID.to_string(),
         commit_sha: COMMIT_SHA.to_string(),
-        test_scenario_id: SCENARIO_ID.to_string(),
+        test_symbol_id: SCENARIO_ID.to_string(),
         status: "failed".to_string(),
         duration_ms: Some(73),
         ran_at: "2026-03-19T12:03:00Z".to_string(),
@@ -464,7 +518,7 @@ fn coverage_capture_record() -> CoverageCaptureRecord {
         tool: "llvm-cov".to_string(),
         format: CoverageFormat::Lcov,
         scope_kind: ScopeKind::TestScenario,
-        subject_test_scenario_id: Some(SCENARIO_ID.to_string()),
+        subject_test_symbol_id: Some(SCENARIO_ID.to_string()),
         line_truth: true,
         branch_truth: true,
         captured_at: "2026-03-19T12:04:00Z".to_string(),
@@ -477,7 +531,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
     vec![
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
+            production_symbol_id: SYMBOL_CREATE_USER.to_string(),
             file_path: FILE_USER.to_string(),
             line: 10,
             branch_id: -1,
@@ -486,7 +540,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
         },
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
+            production_symbol_id: SYMBOL_CREATE_USER.to_string(),
             file_path: FILE_USER.to_string(),
             line: 11,
             branch_id: -1,
@@ -495,7 +549,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
         },
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
+            production_symbol_id: SYMBOL_CREATE_USER.to_string(),
             file_path: FILE_USER.to_string(),
             line: 12,
             branch_id: 0,
@@ -504,7 +558,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
         },
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_CREATE_USER.to_string(),
+            production_symbol_id: SYMBOL_CREATE_USER.to_string(),
             file_path: FILE_USER.to_string(),
             line: 12,
             branch_id: 1,
@@ -513,7 +567,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
         },
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_NORMALIZE_EMAIL.to_string(),
+            production_symbol_id: "symbol:function:normalize_email".to_string(),
             file_path: FILE_EMAIL.to_string(),
             line: 5,
             branch_id: -1,
@@ -522,7 +576,7 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
         },
         CoverageHitRecord {
             capture_id: CAPTURE_ID.to_string(),
-            production_artefact_id: ARTEFACT_NORMALIZE_EMAIL.to_string(),
+            production_symbol_id: "symbol:function:normalize_email".to_string(),
             file_path: FILE_EMAIL.to_string(),
             line: 6,
             branch_id: -1,
