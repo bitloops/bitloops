@@ -76,11 +76,15 @@ impl IngesterHandler for CoverageIngestIngester {
                 ctx.repo_root().join(&path)
             };
 
+            let relational = ctx.relational().ok_or_else(|| {
+                anyhow::anyhow!("test_harness.coverage requires a relational gateway")
+            })?;
             let mut g = store
                 .lock()
                 .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
             let summary = coverage::execute(
                 &mut *g,
+                relational,
                 &coverage_path,
                 &payload.commit_sha,
                 scope_kind,

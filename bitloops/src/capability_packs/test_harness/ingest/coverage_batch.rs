@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::models::{BatchManifestEntry, CoverageFormat, ScopeKind};
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct IngestCoverageBatchSummary {
 
 pub fn execute(
     store: &mut impl TestHarnessCoverageGateway,
+    relational: &dyn RelationalGateway,
     manifest_path: &Path,
     commit_sha: &str,
 ) -> Result<IngestCoverageBatchSummary> {
@@ -47,6 +49,7 @@ pub fn execute(
 
         crate::capability_packs::test_harness::ingest::coverage::execute(
             store,
+            relational,
             &coverage_path,
             commit_sha,
             scope_kind,

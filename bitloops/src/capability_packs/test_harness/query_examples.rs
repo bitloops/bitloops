@@ -3,9 +3,9 @@ use crate::host::capability_host::QueryExample;
 pub static TEST_HARNESS_QUERY_EXAMPLES: &[QueryExample] = &[
     QueryExample {
         capability_id: "test_harness",
-        name: "Verification summary scaffold",
+        name: "Commit-level test harness snapshot",
         query: "repo(\"my-repo\") -> asOf(ref:\"main\") -> artefacts(name:\"findById\") -> test_harness_tests_summary()",
-        description: "Dependency-gated scaffold stage for tests().summary() until dot-chained stage syntax is available",
+        description: "Per-commit row counts and coverage presence for the test harness store; requires asOf(ref:...) or asOf(commit:...) so DevQL resolves resolved_commit_sha",
     },
     QueryExample {
         capability_id: "test_harness",

@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
+use crate::host::capability_host::gateways::RelationalGateway;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
 };
@@ -35,8 +36,10 @@ struct LcovBranchCoverage {
     hit_count: i64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     store: &mut dyn TestHarnessCoverageGateway,
+    relational: &dyn RelationalGateway,
     coverage_path: &Path,
     commit_sha: &str,
     scope_kind: ScopeKind,
@@ -44,7 +47,7 @@ pub fn execute(
     test_artefact_id: Option<&str>,
     format: CoverageFormat,
 ) -> Result<IngestCoverageSummary> {
-    let repo_id = store.load_repo_id_for_commit(commit_sha)?;
+    let repo_id = relational.load_repo_id_for_commit(commit_sha)?;
 
     let capture_id = format!(
         "capture:{commit_sha}:{}:{}",
@@ -72,11 +75,11 @@ pub fn execute(
 
     let (hits, diagnostics) = match format {
         CoverageFormat::Lcov => {
-            ingest_lcov(store, coverage_path, commit_sha, &repo_id, &capture_id)?
+            ingest_lcov(relational, coverage_path, commit_sha, &repo_id, &capture_id)?
         }
         CoverageFormat::LlvmJson => {
             crate::capability_packs::test_harness::ingest::parse_llvm_json::ingest_llvm_json(
-                store,
+                relational,
                 coverage_path,
                 commit_sha,
                 &repo_id,
@@ -117,7 +120,7 @@ pub fn print_summary(commit_sha: &str, summary: &IngestCoverageSummary) {
 }
 
 fn ingest_lcov(
-    store: &dyn TestHarnessCoverageGateway,
+    relational: &dyn RelationalGateway,
     lcov_path: &Path,
     commit_sha: &str,
     repo_id: &str,
@@ -130,7 +133,7 @@ fn ingest_lcov(
     let mut diag_idx = diagnostics.len();
 
     for file in &report {
-        let artefacts = store.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
+        let artefacts = relational.load_artefacts_for_file_lines(commit_sha, &file.source_file)?;
         if artefacts.is_empty() {
             diagnostics.push(CoverageDiagnosticRecord {
                 diagnostic_id: format!("diag:{capture_id}:unmapped:{diag_idx}"),

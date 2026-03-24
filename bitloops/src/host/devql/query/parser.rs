@@ -20,13 +20,6 @@ pub(super) struct ParsedDevqlQuery {
     pub(super) has_checkpoints_stage: bool,
     pub(super) has_telemetry_stage: bool,
     pub(super) has_chat_history_stage: bool,
-    pub(super) has_test_harness_core_test_links_stage: bool,
-    pub(super) has_test_harness_core_line_coverage_stage: bool,
-    pub(super) has_test_harness_core_branch_coverage_stage: bool,
-    pub(super) has_test_harness_core_coverage_metadata_stage: bool,
-    pub(super) test_harness_core_test_links: TestHarnessCoreTestLinksFilter,
-    pub(super) test_harness_core_line_coverage: TestHarnessCoreArtefactFilter,
-    pub(super) test_harness_core_branch_coverage: TestHarnessCoreArtefactFilter,
     pub(super) registered_stages: Vec<RegisteredStageCall>,
     pub(super) limit: usize,
     pub(super) select_fields: Vec<String>,
@@ -72,18 +65,6 @@ pub(super) struct TelemetryFilter {
     pub(super) event_type: Option<String>,
     pub(super) agent: Option<String>,
     pub(super) since: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct TestHarnessCoreArtefactFilter {
-    pub(super) artefact_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct TestHarnessCoreTestLinksFilter {
-    pub(super) artefact_id: Option<String>,
-    pub(super) min_confidence: Option<f64>,
-    pub(super) linkage_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -309,69 +290,6 @@ pub(super) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
-        if let Some(inner) = stage
-            .strip_prefix("__core_test_links(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args = parse_named_args(inner)?;
-            parsed.has_test_harness_core_test_links_stage = true;
-            parsed.test_harness_core_test_links.artefact_id = args.get("artefact_id").cloned();
-            parsed.test_harness_core_test_links.min_confidence = args
-                .get("min_confidence")
-                .map(|value| {
-                    value
-                        .parse::<f64>()
-                        .map(|parsed| parsed.clamp(0.0, 1.0))
-                        .map_err(|_| {
-                            anyhow!("__core_test_links(min_confidence:...) must be numeric")
-                        })
-                })
-                .transpose()?;
-            parsed.test_harness_core_test_links.linkage_source =
-                args.get("linkage_source").cloned();
-            continue;
-        }
-
-        if stage == "__core_test_links()" {
-            parsed.has_test_harness_core_test_links_stage = true;
-            continue;
-        }
-
-        if let Some(inner) = stage
-            .strip_prefix("__core_line_coverage(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args = parse_named_args(inner)?;
-            parsed.has_test_harness_core_line_coverage_stage = true;
-            parsed.test_harness_core_line_coverage.artefact_id = args.get("artefact_id").cloned();
-            continue;
-        }
-
-        if stage == "__core_line_coverage()" {
-            parsed.has_test_harness_core_line_coverage_stage = true;
-            continue;
-        }
-
-        if let Some(inner) = stage
-            .strip_prefix("__core_branch_coverage(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            let args = parse_named_args(inner)?;
-            parsed.has_test_harness_core_branch_coverage_stage = true;
-            parsed.test_harness_core_branch_coverage.artefact_id = args.get("artefact_id").cloned();
-            continue;
-        }
-
-        if stage == "__core_branch_coverage()" {
-            parsed.has_test_harness_core_branch_coverage_stage = true;
-            continue;
-        }
-
-        if stage == "__core_coverage_metadata()" {
-            parsed.has_test_harness_core_coverage_metadata_stage = true;
-            continue;
-        }
-
         if let Some(call) = parse_registered_stage(stage)? {
             parsed.registered_stages.push(call);
             continue;
@@ -484,6 +402,9 @@ pub(super) fn parse_registered_stage(stage: &str) -> Result<Option<RegisteredSta
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     {
+        return Ok(None);
+    }
+    if stage_name.starts_with("__core_") {
         return Ok(None);
     }
 

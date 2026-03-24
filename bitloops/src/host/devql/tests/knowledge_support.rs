@@ -17,9 +17,7 @@ use crate::capability_packs::knowledge::{
     AssociateKnowledgeResult, IngestKnowledgeRequest, IngestKnowledgeResult, KnowledgeProvider,
 };
 use crate::capability_packs::knowledge::{
-    storage::{
-        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
-    },
+    storage::{BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore},
     types::KnowledgePayloadData,
 };
 use crate::config::{
@@ -28,6 +26,7 @@ use crate::config::{
 };
 use crate::host::capability_host::CapabilityConfigView;
 use crate::host::capability_host::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
+use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
     RelationalGateway,
@@ -158,7 +157,7 @@ pub(super) struct TestRuntimeContext {
     config_root: Value,
     sqlite_path: PathBuf,
     duckdb_path: PathBuf,
-    relational: SqliteKnowledgeRelationalStore,
+    relational: SqliteRelationalGateway,
     documents: DuckdbKnowledgeDocumentStore,
     blobs: BlobKnowledgePayloadStore,
     connectors: StubConnectorRegistry,
@@ -272,9 +271,8 @@ impl KnowledgeBddHarness {
         let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
         let duckdb_path = backends.events.duckdb_path_or_default();
 
-        let relational = SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(
-            sqlite_path.clone(),
-        )?);
+        let relational =
+            SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path.clone())?);
         relational.initialise_schema()?;
 
         let documents = DuckdbKnowledgeDocumentStore::new(duckdb_path.clone());

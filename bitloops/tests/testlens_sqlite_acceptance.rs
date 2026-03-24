@@ -9,6 +9,7 @@ use test_harness_support::{
 };
 
 #[test]
+#[ignore = "slow E2E: spawns bitloops binary; run with `cargo test -- --ignored`"]
 fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
     let workspace = Workspace::new("sqlite-init");
 
@@ -70,6 +71,7 @@ fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
 }
 
 #[test]
+#[ignore = "slow E2E: spawns bitloops binary; run with `cargo test -- --ignored`"]
 fn bitloops_testlens_ingest_coverage_reports_artefact_only_mode_on_sqlite() {
     let workspace = Workspace::new("sqlite-coverage");
     write_rust_coverage_fixture(&workspace);

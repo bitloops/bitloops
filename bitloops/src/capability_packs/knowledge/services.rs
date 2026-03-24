@@ -466,7 +466,7 @@ mod tests {
         ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
     };
     use crate::capability_packs::knowledge::storage::{
-        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalStore,
+        BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore,
     };
     use crate::capability_packs::knowledge::url::parse_knowledge_url;
     use crate::config::{
@@ -474,6 +474,7 @@ mod tests {
         StoreBackendConfig,
     };
     use crate::host::capability_host::config_view::CapabilityConfigView;
+    use crate::host::capability_host::gateways::SqliteRelationalGateway;
     use crate::host::capability_host::gateways::{
         BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
         RelationalGateway,
@@ -559,7 +560,7 @@ mod tests {
         repo_root: PathBuf,
         repo: RepoIdentity,
         config_root: Value,
-        relational: SqliteKnowledgeRelationalStore,
+        relational: SqliteRelationalGateway,
         documents: DuckdbKnowledgeDocumentStore,
         blobs: BlobKnowledgePayloadStore,
         connectors: StubConnectorRegistry,
@@ -744,8 +745,7 @@ mod tests {
         let repo = test_repo_identity(repo_root.as_path());
         let backends = test_backends(temp);
         let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
-        let relational =
-            SqliteKnowledgeRelationalStore::new(SqliteConnectionPool::connect(sqlite_path)?);
+        let relational = SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path)?);
         relational.initialise_schema()?;
         let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
         documents.initialise_schema()?;

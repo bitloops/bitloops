@@ -279,7 +279,7 @@ pub struct TestClassificationRecord {
     pub boundary_crossings: i64,
 }
 
-/// Row counts for test-harness tables scoped to a single commit (diagnostics / summaries ingester).
+/// Row counts for test-harness tables scoped to a single commit (e.g. `test_harness_tests_summary` stage).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestHarnessCommitCounts {
     pub test_suites: u64,
@@ -481,6 +481,43 @@ pub fn derive_test_classification(fan_out: i64, boundary_crossings: i64) -> &'st
     } else {
         "unit"
     }
+}
+
+/// Record returned by `load_stage_covering_tests` — matches the shape
+/// that the `tests()` stage handler needs for its JSON output.
+#[derive(Debug, Clone)]
+pub struct StageCoveringTestRecord {
+    pub test_id: String,
+    pub test_name: String,
+    pub suite_name: Option<String>,
+    pub file_path: String,
+    pub confidence: f64,
+    pub discovery_source: String,
+    pub linkage_source: String,
+    pub linkage_status: String,
+}
+
+/// Per-line coverage row for the `coverage()` stage.
+#[derive(Debug, Clone)]
+pub struct StageLineCoverageRecord {
+    pub line: i64,
+    pub covered: bool,
+}
+
+/// Per-branch coverage row for the `coverage()` stage.
+#[derive(Debug, Clone)]
+pub struct StageBranchCoverageRecord {
+    pub line: i64,
+    pub branch_id: i64,
+    pub covered: bool,
+    pub hit_count: i64,
+}
+
+/// Coverage capture metadata for the `coverage()` stage.
+#[derive(Debug, Clone)]
+pub struct StageCoverageMetadataRecord {
+    pub coverage_source: String,
+    pub branch_truth: i64,
 }
 
 #[cfg(test)]

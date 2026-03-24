@@ -43,10 +43,18 @@ impl IngesterHandler for LinkageIngester {
                 .parse_json()
                 .context("parse test_harness.linkage ingest payload")?;
 
+            let relational = ctx.relational().ok_or_else(|| {
+                anyhow::anyhow!("test_harness.linkage requires a relational gateway")
+            })?;
             let mut g = store
                 .lock()
                 .map_err(|e| anyhow::anyhow!("test harness store lock poisoned: {e}"))?;
-            let summary = tests::execute(&mut *g, ctx.repo_root(), payload.commit_sha.as_str())?;
+            let summary = tests::execute(
+                &mut *g,
+                relational,
+                ctx.repo_root(),
+                payload.commit_sha.as_str(),
+            )?;
 
             let human = tests::format_summary(&payload.commit_sha, &summary);
             Ok(IngestResult::new(

@@ -84,60 +84,6 @@ pub(crate) async fn execute_devql_query(
         bail!("clones() does not yet support asOf(...) queries");
     }
 
-    if parsed.has_test_harness_core_test_links_stage
-        && parsed.test_harness_core_test_links.artefact_id.is_none()
-    {
-        log_devql_validation_failure(
-            parsed,
-            "core_test_links_requires_artefact_id",
-            "__core_test_links() requires artefact_id:\"...\" argument",
-        );
-        bail!("__core_test_links() requires artefact_id:\"...\" argument");
-    }
-
-    if parsed.has_test_harness_core_line_coverage_stage
-        && parsed.test_harness_core_line_coverage.artefact_id.is_none()
-    {
-        log_devql_validation_failure(
-            parsed,
-            "core_line_coverage_requires_artefact_id",
-            "__core_line_coverage() requires artefact_id:\"...\" argument",
-        );
-        bail!("__core_line_coverage() requires artefact_id:\"...\" argument");
-    }
-
-    if parsed.has_test_harness_core_branch_coverage_stage
-        && parsed
-            .test_harness_core_branch_coverage
-            .artefact_id
-            .is_none()
-    {
-        log_devql_validation_failure(
-            parsed,
-            "core_branch_coverage_requires_artefact_id",
-            "__core_branch_coverage() requires artefact_id:\"...\" argument",
-        );
-        bail!("__core_branch_coverage() requires artefact_id:\"...\" argument");
-    }
-
-    if has_internal_test_harness_core_stage(parsed)
-        && (parsed.has_clones_stage
-            || parsed.has_deps_stage
-            || parsed.has_chat_history_stage
-            || parsed.has_checkpoints_stage
-            || parsed.has_telemetry_stage
-            || !parsed.registered_stages.is_empty())
-    {
-        log_devql_validation_failure(
-            parsed,
-            "internal_core_stage_combination_not_supported",
-            "internal test-harness core stages cannot be combined with non-core stages in one query",
-        );
-        bail!(
-            "internal test-harness core stages cannot be combined with non-core stages in one query"
-        );
-    }
-
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
 
@@ -259,7 +205,6 @@ pub(crate) async fn execute_devql_query(
 pub(crate) fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str, reason: &str) {
     let has_tests_stage = has_registered_tests_stage(parsed);
     let has_coverage_stage = has_registered_coverage_stage(parsed);
-    let has_internal_test_harness_core_stage = has_internal_test_harness_core_stage(parsed);
     crate::telemetry::logging::warn(
         &crate::telemetry::logging::with_component(
             crate::telemetry::logging::background(),
@@ -282,10 +227,6 @@ pub(crate) fn log_devql_validation_failure(parsed: &ParsedDevqlQuery, rule: &str
             crate::telemetry::logging::bool_attr("has_telemetry_stage", parsed.has_telemetry_stage),
             crate::telemetry::logging::bool_attr("has_tests_stage", has_tests_stage),
             crate::telemetry::logging::bool_attr("has_coverage_stage", has_coverage_stage),
-            crate::telemetry::logging::bool_attr(
-                "has_internal_test_harness_core_stage",
-                has_internal_test_harness_core_stage,
-            ),
             crate::telemetry::logging::bool_attr(
                 "has_registered_stages",
                 !parsed.registered_stages.is_empty(),
@@ -324,11 +265,4 @@ pub(crate) fn is_coverage_stage_name(stage_name: &str) -> bool {
     stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
         || stage_name
             == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
-}
-
-pub(crate) fn has_internal_test_harness_core_stage(parsed: &ParsedDevqlQuery) -> bool {
-    parsed.has_test_harness_core_test_links_stage
-        || parsed.has_test_harness_core_line_coverage_stage
-        || parsed.has_test_harness_core_branch_coverage_stage
-        || parsed.has_test_harness_core_coverage_metadata_stage
 }
