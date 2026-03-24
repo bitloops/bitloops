@@ -18,6 +18,8 @@ mod metadata;
 mod phase_transitions;
 #[path = "post_commit/post_checkout.rs"]
 mod post_checkout;
+#[path = "post_commit/reference_transaction.rs"]
+mod reference_transaction;
 #[path = "post_commit/save_step.rs"]
 mod save_step;
 
@@ -29,4 +31,5 @@ pub(crate) use self::mapping::*;
 pub(crate) use self::metadata::*;
 pub(crate) use self::phase_transitions::*;
 pub(crate) use self::post_checkout::*;
+pub(crate) use self::reference_transaction::*;
 pub(crate) use self::save_step::*;

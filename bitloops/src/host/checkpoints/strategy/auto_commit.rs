@@ -538,6 +538,10 @@ impl Strategy for AutoCommitStrategy {
         self.inner
             .post_checkout(previous_head, new_head, is_branch_checkout)
     }
+
+    fn reference_transaction(&self, state: &str, stdin_lines: &[String]) -> Result<()> {
+        self.inner.reference_transaction(state, stdin_lines)
+    }
 }
 
 #[cfg(test)]

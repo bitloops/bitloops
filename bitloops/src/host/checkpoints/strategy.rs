@@ -139,4 +139,11 @@ pub trait Strategy: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+
+    /// Called by the `reference-transaction` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn reference_transaction(&self, _state: &str, _stdin_lines: &[String]) -> Result<()> {
+        Ok(())
+    }
 }

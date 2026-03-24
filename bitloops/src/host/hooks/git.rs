@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::time::SystemTime;
+use std::{io, io::Read};
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -139,6 +140,13 @@ pub enum GitHookVerb {
         /// `1` when switching branches, `0` otherwise (provided by git as $3).
         is_branch_checkout: i32,
     },
+
+    /// Handle the reference-transaction git hook.
+    #[command(name = "reference-transaction")]
+    ReferenceTransaction {
+        /// Hook state (provided by git as $1): prepared, committed, or aborted.
+        state: String,
+    },
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -193,6 +201,12 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
         } => run_git_hook_with_logging(&repo_root, "post-checkout", &strategy_name, || {
             strategy.post_checkout(&previous_head, &new_head, is_branch_checkout != 0)
         }),
+        GitHookVerb::ReferenceTransaction { state } => {
+            run_git_hook_with_logging(&repo_root, "reference-transaction", &strategy_name, || {
+                let stdin_lines = read_reference_transaction_stdin_lines();
+                strategy.reference_transaction(&state, &stdin_lines)
+            })
+        }
     };
 
     if let Err(e) = result {
@@ -200,6 +214,18 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
     }
 
     Ok(())
+}
+
+fn read_reference_transaction_stdin_lines() -> Vec<String> {
+    let mut raw = String::new();
+    if io::stdin().read_to_string(&mut raw).is_err() {
+        return Vec::new();
+    }
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 #[cfg(test)]

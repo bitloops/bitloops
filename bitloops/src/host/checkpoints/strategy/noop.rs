@@ -57,5 +57,8 @@ mod tests {
         strategy
             .post_checkout("old-head", "new-head", true)
             .expect("post_checkout should be a no-op");
+        strategy
+            .reference_transaction("committed", &[])
+            .expect("reference_transaction should be a no-op");
     }
 }

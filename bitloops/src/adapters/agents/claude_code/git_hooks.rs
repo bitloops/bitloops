@@ -1,7 +1,8 @@
 //! Git hook installation / uninstallation for the manual-commit strategy.
 //!
-//! Installs 5 shell scripts into `.git/hooks/` (or `core.hooksPath`):
-//!   prepare-commit-msg, commit-msg, post-commit, post-checkout, pre-push
+//! Installs 5-6 shell scripts into `.git/hooks/` (or `core.hooksPath`):
+//!   prepare-commit-msg, commit-msg, post-commit, post-checkout, pre-push,
+//!   reference-transaction (Git >= 2.28)
 //!
 //! Each script calls `bitloops hooks git <verb>` and can chain to a
 //! pre-existing hook backed up with the `.pre-bitloops` suffix.
@@ -24,13 +25,26 @@ const HOOK_MARKER: &str = "# Bitloops git hooks";
 /// Suffix appended to pre-existing hooks when backing them up.
 const BACKUP_SUFFIX: &str = ".pre-bitloops";
 
-/// The git hooks managed by Bitloops CLI.
+const REFERENCE_TRANSACTION_HOOK: &str = "reference-transaction";
+const MIN_REFERENCE_TRANSACTION_GIT_VERSION: (u32, u32) = (2, 28);
+
+/// Hook set that is always installed regardless of git version.
+static BASE_HOOK_NAMES: &[&str] = &[
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "post-checkout",
+    "pre-push",
+];
+
+/// All managed git hooks (reference-transaction is version-gated at install time).
 static HOOK_NAMES: &[&str] = &[
     "prepare-commit-msg",
     "commit-msg",
     "post-commit",
     "post-checkout",
     "pre-push",
+    REFERENCE_TRANSACTION_HOOK,
 ];
 
 /// External hook-manager metadata detected in the repo.
@@ -210,7 +224,60 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
                  {cmd_prefix} hooks git pre-push \"$1\" || true\n"
             ),
         },
+        HookSpec {
+            name: REFERENCE_TRANSACTION_HOOK,
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Reference-transaction: branch deletion cleanup; failures must not block git\n\
+                 {cmd_prefix} hooks git reference-transaction \"$@\" 2>/dev/null || true\n"
+            ),
+        },
     ]
+}
+
+fn parse_git_version(version_output: &str) -> Option<(u32, u32, u32)> {
+    let token = version_output
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|ch| ch.is_ascii_digit()))?;
+    let mut components = token.split('.');
+    let major = components.next()?.parse().ok()?;
+    let minor = components.next()?.parse().ok()?;
+    let patch = components.next().and_then(|raw| {
+        let digits: String = raw.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            Some(0)
+        } else {
+            digits.parse().ok()
+        }
+    })?;
+    Some((major, minor, patch))
+}
+
+fn git_supports_reference_transaction(repo_root: &Path) -> bool {
+    let output = new_git_command()
+        .args(["version"])
+        .current_dir(repo_root)
+        .output();
+    let Ok(output) = output else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let Some((major, minor, _patch)) = parse_git_version(raw.trim()) else {
+        return true;
+    };
+    (major, minor) >= MIN_REFERENCE_TRANSACTION_GIT_VERSION
+}
+
+fn expected_hooks_for_repo(repo_root: &Path) -> Vec<&'static str> {
+    if git_supports_reference_transaction(repo_root) {
+        HOOK_NAMES.to_vec()
+    } else {
+        BASE_HOOK_NAMES.to_vec()
+    }
 }
 
 /// Detects known third-party hook managers by config file/directory presence.
@@ -393,7 +460,16 @@ pub fn install_git_hooks(repo_root: &Path, local_dev: bool) -> Result<usize> {
     fs::create_dir_all(&hooks_dir).context("creating git hooks directory")?;
 
     let cmd_prefix = hook_cmd_prefix(local_dev);
-    let specs = build_hook_specs(cmd_prefix);
+    let supports_reference_transaction = git_supports_reference_transaction(repo_root);
+    if !supports_reference_transaction {
+        eprintln!(
+            "[bitloops] Warning: git reference-transaction hook requires Git 2.28+; skipping installation."
+        );
+    }
+    let specs = build_hook_specs(cmd_prefix)
+        .into_iter()
+        .filter(|spec| supports_reference_transaction || spec.name != REFERENCE_TRANSACTION_HOOK)
+        .collect::<Vec<_>>();
     let mut installed_count = 0;
 
     for spec in &specs {
@@ -483,7 +559,7 @@ pub fn is_git_hook_installed(repo_root: &Path) -> bool {
         Ok(d) => d,
         Err(_) => return false,
     };
-    HOOK_NAMES.iter().all(|name| {
+    expected_hooks_for_repo(repo_root).iter().all(|name| {
         fs::read_to_string(hooks_dir.join(name))
             .map(|c| c.contains(HOOK_MARKER))
             .unwrap_or(false)
