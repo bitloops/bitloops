@@ -31,12 +31,9 @@ const REPO_ID: &str = "repo-postgres-test-harness";
 const COMMIT_SHA: &str = "commit-postgres-test-harness";
 const FILE_USER: &str = "src/services/user_service.rs";
 const FILE_EMAIL: &str = "src/services/email.rs";
-const FILE_USER_WORKSPACE_VIEW: &str = "workspace/src/services/user_service.rs";
 const BLOB_USER: &str = "blob-user";
 const ARTEFACT_FILE_USER: &str = "artefact:file:user_service";
 const ARTEFACT_CREATE_USER: &str = "artefact:function:create_user";
-const ARTEFACT_NORMALIZE_EMAIL: &str = "artefact:function:normalize_email";
-const ARTEFACT_STRUCT_USER: &str = "artefact:struct:user";
 const SYMBOL_FILE_USER: &str = "symbol:file:user_service";
 const SYMBOL_CREATE_USER: &str = "symbol:function:create_user";
 const SUITE_ID: &str = "suite:user-service";
@@ -60,32 +57,6 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
-
-    assert_eq!(repository.load_repo_id_for_commit(COMMIT_SHA)?, REPO_ID);
-    let missing_repo_error = repository
-        .load_repo_id_for_commit("missing-commit")
-        .expect_err("missing commit should fail");
-    assert!(
-        missing_repo_error
-            .to_string()
-            .contains("materialize production artefacts first"),
-        "unexpected missing repo error: {missing_repo_error:#}"
-    );
-
-    let production_artefacts = repository.load_production_artefacts(COMMIT_SHA)?;
-    assert_eq!(production_artefacts.len(), 2);
-    assert_eq!(
-        production_artefacts[0].artefact_id,
-        ARTEFACT_NORMALIZE_EMAIL
-    );
-    assert_eq!(production_artefacts[1].artefact_id, ARTEFACT_CREATE_USER);
-
-    let file_artefacts =
-        repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
-    assert_eq!(
-        file_artefacts,
-        vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]
-    );
 
     repository.replace_test_discovery(
         COMMIT_SHA,
@@ -112,36 +83,6 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert_eq!(scenarios[0].scenario_id, SCENARIO_ID);
     assert_eq!(scenarios[0].suite_name, "UserService");
     assert_eq!(scenarios[0].test_name, "checks_email_domain");
-
-    let all_artefacts = repository.list_artefacts(COMMIT_SHA, None)?;
-    assert_eq!(all_artefacts.len(), 7);
-    let function_artefacts = repository.list_artefacts(COMMIT_SHA, Some("function"))?;
-    assert_eq!(function_artefacts.len(), 2);
-    let struct_artefacts = repository.list_artefacts(COMMIT_SHA, Some("struct"))?;
-    assert_eq!(struct_artefacts.len(), 1);
-    assert_eq!(struct_artefacts[0].artefact_id, ARTEFACT_STRUCT_USER);
-    let suite_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_suite"))?;
-    assert_eq!(suite_artefacts.len(), 1);
-    let scenario_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_scenario"))?;
-    assert_eq!(scenario_artefacts.len(), 1);
-
-    let queried =
-        repository.find_artefact(COMMIT_SHA, "src/services/user_service.rs::create_user")?;
-    assert_eq!(queried.artefact_id, ARTEFACT_CREATE_USER);
-    assert_eq!(queried.canonical_kind, "function");
-    let struct_queried = repository.find_artefact(COMMIT_SHA, "User")?;
-    assert_eq!(struct_queried.artefact_id, ARTEFACT_STRUCT_USER);
-    assert_eq!(struct_queried.canonical_kind, "struct");
-
-    let missing_artefact_error = repository
-        .find_artefact(COMMIT_SHA, "missing::symbol")
-        .expect_err("missing artefact should fail");
-    assert_eq!(missing_artefact_error.to_string(), "Artefact not found");
-
-    let repo_not_indexed_error = repository
-        .find_artefact("missing-commit", "missing::symbol")
-        .expect_err("unknown commit should fail as not indexed");
-    assert_eq!(repo_not_indexed_error.to_string(), "Repository not indexed");
 
     let fan_out = repository.load_linked_fan_out_by_test(COMMIT_SHA)?;
     assert_eq!(fan_out.get(SCENARIO_ID), Some(&1));
@@ -180,6 +121,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let covering_tests = repository.load_covering_tests(COMMIT_SHA, SYMBOL_CREATE_USER)?;
     assert_eq!(covering_tests.len(), 1);
     assert_eq!(covering_tests[0].test_id, SCENARIO_ID);
+    assert_eq!(covering_tests[0].suite_name.as_deref(), Some("UserService"));
     assert_eq!(covering_tests[0].classification.as_deref(), Some("unit"));
     assert_eq!(covering_tests[0].fan_out, Some(2));
 
@@ -241,26 +183,6 @@ fn postgres_repository_rebuild_classifications_returns_zero_without_covered_hits
     let inserted = repository.rebuild_classifications_from_coverage(COMMIT_SHA)?;
     assert_eq!(inserted, 0);
     assert_eq!(table_count(&repository, "test_classifications")?, 0);
-    Ok(())
-}
-
-#[test]
-fn postgres_repository_load_artefacts_for_file_lines_supports_exact_and_suffix_match() -> Result<()>
-{
-    let Some(postgres) = TempPostgres::start()? else {
-        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
-        return Ok(());
-    };
-
-    let repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
-    initialise_postgres_repository(&repository)?;
-    seed_production_state(&repository)?;
-
-    let exact = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER)?;
-    assert_eq!(exact, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
-
-    let suffix = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
-    assert_eq!(suffix, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
     Ok(())
 }
 

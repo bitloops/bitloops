@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::capability_packs::test_harness::storage::schema::postgres_test_domain_schema_sql;
 use crate::capability_packs::test_harness::storage::{
@@ -17,18 +17,17 @@ use crate::capability_packs::test_harness::storage::{
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
-    ProductionArtefact, ProductionIngestionBatch, QueriedArtefactRecord,
-    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
-    StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
-    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    ProductionIngestionBatch, ResolvedTestScenarioRecord, StageBranchCoverageRecord,
+    StageCoverageMetadataRecord, StageCoveringTestRecord, StageLineCoverageRecord,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestClassificationRecord,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
+    derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
 use self::helpers::{
-    clear_existing_test_discovery_data, get, get_i64, get_opt_i64,
-    load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
-    upsert_test_artefact_current, upsert_test_artefact_edge_current, upsert_test_classification,
+    clear_existing_test_discovery_data, get, get_i64, get_opt_i64, upsert_test_artefact_current,
+    upsert_test_artefact_edge_current, upsert_test_classification,
     upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
 };
 
@@ -56,109 +55,6 @@ impl PostgresTestHarnessRepository {
         ) -> Pin<Box<dyn Future<Output = Result<T>> + 'a>>,
     ) -> Result<T> {
         self.postgres.with_client(operation)
-    }
-
-    #[allow(dead_code)]
-    pub fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
-        let commit_sha = commit_sha.to_string();
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let row = client
-                    .query_opt(
-                        "SELECT repo_id FROM commits WHERE commit_sha = $1 LIMIT 1",
-                        &[&commit_sha],
-                    )
-                    .await
-                    .context("failed preparing repo lookup query")?
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "no production artefacts found for commit {}; materialize production artefacts first (use `bitloops devql ingest` for Bitloops-backed stores or `testlens ingest-production-artefacts` in prototype mode)",
-                            commit_sha
-                        )
-                    })?;
-                get(&row, 0, "repo_id")
-            })
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>> {
-        let commit_sha = commit_sha.to_string();
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let rows = client
-                    .query(
-                        r#"
-SELECT DISTINCT a.artefact_id, a.symbol_id, COALESCE(a.symbol_fqn, ''), a.path, a.start_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = $1
-  AND a.canonical_kind IN ('function', 'method', 'class')
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-                        &[&commit_sha],
-                    )
-                    .await
-                    .context("failed querying production artefacts")?;
-
-                rows.into_iter()
-                    .map(|row| {
-                        Ok(ProductionArtefact {
-                            artefact_id: get(&row, 0, "artefact_id")?,
-                            symbol_id: get(&row, 1, "symbol_id")?,
-                            symbol_fqn: get(&row, 2, "symbol_fqn")?,
-                            path: get(&row, 3, "path")?,
-                            start_line: get_i64(&row, 4, "start_line")?,
-                        })
-                    })
-                    .collect()
-            })
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn load_artefacts_for_file_lines(
-        &self,
-        commit_sha: &str,
-        file_path: &str,
-    ) -> Result<Vec<(String, i64, i64)>> {
-        let commit_sha = commit_sha.to_string();
-        let file_path = file_path.to_string();
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let rows = client
-                    .query(
-                        r#"
-SELECT DISTINCT a.artefact_id, a.path, a.start_line, a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = $1
-  AND a.canonical_kind != 'file'
-  AND (fs.path = $2 OR $2 LIKE '%' || fs.path)
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-                        &[&commit_sha, &file_path],
-                    )
-                    .await
-                    .context("failed querying artefacts for file")?;
-
-                rows.into_iter()
-                    .map(|row| {
-                        Ok((
-                            get(&row, 0, "artefact_id")?,
-                            get_i64(&row, 2, "start_line")?,
-                            get_i64(&row, 3, "end_line")?,
-                        ))
-                    })
-                    .collect()
-            })
-        })
     }
 }
 
@@ -501,117 +397,6 @@ WHERE cc.commit_sha = $1
 }
 
 impl TestHarnessQueryRepository for PostgresTestHarnessRepository {
-    fn find_artefact(
-        &self,
-        commit_sha: &str,
-        artefact_query: &str,
-    ) -> Result<QueriedArtefactRecord> {
-        let commit_sha = commit_sha.to_string();
-        let artefact_query = artefact_query.to_string();
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let row = client
-                    .query_opt(
-                        r#"
-SELECT
-  a.artefact_id,
-  a.symbol_fqn,
-  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
-  a.path,
-  a.start_line,
-  a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = $1
-  AND (
-    a.artefact_id = $2
-    OR a.symbol_fqn = $2
-    OR a.path = $2
-    OR a.symbol_fqn LIKE '%' || $2
-  )
-ORDER BY
-  CASE
-    WHEN a.symbol_fqn = $2 THEN 0
-    WHEN a.artefact_id = $2 THEN 1
-    WHEN a.path = $2 THEN 2
-    ELSE 3
-  END ASC,
-  a.start_line ASC
-LIMIT 1
-"#,
-                        &[&commit_sha, &artefact_query],
-                    )
-                    .await
-                    .context("failed querying artefact")?;
-
-                let Some(row) = row else {
-                    let indexed_for_commit = client
-                        .query_opt(
-                            "SELECT 1 FROM commits WHERE commit_sha = $1 LIMIT 1",
-                            &[&commit_sha],
-                        )
-                        .await
-                        .context("failed checking indexed state for commit")?;
-
-                    if indexed_for_commit.is_some() {
-                        bail!("Artefact not found");
-                    }
-
-                    bail!("Repository not indexed");
-                };
-
-                Ok(QueriedArtefactRecord {
-                    artefact_id: get(&row, 0, "artefact_id")?,
-                    symbol_fqn: get(&row, 1, "symbol_fqn")?,
-                    canonical_kind: get(&row, 2, "canonical_kind")?,
-                    path: get(&row, 3, "path")?,
-                    start_line: get_i64(&row, 4, "start_line")?,
-                    end_line: get_i64(&row, 5, "end_line")?,
-                })
-            })
-        })
-    }
-
-    fn list_artefacts(
-        &self,
-        commit_sha: &str,
-        kind: Option<&str>,
-    ) -> Result<Vec<crate::models::ListedArtefactRecord>> {
-        let commit_sha = commit_sha.to_string();
-        let kind = kind.map(str::to_string);
-        self.with_client(move |client| {
-            Box::pin(async move {
-                let mut output = Vec::new();
-
-                if kind.is_none()
-                    || !matches!(kind.as_deref(), Some("test_suite" | "test_scenario"))
-                {
-                    output.extend(
-                        load_listed_production_artefacts(client, &commit_sha, kind.as_deref())
-                            .await?,
-                    );
-                }
-                if kind.is_none() || matches!(kind.as_deref(), Some("test_suite")) {
-                    output.extend(load_listed_test_suites(client, &commit_sha).await?);
-                }
-                if kind.is_none() || matches!(kind.as_deref(), Some("test_scenario")) {
-                    output.extend(load_listed_test_scenarios(client, &commit_sha).await?);
-                }
-
-                output.sort_by(|left, right| {
-                    left.file_path
-                        .cmp(&right.file_path)
-                        .then(left.start_line.cmp(&right.start_line))
-                        .then(left.kind.cmp(&right.kind))
-                });
-                Ok(output)
-            })
-        })
-    }
-
     fn load_covering_tests(
         &self,
         commit_sha: &str,
