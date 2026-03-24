@@ -200,52 +200,52 @@ pub struct ListedArtefactRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct TestSuiteRecord {
-    pub suite_id: String,
+pub struct TestArtefactCurrentRecord {
+    pub artefact_id: String,
+    pub symbol_id: String,
     pub repo_id: String,
     pub commit_sha: String,
-    pub language: String,
+    pub blob_sha: String,
     pub path: String,
-    pub name: String,
+    pub language: String,
+    pub canonical_kind: String,
+    pub language_kind: Option<String>,
     pub symbol_fqn: Option<String>,
+    pub name: String,
+    pub parent_artefact_id: Option<String>,
+    pub parent_symbol_id: Option<String>,
     pub start_line: i64,
     pub end_line: i64,
     pub start_byte: Option<i64>,
     pub end_byte: Option<i64>,
     pub signature: Option<String>,
+    pub modifiers: String,
+    pub docstring: Option<String>,
+    pub content_hash: Option<String>,
     pub discovery_source: String,
+    pub revision_kind: String,
+    pub revision_id: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct TestScenarioRecord {
-    pub scenario_id: String,
-    pub suite_id: String,
+pub struct TestArtefactEdgeCurrentRecord {
+    pub edge_id: String,
     pub repo_id: String,
     pub commit_sha: String,
-    pub language: String,
+    pub blob_sha: String,
     pub path: String,
-    pub name: String,
-    pub symbol_fqn: Option<String>,
-    pub start_line: i64,
-    pub end_line: i64,
-    pub start_byte: Option<i64>,
-    pub end_byte: Option<i64>,
-    pub signature: Option<String>,
-    pub discovery_source: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct TestLinkRecord {
-    pub test_link_id: String,
-    pub repo_id: String,
-    pub commit_sha: String,
-    pub test_scenario_id: String,
-    pub production_artefact_id: String,
-    pub production_symbol_id: Option<String>,
-    pub link_source: String,
-    pub evidence_json: String,
-    pub confidence: f64,
-    pub linkage_status: String,
+    pub from_artefact_id: String,
+    pub from_symbol_id: String,
+    pub to_artefact_id: Option<String>,
+    pub to_symbol_id: Option<String>,
+    pub to_symbol_ref: Option<String>,
+    pub edge_kind: String,
+    pub language: String,
+    pub start_line: Option<i64>,
+    pub end_line: Option<i64>,
+    pub metadata: String,
+    pub revision_kind: String,
+    pub revision_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -261,7 +261,7 @@ pub struct TestRunRecord {
     pub run_id: String,
     pub repo_id: String,
     pub commit_sha: String,
-    pub test_scenario_id: String,
+    pub test_symbol_id: String,
     pub status: String,
     pub duration_ms: Option<i64>,
     pub ran_at: String,
@@ -272,7 +272,7 @@ pub struct TestClassificationRecord {
     pub classification_id: String,
     pub repo_id: String,
     pub commit_sha: String,
-    pub test_scenario_id: String,
+    pub test_symbol_id: String,
     pub classification: String,
     pub classification_source: String,
     pub fan_out: i64,
@@ -282,9 +282,8 @@ pub struct TestClassificationRecord {
 /// Row counts for test-harness tables scoped to a single commit (e.g. `test_harness_tests_summary` stage).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TestHarnessCommitCounts {
-    pub test_suites: u64,
-    pub test_scenarios: u64,
-    pub test_links: u64,
+    pub test_artefacts: u64,
+    pub test_artefact_edges: u64,
     pub test_classifications: u64,
     pub coverage_captures: u64,
     pub coverage_hits: u64,
@@ -370,7 +369,7 @@ pub struct CoverageCaptureRecord {
     pub tool: String,
     pub format: CoverageFormat,
     pub scope_kind: ScopeKind,
-    pub subject_test_scenario_id: Option<String>,
+    pub subject_test_symbol_id: Option<String>,
     pub line_truth: bool,
     pub branch_truth: bool,
     pub captured_at: String,
@@ -381,7 +380,7 @@ pub struct CoverageCaptureRecord {
 #[derive(Debug, Clone)]
 pub struct CoverageHitRecord {
     pub capture_id: String,
-    pub production_artefact_id: String,
+    pub production_symbol_id: String,
     pub file_path: String,
     pub line: i64,
     pub branch_id: i64,
@@ -523,9 +522,10 @@ pub struct StageCoverageMetadataRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        E2E_MIN_BOUNDARY_CROSSINGS, E2E_MIN_FAN_OUT, INTEGRATION_MIN_BOUNDARY_CROSSINGS,
-        INTEGRATION_MIN_FAN_OUT, UNIT_MAX_BOUNDARY_CROSSINGS, UNIT_MAX_FAN_OUT,
-        derive_test_classification,
+        CoverageCaptureRecord, CoverageHitRecord, E2E_MIN_BOUNDARY_CROSSINGS, E2E_MIN_FAN_OUT,
+        INTEGRATION_MIN_BOUNDARY_CROSSINGS, INTEGRATION_MIN_FAN_OUT, TestArtefactCurrentRecord,
+        TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestHarnessCommitCounts,
+        TestRunRecord, UNIT_MAX_BOUNDARY_CROSSINGS, UNIT_MAX_FAN_OUT, derive_test_classification,
     };
 
     #[test]
@@ -565,5 +565,115 @@ mod tests {
             derive_test_classification(E2E_MIN_FAN_OUT, E2E_MIN_BOUNDARY_CROSSINGS),
             "e2e"
         );
+    }
+
+    #[test]
+    fn test_harness_current_schema_records_use_symbol_based_fields() {
+        let artefact = TestArtefactCurrentRecord {
+            artefact_id: "artefact".into(),
+            symbol_id: "symbol".into(),
+            repo_id: "repo".into(),
+            commit_sha: "commit".into(),
+            blob_sha: "blob".into(),
+            path: "tests/example.rs".into(),
+            language: "rust".into(),
+            canonical_kind: "test_scenario".into(),
+            language_kind: Some("test_fn".into()),
+            symbol_fqn: Some("crate::tests::example".into()),
+            name: "example".into(),
+            parent_artefact_id: Some("parent-artefact".into()),
+            parent_symbol_id: Some("parent-symbol".into()),
+            start_line: 1,
+            end_line: 2,
+            start_byte: Some(0),
+            end_byte: Some(10),
+            signature: Some("fn example()".into()),
+            modifiers: "[]".into(),
+            docstring: Some("doc".into()),
+            content_hash: Some("hash".into()),
+            discovery_source: "source".into(),
+            revision_kind: "commit".into(),
+            revision_id: "commit".into(),
+        };
+
+        let edge = TestArtefactEdgeCurrentRecord {
+            edge_id: "edge".into(),
+            repo_id: "repo".into(),
+            commit_sha: "commit".into(),
+            blob_sha: "blob".into(),
+            path: "tests/example.rs".into(),
+            from_artefact_id: artefact.artefact_id.clone(),
+            from_symbol_id: artefact.symbol_id.clone(),
+            to_artefact_id: Some("prod-artefact".into()),
+            to_symbol_id: Some("prod-symbol".into()),
+            to_symbol_ref: None,
+            edge_kind: "tests".into(),
+            language: "rust".into(),
+            start_line: Some(1),
+            end_line: Some(1),
+            metadata: "{}".into(),
+            revision_kind: "commit".into(),
+            revision_id: "commit".into(),
+        };
+
+        let run = TestRunRecord {
+            run_id: "run".into(),
+            repo_id: "repo".into(),
+            commit_sha: "commit".into(),
+            test_symbol_id: artefact.symbol_id.clone(),
+            status: "passed".into(),
+            duration_ms: Some(10),
+            ran_at: "now".into(),
+        };
+
+        let classification = TestClassificationRecord {
+            classification_id: "classification".into(),
+            repo_id: "repo".into(),
+            commit_sha: "commit".into(),
+            test_symbol_id: artefact.symbol_id.clone(),
+            classification: "unit".into(),
+            classification_source: "coverage_derived".into(),
+            fan_out: 1,
+            boundary_crossings: 0,
+        };
+
+        let capture = CoverageCaptureRecord {
+            capture_id: "capture".into(),
+            repo_id: "repo".into(),
+            commit_sha: "commit".into(),
+            tool: "llvm".into(),
+            format: super::CoverageFormat::LlvmJson,
+            scope_kind: super::ScopeKind::Workspace,
+            subject_test_symbol_id: Some(artefact.symbol_id.clone()),
+            line_truth: true,
+            branch_truth: true,
+            captured_at: "now".into(),
+            status: "complete".into(),
+            metadata_json: None,
+        };
+
+        let hit = CoverageHitRecord {
+            capture_id: capture.capture_id.clone(),
+            production_symbol_id: "prod-symbol".into(),
+            file_path: "src/lib.rs".into(),
+            line: 10,
+            branch_id: -1,
+            covered: true,
+            hit_count: 1,
+        };
+
+        let counts = TestHarnessCommitCounts {
+            test_artefacts: 2,
+            test_artefact_edges: 1,
+            test_classifications: 1,
+            coverage_captures: 1,
+            coverage_hits: 1,
+        };
+
+        assert_eq!(run.test_symbol_id, classification.test_symbol_id);
+        assert_eq!(capture.subject_test_symbol_id.as_deref(), Some("symbol"));
+        assert_eq!(hit.production_symbol_id, "prod-symbol");
+        assert_eq!(counts.test_artefacts + counts.test_artefact_edges, 3);
+        assert_eq!(edge.from_symbol_id, artefact.symbol_id);
     }
 }

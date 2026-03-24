@@ -16,9 +16,8 @@ pub struct IngestTestsIssue {
 #[derive(Debug, Clone)]
 pub struct IngestTestsSummary {
     pub files: usize,
-    pub suites: usize,
-    pub scenarios: usize,
-    pub links: usize,
+    pub test_artefacts: usize,
+    pub test_edges: usize,
     pub enumeration_status: String,
     pub enumerated_scenarios: usize,
     pub notes: Vec<String>,
@@ -40,9 +39,8 @@ pub fn execute(
     let discovery_run_id = format!("discovery:{commit_sha}");
     let stats_json = serde_json::json!({
         "files": mapping.stats.files,
-        "suites": mapping.stats.suites,
-        "scenarios": mapping.stats.scenarios,
-        "links": mapping.stats.links,
+        "test_artefacts": mapping.stats.test_artefacts,
+        "test_edges": mapping.stats.test_edges,
         "enumerated_scenarios": mapping.stats.enumerated_scenarios,
     })
     .to_string();
@@ -78,18 +76,16 @@ pub fn execute(
 
     repository.replace_test_discovery(
         commit_sha,
-        &mapping.suites,
-        &mapping.scenarios,
-        &mapping.links,
+        &mapping.test_artefacts,
+        &mapping.test_edges,
         &discovery_run,
         &diagnostics,
     )?;
 
     Ok(IngestTestsSummary {
         files: mapping.stats.files,
-        suites: mapping.stats.suites,
-        scenarios: mapping.stats.scenarios,
-        links: mapping.stats.links,
+        test_artefacts: mapping.stats.test_artefacts,
+        test_edges: mapping.stats.test_edges,
         enumeration_status: mapping.enumeration_status,
         enumerated_scenarios: mapping.stats.enumerated_scenarios,
         notes: mapping.enumeration_notes,
@@ -106,12 +102,11 @@ pub fn execute(
 
 pub fn format_summary(commit_sha: &str, summary: &IngestTestsSummary) -> String {
     let mut out = format!(
-        "ingest-tests complete for commit {} (files: {}, suites: {}, scenarios: {}, links: {}, enumeration: {}, enumerated_scenarios: {})",
+        "ingest-tests complete for commit {} (files: {}, test_artefacts: {}, test_edges: {}, enumeration: {}, enumerated_scenarios: {})",
         commit_sha,
         summary.files,
-        summary.suites,
-        summary.scenarios,
-        summary.links,
+        summary.test_artefacts,
+        summary.test_edges,
         summary.enumeration_status,
         summary.enumerated_scenarios,
     );

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::models::{TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveredTestSuite {
@@ -132,17 +132,15 @@ pub(crate) struct ProductionIndex {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct StructuralMappingStats {
     pub(crate) files: usize,
-    pub(crate) suites: usize,
-    pub(crate) scenarios: usize,
-    pub(crate) links: usize,
+    pub(crate) test_artefacts: usize,
+    pub(crate) test_edges: usize,
     pub(crate) enumerated_scenarios: usize,
 }
 
 #[derive(Debug)]
 pub(crate) struct StructuralMappingOutput {
-    pub(crate) suites: Vec<TestSuiteRecord>,
-    pub(crate) scenarios: Vec<TestScenarioRecord>,
-    pub(crate) links: Vec<TestLinkRecord>,
+    pub(crate) test_artefacts: Vec<TestArtefactCurrentRecord>,
+    pub(crate) test_edges: Vec<TestArtefactEdgeCurrentRecord>,
     pub(crate) stats: StructuralMappingStats,
     pub(crate) enumeration_status: String,
     pub(crate) enumeration_notes: Vec<String>,

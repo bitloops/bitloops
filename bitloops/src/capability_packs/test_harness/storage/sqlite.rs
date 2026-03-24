@@ -21,9 +21,9 @@ use crate::models::{
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
     ListedArtefactRecord, QueriedArtefactRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
-    StageLineCoverageRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
-    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestLinkRecord, TestRunRecord,
-    TestScenarioRecord, TestSuiteRecord, derive_test_classification,
+    StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
+    TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
+    TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
 };
 use crate::storage::init::open_existing_database;
 
@@ -40,9 +40,9 @@ use self::writes::{
     clear_existing_production_data, clear_existing_test_discovery_data, table_exists,
     upsert_commit, upsert_current_file_state, upsert_current_production_artefact,
     upsert_current_production_edge, upsert_file_state, upsert_production_artefact,
-    upsert_production_edge, upsert_repository, upsert_test_classification,
-    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_link, upsert_test_run,
-    upsert_test_scenario, upsert_test_suite,
+    upsert_production_edge, upsert_repository, upsert_test_artefact_current,
+    upsert_test_artefact_edge_current, upsert_test_classification,
+    upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
 };
 
 pub struct SqliteTestHarnessRepository {
@@ -63,10 +63,13 @@ impl TestHarnessRepository for SqliteTestHarnessRepository {
             .conn
             .prepare(
                 r#"
-SELECT ts.scenario_id, ts.path, COALESCE(s.name, ''), ts.name
-FROM test_scenarios ts
-LEFT JOIN test_suites s ON s.suite_id = ts.suite_id
+SELECT ts.symbol_id, ts.path, COALESCE(parent.name, ''), ts.name
+FROM test_artefacts_current ts
+LEFT JOIN test_artefacts_current parent
+  ON parent.repo_id = ts.repo_id
+ AND parent.symbol_id = ts.parent_symbol_id
 WHERE ts.commit_sha = ?1
+  AND ts.canonical_kind = 'test_scenario'
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
             )
@@ -132,9 +135,8 @@ ORDER BY ts.path ASC, ts.start_line ASC
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,
-        suites: &[TestSuiteRecord],
-        scenarios: &[TestScenarioRecord],
-        links: &[TestLinkRecord],
+        test_artefacts: &[TestArtefactCurrentRecord],
+        test_edges: &[TestArtefactEdgeCurrentRecord],
         discovery_run: &TestDiscoveryRunRecord,
         diagnostics: &[TestDiscoveryDiagnosticRecord],
     ) -> Result<()> {
@@ -148,14 +150,11 @@ ORDER BY ts.path ASC, ts.start_line ASC
         for diagnostic in diagnostics {
             upsert_test_discovery_diagnostic(&tx, diagnostic)?;
         }
-        for suite in suites {
-            upsert_test_suite(&tx, suite)?;
+        for artefact in test_artefacts {
+            upsert_test_artefact_current(&tx, artefact)?;
         }
-        for scenario in scenarios {
-            upsert_test_scenario(&tx, scenario)?;
-        }
-        for link in links {
-            upsert_test_link(&tx, link)?;
+        for edge in test_edges {
+            upsert_test_artefact_edge_current(&tx, edge)?;
         }
 
         tx.commit()
@@ -190,7 +189,7 @@ ORDER BY ts.path ASC, ts.start_line ASC
                 r#"
 INSERT INTO coverage_captures (
   capture_id, repo_id, commit_sha, tool, format, scope_kind,
-  subject_test_scenario_id, line_truth, branch_truth, captured_at, status, metadata_json
+  subject_test_symbol_id, line_truth, branch_truth, captured_at, status, metadata_json
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 ON CONFLICT(capture_id) DO UPDATE SET
   repo_id = excluded.repo_id,
@@ -198,7 +197,7 @@ ON CONFLICT(capture_id) DO UPDATE SET
   tool = excluded.tool,
   format = excluded.format,
   scope_kind = excluded.scope_kind,
-  subject_test_scenario_id = excluded.subject_test_scenario_id,
+  subject_test_symbol_id = excluded.subject_test_symbol_id,
   line_truth = excluded.line_truth,
   branch_truth = excluded.branch_truth,
   captured_at = excluded.captured_at,
@@ -212,7 +211,7 @@ ON CONFLICT(capture_id) DO UPDATE SET
                     capture.tool,
                     capture.format.as_str(),
                     capture.scope_kind.as_str(),
-                    capture.subject_test_scenario_id,
+                    capture.subject_test_symbol_id,
                     capture.line_truth as i64,
                     capture.branch_truth as i64,
                     capture.captured_at,
@@ -234,16 +233,16 @@ ON CONFLICT(capture_id) DO UPDATE SET
             tx.execute(
                 r#"
 INSERT INTO coverage_hits (
-  capture_id, production_artefact_id, file_path, line, branch_id, covered, hit_count
+  capture_id, production_symbol_id, file_path, line, branch_id, covered, hit_count
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
+ON CONFLICT(capture_id, production_symbol_id, line, branch_id) DO UPDATE SET
   file_path = excluded.file_path,
   covered = excluded.covered,
   hit_count = excluded.hit_count
 "#,
                 params![
                     hit.capture_id,
-                    hit.production_artefact_id,
+                    hit.production_symbol_id,
                     hit.file_path,
                     hit.line,
                     hit.branch_id,
@@ -253,8 +252,8 @@ ON CONFLICT(capture_id, production_artefact_id, line, branch_id) DO UPDATE SET
             )
             .with_context(|| {
                 format!(
-                    "failed inserting coverage hit for capture {} artefact {} line {}",
-                    hit.capture_id, hit.production_artefact_id, hit.line
+                    "failed inserting coverage hit for capture {} symbol {} line {}",
+                    hit.capture_id, hit.production_symbol_id, hit.line
                 )
             })?;
         }
@@ -329,12 +328,12 @@ ON CONFLICT(diagnostic_id) DO UPDATE SET
             .conn
             .prepare(
                 r#"
-SELECT cc.repo_id, cc.subject_test_scenario_id, ch.production_artefact_id, ch.file_path
+SELECT cc.repo_id, cc.subject_test_symbol_id, ch.production_symbol_id, ch.file_path
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
   AND cc.scope_kind = 'test_scenario'
-  AND cc.subject_test_scenario_id IS NOT NULL
+  AND cc.subject_test_symbol_id IS NOT NULL
   AND ch.covered = 1
 "#,
             )
@@ -351,8 +350,9 @@ WHERE cc.commit_sha = ?1
             .context("failed reading classification source row")?
         {
             let repo_id: String = row.get(0).context("missing repo_id")?;
-            let test_scenario_id: String = row.get(1).context("missing test_scenario_id")?;
-            let artefact_id: String = row.get(2).context("missing artefact_id")?;
+            let test_symbol_id: String = row.get(1).context("missing test_symbol_id")?;
+            let production_symbol_id: String =
+                row.get(2).context("missing production_symbol_id")?;
             let path: String = row.get(3).context("missing artefact path")?;
 
             let directory = Path::new(&path)
@@ -361,14 +361,14 @@ WHERE cc.commit_sha = ?1
                 .unwrap_or_default();
 
             let entry = grouped
-                .entry(test_scenario_id)
+                .entry(test_symbol_id)
                 .or_insert_with(|| (repo_id, HashSet::new(), HashSet::new()));
-            entry.1.insert(artefact_id);
+            entry.1.insert(production_symbol_id);
             entry.2.insert(directory);
         }
 
         let mut inserted = 0usize;
-        for (test_scenario_id, (repo_id, artefacts, directories)) in grouped {
+        for (test_symbol_id, (repo_id, artefacts, directories)) in grouped {
             let fan_out = artefacts.len() as i64;
             if fan_out == 0 {
                 continue;
@@ -376,10 +376,10 @@ WHERE cc.commit_sha = ?1
             let boundary_crossings = directories.len() as i64;
             let classification = derive_test_classification(fan_out, boundary_crossings);
             let record = TestClassificationRecord {
-                classification_id: format!("class:{commit_sha}:{test_scenario_id}"),
+                classification_id: format!("class:{commit_sha}:{test_symbol_id}"),
                 repo_id,
                 commit_sha: commit_sha.to_string(),
-                test_scenario_id,
+                test_symbol_id,
                 classification: classification.to_string(),
                 classification_source: "coverage_derived".to_string(),
                 fan_out,
@@ -497,38 +497,40 @@ LIMIT 1
     fn load_covering_tests(
         &self,
         commit_sha: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Vec<CoveringTestRecord>> {
         let mut stmt = self
             .conn
             .prepare(
                 r#"
 SELECT DISTINCT
-  ts.scenario_id,
+  ts.symbol_id,
   ts.symbol_fqn,
   ts.signature,
   ts.path,
-  s.name AS suite_name,
+  parent.name AS suite_name,
   tc.classification,
   tc.classification_source,
   tc.fan_out
-FROM test_links tl
-JOIN test_scenarios ts
-  ON ts.scenario_id = tl.test_scenario_id
-LEFT JOIN test_suites s
-  ON s.suite_id = ts.suite_id
+FROM test_artefact_edges_current te
+JOIN test_artefacts_current ts
+  ON ts.repo_id = te.repo_id
+ AND ts.symbol_id = te.from_symbol_id
+LEFT JOIN test_artefacts_current parent
+  ON parent.repo_id = ts.repo_id
+ AND parent.symbol_id = ts.parent_symbol_id
 LEFT JOIN test_classifications tc
-  ON tc.test_scenario_id = ts.scenario_id
+  ON tc.test_symbol_id = ts.symbol_id
   AND tc.commit_sha = ?1
-WHERE tl.commit_sha = ?1
-  AND tl.production_artefact_id = ?2
+WHERE te.commit_sha = ?1
+  AND (te.to_symbol_id = ?2 OR te.to_artefact_id = ?2)
 ORDER BY ts.path ASC, ts.start_line ASC
 "#,
             )
             .context("failed preparing covering tests query")?;
 
         let rows = stmt
-            .query_map(params![commit_sha, production_artefact_id], |row| {
+            .query_map(params![commit_sha, production_symbol_id], |row| {
                 Ok(CoveringTestRecord {
                     test_id: row.get(0)?,
                     test_symbol_fqn: row.get(1)?,
@@ -554,10 +556,10 @@ ORDER BY ts.path ASC, ts.start_line ASC
             .conn
             .prepare(
                 r#"
-SELECT test_scenario_id, COUNT(DISTINCT production_artefact_id)
-FROM test_links
+SELECT from_symbol_id, COUNT(DISTINCT COALESCE(to_symbol_id, to_symbol_ref))
+FROM test_artefact_edges_current
 WHERE commit_sha = ?1
-GROUP BY test_scenario_id
+GROUP BY from_symbol_id
 "#,
             )
             .context("failed preparing linked fan-out query")?;
@@ -568,9 +570,9 @@ GROUP BY test_scenario_id
 
         let mut output = HashMap::new();
         while let Some(row) = rows.next().context("failed reading linked fan-out row")? {
-            let test_scenario_id: String = row.get(0).context("missing test_scenario_id")?;
+            let test_symbol_id: String = row.get(0).context("missing test_symbol_id")?;
             let fan_out: i64 = row.get(1).context("missing fan_out")?;
-            output.insert(test_scenario_id, fan_out);
+            output.insert(test_symbol_id, fan_out);
         }
         Ok(output)
     }
@@ -589,8 +591,8 @@ GROUP BY test_scenario_id
     fn load_coverage_pair_stats(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
-        artefact_id: &str,
+        test_symbol_id: &str,
+        production_symbol_id: &str,
     ) -> Result<CoveragePairStats> {
         let mut stmt = self
             .conn
@@ -603,19 +605,22 @@ FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
   AND cc.scope_kind = 'test_scenario'
-  AND cc.subject_test_scenario_id = ?2
-  AND ch.production_artefact_id = ?3
+  AND cc.subject_test_symbol_id = ?2
+  AND ch.production_symbol_id = ?3
 "#,
             )
             .context("failed preparing pair coverage query")?;
 
         let stats = stmt
-            .query_row(params![commit_sha, test_scenario_id, artefact_id], |row| {
-                Ok(CoveragePairStats {
-                    total_rows: row.get(0)?,
-                    covered_rows: row.get(1)?,
-                })
-            })
+            .query_row(
+                params![commit_sha, test_symbol_id, production_symbol_id],
+                |row| {
+                    Ok(CoveragePairStats {
+                        total_rows: row.get(0)?,
+                        covered_rows: row.get(1)?,
+                    })
+                },
+            )
             .context("failed querying pair coverage stats")?;
         Ok(stats)
     }
@@ -623,7 +628,7 @@ WHERE cc.commit_sha = ?1
     fn load_latest_test_run(
         &self,
         commit_sha: &str,
-        test_scenario_id: &str,
+        test_symbol_id: &str,
     ) -> Result<Option<LatestTestRunRecord>> {
         let mut stmt = self
             .conn
@@ -631,7 +636,7 @@ WHERE cc.commit_sha = ?1
                 r#"
 SELECT status, duration_ms, commit_sha
 FROM test_runs
-WHERE test_scenario_id = ?1
+WHERE test_symbol_id = ?1
   AND commit_sha = ?2
 ORDER BY ran_at DESC
 LIMIT 1
@@ -640,7 +645,7 @@ LIMIT 1
             .context("failed preparing last run query")?;
 
         let mut rows = stmt
-            .query(params![test_scenario_id, commit_sha])
+            .query(params![test_symbol_id, commit_sha])
             .context("failed querying last run")?;
 
         let Some(row) = rows.next().context("failed reading last run row")? else {
@@ -657,7 +662,7 @@ LIMIT 1
     fn load_coverage_summary(
         &self,
         commit_sha: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
     ) -> Result<Option<CoverageSummaryRecord>> {
         let mut line_stmt = self
             .conn
@@ -667,7 +672,7 @@ SELECT ch.line, MAX(CASE WHEN ch.covered = 1 THEN 1 ELSE 0 END) AS covered_any
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
-  AND ch.production_artefact_id = ?2
+  AND ch.production_symbol_id = ?2
   AND ch.branch_id = -1
 GROUP BY ch.line
 ORDER BY ch.line
@@ -676,7 +681,7 @@ ORDER BY ch.line
             .context("failed preparing line coverage summary query")?;
 
         let line_rows = line_stmt
-            .query_map(params![commit_sha, artefact_id], |row| {
+            .query_map(params![commit_sha, production_symbol_id], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? == 1))
             })
             .context("failed querying line coverage summary")?;
@@ -702,7 +707,7 @@ SELECT
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
-  AND ch.production_artefact_id = ?2
+  AND ch.production_symbol_id = ?2
   AND ch.branch_id != -1
 GROUP BY ch.line, ch.branch_id
 ORDER BY ch.line, ch.branch_id
@@ -711,7 +716,7 @@ ORDER BY ch.line, ch.branch_id
             .context("failed preparing branch coverage summary query")?;
 
         let branch_rows = branch_stmt
-            .query_map(params![commit_sha, artefact_id], |row| {
+            .query_map(params![commit_sha, production_symbol_id], |row| {
                 Ok(CoverageBranchRecord {
                     line: row.get(0)?,
                     branch_id: row.get(1)?,
@@ -756,19 +761,14 @@ ORDER BY ch.line, ch.branch_id
 
         let conn = &self.conn;
         Ok(TestHarnessCommitCounts {
-            test_suites: count(
+            test_artefacts: count(
                 conn,
-                "SELECT COUNT(*) FROM test_suites WHERE commit_sha = ?1",
+                "SELECT COUNT(*) FROM test_artefacts_current WHERE commit_sha = ?1",
                 commit_sha,
             )?,
-            test_scenarios: count(
+            test_artefact_edges: count(
                 conn,
-                "SELECT COUNT(*) FROM test_scenarios WHERE commit_sha = ?1",
-                commit_sha,
-            )?,
-            test_links: count(
-                conn,
-                "SELECT COUNT(*) FROM test_links WHERE commit_sha = ?1",
+                "SELECT COUNT(*) FROM test_artefact_edges_current WHERE commit_sha = ?1",
                 commit_sha,
             )?,
             test_classifications: count(
@@ -796,7 +796,7 @@ WHERE cc.commit_sha = ?1
     fn load_stage_covering_tests(
         &self,
         repo_id: &str,
-        production_artefact_id: &str,
+        production_symbol_id: &str,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -804,7 +804,7 @@ WHERE cc.commit_sha = ?1
         load_stage_covering_tests_conn(
             &self.conn,
             repo_id,
-            production_artefact_id,
+            production_symbol_id,
             min_confidence,
             linkage_source,
             limit,
@@ -814,19 +814,19 @@ WHERE cc.commit_sha = ?1
     fn load_stage_line_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageLineCoverageRecord>> {
-        load_stage_line_coverage_conn(&self.conn, repo_id, artefact_id, commit_sha)
+        load_stage_line_coverage_conn(&self.conn, repo_id, production_symbol_id, commit_sha)
     }
 
     fn load_stage_branch_coverage(
         &self,
         repo_id: &str,
-        artefact_id: &str,
+        production_symbol_id: &str,
         commit_sha: Option<&str>,
     ) -> Result<Vec<StageBranchCoverageRecord>> {
-        load_stage_branch_coverage_conn(&self.conn, repo_id, artefact_id, commit_sha)
+        load_stage_branch_coverage_conn(&self.conn, repo_id, production_symbol_id, commit_sha)
     }
 
     fn load_stage_coverage_metadata(

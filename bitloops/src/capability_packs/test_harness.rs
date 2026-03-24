@@ -1,5 +1,6 @@
 pub mod descriptor;
 pub mod health;
+pub mod identity;
 pub mod ingest;
 pub mod ingesters;
 pub mod mapping;

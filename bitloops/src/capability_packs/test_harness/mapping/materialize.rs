@@ -1,22 +1,22 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::capability_packs::test_harness::mapping::linker::{
-    matched_production_artefacts, scenario_id_suffix,
+use crate::capability_packs::test_harness::identity::{
+    test_edge_id, test_revision_artefact_id, test_structural_symbol_id,
 };
+use crate::capability_packs::test_harness::mapping::linker::matched_production_artefacts;
 use crate::capability_packs::test_harness::mapping::model::ProductionIndex;
 use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, EnumeratedTestScenario, ScenarioDiscoverySource, StructuralMappingStats,
 };
-use crate::models::{ProductionArtefact, TestLinkRecord, TestScenarioRecord, TestSuiteRecord};
+use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 
 pub(crate) struct MaterializationContext<'a> {
     pub(crate) repo_id: &'a str,
     pub(crate) commit_sha: &'a str,
     pub(crate) production: &'a [ProductionArtefact],
     pub(crate) production_index: &'a ProductionIndex,
-    pub(crate) suites: &'a mut Vec<TestSuiteRecord>,
-    pub(crate) scenarios: &'a mut Vec<TestScenarioRecord>,
-    pub(crate) links: &'a mut Vec<TestLinkRecord>,
+    pub(crate) test_artefacts: &'a mut Vec<TestArtefactCurrentRecord>,
+    pub(crate) test_edges: &'a mut Vec<TestArtefactEdgeCurrentRecord>,
     pub(crate) link_keys: &'a mut HashSet<String>,
     pub(crate) stats: &'a mut StructuralMappingStats,
 }
@@ -28,20 +28,19 @@ struct RecordContext<'a> {
     language: &'a str,
 }
 
-struct TestSuiteSpec<'a> {
-    suite_id: &'a str,
-    name: &'a str,
-    start_line: i64,
-    end_line: i64,
-    signature: Option<&'a str>,
-    discovery_source: ScenarioDiscoverySource,
+impl RecordContext<'_> {
+    fn blob_sha(&self) -> String {
+        crate::host::devql::deterministic_uuid(&format!("{}|{}", self.commit_sha, self.path))
+    }
 }
 
-struct TestScenarioSpec<'a> {
-    scenario_id: &'a str,
-    suite_id: &'a str,
-    name: &'a str,
+struct TestArtefactSpec<'a> {
+    canonical_kind: &'a str,
+    language_kind: Option<&'a str>,
     symbol_fqn: Option<&'a str>,
+    name: &'a str,
+    parent_artefact_id: Option<&'a str>,
+    parent_symbol_id: Option<&'a str>,
     start_line: i64,
     end_line: i64,
     signature: Option<&'a str>,
@@ -69,45 +68,44 @@ pub(crate) fn materialize_source_discovery(
         };
 
         for suite in &file.suites {
-            context.stats.suites += 1;
-            let suite_id = format!(
-                "test_suite:{commit_sha}:{}:{}",
-                file.relative_path, suite.start_line
-            );
-            context.suites.push(build_test_suite_record(
+            let suite_record = build_test_artefact_current_record(
                 &record_context,
-                &TestSuiteSpec {
-                    suite_id: &suite_id,
+                &TestArtefactSpec {
+                    canonical_kind: "test_suite",
+                    language_kind: None,
+                    symbol_fqn: Some(&suite.name),
                     name: &suite.name,
+                    parent_artefact_id: None,
+                    parent_symbol_id: None,
                     start_line: suite.start_line,
                     end_line: suite.end_line,
                     signature: Some(&suite.name),
                     discovery_source: ScenarioDiscoverySource::Source,
                 },
-            ));
+            );
+            let suite_symbol_id = suite_record.symbol_id.clone();
+            let suite_artefact_id = suite_record.artefact_id.clone();
+            context.test_artefacts.push(suite_record);
+            context.stats.test_artefacts += 1;
 
             for scenario in &suite.scenarios {
-                context.stats.scenarios += 1;
-                let scenario_id = format!(
-                    "test_case:{commit_sha}:{}:{}:{}",
-                    file.relative_path,
-                    scenario.start_line,
-                    scenario_id_suffix(&scenario.name),
-                );
                 let scenario_fqn = format!("{}.{}", suite.name, scenario.name);
-                context.scenarios.push(build_test_scenario_record(
+                let scenario_record = build_test_artefact_current_record(
                     &record_context,
-                    &TestScenarioSpec {
-                        scenario_id: &scenario_id,
-                        suite_id: &suite_id,
-                        name: &scenario.name,
+                    &TestArtefactSpec {
+                        canonical_kind: "test_scenario",
+                        language_kind: None,
                         symbol_fqn: Some(&scenario_fqn),
+                        name: &scenario.name,
+                        parent_artefact_id: Some(&suite_artefact_id),
+                        parent_symbol_id: Some(&suite_symbol_id),
                         start_line: scenario.start_line,
                         end_line: scenario.end_line,
                         signature: Some(&scenario.name),
                         discovery_source: scenario.discovery_source,
                     },
-                ));
+                );
+                context.stats.test_artefacts += 1;
 
                 for production_artefact in matched_production_artefacts(
                     context.production,
@@ -115,27 +113,25 @@ pub(crate) fn materialize_source_discovery(
                     file,
                     scenario,
                 ) {
-                    let link_key = format!("{}::{}", scenario_id, production_artefact.artefact_id);
+                    let link_key = format!(
+                        "{}::{}::tests",
+                        scenario_record.symbol_id, production_artefact.symbol_id
+                    );
                     if !context.link_keys.insert(link_key) {
                         continue;
                     }
 
-                    let link_id = format!(
-                        "link:{commit_sha}:{}:{}",
-                        scenario_id, production_artefact.artefact_id
-                    );
-                    context.links.push(build_test_link_record(&TestLinkSpec {
-                        test_link_id: &link_id,
-                        repo_id,
-                        commit_sha,
-                        test_scenario_id: &scenario_id,
-                        production_artefact_id: &production_artefact.artefact_id,
-                        production_symbol_id: Some(&production_artefact.symbol_id),
-                        confidence: 0.6,
-                        linkage_status: "resolved",
-                    }));
-                    context.stats.links += 1;
+                    context
+                        .test_edges
+                        .push(build_test_artefact_edge_current_record(
+                            &record_context,
+                            &scenario_record,
+                            production_artefact,
+                        ));
+                    context.stats.test_edges += 1;
                 }
+
+                context.test_artefacts.push(scenario_record);
             }
         }
     }
@@ -147,66 +143,62 @@ pub(crate) fn materialize_enumerated_scenarios(
 ) {
     let repo_id = context.repo_id;
     let commit_sha = context.commit_sha;
-    let mut synthetic_suites = HashMap::new();
+    let mut synthetic_suites: HashMap<String, (String, String)> = HashMap::new();
 
     for enumerated in scenarios_out {
-        let suite_key = format!("{}::{}", enumerated.relative_path, enumerated.suite_name);
-        let suite_id = synthetic_suites
-            .entry(suite_key.clone())
-            .or_insert_with(|| {
-                context.stats.suites += 1;
-                let suite_id = format!(
-                    "test_suite:{commit_sha}:{}:{}",
-                    enumerated.relative_path,
-                    scenario_id_suffix(&enumerated.suite_name),
-                );
-                let record_context = RecordContext {
-                    repo_id,
-                    commit_sha,
-                    path: &enumerated.relative_path,
-                    language: &enumerated.language,
-                };
-                context.suites.push(build_test_suite_record(
-                    &record_context,
-                    &TestSuiteSpec {
-                        suite_id: &suite_id,
-                        name: &enumerated.suite_name,
-                        start_line: 1,
-                        end_line: 1,
-                        signature: Some(&enumerated.suite_name),
-                        discovery_source: ScenarioDiscoverySource::Enumeration,
-                    },
-                ));
-                suite_id
-            });
-
-        let scenario_id = format!(
-            "test_case:{commit_sha}:{}:{}:{}",
-            enumerated.relative_path,
-            enumerated.start_line,
-            scenario_id_suffix(&enumerated.scenario_name),
-        );
-        let scenario_fqn = format!("{}.{}", enumerated.suite_name, enumerated.scenario_name);
         let record_context = RecordContext {
             repo_id,
             commit_sha,
             path: &enumerated.relative_path,
             language: &enumerated.language,
         };
-        context.scenarios.push(build_test_scenario_record(
+
+        let suite_key = format!("{}::{}", enumerated.relative_path, enumerated.suite_name);
+        let (suite_symbol_id, suite_artefact_id) = synthetic_suites
+            .entry(suite_key)
+            .or_insert_with(|| {
+                let suite_record = build_test_artefact_current_record(
+                    &record_context,
+                    &TestArtefactSpec {
+                        canonical_kind: "test_suite",
+                        language_kind: None,
+                        symbol_fqn: Some(&enumerated.suite_name),
+                        name: &enumerated.suite_name,
+                        parent_artefact_id: None,
+                        parent_symbol_id: None,
+                        start_line: 1,
+                        end_line: 1,
+                        signature: Some(&enumerated.suite_name),
+                        discovery_source: ScenarioDiscoverySource::Enumeration,
+                    },
+                );
+                let ids = (
+                    suite_record.symbol_id.clone(),
+                    suite_record.artefact_id.clone(),
+                );
+                context.test_artefacts.push(suite_record);
+                context.stats.test_artefacts += 1;
+                ids
+            })
+            .clone();
+
+        let scenario_fqn = format!("{}.{}", enumerated.suite_name, enumerated.scenario_name);
+        let scenario_record = build_test_artefact_current_record(
             &record_context,
-            &TestScenarioSpec {
-                scenario_id: &scenario_id,
-                suite_id,
-                name: &enumerated.scenario_name,
+            &TestArtefactSpec {
+                canonical_kind: "test_scenario",
+                language_kind: None,
                 symbol_fqn: Some(&scenario_fqn),
+                name: &enumerated.scenario_name,
+                parent_artefact_id: Some(&suite_artefact_id),
+                parent_symbol_id: Some(&suite_symbol_id),
                 start_line: enumerated.start_line,
                 end_line: enumerated.start_line.max(1),
                 signature: Some(&enumerated.scenario_name),
                 discovery_source: enumerated.discovery_source,
             },
-        ));
-        context.stats.scenarios += 1;
+        );
+        context.stats.test_artefacts += 1;
         context.stats.enumerated_scenarios += 1;
 
         let synthetic_file = DiscoveredTestFile {
@@ -238,95 +230,102 @@ pub(crate) fn materialize_enumerated_scenarios(
             &synthetic_file,
             &synthetic_scenario,
         ) {
-            let link_key = format!("{}::{}", scenario_id, production_artefact.artefact_id);
+            let link_key = format!(
+                "{}::{}::tests",
+                scenario_record.symbol_id, production_artefact.symbol_id
+            );
             if !context.link_keys.insert(link_key) {
                 continue;
             }
 
-            let link_id = format!(
-                "link:{commit_sha}:{}:{}",
-                scenario_id, production_artefact.artefact_id
-            );
-            context.links.push(build_test_link_record(&TestLinkSpec {
-                test_link_id: &link_id,
-                repo_id,
-                commit_sha,
-                test_scenario_id: &scenario_id,
-                production_artefact_id: &production_artefact.artefact_id,
-                production_symbol_id: Some(&production_artefact.symbol_id),
-                confidence: 0.6,
-                linkage_status: "resolved",
-            }));
-            context.stats.links += 1;
+            context
+                .test_edges
+                .push(build_test_artefact_edge_current_record(
+                    &record_context,
+                    &scenario_record,
+                    production_artefact,
+                ));
+            context.stats.test_edges += 1;
         }
+
+        context.test_artefacts.push(scenario_record);
     }
 }
 
-fn build_test_suite_record(
+fn build_test_artefact_current_record(
     context: &RecordContext<'_>,
-    spec: &TestSuiteSpec<'_>,
-) -> TestSuiteRecord {
-    TestSuiteRecord {
-        suite_id: spec.suite_id.to_string(),
-        repo_id: context.repo_id.to_string(),
-        commit_sha: context.commit_sha.to_string(),
-        language: context.language.to_string(),
-        path: context.path.to_string(),
-        name: spec.name.to_string(),
-        symbol_fqn: Some(spec.name.to_string()),
-        start_line: spec.start_line,
-        end_line: spec.end_line,
-        start_byte: None,
-        end_byte: None,
-        signature: spec.signature.map(str::to_string),
-        discovery_source: spec.discovery_source.as_str().to_string(),
-    }
-}
+    spec: &TestArtefactSpec<'_>,
+) -> TestArtefactCurrentRecord {
+    let blob_sha = context.blob_sha();
+    let symbol_id = test_structural_symbol_id(
+        context.path,
+        spec.canonical_kind,
+        spec.language_kind,
+        spec.parent_symbol_id,
+        spec.name,
+        spec.signature,
+    );
+    let artefact_id = test_revision_artefact_id(context.repo_id, &blob_sha, &symbol_id);
 
-fn build_test_scenario_record(
-    context: &RecordContext<'_>,
-    spec: &TestScenarioSpec<'_>,
-) -> TestScenarioRecord {
-    TestScenarioRecord {
-        scenario_id: spec.scenario_id.to_string(),
-        suite_id: spec.suite_id.to_string(),
+    TestArtefactCurrentRecord {
+        artefact_id,
+        symbol_id,
         repo_id: context.repo_id.to_string(),
         commit_sha: context.commit_sha.to_string(),
-        language: context.language.to_string(),
+        blob_sha,
         path: context.path.to_string(),
-        name: spec.name.to_string(),
+        language: context.language.to_string(),
+        canonical_kind: spec.canonical_kind.to_string(),
+        language_kind: spec.language_kind.map(str::to_string),
         symbol_fqn: spec.symbol_fqn.map(str::to_string),
+        name: spec.name.to_string(),
+        parent_artefact_id: spec.parent_artefact_id.map(str::to_string),
+        parent_symbol_id: spec.parent_symbol_id.map(str::to_string),
         start_line: spec.start_line,
         end_line: spec.end_line,
         start_byte: None,
         end_byte: None,
         signature: spec.signature.map(str::to_string),
+        modifiers: "[]".to_string(),
+        docstring: None,
+        content_hash: None,
         discovery_source: spec.discovery_source.as_str().to_string(),
+        revision_kind: "commit".to_string(),
+        revision_id: context.commit_sha.to_string(),
     }
 }
 
-struct TestLinkSpec<'a> {
-    test_link_id: &'a str,
-    repo_id: &'a str,
-    commit_sha: &'a str,
-    test_scenario_id: &'a str,
-    production_artefact_id: &'a str,
-    production_symbol_id: Option<&'a str>,
-    confidence: f64,
-    linkage_status: &'a str,
-}
+fn build_test_artefact_edge_current_record(
+    context: &RecordContext<'_>,
+    from: &TestArtefactCurrentRecord,
+    production_artefact: &ProductionArtefact,
+) -> TestArtefactEdgeCurrentRecord {
+    let metadata =
+        r#"{"confidence":0.6,"link_source":"static_analysis","linkage_status":"resolved"}"#
+            .to_string();
 
-fn build_test_link_record(spec: &TestLinkSpec<'_>) -> TestLinkRecord {
-    TestLinkRecord {
-        test_link_id: spec.test_link_id.to_string(),
-        repo_id: spec.repo_id.to_string(),
-        commit_sha: spec.commit_sha.to_string(),
-        test_scenario_id: spec.test_scenario_id.to_string(),
-        production_artefact_id: spec.production_artefact_id.to_string(),
-        production_symbol_id: spec.production_symbol_id.map(str::to_string),
-        link_source: "static_analysis".to_string(),
-        evidence_json: "{}".to_string(),
-        confidence: spec.confidence,
-        linkage_status: spec.linkage_status.to_string(),
+    TestArtefactEdgeCurrentRecord {
+        edge_id: test_edge_id(
+            context.repo_id,
+            &from.symbol_id,
+            "tests",
+            &production_artefact.symbol_id,
+        ),
+        repo_id: context.repo_id.to_string(),
+        commit_sha: context.commit_sha.to_string(),
+        blob_sha: context.blob_sha(),
+        path: context.path.to_string(),
+        from_artefact_id: from.artefact_id.clone(),
+        from_symbol_id: from.symbol_id.clone(),
+        to_artefact_id: Some(production_artefact.artefact_id.clone()),
+        to_symbol_id: Some(production_artefact.symbol_id.clone()),
+        to_symbol_ref: None,
+        edge_kind: "tests".to_string(),
+        language: context.language.to_string(),
+        start_line: Some(from.start_line),
+        end_line: Some(from.end_line),
+        metadata,
+        revision_kind: "commit".to_string(),
+        revision_id: context.commit_sha.to_string(),
     }
 }

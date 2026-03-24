@@ -65,7 +65,7 @@ pub fn execute(
         tool: tool.to_string(),
         format,
         scope_kind,
-        subject_test_scenario_id: test_artefact_id.map(|s| s.to_string()),
+        subject_test_symbol_id: test_artefact_id.map(|s| s.to_string()),
         line_truth: true,
         branch_truth: has_branches,
         captured_at,
@@ -154,14 +154,14 @@ fn ingest_lcov(
             continue;
         }
 
-        for (artefact_id, start_line, end_line) in &artefacts {
+        for (production_symbol_id, start_line, end_line) in &artefacts {
             for (&line_number, &hit_count) in &file.line_hits {
                 if line_number < *start_line || line_number > *end_line {
                     continue;
                 }
                 hits.push(CoverageHitRecord {
                     capture_id: capture_id.to_string(),
-                    production_artefact_id: artefact_id.clone(),
+                    production_symbol_id: production_symbol_id.clone(),
                     file_path: file.source_file.clone(),
                     line: line_number,
                     branch_id: -1,
@@ -176,7 +176,7 @@ fn ingest_lcov(
                 }
                 hits.push(CoverageHitRecord {
                     capture_id: capture_id.to_string(),
-                    production_artefact_id: artefact_id.clone(),
+                    production_symbol_id: production_symbol_id.clone(),
                     file_path: file.source_file.clone(),
                     line: branch.line,
                     branch_id: branch.branch_id,
@@ -338,4 +338,275 @@ fn parse_lcov_report(
 
 fn normalize_lcov_path(path: &str) -> String {
     path.trim().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use anyhow::Result;
+
+    use super::{execute, format_summary, parse_lcov_report};
+    use crate::capability_packs::knowledge::storage::{
+        KnowledgeItemRow, KnowledgeRelationAssertionRow, KnowledgeSourceRow,
+    };
+    use crate::capability_packs::test_harness::storage::TestHarnessCoverageGateway;
+    use crate::host::capability_host::gateways::RelationalGateway;
+    use crate::models::{
+        CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageFormat, CoverageHitRecord,
+        ScopeKind,
+    };
+
+    #[derive(Default)]
+    struct FakeCoverageStore {
+        captures: Vec<CoverageCaptureRecord>,
+        hits: Vec<CoverageHitRecord>,
+        diagnostics: Vec<CoverageDiagnosticRecord>,
+        rebuild_commits: Vec<String>,
+        classifications: usize,
+    }
+
+    impl TestHarnessCoverageGateway for FakeCoverageStore {
+        fn insert_coverage_capture(&mut self, capture: &CoverageCaptureRecord) -> Result<()> {
+            self.captures.push(capture.clone());
+            Ok(())
+        }
+
+        fn insert_coverage_hits(&mut self, hits: &[CoverageHitRecord]) -> Result<()> {
+            self.hits.extend_from_slice(hits);
+            Ok(())
+        }
+
+        fn insert_coverage_diagnostics(
+            &mut self,
+            diagnostics: &[CoverageDiagnosticRecord],
+        ) -> Result<()> {
+            self.diagnostics.extend_from_slice(diagnostics);
+            Ok(())
+        }
+
+        fn rebuild_classifications_from_coverage(&mut self, commit_sha: &str) -> Result<usize> {
+            self.rebuild_commits.push(commit_sha.to_string());
+            Ok(self.classifications)
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeRelationalGateway {
+        repo_id: String,
+        artefacts_by_file: HashMap<String, Vec<(String, i64, i64)>>,
+    }
+
+    impl RelationalGateway for FakeRelationalGateway {
+        fn initialise_schema(&self) -> Result<()> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn persist_ingestion(
+            &self,
+            _source: &KnowledgeSourceRow,
+            _item: &KnowledgeItemRow,
+        ) -> Result<()> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn insert_relation_assertion(
+            &self,
+            _relation: &KnowledgeRelationAssertionRow,
+        ) -> Result<()> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn find_item_by_id(
+            &self,
+            _repo_id: &str,
+            _knowledge_item_id: &str,
+        ) -> Result<Option<KnowledgeItemRow>> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn find_source_by_id(
+            &self,
+            _knowledge_source_id: &str,
+        ) -> Result<Option<KnowledgeSourceRow>> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn list_items_for_repo(
+            &self,
+            _repo_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<KnowledgeItemRow>> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn resolve_checkpoint_id(&self, _repo_id: &str, _checkpoint_ref: &str) -> Result<String> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn artefact_exists(&self, _repo_id: &str, _artefact_id: &str) -> Result<bool> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
+            Ok(self.repo_id.clone())
+        }
+
+        fn load_production_artefacts(
+            &self,
+            _commit_sha: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            unreachable!("unused in coverage tests")
+        }
+
+        fn load_artefacts_for_file_lines(
+            &self,
+            _commit_sha: &str,
+            file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            Ok(self
+                .artefacts_by_file
+                .get(file_path)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
+
+    #[test]
+    fn parse_lcov_report_collects_hits_branches_and_parse_diagnostics() {
+        let temp = tempfile::NamedTempFile::new().expect("temp lcov");
+        std::fs::write(
+            temp.path(),
+            "\
+SF:C:\\repo\\src\\lib.rs
+DA:10,3
+DA:abc,2
+DA:11,0
+BRDA:10,0,1,2
+BRDA:bad
+end_of_record
+",
+        )
+        .expect("write lcov");
+
+        let (files, diagnostics) =
+            parse_lcov_report(temp.path(), "capture:test", "repo:test", "commit-sha-123")
+                .expect("parse lcov");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source_file, "C:/repo/src/lib.rs");
+        assert_eq!(files[0].line_hits.get(&10), Some(&3));
+        assert_eq!(files[0].line_hits.get(&11), Some(&0));
+        assert_eq!(files[0].branches.len(), 1);
+        assert_eq!(files[0].branches[0].line, 10);
+        assert_eq!(files[0].branches[0].branch_id, 1);
+        assert_eq!(files[0].branches[0].hit_count, 2);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].message.contains("unparseable DA values"));
+        assert!(diagnostics[1].message.contains("malformed BRDA line"));
+    }
+
+    #[test]
+    fn execute_persists_lcov_capture_hits_and_unmapped_diagnostics() {
+        let mut store = FakeCoverageStore {
+            classifications: 7,
+            ..Default::default()
+        };
+        let relational = FakeRelationalGateway {
+            repo_id: "repo:test".to_string(),
+            artefacts_by_file: HashMap::from([(
+                "src/lib.rs".to_string(),
+                vec![
+                    ("prod:service".to_string(), 10, 11),
+                    ("prod:branch".to_string(), 11, 11),
+                ],
+            )]),
+        };
+        let temp = tempfile::NamedTempFile::new().expect("temp lcov");
+        std::fs::write(
+            temp.path(),
+            "\
+SF:src/lib.rs
+DA:10,3
+DA:11,0
+BRDA:11,0,1,2
+end_of_record
+SF:src/missing.rs
+DA:5,1
+end_of_record
+",
+        )
+        .expect("write lcov");
+
+        let summary = execute(
+            &mut store,
+            &relational,
+            temp.path(),
+            "commit-sha-123",
+            ScopeKind::TestScenario,
+            "cargo-llvm-cov",
+            Some("test-symbol:login"),
+            CoverageFormat::Lcov,
+        )
+        .expect("execute lcov ingest");
+
+        assert_eq!(summary.hits, 5);
+        assert_eq!(summary.classifications, 7);
+        assert_eq!(summary.diagnostics, 1);
+        assert_eq!(store.captures.len(), 1);
+        let capture = &store.captures[0];
+        assert_eq!(
+            capture.capture_id,
+            "capture:commit-sha-123:test_scenario:test-symbol:login"
+        );
+        assert_eq!(capture.repo_id, "repo:test");
+        assert_eq!(capture.tool, "cargo-llvm-cov");
+        assert_eq!(capture.format, CoverageFormat::Lcov);
+        assert_eq!(capture.scope_kind, ScopeKind::TestScenario);
+        assert_eq!(
+            capture.subject_test_symbol_id.as_deref(),
+            Some("test-symbol:login")
+        );
+        assert!(capture.line_truth);
+        assert!(!capture.branch_truth);
+        assert_eq!(capture.status, "complete");
+        assert!(!capture.captured_at.is_empty());
+
+        assert_eq!(store.hits.len(), 5);
+        assert!(store.hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:service"
+                && hit.file_path == "src/lib.rs"
+                && hit.line == 10
+                && hit.branch_id == -1
+                && hit.covered
+                && hit.hit_count == 3
+        }));
+        assert!(store.hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:service"
+                && hit.line == 11
+                && hit.branch_id == 1
+                && hit.covered
+                && hit.hit_count == 2
+        }));
+        assert!(store.hits.iter().any(|hit| {
+            hit.production_symbol_id == "prod:branch"
+                && hit.line == 11
+                && hit.branch_id == -1
+                && !hit.covered
+                && hit.hit_count == 0
+        }));
+        assert_eq!(store.diagnostics.len(), 1);
+        assert_eq!(store.diagnostics[0].code, "unmapped_file");
+        assert_eq!(store.diagnostics[0].path.as_deref(), Some("src/missing.rs"));
+        assert_eq!(store.rebuild_commits, vec!["commit-sha-123".to_string()]);
+
+        let summary_text = format_summary("commit-sha-123", &summary);
+        assert!(summary_text.contains("ingested lcov coverage for commit commit-sha-123"));
+        assert!(summary_text.contains("hits: 5"));
+        assert!(summary_text.contains("diagnostics: 1"));
+    }
 }

@@ -70,6 +70,10 @@ impl StageHandler for TestsStageHandler {
                 if artefact_id.is_empty() {
                     continue;
                 }
+                let production_symbol_id = row_obj
+                    .get("symbol_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(artefact_id);
 
                 let artefact = json!({
                     "artefact_id": artefact_id,
@@ -82,7 +86,7 @@ impl StageHandler for TestsStageHandler {
 
                 let covering = g.load_stage_covering_tests(
                     &repo_id,
-                    artefact_id,
+                    production_symbol_id,
                     min_confidence,
                     linkage_source,
                     limit,

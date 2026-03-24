@@ -16,21 +16,15 @@ pub(super) async fn load_test_harness_commit_counts(
     }
 
     Ok(TestHarnessCommitCounts {
-        test_suites: cnt(
+        test_artefacts: cnt(
             client,
-            "SELECT COUNT(*)::bigint FROM test_suites WHERE commit_sha = $1",
+            "SELECT COUNT(*)::bigint FROM test_artefacts_current WHERE commit_sha = $1",
             commit_sha,
         )
         .await?,
-        test_scenarios: cnt(
+        test_artefact_edges: cnt(
             client,
-            "SELECT COUNT(*)::bigint FROM test_scenarios WHERE commit_sha = $1",
-            commit_sha,
-        )
-        .await?,
-        test_links: cnt(
-            client,
-            "SELECT COUNT(*)::bigint FROM test_links WHERE commit_sha = $1",
+            "SELECT COUNT(*)::bigint FROM test_artefact_edges_current WHERE commit_sha = $1",
             commit_sha,
         )
         .await?,
