@@ -222,6 +222,17 @@ ON workspace_revisions (repo_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
 ON workspace_revisions (repo_id, tree_hash);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    repo_id TEXT NOT NULL,
+    state_key TEXT NOT NULL,
+    state_value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, state_key)
+);
+
+CREATE INDEX IF NOT EXISTS sync_state_repo_idx
+ON sync_state (repo_id);
 "#
 }
 

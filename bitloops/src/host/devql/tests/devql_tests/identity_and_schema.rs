@@ -147,6 +147,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
     assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
@@ -156,6 +157,13 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CONSTRAINT artefact_edges_current_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_current_line_range_chk"));
     assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));
+}
+
+#[test]
+fn sqlite_schema_sql_includes_sync_state_table() {
+    let sql = sqlite_schema_sql();
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, state_key)"));
 }
 
 #[test]

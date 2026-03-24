@@ -277,6 +277,8 @@ fn test_unresolved_call_edge(
     }
 }
 
+#[path = "devql_tests/baseline.rs"]
+mod baseline;
 #[path = "devql_tests/config_and_status.rs"]
 mod config_and_status;
 #[path = "devql_tests/core_and_ingestion.rs"]

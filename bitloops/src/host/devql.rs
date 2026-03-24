@@ -22,8 +22,8 @@ use crate::config::{
     resolve_store_semantic_config,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed,
-    read_session_content, run_git,
+    CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
+    read_committed, read_session_content, run_git,
 };
 use crate::host::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -264,24 +264,46 @@ fn require_postgres_dsn<'a>(
         })
 }
 
-pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
+async fn initialise_devql_schema_for_command(
+    cfg: &DevqlConfig,
+    command: &str,
+) -> Result<RelationalStorage> {
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
-        .context("resolving DevQL backend config for `devql init`")?;
-    let relational = RelationalStorage::connect(cfg, &backends.relational, "devql init").await?;
+        .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
+    let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
     if backends.events.has_clickhouse() {
         init_clickhouse_schema(cfg).await?;
     } else {
         init_duckdb_schema(&backends.events).await?;
     }
-
     init_relational_schema(cfg, &relational).await?;
+    Ok(relational)
+}
+
+pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
+    let _relational = initialise_devql_schema_for_command(cfg, "devql init").await?;
 
     println!(
         "DevQL schema ready for repo {} ({})",
         cfg.repo.identity, cfg.repo.repo_id
     );
     Ok(())
+}
+
+pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
+    let relational = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
+    println!(
+        "DevQL schema ready for repo {} ({})",
+        cfg.repo.identity, cfg.repo.repo_id
+    );
+
+    if skip_baseline {
+        println!("Baseline ingestion skipped (`--skip-baseline`).");
+        return Ok(());
+    }
+
+    run_baseline_ingestion(cfg, &relational).await
 }
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
@@ -645,6 +667,9 @@ mod ingestion_artefact_identity;
 // ingestion: checkpoint / commit / event persistence
 #[path = "devql/ingestion/checkpoint.rs"]
 mod ingestion_checkpoint;
+// ingestion: baseline indexing for full tracked codebase at HEAD
+#[path = "devql/ingestion/baseline.rs"]
+mod ingestion_baseline;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -715,6 +740,7 @@ use self::ingestion_artefact_persistence_sql::*;
 pub(crate) use self::ingestion_artefact_persistence_sql::{sql_json_value, sql_now};
 use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
+use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
 use self::ingestion_edges_export::*;
 use self::ingestion_edges_inherits::*;
