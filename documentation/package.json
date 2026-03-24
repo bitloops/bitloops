@@ -9,14 +9,14 @@
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
-    "serve": "docusaurus serve",
+    "serve": "docusaurus serve --port 8080",
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@docusaurus/core": "3.9.2",
-    "@docusaurus/preset-classic": "3.9.2",
+    "@docusaurus/core": "^3.9.2",
+    "@docusaurus/preset-classic": "^3.9.2",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
     "prism-react-renderer": "^2.3.0",
@@ -43,6 +43,9 @@
   },
   "engines": {
     "node": ">=20.0"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.3"
   },
   "packageManager": "pnpm@10.32.1+sha512.a706938f0e89ac1456b6563eab4edf1d1faf3368d1191fc5c59790e96dc918e4456ab2e67d613de1043d2e8c81f87303e6b40d4ffeca9df15ef1ad567348f2be"
 }
