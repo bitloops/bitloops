@@ -21,20 +21,30 @@ The executable contract is host-owned and pack-agnostic.
 flowchart TD
     PACK["CapabilityPack"]
     REG["CapabilityRegistrar"]
-    STAGE["StageHandler"]
-    INGEST["IngesterHandler"]
+    CORESTAGE["StageHandler"]
+    COREINGEST["IngesterHandler"]
+    KSTAGE["KnowledgeStageHandler"]
+    KINGEST["KnowledgeIngesterHandler"]
     EXECCTX["CapabilityExecutionContext"]
     INGESTCTX["CapabilityIngestContext"]
+    KEXECCTX["KnowledgeExecutionContext"]
+    KINGESTCTX["KnowledgeIngestContext"]
     MIG["CapabilityMigration"]
+    KMIG["KnowledgeMigrationContext"]
     HEALTH["CapabilityHealthCheck"]
 
     PACK --> REG
-    REG --> STAGE
-    REG --> INGEST
+    REG --> CORESTAGE
+    REG --> COREINGEST
+    REG --> KSTAGE
+    REG --> KINGEST
     PACK --> MIG
     PACK --> HEALTH
-    STAGE --> EXECCTX
-    INGEST --> INGESTCTX
+    CORESTAGE --> EXECCTX
+    COREINGEST --> INGESTCTX
+    KSTAGE --> KEXECCTX
+    KINGEST --> KINGESTCTX
+    MIG --> KMIG
 ```
 
 ## Registration lifecycle
@@ -42,32 +52,33 @@ flowchart TD
 1. `DevqlCapabilityHost::builtin(...)` builds the host.
 2. `capability_packs::builtin_packs(...)` returns the built-in packs.
 3. Each pack exposes a `CapabilityDescriptor`.
-4. Each pack registers its stages, ingesters, schema modules, and query examples through `CapabilityRegistrar`.
-5. The host stores migrations and health checks alongside the registration.
-6. At runtime the host invokes stages or ingesters by `(capability_id, contribution_id)`.
+4. Each pack registers contributions through `CapabilityRegistrar`.
+5. Core/non-knowledge contributions use `register_stage` / `register_ingester`; knowledge contributions use `register_knowledge_stage` / `register_knowledge_ingester`.
+6. The host stores migrations and health checks alongside the registration.
+7. At runtime the host invokes stages or ingesters by `(capability_id, contribution_id)` with core or knowledge typed dispatch.
 
 ## Common pack structure
 
 Most packs follow this shape:
 
-| File or module | Role |
-| --- | --- |
-| `descriptor.rs` | Static pack descriptor and dependencies. |
-| `pack.rs` | `CapabilityPack` implementation. |
-| `register.rs` | Wiring of stages, ingesters, schema modules, and examples. |
-| `stages/` | Query-stage handlers. |
-| `ingesters/` | Ingestion handlers. |
-| `migrations/` | Pack-owned schema changes. |
-| `health/` | Readiness and configuration checks. |
-| `storage/` or service modules | Pack-internal storage and service code. |
+| File or module                | Role                                                       |
+| ----------------------------- | ---------------------------------------------------------- |
+| `descriptor.rs`               | Static pack descriptor and dependencies.                   |
+| `pack.rs`                     | `CapabilityPack` implementation.                           |
+| `register.rs`                 | Wiring of stages, ingesters, schema modules, and examples. |
+| `stages/`                     | Query-stage handlers.                                      |
+| `ingesters/`                  | Ingestion handlers.                                        |
+| `migrations/`                 | Pack-owned schema changes.                                 |
+| `health/`                     | Readiness and configuration checks.                        |
+| `storage/` or service modules | Pack-internal storage and service code.                    |
 
 ## Built-in pack comparison
 
-| Pack | Registered stages | Registered ingesters | Migrations | Health checks | Main storage surface |
-| --- | --- | --- | --- | --- | --- |
-| `knowledge` | 1 | 4 | 1 | 3 | Relational, documents, blobs, connectors |
-| `test_harness` | 5 | 4 | 1 | 3 | Optional test-harness repository plus DevQL relational |
-| `semantic_clones` | 0 | 1 | 1 | 1 | DevQL relational only |
+| Pack              | Registered stages | Registered ingesters | Migrations | Health checks | Main storage surface                                                              |
+| ----------------- | ----------------- | -------------------- | ---------- | ------------- | --------------------------------------------------------------------------------- |
+| `knowledge`       | 1                 | 4                    | 1          | 3             | Host relational + knowledge relational/document repositories + blobs + connectors |
+| `test_harness`    | 5                 | 4                    | 1          | 3             | Optional test-harness repository plus DevQL relational                            |
+| `semantic_clones` | 0                 | 1                    | 1          | 1             | DevQL relational only                                                             |
 
 The `semantic_clones` pack is worth calling out: it contributes an ingester and schema module, but it does not register a normal DevQL stage handler today.
 
@@ -108,8 +119,9 @@ The pack is service-driven:
 
 It relies on the host context for:
 
-- relational writes and reads
-- document-store writes and reads
+- `knowledge_relational()` writes and reads
+- `knowledge_documents()` writes and reads
+- `host_relational()` for checkpoint and artefact resolution
 - blob payload persistence
 - external connector selection
 - provenance generation
@@ -119,14 +131,14 @@ It relies on the host context for:
 
 Knowledge is the cleanest pack boundary in the current codebase:
 
-- relational access lives behind the host-provided relational gateway
-- document access lives behind the document gateway
+- host relational access stays pack-agnostic (`RelationalGateway`)
+- knowledge relational/document access lives behind `KnowledgeRelationalRepository` and `KnowledgeDocumentRepository`
 - payload blobs live behind the blob gateway
 - external fetches go through `adapters/connectors`
 
 ### Migrations and health
 
-Its initial migration initialises both relational and document schema.
+Its initial migration runs through `MigrationRunner::Knowledge` and initialises both knowledge relational and knowledge document schema via `KnowledgeMigrationContext`.
 
 Its health checks cover:
 

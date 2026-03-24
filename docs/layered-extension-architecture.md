@@ -72,13 +72,13 @@ flowchart TD
 
 ## Layer summary
 
-| Layer | Main modules | Responsibility |
-| --- | --- | --- |
-| Presentation | `bitloops/src/cli`, `bitloops/src/api` | User-facing entrypoints for DevQL, dashboard, hooks, and test tooling. |
-| Host substrate | `bitloops/src/host` | Orchestration, policy, lifecycle, checkpointing, and registry/reporting. |
-| Executable extensions | `bitloops/src/capability_packs` | Repository-scoped capabilities executed by DevQL through stages and ingesters. |
-| Runtime adapters | `bitloops/src/adapters` | Agent integrations, external knowledge connectors, and model-provider abstractions. |
-| Infrastructure and shared code | `bitloops/src/storage`, `config`, `git`, `telemetry`, `utils`, `models` | Storage, config resolution, Git access, logging, helpers, and shared types. |
+| Layer                          | Main modules                                                            | Responsibility                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Presentation                   | `bitloops/src/cli`, `bitloops/src/api`                                  | User-facing entrypoints for DevQL, dashboard, hooks, and test tooling.              |
+| Host substrate                 | `bitloops/src/host`                                                     | Orchestration, policy, lifecycle, checkpointing, and registry/reporting.            |
+| Executable extensions          | `bitloops/src/capability_packs`                                         | Repository-scoped capabilities executed by DevQL through stages and ingesters.      |
+| Runtime adapters               | `bitloops/src/adapters`                                                 | Agent integrations, external knowledge connectors, and model-provider abstractions. |
+| Infrastructure and shared code | `bitloops/src/storage`, `config`, `git`, `telemetry`, `utils`, `models` | Storage, config resolution, Git access, logging, helpers, and shared types.         |
 
 ## The real architectural boundaries
 
@@ -87,11 +87,12 @@ flowchart TD
 `bitloops/src/host/capability_host` defines the executable capability-pack contract:
 
 - `CapabilityPack`
-- `StageHandler`
-- `IngesterHandler`
-- `CapabilityExecutionContext`
-- `CapabilityIngestContext`
-- `CapabilityMigrationContext`
+- `CapabilityRegistrar` (core + knowledge registration surfaces)
+- `StageHandler` and `IngesterHandler` for core/non-knowledge packs
+- `KnowledgeStageHandler` and `KnowledgeIngesterHandler` for the Knowledge pack
+- `CapabilityExecutionContext`, `CapabilityIngestContext`, `CapabilityMigrationContext`
+- `KnowledgeExecutionContext`, `KnowledgeIngestContext`, `KnowledgeMigrationContext`
+- `MigrationRunner::Core` and `MigrationRunner::Knowledge`
 - `CapabilityHealthContext`
 
 The built-in packs registered on this path are:
@@ -171,8 +172,9 @@ sequenceDiagram
     CLI->>DevQL: bitloops devql ingest
     DevQL->>ExtHost: resolve language pack for file or language
     DevQL->>CapHost: ensure pack migrations and runtime policy
-    DevQL->>Pack: invoke ingester or use pack runtime helpers
-    Pack->>Store: write relational, document, blob, or connector-backed data
+    DevQL->>CapHost: dispatch core or knowledge ingester
+    CapHost->>Pack: invoke handler with typed context
+    Pack->>Store: write host relational, knowledge repositories, blobs, and connector-backed data
 ```
 
 ### DevQL query execution
@@ -187,7 +189,7 @@ sequenceDiagram
 
     CLI->>DevQL: bitloops devql query
     DevQL->>CapHost: resolve registered stage
-    CapHost->>Pack: execute stage
+    CapHost->>Pack: execute core or knowledge stage with typed context
     Pack->>Store: read capability-owned or DevQL relational data
     Pack-->>CapHost: StageResponse
     CapHost-->>DevQL: rendered result
