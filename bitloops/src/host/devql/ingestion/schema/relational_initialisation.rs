@@ -4,6 +4,11 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite_exec_path_allow_create(sqlite_path, sqlite_schema_sql())
         .await
         .context("creating SQLite relational DevQL tables")?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
+        .context("connecting SQLite pool for current-state schema migrations")?;
+    sqlite
+        .initialise_devql_schema()
+        .context("running SQLite current-state schema migrations")?;
     sqlite_exec_path_allow_create(sqlite_path, edge_model_cleanup_sqlite_sql())
         .await
         .context("normalising SQLite DevQL edge model values")?;

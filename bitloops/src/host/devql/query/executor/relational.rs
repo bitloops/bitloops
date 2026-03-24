@@ -52,6 +52,10 @@ pub(crate) async fn build_relational_artefacts_query(
     };
 
     let mut where_clauses = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
+    if !use_historical_tables {
+        let branch = active_branch_name(&cfg.repo_root);
+        where_clauses.push(format!("a.branch = '{}'", esc_pg(&branch)));
+    }
 
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         where_clauses.push(canonical_kind_filter_sql("a.canonical_kind", kind));
@@ -157,7 +161,9 @@ pub(crate) async fn build_relational_clones_query(
     relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<String> {
+    let branch = active_branch_name(&cfg.repo_root);
     let mut source_filters = vec![format!("src.repo_id = '{}'", esc_pg(repo_id))];
+    source_filters.push(format!("src.branch = '{}'", esc_pg(&branch)));
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
         source_filters.push(canonical_kind_filter_sql("src.canonical_kind", kind));
     }
@@ -215,12 +221,14 @@ tgt.artefact_id AS target_artefact_id, tgt.path AS target_path, tgt.symbol_fqn A
 tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_language_kind, tgt.language AS target_language, \
 ss.summary AS target_summary \
 FROM symbol_clone_edges ce \
-JOIN artefacts_current src ON src.repo_id = ce.repo_id AND src.symbol_id = ce.source_symbol_id \
-JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.symbol_id = ce.target_symbol_id \
+JOIN artefacts_current src ON src.repo_id = ce.repo_id AND src.branch = '{}' AND src.symbol_id = ce.source_symbol_id \
+JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.branch = '{}' AND tgt.symbol_id = ce.target_symbol_id \
 LEFT JOIN symbol_semantics ss ON ss.artefact_id = tgt.artefact_id \
 WHERE {} AND {} \
 ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn \
 LIMIT {}",
+        esc_pg(&branch),
+        esc_pg(&branch),
         clone_filters.join(" AND "),
         source_filters.join(" AND "),
         parsed.limit.max(1),

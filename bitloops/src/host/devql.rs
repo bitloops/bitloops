@@ -503,11 +503,13 @@ async fn promote_temporary_current_rows_for_head_commit(
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .unwrap_or_default();
     let updated_at_sql = revision_timestamp_sql(relational, head_unix);
+    let branch = active_branch_name(&cfg.repo_root);
 
     let sql = format!(
         "SELECT path, blob_sha FROM artefacts_current \
-	WHERE repo_id = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
+	WHERE repo_id = '{}' AND branch = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(&branch),
     );
     let rows = relational.query_rows(&sql).await?;
     let mut promoted = 0usize;
@@ -538,12 +540,13 @@ async fn promote_temporary_current_rows_for_head_commit(
         let sql_artefacts = format!(
             "UPDATE artefacts_current \
 	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
+	WHERE repo_id = '{}' AND branch = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
             updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
+            esc_pg(&branch),
             esc_pg(path),
         );
         relational.exec(&sql_artefacts).await?;
@@ -551,12 +554,13 @@ async fn promote_temporary_current_rows_for_head_commit(
         let sql_edges = format!(
             "UPDATE artefact_edges_current \
 	SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-	WHERE repo_id = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
+	WHERE repo_id = '{}' AND branch = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
             esc_pg(&head_sha),
             esc_pg(&head_sha),
             esc_pg(&head_blob_sha),
             updated_at_sql,
             esc_pg(&cfg.repo.repo_id),
+            esc_pg(&branch),
             esc_pg(path),
         );
         relational.exec(&sql_edges).await?;

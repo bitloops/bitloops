@@ -146,7 +146,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("temp_checkpoint_id BIGINT"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
-    assert!(sql.contains("PRIMARY KEY (repo_id, symbol_id)"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
@@ -170,10 +170,11 @@ fn artefact_edges_hardening_sql_includes_constraints_and_indexes() {
 #[test]
 fn current_state_hardening_sql_includes_current_state_constraints_and_indexes() {
     let sql = current_state_hardening_sql();
+    assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS branch TEXT"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS commit_sha TEXT"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS modifiers JSONB"));
     assert!(sql.contains("ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS docstring TEXT"));
-    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_symbol_fqn_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx"));
     assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_target_chk"));
     assert!(sql.contains("ADD CONSTRAINT artefact_edges_current_line_range_chk"));
     assert!(sql.contains("CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq"));

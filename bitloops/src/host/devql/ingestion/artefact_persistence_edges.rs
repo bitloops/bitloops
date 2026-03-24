@@ -263,13 +263,15 @@ pub(super) fn edge_payload_equal(lhs: &PersistedEdgeRecord, rhs: &PersistedEdgeR
 pub(super) async fn load_current_artefacts_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
 ) -> Result<HashMap<String, CurrentArtefactStateRecord>> {
     let sql = format!(
         "SELECT symbol_id, artefact_id, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, \
 start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
-FROM artefacts_current WHERE repo_id = '{}' AND path = '{}'",
+FROM artefacts_current WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(path),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -289,12 +291,14 @@ FROM artefacts_current WHERE repo_id = '{}' AND path = '{}'",
 pub(super) async fn load_current_outgoing_edges_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
 ) -> Result<HashMap<String, CurrentEdgeStateRecord>> {
     let sql = format!(
         "SELECT edge_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata \
-FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
+FROM artefact_edges_current WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(path),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -314,6 +318,7 @@ FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
 pub(super) async fn delete_current_artefacts_for_path_symbols(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
     symbol_ids: &HashSet<String>,
 ) -> Result<()> {
@@ -323,8 +328,9 @@ pub(super) async fn delete_current_artefacts_for_path_symbols(
 
     let symbol_ids = symbol_ids.iter().cloned().collect::<Vec<_>>();
     let sql = format!(
-        "DELETE FROM artefacts_current WHERE repo_id = '{}' AND path = '{}' AND symbol_id IN ({})",
+        "DELETE FROM artefacts_current WHERE repo_id = '{}' AND branch = '{}' AND path = '{}' AND symbol_id IN ({})",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(path),
         sql_string_list_pg(symbol_ids.as_slice()),
     );
@@ -334,11 +340,13 @@ pub(super) async fn delete_current_artefacts_for_path_symbols(
 pub(super) async fn delete_current_outgoing_edges_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
 ) -> Result<()> {
     let sql = format!(
-        "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND path = '{}'",
+        "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(path),
     );
     relational.exec(&sql).await
@@ -347,6 +355,7 @@ pub(super) async fn delete_current_outgoing_edges_for_path(
 pub(super) async fn delete_current_outgoing_edges_for_ids(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     edge_ids: &HashSet<String>,
 ) -> Result<()> {
     if edge_ids.is_empty() {
@@ -355,8 +364,9 @@ pub(super) async fn delete_current_outgoing_edges_for_ids(
 
     let edge_ids = edge_ids.iter().cloned().collect::<Vec<_>>();
     let sql = format!(
-        "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND edge_id IN ({})",
+        "DELETE FROM artefact_edges_current WHERE repo_id = '{}' AND branch = '{}' AND edge_id IN ({})",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         sql_string_list_pg(edge_ids.as_slice()),
     );
     relational.exec(&sql).await
@@ -365,6 +375,7 @@ pub(super) async fn delete_current_outgoing_edges_for_ids(
 pub(super) async fn load_current_external_target_lookup(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
     refs: &HashSet<String>,
 ) -> Result<HashMap<String, (String, String)>> {
@@ -375,8 +386,9 @@ pub(super) async fn load_current_external_target_lookup(
     let ref_values = refs.iter().cloned().collect::<Vec<_>>();
     let sql = format!(
         "SELECT symbol_fqn, symbol_id, artefact_id FROM artefacts_current \
-WHERE repo_id = '{}' AND path <> '{}' AND symbol_fqn IN ({})",
+WHERE repo_id = '{}' AND branch = '{}' AND path <> '{}' AND symbol_fqn IN ({})",
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(path),
         sql_string_list_pg(ref_values.as_slice()),
     );
@@ -478,9 +490,10 @@ pub(super) async fn upsert_current_edge(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
+    branch: &str,
     record: &PersistedEdgeRecord,
 ) -> Result<()> {
-    let sql = build_upsert_current_edge_sql(cfg, relational, rev, record, "");
+    let sql = build_upsert_current_edge_sql(cfg, relational, rev, record, branch);
     relational.exec(&sql).await
 }
 
@@ -489,7 +502,7 @@ pub(super) fn build_upsert_current_edge_sql(
     relational: &RelationalStorage,
     rev: &FileRevision<'_>,
     record: &PersistedEdgeRecord,
-    _branch: &str,
+    branch: &str,
 ) -> String {
     let _temporal_scope = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, rev.blob_sha)
         .with_source_anchor(rev.commit_sha, rev.path)
@@ -514,11 +527,12 @@ pub(super) fn build_upsert_current_edge_sql(
     let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
 
     format!(
-        "INSERT INTO artefact_edges_current (edge_id, repo_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {}) \
-ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = {}",
+        "INSERT INTO artefact_edges_current (edge_id, repo_id, branch, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata, updated_at) \
+VALUES ('{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}', {}, {}, {}, {}) \
+ON CONFLICT (repo_id, branch, edge_id) DO UPDATE SET commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, from_symbol_id = EXCLUDED.from_symbol_id, from_artefact_id = EXCLUDED.from_artefact_id, to_symbol_id = EXCLUDED.to_symbol_id, to_artefact_id = EXCLUDED.to_artefact_id, to_symbol_ref = EXCLUDED.to_symbol_ref, edge_kind = EXCLUDED.edge_kind, language = EXCLUDED.language, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, metadata = EXCLUDED.metadata, updated_at = {}",
         esc_pg(&record.edge_id),
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(rev.commit_sha),
         esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
@@ -543,6 +557,7 @@ ON CONFLICT (edge_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, commit_sha = EXC
 pub(super) async fn repair_inbound_current_edges(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     refreshed_symbol_ids: &HashSet<String>,
     deleted_symbol_ids: &HashSet<String>,
 ) -> Result<()> {
@@ -555,11 +570,13 @@ SET to_artefact_id = (
     SELECT a.artefact_id
     FROM artefacts_current a
     WHERE a.repo_id = artefact_edges_current.repo_id
+      AND a.branch = artefact_edges_current.branch
       AND a.symbol_id = artefact_edges_current.to_symbol_id
 ), updated_at = {} \
-WHERE repo_id = '{}' AND to_symbol_id IN ({})",
+WHERE repo_id = '{}' AND branch = '{}' AND to_symbol_id IN ({})",
             now_sql,
             esc_pg(&cfg.repo.repo_id),
+            esc_pg(branch),
             sql_string_list_pg(refreshed_symbol_ids.as_slice()),
         );
         relational.exec(&sql).await?;
@@ -570,9 +587,10 @@ WHERE repo_id = '{}' AND to_symbol_id IN ({})",
         let sql = format!(
             "UPDATE artefact_edges_current \
 SET to_symbol_id = NULL, to_artefact_id = NULL, updated_at = {} \
-WHERE repo_id = '{}' AND to_symbol_id IN ({})",
+WHERE repo_id = '{}' AND branch = '{}' AND to_symbol_id IN ({})",
             now_sql,
             esc_pg(&cfg.repo.repo_id),
+            esc_pg(branch),
             sql_string_list_pg(deleted_symbol_ids.as_slice()),
         );
         relational.exec(&sql).await?;

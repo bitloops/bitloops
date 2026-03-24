@@ -284,13 +284,13 @@ pub(super) fn upsert_current_production_artefact(
     conn.execute(
         r#"
 INSERT INTO artefacts_current (
-  repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
+  repo_id, branch, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
   language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
   start_byte, end_byte, signature, modifiers, docstring, content_hash
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+  ?1, 'main', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
 )
-ON CONFLICT(repo_id, symbol_id) DO UPDATE SET
+ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
   artefact_id = excluded.artefact_id,
   commit_sha = excluded.commit_sha,
   blob_sha = excluded.blob_sha,
@@ -382,11 +382,11 @@ pub(super) fn upsert_current_production_edge(
     conn.execute(
         r#"
 INSERT INTO artefact_edges_current (
-  edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+  edge_id, repo_id, branch, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
   to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
   end_line, metadata
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-ON CONFLICT(edge_id) DO UPDATE SET
+) VALUES (?1, ?2, 'main', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+ON CONFLICT(repo_id, branch, edge_id) DO UPDATE SET
   repo_id = excluded.repo_id,
   commit_sha = excluded.commit_sha,
   blob_sha = excluded.blob_sha,

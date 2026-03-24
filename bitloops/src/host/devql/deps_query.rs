@@ -45,8 +45,12 @@ pub(super) fn build_relational_deps_query(
     } else {
         "artefact_edges_current"
     };
+    let current_branch = (!use_historical_tables).then(|| active_branch_name(&cfg.repo_root));
 
     let mut edge_filters = vec![format!("e.repo_id = '{}'", esc_pg(repo_id))];
+    if let Some(branch) = current_branch.as_deref() {
+        edge_filters.push(format!("e.branch = '{}'", esc_pg(branch)));
+    }
     if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
         edge_filters.push("e.revision_kind = 'temporary'".to_string());
         edge_filters.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
@@ -69,6 +73,21 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
                 .to_string()
         }
     };
+    let edge_to_target_join_scope = if use_historical_tables {
+        String::new()
+    } else {
+        " AND at.repo_id = e.repo_id AND at.branch = e.branch".to_string()
+    };
+    let edge_to_from_join_scope = if use_historical_tables {
+        String::new()
+    } else {
+        " AND af.repo_id = e.repo_id AND af.branch = e.branch".to_string()
+    };
+    let edge_to_source_alias_scope = if use_historical_tables {
+        String::new()
+    } else {
+        " AND a.repo_id = e.repo_id AND a.branch = e.branch".to_string()
+    };
 
     let sql = if parsed.deps.direction == DepsDirection::In {
         let target_filters = build_deps_source_filters(
@@ -82,14 +101,16 @@ CASE WHEN e.to_symbol_ref IS NULL THEN 1 ELSE 0 END, e.to_symbol_ref"
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
 FROM {} e \
-JOIN {} at ON at.artefact_id = e.to_artefact_id \
-JOIN {} af ON af.artefact_id = e.from_artefact_id \
+JOIN {} at ON at.artefact_id = e.to_artefact_id{} \
+JOIN {} af ON af.artefact_id = e.from_artefact_id{} \
 WHERE {} AND {} \
 ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
+            edge_to_target_join_scope,
             artefacts_table,
+            edge_to_from_join_scope,
             edge_filters.join(" AND "),
             target_filters.join(" AND "),
             order_clause,
@@ -106,30 +127,34 @@ LIMIT {}",
         format!(
             "WITH out_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
-FROM {} e JOIN {} a ON a.artefact_id = e.from_artefact_id \
+FROM {} e JOIN {} a ON a.artefact_id = e.from_artefact_id{} \
 WHERE {} AND {} \
 ), in_edges AS ( \
 SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata \
-FROM {} e JOIN {} a ON a.artefact_id = e.to_artefact_id \
+FROM {} e JOIN {} a ON a.artefact_id = e.to_artefact_id{} \
 WHERE {} AND {} \
 ) \
 SELECT DISTINCT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
 FROM (SELECT * FROM out_edges UNION ALL SELECT * FROM in_edges) e \
-JOIN {} af ON af.artefact_id = e.from_artefact_id \
-LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
+JOIN {} af ON af.artefact_id = e.from_artefact_id{} \
+LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id{} \
 ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
+            edge_to_source_alias_scope,
             edge_filters.join(" AND "),
             source_filters.join(" AND "),
             edges_table,
             artefacts_table,
+            edge_to_source_alias_scope,
             edge_filters.join(" AND "),
             source_filters.join(" AND "),
             artefacts_table,
+            edge_to_from_join_scope,
             artefacts_table,
+            edge_to_target_join_scope,
             order_clause,
             parsed.limit.max(1)
         )
@@ -145,14 +170,16 @@ LIMIT {}",
             "SELECT e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
 af.path AS from_path, af.symbol_fqn AS from_symbol_fqn, at.path AS to_path, at.symbol_fqn AS to_symbol_fqn \
 FROM {} e \
-JOIN {} af ON af.artefact_id = e.from_artefact_id \
-LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id \
+JOIN {} af ON af.artefact_id = e.from_artefact_id{} \
+LEFT JOIN {} at ON at.artefact_id = e.to_artefact_id{} \
 WHERE {} AND {} \
 ORDER BY {} \
 LIMIT {}",
             edges_table,
             artefacts_table,
+            edge_to_from_join_scope,
             artefacts_table,
+            edge_to_target_join_scope,
             edge_filters.join(" AND "),
             source_filters.join(" AND "),
             order_clause,
@@ -171,6 +198,10 @@ pub(super) fn build_deps_source_filters(
     historical_commit_selector: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut source_filters = vec![format!("{alias}.repo_id = '{}'", esc_pg(repo_id))];
+    if historical_commit_selector.is_none() {
+        let branch = active_branch_name(&cfg.repo_root);
+        source_filters.push(format!("{alias}.branch = '{}'", esc_pg(&branch)));
+    }
     if let Some(AsOfSelector::SaveRevision(revision_id)) = parsed.as_of.as_ref() {
         source_filters.push(format!("{alias}.revision_kind = 'temporary'"));
         source_filters.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));

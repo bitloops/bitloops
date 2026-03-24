@@ -23,6 +23,21 @@ pub(super) fn default_branch_name(repo_root: &Path) -> String {
         .unwrap_or_else(|_| "main".to_string())
 }
 
+pub(super) fn active_branch_name(repo_root: &Path) -> String {
+    let branch = run_git(repo_root, &["branch", "--show-current"])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    branch.unwrap_or_else(|| {
+        let fallback = default_branch_name(repo_root);
+        if fallback.trim().is_empty() {
+            "main".to_string()
+        } else {
+            fallback
+        }
+    })
+}
+
 pub(super) fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {

@@ -108,6 +108,7 @@ ALTER TABLE current_file_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ D
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
@@ -126,9 +127,10 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     signature TEXT,
     content_hash TEXT,
     updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (repo_id, symbol_id)
+    PRIMARY KEY (repo_id, branch, symbol_id)
 );
 
+ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS branch TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS artefact_id TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS commit_sha TEXT;
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS blob_sha TEXT;
@@ -151,27 +153,55 @@ ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DE
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
+UPDATE artefacts_current ac
+SET branch = COALESCE(
+    NULLIF(ac.branch, ''),
+    NULLIF(
+        (
+            SELECT r.default_branch
+            FROM repositories r
+            WHERE r.repo_id = ac.repo_id
+            LIMIT 1
+        ),
+        ''
+    ),
+    'main'
+)
+WHERE ac.branch IS NULL OR ac.branch = '';
+ALTER TABLE artefacts_current ALTER COLUMN branch SET DEFAULT 'main';
+ALTER TABLE artefacts_current ALTER COLUMN branch SET NOT NULL;
 ALTER TABLE artefacts_current ALTER COLUMN canonical_kind DROP NOT NULL;
 UPDATE artefacts_current
 SET modifiers = '[]'::jsonb
 WHERE modifiers IS NULL;
 ALTER TABLE artefacts_current ALTER COLUMN modifiers SET NOT NULL;
+ALTER TABLE artefacts_current DROP CONSTRAINT IF EXISTS artefacts_current_pkey;
+ALTER TABLE artefacts_current ADD PRIMARY KEY (repo_id, branch, symbol_id);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
-ON artefacts_current (repo_id, path);
+DROP INDEX IF EXISTS artefacts_current_path_idx;
+DROP INDEX IF EXISTS artefacts_current_kind_idx;
+DROP INDEX IF EXISTS artefacts_current_symbol_fqn_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_path_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_kind_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_fqn_idx;
+DROP INDEX IF EXISTS artefacts_current_artefact_idx;
 
-CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx
-ON artefacts_current (repo_id, canonical_kind);
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx
+ON artefacts_current (repo_id, branch, path);
+
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx
+ON artefacts_current (repo_id, branch, canonical_kind);
 
 CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
-ON artefacts_current (repo_id, artefact_id);
+ON artefacts_current (repo_id, branch, artefact_id);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_symbol_fqn_idx
-ON artefacts_current (repo_id, symbol_fqn);
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx
+ON artefacts_current (repo_id, branch, symbol_fqn);
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
-    edge_id TEXT PRIMARY KEY,
+    edge_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     commit_sha TEXT NOT NULL,
     blob_sha TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -185,9 +215,11 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
     start_line INTEGER,
     end_line INTEGER,
     metadata JSONB DEFAULT '{}'::jsonb,
-    updated_at TIMESTAMPTZ DEFAULT now()
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (repo_id, branch, edge_id)
 );
 
+ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS branch TEXT;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS commit_sha TEXT;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS blob_sha TEXT;
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS path TEXT;
@@ -205,6 +237,25 @@ ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
+UPDATE artefact_edges_current ec
+SET branch = COALESCE(
+    NULLIF(ec.branch, ''),
+    NULLIF(
+        (
+            SELECT r.default_branch
+            FROM repositories r
+            WHERE r.repo_id = ec.repo_id
+            LIMIT 1
+        ),
+        ''
+    ),
+    'main'
+)
+WHERE ec.branch IS NULL OR ec.branch = '';
+ALTER TABLE artefact_edges_current ALTER COLUMN branch SET DEFAULT 'main';
+ALTER TABLE artefact_edges_current ALTER COLUMN branch SET NOT NULL;
+ALTER TABLE artefact_edges_current DROP CONSTRAINT IF EXISTS artefact_edges_current_pkey;
+ALTER TABLE artefact_edges_current ADD PRIMARY KEY (repo_id, branch, edge_id);
 
 DO $$
 BEGIN
@@ -235,25 +286,35 @@ BEGIN
     END IF;
 END $$;
 
+DROP INDEX IF EXISTS artefact_edges_current_path_idx;
+DROP INDEX IF EXISTS artefact_edges_current_from_idx;
+DROP INDEX IF EXISTS artefact_edges_current_to_idx;
+DROP INDEX IF EXISTS artefact_edges_current_branch_from_idx;
+DROP INDEX IF EXISTS artefact_edges_current_branch_to_idx;
+DROP INDEX IF EXISTS artefact_edges_current_kind_idx;
+DROP INDEX IF EXISTS artefact_edges_current_symbol_ref_idx;
+DROP INDEX IF EXISTS artefact_edges_current_natural_uq;
+
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
-ON artefact_edges_current (repo_id, path);
+ON artefact_edges_current (repo_id, branch, path);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx
-ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx
+ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_to_idx
-ON artefact_edges_current (repo_id, to_symbol_id, edge_kind);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx
+ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_idx
-ON artefact_edges_current (repo_id, edge_kind);
+ON artefact_edges_current (repo_id, branch, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_symbol_ref_idx
-ON artefact_edges_current (repo_id, to_symbol_ref)
+ON artefact_edges_current (repo_id, branch, to_symbol_ref)
 WHERE to_symbol_ref IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq
 ON artefact_edges_current (
     repo_id,
+    branch,
     from_symbol_id,
     edge_kind,
     COALESCE(to_symbol_id, ''),
