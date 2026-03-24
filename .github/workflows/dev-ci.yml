@@ -36,7 +36,7 @@ jobs:
     name: Rust file size
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Check Rust file size limits
@@ -46,7 +46,7 @@ jobs:
     name: Format
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -57,7 +57,7 @@ jobs:
     name: Clippy
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -73,7 +73,7 @@ jobs:
     continue-on-error: true
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -89,6 +89,7 @@ jobs:
           # Cap parallel rustc jobs to lower peak RAM while compiling/linking large deps (tune per runner).
           CARGO_BUILD_JOBS: 4
         run: |
+          cargo install cargo-llvm-cov --locked
           if command -v mold >/dev/null 2>&1; then
             mold -run bash scripts/coverage-baseline-check.sh check
           else
