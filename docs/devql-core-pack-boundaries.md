@@ -19,7 +19,7 @@ This document records the **target architecture** for keeping the DevQL **core**
 
 Prefer **operation-scoped or capability-scoped ports** over exposing raw “Relational” / “Events” buckets to every handler. Generic datasource kinds are acceptable **only** as **policy-bound implementations** (namespace checks, allowlisted tables), not as unconstrained SQL.
 
-**Direction:** neutral **`relational()`** / **`documents()`** on **`KnowledgeIngestContext`** / **`KnowledgeExecutionContext`** only; core **`Capability*Context`** traits omit those ports. **`devql_relational` / `devql_relational_scoped`** remain on ingest for pack-scoped DevQL relational access. Migrations still use a single **`CapabilityMigrationContext`** that includes knowledge stores until further split.
+**Direction (implemented):** knowledge-specific ports live on **`KnowledgeIngestContext`** / **`KnowledgeExecutionContext`** as **`knowledge_relational()`** + **`knowledge_documents()`** only; core **`Capability*Context`** traits stay pack-agnostic and expose host-only **`host_relational()`** where needed. **`devql_relational` / `devql_relational_scoped`** remain on ingest for pack-scoped DevQL relational access. Migrations are split: core uses **`CapabilityMigrationContext`**, knowledge uses **`KnowledgeMigrationContext`** via **`MigrationRunner::Core`** / **`MigrationRunner::Knowledge`**.
 
 ---
 

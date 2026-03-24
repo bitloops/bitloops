@@ -20,16 +20,22 @@ use crate::capability_packs::knowledge::{
     storage::{BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore},
     types::KnowledgePayloadData,
 };
+use crate::capability_packs::knowledge::storage::{
+    KnowledgeDocumentRepository, KnowledgeRelationalRepository,
+    SqliteKnowledgeRelationalRepository,
+};
 use crate::config::{
     AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, ProviderConfig,
     RelationalBackendConfig, StoreBackendConfig,
 };
 use crate::host::capability_host::CapabilityConfigView;
-use crate::host::capability_host::contexts::{CapabilityExecutionContext, CapabilityIngestContext};
+use crate::host::capability_host::contexts::{
+    CapabilityExecutionContext, CapabilityIngestContext, KnowledgeExecutionContext,
+    KnowledgeIngestContext,
+};
 use crate::host::capability_host::gateways::SqliteRelationalGateway;
 use crate::host::capability_host::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, DocumentStoreGateway, ProvenanceBuilder,
-    RelationalGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, ProvenanceBuilder, RelationalGateway,
 };
 use crate::host::devql::RepoIdentity;
 use crate::storage::SqliteConnectionPool;
@@ -158,6 +164,7 @@ pub(super) struct TestRuntimeContext {
     sqlite_path: PathBuf,
     duckdb_path: PathBuf,
     relational: SqliteRelationalGateway,
+    knowledge_relational: SqliteKnowledgeRelationalRepository,
     documents: DuckdbKnowledgeDocumentStore,
     blobs: BlobKnowledgePayloadStore,
     connectors: StubConnectorRegistry,
@@ -177,6 +184,10 @@ impl CapabilityExecutionContext for TestRuntimeContext {
 
     fn graph(&self) -> &dyn CanonicalGraphGateway {
         &self.graph
+    }
+
+    fn host_relational(&self) -> &dyn RelationalGateway {
+        &self.relational
     }
 }
 
@@ -212,12 +223,28 @@ impl CapabilityIngestContext for TestRuntimeContext {
         &self.provenance
     }
 
-    fn relational(&self) -> Option<&dyn RelationalGateway> {
-        Some(&self.relational)
+    fn host_relational(&self) -> &dyn RelationalGateway {
+        &self.relational
+    }
+}
+
+impl KnowledgeExecutionContext for TestRuntimeContext {
+    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+        &self.knowledge_relational
     }
 
-    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-        Some(&self.documents)
+    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+        &self.documents
+    }
+}
+
+impl KnowledgeIngestContext for TestRuntimeContext {
+    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+        &self.knowledge_relational
+    }
+
+    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+        &self.documents
     }
 }
 
@@ -271,9 +298,10 @@ impl KnowledgeBddHarness {
         let sqlite_path = backends.relational.resolve_sqlite_db_path()?;
         let duckdb_path = backends.events.duckdb_path_or_default();
 
-        let relational =
-            SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path.clone())?);
-        relational.initialise_schema()?;
+        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path.clone())?;
+        let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
+        let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
+        knowledge_relational.initialise_schema()?;
 
         let documents = DuckdbKnowledgeDocumentStore::new(duckdb_path.clone());
         documents.initialise_schema()?;
@@ -304,6 +332,7 @@ impl KnowledgeBddHarness {
                 sqlite_path,
                 duckdb_path,
                 relational,
+                knowledge_relational,
                 documents,
                 blobs,
                 connectors,

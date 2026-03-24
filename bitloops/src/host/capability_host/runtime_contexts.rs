@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
 use crate::capability_packs::knowledge::storage::{
-    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore,
+    BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentRepository,
+    KnowledgeRelationalRepository, SqliteKnowledgeRelationalRepository,
 };
 use crate::config::{
     ProviderConfig, StoreBackendConfig, resolve_provider_config_for_repo,
@@ -18,12 +19,12 @@ use crate::storage::SqliteConnectionPool;
 use super::config_view::CapabilityConfigView;
 use super::contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
-    CapabilityMigrationContext,
+    CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
+    KnowledgeMigrationContext,
 };
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
-    DocumentStoreGateway, ProvenanceBuilder, RelationalGateway, SqliteRelationalGateway,
-    StoreHealthGateway,
+    ProvenanceBuilder, RelationalGateway, SqliteRelationalGateway, StoreHealthGateway,
 };
 
 pub struct LocalCapabilityRuntimeResources {
@@ -33,7 +34,8 @@ pub struct LocalCapabilityRuntimeResources {
     pub backends: StoreBackendConfig,
     pub provider_config: ProviderConfig,
     pub relational: SqliteRelationalGateway,
-    pub documents: DuckdbKnowledgeDocumentStore,
+    pub knowledge_relational: SqliteKnowledgeRelationalRepository,
+    pub knowledge_documents: DuckdbKnowledgeDocumentStore,
     pub blob_payloads: BlobKnowledgePayloadStore,
     pub connectors: BuiltinConnectorRegistry,
     pub provenance: DefaultProvenanceBuilder,
@@ -49,8 +51,11 @@ impl LocalCapabilityRuntimeResources {
         let sqlite_path = backends
             .relational
             .resolve_sqlite_db_path_for_repo(repo_root)?;
-        let relational = SqliteRelationalGateway::new(SqliteConnectionPool::connect(sqlite_path)?);
-        let documents = DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
+        let sqlite_pool = SqliteConnectionPool::connect(sqlite_path)?;
+        let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
+        let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
+        let knowledge_documents =
+            DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
         let blob_payloads = BlobKnowledgePayloadStore::from_backend_config(repo_root, &backends)?;
         let connectors = BuiltinConnectorRegistry::new(provider_config.clone())?;
 
@@ -64,7 +69,8 @@ impl LocalCapabilityRuntimeResources {
             backends,
             provider_config,
             relational,
-            documents,
+            knowledge_relational,
+            knowledge_documents,
             blob_payloads,
             connectors,
             provenance: DefaultProvenanceBuilder,
@@ -89,7 +95,8 @@ impl LocalCapabilityRuntimeResources {
             &self.config_root,
             &self.backends,
             &self.relational,
-            &self.documents,
+            &self.knowledge_relational,
+            &self.knowledge_documents,
             &self.blob_payloads,
             &self.connectors,
             &self.provenance,
@@ -136,7 +143,8 @@ pub struct LocalCapabilityRuntime<'a> {
     config_root: &'a Value,
     backends: &'a StoreBackendConfig,
     relational: &'a dyn RelationalGateway,
-    documents: &'a dyn DocumentStoreGateway,
+    knowledge_relational: &'a dyn KnowledgeRelationalRepository,
+    knowledge_documents: &'a dyn KnowledgeDocumentRepository,
     blob_payloads: &'a dyn BlobPayloadGateway,
     connectors: &'a dyn ConnectorRegistry,
     provenance: &'a dyn ProvenanceBuilder,
@@ -155,7 +163,8 @@ impl<'a> LocalCapabilityRuntime<'a> {
         config_root: &'a Value,
         backends: &'a StoreBackendConfig,
         relational: &'a dyn RelationalGateway,
-        documents: &'a dyn DocumentStoreGateway,
+        knowledge_relational: &'a dyn KnowledgeRelationalRepository,
+        knowledge_documents: &'a dyn KnowledgeDocumentRepository,
         blob_payloads: &'a dyn BlobPayloadGateway,
         connectors: &'a dyn ConnectorRegistry,
         provenance: &'a dyn ProvenanceBuilder,
@@ -171,7 +180,8 @@ impl<'a> LocalCapabilityRuntime<'a> {
             config_root,
             backends,
             relational,
-            documents,
+            knowledge_relational,
+            knowledge_documents,
             blob_payloads,
             connectors,
             provenance,
@@ -197,12 +207,8 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
         self.graph
     }
 
-    fn relational(&self) -> Option<&dyn RelationalGateway> {
-        Some(self.relational)
-    }
-
-    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-        Some(self.documents)
+    fn host_relational(&self) -> &dyn RelationalGateway {
+        self.relational
     }
 }
 
@@ -238,6 +244,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
         self.provenance
     }
 
+    fn host_relational(&self) -> &dyn RelationalGateway {
+        self.relational
+    }
+
     fn devql_relational(&self) -> Option<&RelationalStorage> {
         self.devql_relational
     }
@@ -248,14 +258,6 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn invoking_ingester_id(&self) -> Option<&str> {
         self.invoking_ingester_id
-    }
-
-    fn relational(&self) -> Option<&dyn RelationalGateway> {
-        Some(self.relational)
-    }
-
-    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-        Some(self.documents)
     }
 }
 
@@ -289,13 +291,35 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
             .context("applying DevQL SQLite DDL")?;
         Ok(())
     }
+}
 
-    fn relational(&self) -> Option<&dyn RelationalGateway> {
-        Some(self.relational)
+impl KnowledgeExecutionContext for LocalCapabilityRuntime<'_> {
+    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+        self.knowledge_relational
     }
 
-    fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-        Some(self.documents)
+    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+        self.knowledge_documents
+    }
+}
+
+impl KnowledgeIngestContext for LocalCapabilityRuntime<'_> {
+    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+        self.knowledge_relational
+    }
+
+    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+        self.knowledge_documents
+    }
+}
+
+impl KnowledgeMigrationContext for LocalCapabilityRuntime<'_> {
+    fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+        self.knowledge_relational
+    }
+
+    fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+        self.knowledge_documents
     }
 }
 

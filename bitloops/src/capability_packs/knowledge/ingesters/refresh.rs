@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::host::capability_host::{
-    CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
+    KnowledgeIngestContext, IngestRequest, IngestResult, KnowledgeIngesterHandler,
 };
 
 use super::super::services::KnowledgeServices;
@@ -20,11 +20,11 @@ impl KnowledgeRefreshIngester {
     }
 }
 
-impl IngesterHandler for KnowledgeRefreshIngester {
+impl KnowledgeIngesterHandler for KnowledgeRefreshIngester {
     fn ingest<'a>(
         &'a self,
         request: IngestRequest,
-        ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn KnowledgeIngestContext,
     ) -> super::super::types::BoxFuture<'a, Result<IngestResult>> {
         Box::pin(async move {
             let input: RefreshSourceRequest = request.parse_json()?;

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 
 use crate::config::StoreBackendConfig;
-use crate::host::capability_host::gateways::BlobPayloadGateway;
+use crate::host::capability_host::gateways::{BlobPayloadGateway, BlobPayloadRef};
 use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 
-use super::models::{KnowledgePayloadRef, knowledge_payload_key};
+use super::models::KnowledgePayloadRef;
 
 pub struct BlobKnowledgePayloadStore {
     store: Box<dyn BlobStore>,
@@ -24,21 +24,13 @@ impl BlobKnowledgePayloadStore {
         })
     }
 
-    pub fn write_payload(
-        &self,
-        repo_id: &str,
-        knowledge_item_id: &str,
-        knowledge_item_version_id: &str,
-        bytes: &[u8],
-    ) -> Result<KnowledgePayloadRef> {
-        let storage_path =
-            knowledge_payload_key(repo_id, knowledge_item_id, knowledge_item_version_id);
+    pub fn write_payload(&self, key: &str, bytes: &[u8]) -> Result<KnowledgePayloadRef> {
         self.store
-            .write(&storage_path, bytes)
+            .write(key, bytes)
             .context("writing knowledge payload blob")?;
         Ok(KnowledgePayloadRef {
             storage_backend: self.backend.clone(),
-            storage_path,
+            storage_path: key.to_string(),
             mime_type: "application/json".to_string(),
             size_bytes: bytes.len() as i64,
         })
@@ -58,23 +50,11 @@ impl BlobKnowledgePayloadStore {
 }
 
 impl BlobPayloadGateway for BlobKnowledgePayloadStore {
-    fn write_payload(
-        &self,
-        repo_id: &str,
-        knowledge_item_id: &str,
-        knowledge_item_version_id: &str,
-        bytes: &[u8],
-    ) -> Result<KnowledgePayloadRef> {
-        BlobKnowledgePayloadStore::write_payload(
-            self,
-            repo_id,
-            knowledge_item_id,
-            knowledge_item_version_id,
-            bytes,
-        )
+    fn write_payload(&self, key: &str, bytes: &[u8]) -> Result<BlobPayloadRef> {
+        BlobKnowledgePayloadStore::write_payload(self, key, bytes)
     }
 
-    fn delete_payload(&self, payload: &KnowledgePayloadRef) -> Result<()> {
+    fn delete_payload(&self, payload: &BlobPayloadRef) -> Result<()> {
         BlobKnowledgePayloadStore::delete_payload(self, payload)
     }
 
@@ -132,7 +112,7 @@ mod tests {
         let store =
             BlobKnowledgePayloadStore::from_backend_config(&repo_root, &backends).expect("store");
         let payload = store
-            .write_payload("repo-1", "item-1", "version-1", b"{\"ok\":true}")
+            .write_payload("knowledge/repo-1/item-1/version-1/payload.json", b"{\"ok\":true}")
             .expect("write payload");
 
         assert!(store.payload_exists(&payload.storage_path).expect("exists"));

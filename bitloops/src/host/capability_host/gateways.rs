@@ -9,7 +9,7 @@ use serde_json::Value;
 pub use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
-pub use blob_payloads::BlobPayloadGateway;
+pub use blob_payloads::{BlobPayloadGateway, BlobPayloadRef};
 pub use documents::DocumentStoreGateway;
 pub use relational::RelationalGateway;
 pub use sqlite_relational::SqliteRelationalGateway;

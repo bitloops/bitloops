@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::host::capability_host::CapabilityIngestContext;
+use crate::host::capability_host::KnowledgeIngestContext;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +111,7 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
 }
 
 pub fn resolve_source_ref(
-    ctx: &dyn CapabilityIngestContext,
+    ctx: &dyn KnowledgeIngestContext,
     raw: &str,
 ) -> Result<ResolvedKnowledgeSourceRef> {
     match parse_knowledge_ref(raw)? {
@@ -120,15 +120,13 @@ pub fn resolve_source_ref(
             knowledge_item_version_id,
         } => {
             let item = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| format!("knowledge item `{knowledge_item_id}` not found"))?;
 
             if let Some(source_knowledge_item_version_id) = knowledge_item_version_id {
                 let version = ctx
-                    .documents()
-                    .expect("knowledge pack requires documents gateway")
+                    .knowledge_documents()
                     .find_knowledge_item_version(&source_knowledge_item_version_id)?
                     .with_context(|| {
                         format!(
@@ -168,13 +166,12 @@ pub fn resolve_source_ref(
                 "warning: `knowledge_version:<id>` is deprecated; use `knowledge:<knowledge_item_id>:<knowledge_item_version_id>`"
             );
             let version = ctx
-                .documents()
-                .expect("knowledge pack requires documents gateway")
+                .knowledge_documents()
                 .find_knowledge_item_version(&knowledge_item_version_id)?
                 .with_context(|| {
                     format!("knowledge item version `{knowledge_item_version_id}` not found")
                 })?;
-            ctx.relational().expect("knowledge pack requires relational gateway")
+            ctx.knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &version.knowledge_item_id)?
                 .with_context(|| {
                     format!(
@@ -201,7 +198,7 @@ pub fn resolve_source_ref(
 }
 
 pub fn resolve_target_ref(
-    ctx: &dyn CapabilityIngestContext,
+    ctx: &dyn KnowledgeIngestContext,
     raw: &str,
 ) -> Result<ResolvedKnowledgeTargetRef> {
     match parse_knowledge_ref(raw)? {
@@ -213,8 +210,7 @@ pub fn resolve_target_ref(
             knowledge_item_version_id,
         } => {
             let item = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .knowledge_relational()
                 .find_item_by_id(&ctx.repo().repo_id, &knowledge_item_id)?
                 .with_context(|| {
                     format!("target knowledge item `{knowledge_item_id}` not found")
@@ -222,8 +218,7 @@ pub fn resolve_target_ref(
 
             if let Some(target_version_id) = knowledge_item_version_id {
                 let version = ctx
-                    .documents()
-                    .expect("knowledge pack requires documents gateway")
+                    .knowledge_documents()
                     .find_knowledge_item_version(&target_version_id)?
                     .with_context(|| {
                         format!("target knowledge item version `{target_version_id}` not found")
@@ -255,8 +250,7 @@ pub fn resolve_target_ref(
         }
         KnowledgeRef::Checkpoint { checkpoint_id } => {
             let resolved = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .host_relational()
                 .resolve_checkpoint_id(&ctx.repo().repo_id, &checkpoint_id)?;
             Ok(ResolvedKnowledgeTargetRef::Checkpoint {
                 checkpoint_id: resolved,
@@ -275,8 +269,7 @@ pub fn resolve_target_ref(
             }
 
             let exists = ctx
-                .relational()
-                .expect("knowledge pack requires relational gateway")
+                .host_relational()
                 .artefact_exists(&ctx.repo().repo_id, trimmed)?;
             if !exists {
                 bail!("artefact `{trimmed}` not found");
@@ -336,15 +329,15 @@ mod tests {
         ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter,
     };
     use crate::capability_packs::knowledge::storage::{
-        KnowledgeDocumentVersionRow, KnowledgeItemRow, KnowledgePayloadRef,
-        KnowledgeRelationAssertionRow, KnowledgeSourceRow,
+        KnowledgeDocumentRepository, KnowledgeDocumentVersionRow, KnowledgeItemRow,
+        KnowledgeRelationAssertionRow, KnowledgeRelationalRepository, KnowledgeSourceRow,
     };
     use crate::config::ProviderConfig;
-    use crate::host::capability_host::CapabilityIngestContext;
     use crate::host::capability_host::config_view::CapabilityConfigView;
     use crate::host::capability_host::gateways::{
-        BlobPayloadGateway, DocumentStoreGateway, ProvenanceBuilder, RelationalGateway,
+        BlobPayloadGateway, BlobPayloadRef, ProvenanceBuilder, RelationalGateway,
     };
+    use crate::host::capability_host::CapabilityIngestContext;
     use crate::host::devql::RepoIdentity;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 
@@ -376,17 +369,11 @@ mod tests {
     struct NoopBlobGateway;
 
     impl BlobPayloadGateway for NoopBlobGateway {
-        fn write_payload(
-            &self,
-            _repo_id: &str,
-            _knowledge_item_id: &str,
-            _knowledge_item_version_id: &str,
-            _bytes: &[u8],
-        ) -> Result<KnowledgePayloadRef> {
+        fn write_payload(&self, _key: &str, _bytes: &[u8]) -> Result<BlobPayloadRef> {
             Err(anyhow!("blob writes are not used in refs tests"))
         }
 
-        fn delete_payload(&self, _payload: &KnowledgePayloadRef) -> Result<()> {
+        fn delete_payload(&self, _payload: &BlobPayloadRef) -> Result<()> {
             Ok(())
         }
 
@@ -415,6 +402,44 @@ mod tests {
     }
 
     impl RelationalGateway for FakeRelationalGateway {
+        fn resolve_checkpoint_id(&self, _repo_id: &str, checkpoint_ref: &str) -> Result<String> {
+            self.checkpoint_map
+                .get(checkpoint_ref)
+                .cloned()
+                .ok_or_else(|| anyhow!("checkpoint `{checkpoint_ref}` not found"))
+        }
+
+        fn artefact_exists(&self, _repo_id: &str, artefact_id: &str) -> Result<bool> {
+            Ok(*self.artefacts.get(artefact_id).unwrap_or(&false))
+        }
+
+        fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
+            bail!(
+                "FakeRelationalGateway: load_repo_id_for_commit not implemented (commit {commit_sha})"
+            )
+        }
+
+        fn load_production_artefacts(
+            &self,
+            commit_sha: &str,
+        ) -> Result<Vec<crate::models::ProductionArtefact>> {
+            bail!(
+                "FakeRelationalGateway: load_production_artefacts not implemented (commit {commit_sha})"
+            )
+        }
+
+        fn load_artefacts_for_file_lines(
+            &self,
+            commit_sha: &str,
+            file_path: &str,
+        ) -> Result<Vec<(String, i64, i64)>> {
+            bail!(
+                "FakeRelationalGateway: load_artefacts_for_file_lines not implemented (commit {commit_sha}, file {file_path})"
+            )
+        }
+    }
+
+    impl KnowledgeRelationalRepository for FakeRelationalGateway {
         fn initialise_schema(&self) -> Result<()> {
             Ok(())
         }
@@ -466,49 +491,13 @@ mod tests {
         ) -> Result<Vec<KnowledgeItemRow>> {
             Ok(self.item.clone().into_iter().collect())
         }
-
-        fn resolve_checkpoint_id(&self, _repo_id: &str, checkpoint_ref: &str) -> Result<String> {
-            self.checkpoint_map
-                .get(checkpoint_ref)
-                .cloned()
-                .ok_or_else(|| anyhow!("checkpoint `{checkpoint_ref}` not found"))
-        }
-
-        fn artefact_exists(&self, _repo_id: &str, artefact_id: &str) -> Result<bool> {
-            Ok(*self.artefacts.get(artefact_id).unwrap_or(&false))
-        }
-
-        fn load_repo_id_for_commit(&self, commit_sha: &str) -> Result<String> {
-            bail!(
-                "FakeRelationalGateway: load_repo_id_for_commit not implemented (commit {commit_sha})"
-            )
-        }
-
-        fn load_production_artefacts(
-            &self,
-            commit_sha: &str,
-        ) -> Result<Vec<crate::models::ProductionArtefact>> {
-            bail!(
-                "FakeRelationalGateway: load_production_artefacts not implemented (commit {commit_sha})"
-            )
-        }
-
-        fn load_artefacts_for_file_lines(
-            &self,
-            commit_sha: &str,
-            file_path: &str,
-        ) -> Result<Vec<(String, i64, i64)>> {
-            bail!(
-                "FakeRelationalGateway: load_artefacts_for_file_lines not implemented (commit {commit_sha}, file {file_path})"
-            )
-        }
     }
 
     struct FakeDocumentGateway {
         rows: HashMap<String, KnowledgeDocumentVersionRow>,
     }
 
-    impl DocumentStoreGateway for FakeDocumentGateway {
+    impl KnowledgeDocumentRepository for FakeDocumentGateway {
         fn initialise_schema(&self) -> Result<()> {
             Ok(())
         }
@@ -591,12 +580,18 @@ mod tests {
             &self.provenance
         }
 
-        fn relational(&self) -> Option<&dyn RelationalGateway> {
-            Some(&self.relational)
+        fn host_relational(&self) -> &dyn RelationalGateway {
+            &self.relational
+        }
+    }
+
+    impl KnowledgeIngestContext for RefTestContext {
+        fn knowledge_relational(&self) -> &dyn KnowledgeRelationalRepository {
+            &self.relational
         }
 
-        fn documents(&self) -> Option<&dyn DocumentStoreGateway> {
-            Some(&self.documents)
+        fn knowledge_documents(&self) -> &dyn KnowledgeDocumentRepository {
+            &self.documents
         }
     }
 

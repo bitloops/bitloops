@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 
-use crate::host::capability_host::gateways::DocumentStoreGateway;
 use crate::host::devql::knowledge_schema_sql_duckdb;
 
 use super::models::{KnowledgeDocumentVersionRow, ensure_parent_dir};
+use super::document_repository::KnowledgeDocumentRepository;
 
 pub struct DuckdbKnowledgeDocumentStore {
     path: std::path::PathBuf,
@@ -227,7 +227,7 @@ impl DuckdbKnowledgeDocumentStore {
     }
 }
 
-impl DocumentStoreGateway for DuckdbKnowledgeDocumentStore {
+impl KnowledgeDocumentRepository for DuckdbKnowledgeDocumentStore {
     fn initialise_schema(&self) -> Result<()> {
         DuckdbKnowledgeDocumentStore::initialise_schema(self)
     }

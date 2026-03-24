@@ -1,17 +1,17 @@
 use anyhow::Result;
 
-use crate::capability_packs::knowledge::storage::KnowledgePayloadRef;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobPayloadRef {
+    pub storage_backend: String,
+    pub storage_path: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+}
 
 pub trait BlobPayloadGateway: Send + Sync {
-    fn write_payload(
-        &self,
-        repo_id: &str,
-        knowledge_item_id: &str,
-        knowledge_item_version_id: &str,
-        bytes: &[u8],
-    ) -> Result<KnowledgePayloadRef>;
+    fn write_payload(&self, key: &str, bytes: &[u8]) -> Result<BlobPayloadRef>;
 
-    fn delete_payload(&self, payload: &KnowledgePayloadRef) -> Result<()>;
+    fn delete_payload(&self, payload: &BlobPayloadRef) -> Result<()>;
 
     fn payload_exists(&self, storage_path: &str) -> Result<bool>;
 }
