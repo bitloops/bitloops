@@ -138,16 +138,6 @@ pub struct ProductionArtefact {
 }
 
 #[derive(Debug, Clone)]
-pub struct QueriedArtefactRecord {
-    pub artefact_id: String,
-    pub symbol_fqn: Option<String>,
-    pub canonical_kind: String,
-    pub path: String,
-    pub start_line: i64,
-    pub end_line: i64,
-}
-
-#[derive(Debug, Clone)]
 pub struct CoveringTestRecord {
     pub test_id: String,
     pub test_symbol_fqn: Option<String>,
@@ -187,16 +177,6 @@ pub struct CoverageSummaryRecord {
     pub branch_total: usize,
     pub branch_covered: usize,
     pub branches: Vec<CoverageBranchRecord>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ListedArtefactRecord {
-    pub artefact_id: String,
-    pub symbol_fqn: Option<String>,
-    pub kind: String,
-    pub file_path: String,
-    pub start_line: i64,
-    pub end_line: i64,
 }
 
 #[derive(Debug, Clone)]
