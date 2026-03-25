@@ -15,7 +15,12 @@ fi
 
 BASELINE_FILE_JSONL="$PROJECT_ROOT/.coverage-baseline.jsonl"
 COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
-CANONICAL_CMD="cargo llvm-cov --workspace --no-default-features --all-targets --no-fail-fast --lcov --output-path target/llvm-cov.info"
+# Match run_coverage() / duckdb_no_bundle_flags (bundled mode omits --no-default-features).
+CANONICAL_CMD="cargo llvm-cov --workspace"
+if [[ ${#duckdb_no_bundle_flags[@]} -gt 0 ]]; then
+  CANONICAL_CMD+=" ${duckdb_no_bundle_flags[*]}"
+fi
+CANONICAL_CMD+=" --all-targets --no-fail-fast --lcov --output-path target/llvm-cov.info"
 EPSILON="0.05"
 
 sanitize_git_env() {
