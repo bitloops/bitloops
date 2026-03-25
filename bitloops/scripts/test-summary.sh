@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [[ "${DUCKDB_USE_BUNDLED:-}" == "1" ]]; then
+  unset DUCKDB_DOWNLOAD_LIB || true
+  duckdb_no_bundle_flags=()
+else
+  export DUCKDB_DOWNLOAD_LIB="${DUCKDB_DOWNLOAD_LIB:-1}"
+  duckdb_no_bundle_flags=(--no-default-features)
+fi
+
 with_coverage=0
 cargo_args=()
 for arg in "$@"; do
@@ -51,12 +59,12 @@ if [[ "$with_coverage" -eq 1 ]]; then
 
   rm -f "$coverage_file"
   if [[ ${#cargo_args[@]} -gt 0 ]]; then
-    cargo llvm-cov --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
+    cargo llvm-cov "${duckdb_no_bundle_flags[@]}" --no-fail-fast --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
   else
-    cargo llvm-cov --workspace --all-features --all-targets --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
+    cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
   fi
 else
-  cargo test --no-fail-fast "${cargo_args[@]}" 2>&1 | tee "$log_file"
+  cargo test --no-fail-fast "${duckdb_no_bundle_flags[@]}" "${cargo_args[@]}" 2>&1 | tee "$log_file"
 fi
 status=${PIPESTATUS[0]}
 set -e
@@ -102,7 +110,9 @@ if [[ "$with_coverage" -eq 1 ]]; then
     ' "$coverage_file"
 
     per_file_tmp="$(mktemp -t bitloops-cov-files.XXXXXX)"
-    cleanup_cov_tmp() { rm -f "$per_file_tmp"; }
+    cleanup_cov_tmp() {
+      rm -f "$per_file_tmp" "${per_file_tmp}.sorted"
+    }
     trap 'cleanup; cleanup_cov_tmp' EXIT
 
     PROJECT_ROOT="$PROJECT_ROOT" awk -F: '
@@ -142,7 +152,9 @@ if [[ "$with_coverage" -eq 1 ]]; then
 
     echo
     echo "Lowest line-coverage files (top 15):"
-    sort -n -t $'\t' -k1,1 "$per_file_tmp" | head -n 15 | awk -F'\t' '
+    sorted_cov_tmp="${per_file_tmp}.sorted"
+    sort -n -t $'\t' -k1,1 -o "$sorted_cov_tmp" "$per_file_tmp"
+    head -n 15 "$sorted_cov_tmp" | awk -F'\t' '
       function ratio(c, t, p) {
         if (t == 0) return "n/a";
         return sprintf("%d/%d (%.1f%%)", c, t, p);

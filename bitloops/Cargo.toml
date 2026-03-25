@@ -3,6 +3,11 @@ name = "bitloops"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["duckdb-bundled"]
+# Compile libduckdb from C++ (slow; offline or targets without official prebuilts, e.g. linux-musl cross builds).
+duckdb-bundled = ["duckdb/bundled"]
+
 [lib]
 path = "src/lib.rs"
 
@@ -37,7 +42,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 semver = "1"
 tar = "0.4"
 zstd = "0.13"
-duckdb = { version = "1", features = ["bundled"] }
+duckdb = { version = "1", default-features = false }
 object_store = { version = "0.12.4", features = ["aws", "gcp"] }
 fastembed = "5.12.1"
 walkdir = "2.5"

@@ -32,6 +32,15 @@ fn init_args_supports_agent_flag() {
 }
 
 #[test]
+fn init_args_supports_skip_baseline_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--skip-baseline"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert!(args.skip_baseline);
+}
+
+#[test]
 fn init_cmd_agent_flag_no_value_errors() {
     let err = Cli::try_parse_from(["bitloops", "init", "--agent"])
         .err()
@@ -54,6 +63,7 @@ fn run_init_with_unknown_agent_returns_error() {
                 force: false,
                 agent: Some("bad-agent".to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -74,6 +84,7 @@ fn run_init_creates_default_store_databases_and_blob_directory() {
                 force: false,
                 agent: Some(AGENT_CLAUDE_CODE.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -167,6 +178,7 @@ fn run_init_respects_repo_level_configured_store_paths() {
                 force: false,
                 agent: Some(AGENT_CLAUDE_CODE.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -198,6 +210,7 @@ fn run_init_with_agent_claude_installs_claude_hooks() {
                 force: false,
                 agent: Some(AGENT_CLAUDE_CODE.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -218,6 +231,7 @@ fn run_init_with_agent_cursor_installs_cursor_hooks() {
                 force: false,
                 agent: Some(AGENT_CURSOR.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -240,6 +254,7 @@ fn run_init_with_agent_codex_installs_codex_hooks() {
                 force: false,
                 agent: Some(AGENT_CODEX.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -263,6 +278,7 @@ fn run_init_with_agent_gemini_installs_gemini_hooks() {
                 force: false,
                 agent: Some(AGENT_GEMINI.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut out,
             None,
@@ -283,6 +299,7 @@ fn run_init_with_force_reinstalls_claude_hooks() {
                 force: false,
                 agent: Some(AGENT_CLAUDE_CODE.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut first_out,
             None,
@@ -294,6 +311,7 @@ fn run_init_with_force_reinstalls_claude_hooks() {
                 force: true,
                 agent: Some(AGENT_CLAUDE_CODE.to_string()),
                 telemetry: true,
+                skip_baseline: false,
             },
             &mut second_out,
             None,

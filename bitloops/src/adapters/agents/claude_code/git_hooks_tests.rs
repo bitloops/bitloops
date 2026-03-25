@@ -270,12 +270,32 @@ fn test_extract_command_line() {
             "#!/bin/sh\n# comment 1\n# comment 2\nbitloops hooks git pre-push \"$1\" || true\n",
             "bitloops hooks git pre-push \"$1\" || true",
         ),
+        (
+            "post-checkout forwards all hook args",
+            "#!/bin/sh\n# comment\nbitloops hooks git post-checkout \"$@\" 2>/dev/null || true\n",
+            "bitloops hooks git post-checkout \"$@\" 2>/dev/null || true",
+        ),
+        (
+            "post-merge forwards all hook args",
+            "#!/bin/sh\n# comment\nbitloops hooks git post-merge \"$@\" 2>/dev/null || true\n",
+            "bitloops hooks git post-merge \"$@\" 2>/dev/null || true",
+        ),
+        (
+            "reference-transaction forwards all hook args",
+            "#!/bin/sh\n# comment\nbitloops hooks git reference-transaction \"$@\" 2>/dev/null || true\n",
+            "bitloops hooks git reference-transaction \"$@\" 2>/dev/null || true",
+        ),
         ("empty content", "", ""),
         ("only comments", "#!/bin/sh\n# just a comment\n", ""),
         (
             "whitespace around command",
             "#!/bin/sh\n# comment\n  bitloops hooks git commit-msg \"$1\" || exit 1  \n",
             "bitloops hooks git commit-msg \"$1\" || exit 1",
+        ),
+        (
+            "comment line contains hooks git substring",
+            "#!/bin/sh\n# Pre-push: `bitloops hooks git pre-push` (default manual-commit: no-op)\nbitloops hooks git pre-push \"$1\" || true\n",
+            "bitloops hooks git pre-push \"$1\" || true",
         ),
     ];
 
@@ -399,15 +419,44 @@ fn get_hooks_dir_in_path_core_hooks_path() {
 }
 
 #[test]
-fn install_creates_four_scripts() {
+fn parse_git_version_handles_standard_and_apple_formats() {
+    assert_eq!(parse_git_version("git version 2.39.3"), Some((2, 39, 3)));
+    assert_eq!(
+        parse_git_version("git version 2.39.3 (Apple Git-146)"),
+        Some((2, 39, 3))
+    );
+    assert_eq!(
+        parse_git_version("git version 2.28.0.windows.1"),
+        Some((2, 28, 0))
+    );
+}
+
+#[test]
+fn reference_transaction_support_threshold_matches_git_2_28() {
+    let supports = |version_output: &str| {
+        parse_git_version(version_output)
+            .map(|(major, minor, _patch)| (major, minor) >= MIN_REFERENCE_TRANSACTION_GIT_VERSION)
+            .unwrap_or(true)
+    };
+    assert!(!supports("git version 2.27.0"));
+    assert!(supports("git version 2.28.0"));
+}
+
+#[test]
+fn install_creates_managed_scripts() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
 
     let count = install_git_hooks(dir.path(), false).unwrap();
-    assert_eq!(count, 4, "should install 4 hooks");
+    assert_eq!(
+        count,
+        expected_hooks.len(),
+        "should install all managed hooks"
+    );
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
-    for name in HOOK_NAMES {
+    for name in expected_hooks {
         let path = hooks_dir.join(name);
         assert!(path.exists(), "{name} should exist");
         #[cfg(unix)]
@@ -423,10 +472,11 @@ fn install_creates_four_scripts() {
 fn install_scripts_contain_marker() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
     install_git_hooks(dir.path(), false).unwrap();
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
-    for name in HOOK_NAMES {
+    for name in expected_hooks {
         let content = fs::read_to_string(hooks_dir.join(name)).unwrap();
         assert!(
             content.contains(HOOK_MARKER),
@@ -439,12 +489,13 @@ fn install_scripts_contain_marker() {
 fn install_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
     let first_count = install_git_hooks(dir.path(), false).unwrap();
     assert!(first_count > 0, "first install should install hooks");
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
     let mut first_contents = std::collections::BTreeMap::new();
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
         assert!(
             data.contains(HOOK_MARKER),
@@ -456,10 +507,10 @@ fn install_is_idempotent() {
     let second_count = install_git_hooks(dir.path(), false).unwrap();
     assert_eq!(second_count, 0, "second install should report 0 new hooks");
 
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         let data = fs::read_to_string(hooks_dir.join(hook)).unwrap();
         assert_eq!(
-            data, first_contents[hook],
+            data, first_contents[*hook],
             "{hook} content changed after idempotent reinstall"
         );
     }
@@ -511,13 +562,18 @@ fn install_chains_to_backup() {
 fn uninstall_removes_bitloops_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
     install_git_hooks(dir.path(), false).unwrap();
 
     let removed = uninstall_git_hooks(dir.path()).unwrap();
-    assert_eq!(removed, 4, "should remove 4 hooks");
+    assert_eq!(
+        removed,
+        expected_hooks.len(),
+        "should remove all managed hooks"
+    );
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
-    for name in HOOK_NAMES {
+    for name in expected_hooks {
         assert!(
             !hooks_dir.join(name).exists(),
             "{name} should have been removed"
@@ -566,6 +622,7 @@ fn is_git_hook_installed_tracks_install_state() {
 fn install_respects_core_hookspath() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
 
     run_git_checked(dir.path(), &["config", "core.hooksPath", ".husky/_"]);
     let count = install_git_hooks(dir.path(), false).unwrap();
@@ -575,7 +632,7 @@ fn install_respects_core_hookspath() {
     );
 
     let configured_hooks_dir = dir.path().join(".husky").join("_");
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         let data = fs::read_to_string(configured_hooks_dir.join(hook)).unwrap();
         assert!(
             data.contains(HOOK_MARKER),
@@ -584,7 +641,7 @@ fn install_respects_core_hookspath() {
     }
 
     let default_hooks_dir = dir.path().join(".git").join("hooks");
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         let default_hook_path = default_hooks_dir.join(hook);
         if let Ok(data) = fs::read_to_string(default_hook_path) {
             assert!(
@@ -603,11 +660,12 @@ fn install_respects_core_hookspath() {
 #[test]
 fn install_from_worktree_writes_common_hooks_dir() {
     let (_parent, main_repo, worktree_dir) = init_hooks_worktree_repo();
+    let expected_hooks = expected_hooks_for_repo(&worktree_dir);
 
     install_git_hooks(&worktree_dir, false).unwrap();
 
     let common_hooks_dir = main_repo.join(".git").join("hooks");
-    for &name in HOOK_NAMES {
+    for name in &expected_hooks {
         let data = fs::read_to_string(common_hooks_dir.join(name)).unwrap();
         assert!(
             data.contains(HOOK_MARKER),
@@ -622,7 +680,7 @@ fn install_from_worktree_writes_common_hooks_dir() {
         worktree_dir.join(worktree_git_dir_raw)
     };
 
-    for &name in HOOK_NAMES {
+    for name in &expected_hooks {
         let worktree_local_hook = worktree_git_dir.join("hooks").join(name);
         if let Ok(data) = fs::read_to_string(worktree_local_hook) {
             assert!(
@@ -642,19 +700,20 @@ fn install_from_worktree_writes_common_hooks_dir() {
 fn remove_from_core_hookspath_relative() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
 
     run_git_checked(dir.path(), &["config", "core.hooksPath", ".husky/_"]);
     let install_count = install_git_hooks(dir.path(), false).unwrap();
     assert!(install_count > 0);
 
     let configured_hooks_dir = dir.path().join(".husky").join("_");
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         assert!(configured_hooks_dir.join(hook).exists());
     }
 
     let removed = uninstall_git_hooks(dir.path()).unwrap();
     assert_eq!(removed, install_count);
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         assert!(
             !configured_hooks_dir.join(hook).exists(),
             "{hook} should be removed from core.hooksPath"
@@ -742,10 +801,11 @@ fn install_idempotent_with_chaining() {
 fn install_no_backup_when_no_existing_hook() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let expected_hooks = expected_hooks_for_repo(dir.path());
     install_git_hooks(dir.path(), false).unwrap();
 
     let hooks_dir = get_hooks_dir(dir.path()).unwrap();
-    for &hook in HOOK_NAMES {
+    for hook in &expected_hooks {
         assert!(
             !hooks_dir.join(format!("{hook}{BACKUP_SUFFIX}")).exists(),
             "fresh install should not create backup for {hook}"

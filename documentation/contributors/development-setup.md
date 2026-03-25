@@ -31,34 +31,41 @@ cargo build
 cargo run -- --version
 ```
 
-## Set Up Git Hooks
+## Local checks (optional)
 
-We have pre-commit hooks for formatting and linting:
+There are no required git hooks. From the repository root you can run the same checks as CI (for PRs into `develop`):
 
 ```bash
-./scripts/setup-hooks.sh
+bash scripts/check-dev.sh           # file-size, fmt, clippy
+bash scripts/check-dev.sh --test   # + full tests
+bash scripts/check-dev.sh --full   # + coverage baseline
 ```
 
-This installs:
-- **Pre-commit** — runs `cargo fmt` and `cargo clippy`
-- **Pre-push** — runs coverage checks against the baseline
+If an older setup pointed `core.hooksPath` here, run `bash scripts/setup-hooks.sh` once to clear it.
 
 ## Running Tests
 
-We use four test aliases to keep things organized:
+From `bitloops/`, the usual full run is:
 
-| Command | What It Runs |
-|---------|-------------|
-| `cargo test-core` | Library crate unit tests |
-| `cargo test-cli` | CLI/binary crate tests |
-| `cargo test-integration` | Integration tests in `tests/` |
-| `cargo test-all` | Everything |
+```bash
+./scripts/test-summary.sh
+```
 
-For a quick summary with coverage:
+That runs `cargo test --no-fail-fast` and prints combined `test result:` lines at the end. Cargo also defines optional aliases in `.cargo/config.toml` (`test-core`, `test-cli`, `test-integration`, `test-all`). Aliases only work when that config is loaded (run from `bitloops/`); from the repo root use `cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast`, not `cargo test-all --manifest-path …`.
+
+For coverage in one go (llvm-cov + summary tables):
 
 ```bash
 ./scripts/test-summary.sh --coverage
 ```
+
+For HTML/LCOV artifacts (not the baseline gate):
+
+```bash
+./scripts/test-coverage.sh baseline
+```
+
+**DuckDB:** `test-summary.sh` and `check-dev.sh` use prebuilt DuckDB libraries when possible (`DUCKDB_DOWNLOAD_LIB=1` and `--no-default-features`). Set `DUCKDB_USE_BUNDLED=1` to compile from source instead. See `DEVELOPMENT.md` for details.
 
 ## Test Coverage
 
@@ -68,7 +75,7 @@ We use `cargo-llvm-cov` for coverage. Install it:
 cargo install cargo-llvm-cov
 ```
 
-The project maintains a coverage baseline in `.coverage-baseline.jsonl`. The pre-push hook checks that coverage doesn't regress beyond a 5% tolerance.
+The project maintains a coverage baseline in `.coverage-baseline.jsonl` (under `bitloops/`). CI runs that check on pull requests to `develop` **informationally** (merge is not blocked by it). To enforce the 5% tolerance locally before merging, use `bash scripts/check-dev.sh --full`.
 
 ## Quick Reference
 
@@ -77,7 +84,7 @@ The project maintains a coverage baseline in `.coverage-baseline.jsonl`. The pre
 | Check compiles | `cargo check` |
 | Build | `cargo build` |
 | Run locally | `cargo run -- <command>` |
-| All tests | `cargo test-all` |
+| All tests | `./scripts/test-summary.sh` or `cargo test --no-fail-fast` |
 | Format code | `cargo fmt` |
 | Lint | `cargo clippy` |
 | Coverage report | `./scripts/test-summary.sh --coverage` |

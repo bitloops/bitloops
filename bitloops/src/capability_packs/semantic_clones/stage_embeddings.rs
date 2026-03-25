@@ -122,12 +122,11 @@ pub(crate) async fn upsert_symbol_embedding_rows(
 pub(crate) async fn ensure_semantic_embeddings_schema(
     relational: &RelationalStorage,
 ) -> Result<()> {
-    match relational {
-        RelationalStorage::Postgres(client) => {
-            init_postgres_semantic_embeddings_schema(client).await
-        }
-        RelationalStorage::Sqlite { path } => init_sqlite_semantic_embeddings_schema(path).await,
+    init_sqlite_semantic_embeddings_schema(&relational.local.path).await?;
+    if let Some(remote) = relational.remote.as_ref() {
+        init_postgres_semantic_embeddings_schema(&remote.client).await?;
     }
+    Ok(())
 }
 
 async fn load_symbol_embedding_index_state(
@@ -170,10 +169,7 @@ async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
-    let sql = match relational {
-        RelationalStorage::Postgres(_) => build_postgres_symbol_embedding_persist_sql(row)?,
-        RelationalStorage::Sqlite { .. } => build_sqlite_symbol_embedding_persist_sql(row)?,
-    };
+    let sql = build_sqlite_symbol_embedding_persist_sql(row)?;
     relational.exec(&sql).await
 }
 
@@ -210,6 +206,7 @@ WHERE artefact_id IN ({})",
     )
 }
 
+#[cfg(test)]
 fn build_postgres_symbol_embedding_persist_sql(
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
@@ -248,6 +245,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = excluded.repo_id, blob_sha = e
     ))
 }
 
+#[cfg(test)]
 fn sql_vector_string(values: &[f32]) -> Result<String> {
     let json = sql_json_string(values)?;
     Ok(format!("'{json}'::vector"))
@@ -281,7 +279,7 @@ mod semantic_embedding_persistence_tests {
             .await
             .expect("create sqlite schema");
         std::mem::forget(temp);
-        RelationalStorage::Sqlite { path: db_path }
+        RelationalStorage::local_only(db_path)
     }
 
     #[test]
@@ -462,9 +460,7 @@ mod semantic_embedding_persistence_tests {
     async fn semantic_embedding_schema_ensure_creates_sqlite_table() {
         let temp = tempdir().expect("temp dir");
         let db_path = temp.path().join("semantic-embeddings.sqlite");
-        let relational = RelationalStorage::Sqlite {
-            path: db_path.clone(),
-        };
+        let relational = RelationalStorage::local_only(db_path.clone());
 
         ensure_semantic_embeddings_schema(&relational)
             .await

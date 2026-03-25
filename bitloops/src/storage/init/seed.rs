@@ -135,15 +135,15 @@ ON CONFLICT(artefact_id) DO UPDATE SET
         tx.execute(
             r#"
 INSERT INTO artefacts_current (
-  repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
+  repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
   blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
   parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring,
   content_hash
 ) VALUES (
-  ?1, ?2, ?3, ?4, 'commit', ?4, NULL,
+  ?1, 'main', ?2, ?3, ?4, 'commit', ?4, NULL,
   ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16, '[]', NULL, NULL
 )
-ON CONFLICT(repo_id, symbol_id) DO UPDATE SET
+ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
   artefact_id = excluded.artefact_id,
   commit_sha = excluded.commit_sha,
   revision_kind = excluded.revision_kind,

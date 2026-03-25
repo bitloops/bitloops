@@ -40,10 +40,14 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
+        self.migrate_workspace_revisions_uniqueness()
+            .context("migrating SQLite workspace_revisions uniqueness (pre-schema)")?;
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")?;
         self.migrate_devql_checkpoint_columns()
             .context("migrating SQLite DevQL checkpoint columns")?;
+        self.migrate_devql_branch_scope_current_tables()
+            .context("migrating SQLite DevQL current-state branch scope")?;
         self.migrate_workspace_revisions_uniqueness()
             .context("migrating SQLite workspace_revisions uniqueness")
     }
@@ -100,6 +104,9 @@ impl SqliteConnectionPool {
 
     fn migrate_workspace_revisions_uniqueness(&self) -> Result<()> {
         self.with_connection(|conn| {
+            if !sqlite_table_exists(conn, "workspace_revisions")? {
+                return Ok(());
+            }
             conn.execute_batch(
                 r#"
 DELETE FROM workspace_revisions
@@ -114,6 +121,14 @@ ON workspace_revisions (repo_id, tree_hash);
 "#,
             )
             .context("hardening workspace_revisions uniqueness")?;
+            Ok(())
+        })
+    }
+
+    fn migrate_devql_branch_scope_current_tables(&self) -> Result<()> {
+        self.with_connection(|conn| {
+            migrate_artefacts_current_branch_scope(conn)?;
+            migrate_artefact_edges_current_branch_scope(conn)?;
             Ok(())
         })
     }
@@ -133,6 +148,299 @@ ON workspace_revisions (repo_id, tree_hash);
         let conn = open_sqlite_connection(&self.db_path)?;
         operation(&conn)
     }
+}
+
+fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    let exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .context("checking SQLite table existence")?;
+    Ok(exists > 0)
+}
+
+fn sqlite_table_pk_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .with_context(|| format!("preparing PRAGMA table_info for `{table}`"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA table_info for `{table}`"))?;
+    let mut pk = Vec::<(i64, String)>::new();
+    while let Some(row) = rows.next().context("reading PRAGMA row")? {
+        let name: String = row
+            .get(1)
+            .with_context(|| format!("reading column name from `{table}`"))?;
+        let order: i64 = row
+            .get(5)
+            .with_context(|| format!("reading pk order from `{table}`"))?;
+        if order > 0 {
+            pk.push((order, name));
+        }
+    }
+    pk.sort_by_key(|(order, _)| *order);
+    Ok(pk.into_iter().map(|(_, name)| name).collect())
+}
+
+fn sqlite_table_has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .with_context(|| format!("preparing PRAGMA table_info for `{table}`"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA table_info for `{table}`"))?;
+    while let Some(row) = rows.next().context("reading PRAGMA row")? {
+        let name: String = row
+            .get(1)
+            .with_context(|| format!("reading column name from `{table}`"))?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn migrate_artefacts_current_branch_scope(conn: &rusqlite::Connection) -> Result<()> {
+    if !sqlite_table_exists(conn, "artefacts_current")? {
+        return Ok(());
+    }
+
+    let has_branch = sqlite_table_has_column(conn, "artefacts_current", "branch")?;
+    let pk_columns = sqlite_table_pk_columns(conn, "artefacts_current")?;
+    let needs_rebuild = !has_branch
+        || pk_columns
+            != [
+                "repo_id".to_string(),
+                "branch".to_string(),
+                "symbol_id".to_string(),
+            ];
+
+    if needs_rebuild {
+        conn.execute_batch(
+            r#"
+DROP TABLE IF EXISTS artefacts_current__branch_migration;
+CREATE TABLE artefacts_current__branch_migration (
+    repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    revision_kind TEXT NOT NULL DEFAULT 'commit',
+    revision_id TEXT NOT NULL DEFAULT '',
+    temp_checkpoint_id INTEGER,
+    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    language TEXT NOT NULL,
+    canonical_kind TEXT,
+    language_kind TEXT,
+    symbol_fqn TEXT,
+    parent_symbol_id TEXT,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    docstring TEXT,
+    content_hash TEXT,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, branch, symbol_id)
+);
+INSERT INTO artefacts_current__branch_migration (
+    repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
+    blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
+    parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers,
+    docstring, content_hash, updated_at
+)
+SELECT
+    ac.repo_id,
+    COALESCE(NULLIF((SELECT r.default_branch FROM repositories r WHERE r.repo_id = ac.repo_id LIMIT 1), ''), 'main') AS branch,
+    ac.symbol_id,
+    ac.artefact_id,
+    ac.commit_sha,
+    ac.revision_kind,
+    ac.revision_id,
+    ac.temp_checkpoint_id,
+    ac.blob_sha,
+    ac.path,
+    ac.language,
+    ac.canonical_kind,
+    ac.language_kind,
+    ac.symbol_fqn,
+    ac.parent_symbol_id,
+    ac.parent_artefact_id,
+    ac.start_line,
+    ac.end_line,
+    ac.start_byte,
+    ac.end_byte,
+    ac.signature,
+    ac.modifiers,
+    ac.docstring,
+    ac.content_hash,
+    ac.updated_at
+FROM artefacts_current ac;
+DROP TABLE artefacts_current;
+ALTER TABLE artefacts_current__branch_migration RENAME TO artefacts_current;
+"#,
+        )
+        .context("rebuilding artefacts_current with branch-scoped primary key")?;
+    }
+
+    conn.execute_batch(
+        r#"
+DROP INDEX IF EXISTS artefacts_current_path_idx;
+DROP INDEX IF EXISTS artefacts_current_kind_idx;
+DROP INDEX IF EXISTS artefacts_current_symbol_fqn_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_path_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_kind_idx;
+DROP INDEX IF EXISTS artefacts_current_branch_fqn_idx;
+DROP INDEX IF EXISTS artefacts_current_artefact_idx;
+
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx
+ON artefacts_current (repo_id, branch, path);
+
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx
+ON artefacts_current (repo_id, branch, canonical_kind);
+
+CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
+ON artefacts_current (repo_id, branch, artefact_id);
+
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx
+ON artefacts_current (repo_id, branch, symbol_fqn);
+"#,
+    )
+    .context("ensuring branch-aware artefacts_current indexes")?;
+
+    Ok(())
+}
+
+fn migrate_artefact_edges_current_branch_scope(conn: &rusqlite::Connection) -> Result<()> {
+    if !sqlite_table_exists(conn, "artefact_edges_current")? {
+        return Ok(());
+    }
+
+    let has_branch = sqlite_table_has_column(conn, "artefact_edges_current", "branch")?;
+    let pk_columns = sqlite_table_pk_columns(conn, "artefact_edges_current")?;
+    let needs_rebuild = !has_branch
+        || pk_columns
+            != [
+                "repo_id".to_string(),
+                "branch".to_string(),
+                "edge_id".to_string(),
+            ];
+
+    if needs_rebuild {
+        conn.execute_batch(
+            r#"
+DROP TABLE IF EXISTS artefact_edges_current__branch_migration;
+CREATE TABLE artefact_edges_current__branch_migration (
+    edge_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
+    commit_sha TEXT NOT NULL,
+    revision_kind TEXT NOT NULL DEFAULT 'commit',
+    revision_id TEXT NOT NULL DEFAULT '',
+    temp_checkpoint_id INTEGER,
+    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    from_symbol_id TEXT NOT NULL,
+    from_artefact_id TEXT NOT NULL,
+    to_symbol_id TEXT,
+    to_artefact_id TEXT,
+    to_symbol_ref TEXT,
+    edge_kind TEXT NOT NULL,
+    language TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    metadata TEXT DEFAULT '{}',
+    updated_at TEXT DEFAULT (datetime('now')),
+    CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL),
+    CHECK (
+        (start_line IS NULL AND end_line IS NULL)
+        OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
+    ),
+    PRIMARY KEY (repo_id, branch, edge_id)
+);
+INSERT INTO artefact_edges_current__branch_migration (
+    edge_id, repo_id, branch, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha,
+    path, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref,
+    edge_kind, language, start_line, end_line, metadata, updated_at
+)
+SELECT
+    ec.edge_id,
+    ec.repo_id,
+    COALESCE(NULLIF((SELECT r.default_branch FROM repositories r WHERE r.repo_id = ec.repo_id LIMIT 1), ''), 'main') AS branch,
+    ec.commit_sha,
+    ec.revision_kind,
+    ec.revision_id,
+    ec.temp_checkpoint_id,
+    ec.blob_sha,
+    ec.path,
+    ec.from_symbol_id,
+    ec.from_artefact_id,
+    ec.to_symbol_id,
+    ec.to_artefact_id,
+    ec.to_symbol_ref,
+    ec.edge_kind,
+    ec.language,
+    ec.start_line,
+    ec.end_line,
+    ec.metadata,
+    ec.updated_at
+FROM artefact_edges_current ec;
+DROP TABLE artefact_edges_current;
+ALTER TABLE artefact_edges_current__branch_migration RENAME TO artefact_edges_current;
+"#,
+        )
+        .context("rebuilding artefact_edges_current with branch-scoped primary key")?;
+    }
+
+    conn.execute_batch(
+        r#"
+DROP INDEX IF EXISTS artefact_edges_current_from_idx;
+DROP INDEX IF EXISTS artefact_edges_current_to_idx;
+DROP INDEX IF EXISTS artefact_edges_current_branch_from_idx;
+DROP INDEX IF EXISTS artefact_edges_current_branch_to_idx;
+DROP INDEX IF EXISTS artefact_edges_current_path_idx;
+DROP INDEX IF EXISTS artefact_edges_current_kind_idx;
+DROP INDEX IF EXISTS artefact_edges_current_symbol_ref_idx;
+DROP INDEX IF EXISTS artefact_edges_current_natural_uq;
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
+ON artefact_edges_current (repo_id, branch, path);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx
+ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx
+ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_idx
+ON artefact_edges_current (repo_id, branch, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_symbol_ref_idx
+ON artefact_edges_current (repo_id, branch, to_symbol_ref);
+
+CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq
+ON artefact_edges_current (
+    repo_id,
+    branch,
+    from_symbol_id,
+    edge_kind,
+    COALESCE(to_symbol_id, ''),
+    COALESCE(to_symbol_ref, ''),
+    COALESCE(start_line, -1),
+    COALESCE(end_line, -1),
+    COALESCE(metadata, '{}')
+);
+"#,
+    )
+    .context("ensuring branch-aware artefact_edges_current indexes")?;
+
+    Ok(())
 }
 
 fn ensure_sqlite_parent_dir(db_path: &Path) -> Result<()> {
@@ -346,6 +654,61 @@ mod tests {
     }
 
     #[test]
+    fn initialise_devql_schema_recovers_legacy_workspace_revision_duplicates() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+        sqlite.execute_batch(
+            r#"
+CREATE TABLE workspace_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id    TEXT    NOT NULL,
+    tree_hash  TEXT    NOT NULL,
+    created_at TEXT    DEFAULT (datetime('now'))
+);
+
+CREATE INDEX workspace_revisions_repo_idx
+ON workspace_revisions (repo_id);
+
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1');
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1');
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2');
+"#,
+        )?;
+
+        sqlite.initialise_devql_schema()?;
+
+        let duplicate_count: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = 'repo-a' AND tree_hash = 'hash-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            duplicate_count, 1,
+            "legacy duplicate workspace_revisions rows should be deduplicated"
+        );
+
+        let duplicate_insert_rejected = sqlite.with_connection(|conn| {
+            Ok(conn
+                .execute(
+                    "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2')",
+                    [],
+                )
+                .is_err())
+        })?;
+        assert!(
+            duplicate_insert_rejected,
+            "unique repo/tree_hash inserts must be enforced after migration"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn sqlite_connection_pool_initialises_checkpoint_schema_tables() -> Result<()> {
         let temp = TempDir::new().context("creating temp dir")?;
         let sqlite_path = temp.path().join("nested").join("checkpoints.sqlite");
@@ -499,6 +862,125 @@ mod tests {
             .map_err(anyhow::Error::from)
         })?;
         assert_eq!(revision_kind, "commit");
+
+        Ok(())
+    }
+
+    #[test]
+    fn initialise_devql_schema_assigns_legacy_current_state_rows_to_repository_default_branch()
+    -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+        sqlite.execute_batch(
+            "CREATE TABLE repositories (
+                repo_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                organization TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_branch TEXT,
+                created_at TEXT
+            );
+            INSERT INTO repositories (repo_id, provider, organization, name, default_branch, created_at)
+            VALUES ('repo-legacy', 'git', 'bitloops', 'bitloops', 'feature/legacy-default', datetime('now'));",
+        )?;
+
+        sqlite.execute_batch(
+            "CREATE TABLE artefacts_current (
+                repo_id TEXT NOT NULL,
+                symbol_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                canonical_kind TEXT,
+                language_kind TEXT,
+                symbol_fqn TEXT,
+                parent_symbol_id TEXT,
+                parent_artefact_id TEXT,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                start_byte INTEGER NOT NULL,
+                end_byte INTEGER NOT NULL,
+                signature TEXT,
+                modifiers TEXT NOT NULL DEFAULT '[]',
+                docstring TEXT,
+                content_hash TEXT,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (repo_id, symbol_id)
+            );
+            INSERT INTO artefacts_current (
+                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash
+            ) VALUES (
+                'repo-legacy', 'legacy-symbol', 'legacy-artefact', 'legacy-commit', 'legacy-blob',
+                'src/legacy.ts', 'typescript', 'function', 'function', 'src/legacy.ts::legacySymbol',
+                NULL, NULL, 1, 1, 0, 10, 'legacy()', '[]', 'legacy docs', 'legacy-hash'
+            );",
+        )?;
+
+        sqlite.execute_batch(
+            "CREATE TABLE artefact_edges_current (
+                edge_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                path TEXT NOT NULL,
+                from_symbol_id TEXT NOT NULL,
+                from_artefact_id TEXT NOT NULL,
+                to_symbol_id TEXT,
+                to_artefact_id TEXT,
+                to_symbol_ref TEXT,
+                edge_kind TEXT NOT NULL,
+                language TEXT NOT NULL,
+                start_line INTEGER,
+                end_line INTEGER,
+                metadata TEXT DEFAULT '{}',
+                updated_at TEXT DEFAULT (datetime('now')),
+                CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL)
+            );
+            INSERT INTO artefact_edges_current (
+                edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata
+            ) VALUES (
+                'legacy-edge', 'repo-legacy', 'legacy-commit', 'legacy-blob', 'src/legacy.ts',
+                'legacy-symbol', 'legacy-artefact', NULL, NULL, 'target::legacy', 'references',
+                'typescript', 1, 1, '{}'
+            );",
+        )?;
+
+        sqlite.initialise_devql_schema()?;
+
+        let migrated_artefact_rows: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM artefacts_current \
+                 WHERE repo_id = 'repo-legacy' AND branch = 'feature/legacy-default' AND symbol_id = 'legacy-symbol'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            migrated_artefact_rows, 1,
+            "legacy artefacts_current rows should migrate to the repository default branch"
+        );
+
+        let migrated_edge_rows: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM artefact_edges_current \
+                 WHERE repo_id = 'repo-legacy' AND branch = 'feature/legacy-default' AND edge_id = 'legacy-edge'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            migrated_edge_rows, 1,
+            "legacy artefact_edges_current rows should migrate to the repository default branch"
+        );
 
         Ok(())
     }

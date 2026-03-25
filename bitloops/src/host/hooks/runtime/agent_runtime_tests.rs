@@ -110,7 +110,7 @@ impl Strategy for RecordingStrategy {
         Ok(())
     }
 
-    fn pre_push(&self, _remote: &str) -> Result<()> {
+    fn pre_push(&self, _remote: &str, _stdin_lines: &[String]) -> Result<()> {
         Ok(())
     }
 }

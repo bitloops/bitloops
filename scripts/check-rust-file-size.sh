@@ -116,7 +116,14 @@ fi
 
 if [[ "${#size_index[@]}" -gt 0 ]]; then
   echo "Top non-test Rust files by line count:"
-  printf '%s\n' "${size_index[@]}" | sort -nr | head -n 15 | sed 's/^/  /'
+  # Sort fully then take top N in bash — avoids sort|head SIGPIPE ("Broken pipe") under set -o pipefail.
+  mapfile -t _top_by_lines < <(printf '%s\n' "${size_index[@]}" | sort -nr)
+  _n="${#_top_by_lines[@]}"
+  ((_n > 15)) && _n=15
+  for ((i = 0; i < _n; i++)); do
+    echo "  ${_top_by_lines[i]}"
+  done
+  unset -v _top_by_lines _n
   echo
 fi
 

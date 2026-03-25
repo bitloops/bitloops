@@ -52,7 +52,16 @@ mod tests {
             .post_commit()
             .expect("post_commit should be a no-op");
         strategy
-            .pre_push("origin")
+            .pre_push("origin", &[])
             .expect("pre_push should be a no-op");
+        strategy
+            .post_merge(false)
+            .expect("post_merge should be a no-op");
+        strategy
+            .post_checkout("old-head", "new-head", true)
+            .expect("post_checkout should be a no-op");
+        strategy
+            .reference_transaction("committed", &[])
+            .expect("reference_transaction should be a no-op");
     }
 }
