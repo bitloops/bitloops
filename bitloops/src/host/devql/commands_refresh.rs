@@ -22,14 +22,31 @@ pub async fn run_post_commit_artefact_refresh(
     )
     .await?;
 
-    refresh_commit_artefacts_for_files(cfg, &relational, commit_sha, changed_files).await
+    update_artefacts_for_changed_files(cfg, &relational, commit_sha, changed_files, "post-commit")
+        .await
 }
 
-async fn refresh_commit_artefacts_for_files(
+pub async fn run_post_merge_artefact_refresh(
+    cfg: &DevqlConfig,
+    commit_sha: &str,
+    changed_files: &[String],
+) -> Result<PostCommitArtefactRefreshStats> {
+    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .context("resolving DevQL backend config for post-merge artefact refresh")?;
+    let relational =
+        RelationalStorage::connect(cfg, &backends.relational, "git post-merge artefact refresh")
+            .await?;
+
+    update_artefacts_for_changed_files(cfg, &relational, commit_sha, changed_files, "post-merge")
+        .await
+}
+
+async fn update_artefacts_for_changed_files(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     commit_sha: &str,
     changed_files: &[String],
+    source_hook: &str,
 ) -> Result<PostCommitArtefactRefreshStats> {
     ensure_repository_row(cfg, relational).await?;
 
@@ -95,7 +112,7 @@ async fn refresh_commit_artefacts_for_files(
         if let Err(err) = refresh_result {
             stats.files_failed += 1;
             eprintln!(
-                "[bitloops] Warning: DevQL post-commit refresh failed for `{path}` at commit {commit_sha}: {err:#}"
+                "[bitloops] Warning: DevQL {source_hook} refresh failed for `{path}` at commit {commit_sha}: {err:#}"
             );
         }
     }
@@ -143,7 +160,9 @@ pub async fn run_post_checkout_branch_seed(
     }
 
     let files = discover_baseline_files_at_revision(&cfg.repo_root, new_head)?;
-    let _stats = refresh_commit_artefacts_for_files(cfg, &relational, new_head, &files).await?;
+    let _stats =
+        update_artefacts_for_changed_files(cfg, &relational, new_head, &files, "post-checkout")
+            .await?;
     Ok(())
 }
 

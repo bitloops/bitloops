@@ -130,6 +130,13 @@ pub enum GitHookVerb {
         remote: String,
     },
 
+    /// Handle the post-merge git hook.
+    #[command(name = "post-merge")]
+    PostMerge {
+        /// `1` when merge was a squash merge, `0` otherwise (provided by git as $1).
+        is_squash: i32,
+    },
+
     /// Handle the post-checkout git hook.
     #[command(name = "post-checkout")]
     PostCheckout {
@@ -192,6 +199,11 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
         GitHookVerb::PrePush { remote } => {
             run_git_hook_with_logging(&repo_root, "pre-push", &strategy_name, || {
                 strategy.pre_push(&remote)
+            })
+        }
+        GitHookVerb::PostMerge { is_squash } => {
+            run_git_hook_with_logging(&repo_root, "post-merge", &strategy_name, || {
+                strategy.post_merge(is_squash != 0)
             })
         }
         GitHookVerb::PostCheckout {

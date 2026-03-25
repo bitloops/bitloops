@@ -49,7 +49,8 @@ pub(crate) use self::commands_query::{
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
-    PostCommitArtefactRefreshStats, run_post_checkout_branch_seed, run_post_commit_artefact_refresh,
+    PostCommitArtefactRefreshStats, run_post_checkout_branch_seed,
+    run_post_commit_artefact_refresh, run_post_merge_artefact_refresh,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};

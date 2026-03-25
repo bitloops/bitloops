@@ -128,6 +128,13 @@ pub trait Strategy: Send + Sync {
         Ok(())
     }
 
+    /// Called by the `post-merge` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn post_merge(&self, _is_squash: bool) -> Result<()> {
+        Ok(())
+    }
+
     /// Called by the `post-checkout` git hook.
     /// Default implementation is a no-op.
     ///

@@ -55,6 +55,9 @@ mod tests {
             .pre_push("origin")
             .expect("pre_push should be a no-op");
         strategy
+            .post_merge(false)
+            .expect("post_merge should be a no-op");
+        strategy
             .post_checkout("old-head", "new-head", true)
             .expect("post_checkout should be a no-op");
         strategy

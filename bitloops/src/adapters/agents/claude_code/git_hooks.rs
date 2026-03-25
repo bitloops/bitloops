@@ -1,7 +1,7 @@
 //! Git hook installation / uninstallation for the manual-commit strategy.
 //!
-//! Installs 5-6 shell scripts into `.git/hooks/` (or `core.hooksPath`):
-//!   prepare-commit-msg, commit-msg, post-commit, post-checkout, pre-push,
+//! Installs 6-7 shell scripts into `.git/hooks/` (or `core.hooksPath`):
+//!   prepare-commit-msg, commit-msg, post-commit, post-merge, post-checkout, pre-push,
 //!   reference-transaction (Git >= 2.28)
 //!
 //! Each script calls `bitloops hooks git <verb>` and can chain to a
@@ -33,6 +33,7 @@ static BASE_HOOK_NAMES: &[&str] = &[
     "prepare-commit-msg",
     "commit-msg",
     "post-commit",
+    "post-merge",
     "post-checkout",
     "pre-push",
 ];
@@ -42,6 +43,7 @@ static HOOK_NAMES: &[&str] = &[
     "prepare-commit-msg",
     "commit-msg",
     "post-commit",
+    "post-merge",
     "post-checkout",
     "pre-push",
     REFERENCE_TRANSACTION_HOOK,
@@ -212,6 +214,15 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
                  {runtime_bootstrap}\
                  # Post-checkout: branch seeding and bookkeeping; failures must not block git\n\
                  {cmd_prefix} hooks git post-checkout \"$@\" 2>/dev/null || true\n"
+            ),
+        },
+        HookSpec {
+            name: "post-merge",
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Post-merge: refresh DevQL after pull/merge; failures must not block git\n\
+                 {cmd_prefix} hooks git post-merge \"$@\" 2>/dev/null || true\n"
             ),
         },
         HookSpec {

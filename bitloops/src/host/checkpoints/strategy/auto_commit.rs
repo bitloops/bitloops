@@ -529,6 +529,10 @@ impl Strategy for AutoCommitStrategy {
         self.inner.pre_push(remote)
     }
 
+    fn post_merge(&self, is_squash: bool) -> Result<()> {
+        self.inner.post_merge(is_squash)
+    }
+
     fn post_checkout(
         &self,
         previous_head: &str,

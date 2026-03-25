@@ -282,7 +282,7 @@ pub fn run_uninstall(
         if git_hooks_installed {
             writeln!(
                 out,
-                "  - Git hooks (prepare-commit-msg, commit-msg, post-commit, post-checkout, pre-push, reference-transaction)"
+                "  - Git hooks (prepare-commit-msg, commit-msg, post-commit, post-merge, post-checkout, pre-push, reference-transaction)"
             )?;
         }
         if session_state_count > 0 {

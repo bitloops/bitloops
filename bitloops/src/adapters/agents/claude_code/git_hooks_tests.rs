@@ -276,6 +276,11 @@ fn test_extract_command_line() {
             "bitloops hooks git post-checkout \"$@\" 2>/dev/null || true",
         ),
         (
+            "post-merge forwards all hook args",
+            "#!/bin/sh\n# comment\nbitloops hooks git post-merge \"$@\" 2>/dev/null || true\n",
+            "bitloops hooks git post-merge \"$@\" 2>/dev/null || true",
+        ),
+        (
             "reference-transaction forwards all hook args",
             "#!/bin/sh\n# comment\nbitloops hooks git reference-transaction \"$@\" 2>/dev/null || true\n",
             "bitloops hooks git reference-transaction \"$@\" 2>/dev/null || true",

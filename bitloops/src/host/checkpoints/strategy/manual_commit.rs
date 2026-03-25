@@ -5,9 +5,10 @@
 //! 2. `git commit` → `prepare_commit_msg()` → no-op
 //! 3. `commit-msg` hook → `commit_msg()` → no-op
 //! 4. `post-commit` hook → `post_commit()` → condenses session into checkpoint rows/blobs
-//! 5. `post-checkout` hook → `post_checkout()` → seeds DevQL branch current-state when needed
-//! 6. `reference-transaction` hook → `reference_transaction()` → branch-deletion cleanup
-//! 7. `git push` → `pre_push()` → no-op
+//! 5. `post-merge` hook → `post_merge()` → refreshes DevQL for pull/merge changed files
+//! 6. `post-checkout` hook → `post_checkout()` → seeds DevQL branch current-state when needed
+//! 7. `reference-transaction` hook → `reference_transaction()` → branch-deletion cleanup
+//! 8. `git push` → `pre_push()` → no-op
 //!
 //! Git operations use shell `git` + `GIT_INDEX_FILE` for temp-index tree construction.
 
