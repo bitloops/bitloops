@@ -8,7 +8,7 @@
 //! 5. `post-merge` hook → `post_merge()` → refreshes DevQL for pull/merge changed files
 //! 6. `post-checkout` hook → `post_checkout()` → seeds DevQL branch current-state when needed
 //! 7. `reference-transaction` hook → `reference_transaction()` → branch-deletion cleanup
-//! 8. `git push` → `pre_push()` → no-op
+//! 8. `git push` → `pre_push()` → replicates DevQL historical/current state to Postgres
 //!
 //! Git operations use shell `git` + `GIT_INDEX_FILE` for temp-index tree construction.
 

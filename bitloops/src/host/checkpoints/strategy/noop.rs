@@ -52,7 +52,7 @@ mod tests {
             .post_commit()
             .expect("post_commit should be a no-op");
         strategy
-            .pre_push("origin")
+            .pre_push("origin", &[])
             .expect("pre_push should be a no-op");
         strategy
             .post_merge(false)

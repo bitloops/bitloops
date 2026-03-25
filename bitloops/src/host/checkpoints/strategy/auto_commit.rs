@@ -525,8 +525,8 @@ impl Strategy for AutoCommitStrategy {
         self.inner.post_commit()
     }
 
-    fn pre_push(&self, remote: &str) -> Result<()> {
-        self.inner.pre_push(remote)
+    fn pre_push(&self, remote: &str, stdin_lines: &[String]) -> Result<()> {
+        self.inner.pre_push(remote, stdin_lines)
     }
 
     fn post_merge(&self, is_squash: bool) -> Result<()> {

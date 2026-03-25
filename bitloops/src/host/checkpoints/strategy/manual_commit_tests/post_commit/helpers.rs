@@ -7,34 +7,16 @@ pub(crate) fn commit_file(repo_root: &Path, filename: &str, content: &str) {
 }
 
 pub(crate) fn init_devql_schema(repo_root: &Path) -> PathBuf {
+    init_devql_schema_with_postgres_dsn(repo_root, None)
+}
+
+pub(crate) fn init_devql_schema_with_postgres_dsn(
+    repo_root: &Path,
+    postgres_dsn: Option<&str>,
+) -> PathBuf {
     let bitloops_dir = repo_root.join(".bitloops");
     fs::create_dir_all(&bitloops_dir).expect("create .bitloops directory");
-    fs::write(
-        bitloops_dir.join("config.json"),
-        r#"{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {
-    "stores": {
-      "relational": {
-        "sqlite_path": ".bitloops/stores/relational/post-commit-devql.db",
-        "postgres_dsn": null
-      },
-      "event": {
-        "duckdb_path": ".bitloops/stores/events/post-commit-events.duckdb",
-        "clickhouse_url": null,
-        "clickhouse_user": null,
-        "clickhouse_password": null,
-        "clickhouse_database": null
-      },
-      "blob": {
-        "local_path": ".bitloops/stores/blobs/post-commit"
-      }
-    }
-  }
-}"#,
-    )
-    .expect("write repo-local store config for post-commit tests");
+    write_post_commit_test_config(repo_root, None);
 
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
     let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
@@ -59,5 +41,43 @@ pub(crate) fn init_devql_schema(repo_root: &Path) -> PathBuf {
         "post-commit test must initialise DevQL relational schema in the configured sqlite path"
     );
 
+    if postgres_dsn.is_some() {
+        write_post_commit_test_config(repo_root, postgres_dsn);
+    }
+
     sqlite_path
+}
+
+fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {
+    let postgres_dsn_json =
+        serde_json::to_string(&postgres_dsn).expect("serialize postgres_dsn for test config");
+    fs::write(
+        repo_root.join(".bitloops/config.json"),
+        format!(
+            r#"{{
+  "version": "1.0",
+  "scope": "project",
+  "settings": {{
+    "stores": {{
+      "relational": {{
+        "sqlite_path": ".bitloops/stores/relational/post-commit-devql.db",
+        "postgres_dsn": {}
+      }},
+      "event": {{
+        "duckdb_path": ".bitloops/stores/events/post-commit-events.duckdb",
+        "clickhouse_url": null,
+        "clickhouse_user": null,
+        "clickhouse_password": null,
+        "clickhouse_database": null
+      }},
+      "blob": {{
+        "local_path": ".bitloops/stores/blobs/post-commit"
+      }}
+    }}
+  }}
+}}"#,
+            postgres_dsn_json
+        ),
+    )
+    .expect("write repo-local store config for post-commit tests");
 }

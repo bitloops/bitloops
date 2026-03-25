@@ -122,9 +122,11 @@ pub trait Strategy: Send + Sync {
     fn post_commit(&self) -> Result<()>;
 
     /// Called by the `pre-push` git hook.
+    /// Receives raw stdin lines from git containing ref updates in the format:
+    /// `<local_ref> <local_sha> <remote_ref> <remote_sha>`.
     /// Default implementation is a no-op.
     ///
-    fn pre_push(&self, _remote: &str) -> Result<()> {
+    fn pre_push(&self, _remote: &str, _stdin_lines: &[String]) -> Result<()> {
         Ok(())
     }
 

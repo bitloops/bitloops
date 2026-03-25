@@ -198,7 +198,8 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
         }
         GitHookVerb::PrePush { remote } => {
             run_git_hook_with_logging(&repo_root, "pre-push", &strategy_name, || {
-                strategy.pre_push(&remote)
+                let stdin_lines = read_pre_push_stdin_lines();
+                strategy.pre_push(&remote, &stdin_lines)
             })
         }
         GitHookVerb::PostMerge { is_squash } => {
@@ -229,6 +230,18 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
 }
 
 fn read_reference_transaction_stdin_lines() -> Vec<String> {
+    let mut raw = String::new();
+    if io::stdin().read_to_string(&mut raw).is_err() {
+        return Vec::new();
+    }
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn read_pre_push_stdin_lines() -> Vec<String> {
     let mut raw = String::new();
     if io::stdin().read_to_string(&mut raw).is_err() {
         return Vec::new();
