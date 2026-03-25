@@ -101,6 +101,11 @@ impl EventsBackendConfig {
         resolve_duckdb_db_path_for_repo(&repo_root, self.duckdb_path.as_deref())
     }
 
+    /// Resolve the DuckDB path relative to an explicit repo root (avoids cwd dependency).
+    pub fn resolve_duckdb_db_path_for_repo(&self, repo_root: &Path) -> PathBuf {
+        resolve_duckdb_db_path_for_repo(repo_root, self.duckdb_path.as_deref())
+    }
+
     pub fn clickhouse_endpoint(&self) -> String {
         let base = self
             .clickhouse_url

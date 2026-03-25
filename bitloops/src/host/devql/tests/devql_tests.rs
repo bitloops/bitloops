@@ -122,7 +122,7 @@ async fn init_duckdb_schema_creates_checkpoint_events_table() {
     let path = temp.path().join("events.duckdb");
     let events_cfg = backend_cfg(None, Some(path.to_string_lossy().to_string())).events;
 
-    init_duckdb_schema(&events_cfg)
+    init_duckdb_schema(temp.path(), &events_cfg)
         .await
         .expect("initialise duckdb schema");
 

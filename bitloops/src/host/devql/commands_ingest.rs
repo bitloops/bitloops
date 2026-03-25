@@ -18,7 +18,7 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
         if backends.events.has_clickhouse() {
             init_clickhouse_schema(cfg).await?;
         } else {
-            init_duckdb_schema(&backends.events).await?;
+            init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
         }
         init_relational_schema(cfg, &relational).await?;
     }
