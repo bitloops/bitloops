@@ -170,6 +170,132 @@ pub(crate) fn pre_push_without_postgres_prunes_historical_rows_by_retention() {
 }
 
 #[test]
+pub(crate) fn pre_push_retention_pruning_preserves_current_state_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    let sqlite_path = init_devql_schema(dir.path());
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+    let branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
+
+    let sqlite = rusqlite::Connection::open(&sqlite_path).unwrap();
+    sqlite
+        .execute(
+            "INSERT INTO artefacts_current (
+                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id,
+                blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+            ) VALUES (
+                ?1, ?2, 'current-symbol', 'current-artefact', ?3, 'commit', ?3, NULL,
+                'current-blob', 'src/current.ts', 'typescript', 'function', 'function', 'src/current.ts::currentSymbol',
+                NULL, NULL, 1, 1, 0, 1, 'current()', '[]', NULL, 'current-hash', datetime('now')
+            )",
+            rusqlite::params![repo_id.as_str(), branch.as_str(), head.as_str()],
+        )
+        .unwrap();
+    sqlite
+        .execute(
+            "INSERT INTO artefact_edges_current (
+                edge_id, repo_id, branch, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path,
+                from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+                start_line, end_line, metadata, updated_at
+            ) VALUES (
+                'current-edge', ?1, ?2, ?3, 'commit', ?3, NULL, 'current-blob', 'src/current.ts',
+                'current-symbol', 'current-artefact', NULL, NULL, 'target::symbol', 'references', 'typescript',
+                1, 1, '{}', datetime('now')
+            )",
+            rusqlite::params![repo_id.as_str(), branch.as_str(), head.as_str()],
+        )
+        .unwrap();
+
+    for idx in 0..55 {
+        let commit_sha = format!("commit-{idx:03}");
+        let blob_sha = format!("blob-{idx:03}");
+        let path = format!("src/history_{idx:03}.ts");
+        let artefact_id = format!("artefact-{idx:03}");
+        let edge_id = format!("edge-{idx:03}");
+        let committed_at = format!("2026-01-01 00:{idx:02}:00");
+
+        sqlite
+            .execute(
+                "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at) \
+                 VALUES (?1, ?2, 'Test', 'test@example.com', 'seed', ?3)",
+                rusqlite::params![commit_sha.as_str(), repo_id.as_str(), committed_at.as_str()],
+            )
+            .unwrap();
+        sqlite
+            .execute(
+                "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    repo_id.as_str(),
+                    commit_sha.as_str(),
+                    path.as_str(),
+                    blob_sha.as_str()
+                ],
+            )
+            .unwrap();
+        sqlite
+            .execute(
+                "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'typescript', 'function', 'function', ?2, NULL, 1, 1, 0, 1, 'fn()', '[]', NULL, ?6)",
+                rusqlite::params![
+                    artefact_id.as_str(),
+                    format!("symbol-{idx:03}"),
+                    repo_id.as_str(),
+                    blob_sha.as_str(),
+                    path.as_str(),
+                    format!("hash-{idx:03}")
+                ],
+            )
+            .unwrap();
+        sqlite
+            .execute(
+                "INSERT INTO artefact_edges (edge_id, repo_id, blob_sha, from_artefact_id, to_symbol_ref, edge_kind, language, metadata) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'calls', 'typescript', '{}')",
+                rusqlite::params![
+                    edge_id.as_str(),
+                    repo_id.as_str(),
+                    blob_sha.as_str(),
+                    artefact_id.as_str(),
+                    format!("target::{idx:03}")
+                ],
+            )
+            .unwrap();
+    }
+    drop(sqlite);
+
+    ManualCommitStrategy::new(dir.path())
+        .pre_push("origin", &[])
+        .unwrap();
+
+    let sqlite = rusqlite::Connection::open(sqlite_path).unwrap();
+    let current_artefacts_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND branch = ?2 AND symbol_id = 'current-symbol'",
+            rusqlite::params![repo_id.as_str(), branch.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let current_edges_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND branch = ?2 AND edge_id = 'current-edge'",
+            rusqlite::params![repo_id.as_str(), branch.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(
+        current_artefacts_rows, 1,
+        "retention pruning must not delete branch-scoped artefacts_current rows"
+    );
+    assert_eq!(
+        current_edges_rows, 1,
+        "retention pruning must not delete branch-scoped artefact_edges_current rows"
+    );
+}
+
+#[test]
 pub(crate) fn pre_push_marks_branch_pending_when_postgres_is_unreachable() {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
