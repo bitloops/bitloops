@@ -1,4 +1,4 @@
-use figlet_rs::FIGfont;
+use figlet_rs::FIGlet;
 use std::env;
 
 pub const BITLOOPS_PURPLE_HEX: &str = "#7404e4";
@@ -34,7 +34,7 @@ pub fn squared_capital(s: &str) -> String {
 }
 
 pub fn bitloops_wordmark() -> String {
-    if let Ok(font) = FIGfont::standard()
+    if let Ok(font) = FIGlet::standard()
         && let Some(figure) = font.convert("bitloops")
     {
         return figure.to_string().trim_end().to_string();
