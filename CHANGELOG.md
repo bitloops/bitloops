@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.11] - 2026-03-25
+
+### Added
+
 - **Unified multi-scope configuration** (`CLI-1459`): One configuration domain replaces the legacy `settings.json` / `config.json` split. All settings (hooks, strategy, stores, knowledge, semantic, dashboard, watch) now live in a single `config.json` / `config.local.json` file pair using a versioned envelope format (`version` / `scope` / `settings`). Layer precedence: code defaults → global `~/.bitloops/config.json` → project shared → project local → environment variables. Deep-merge semantics for objects; arrays replace entirely; explicit `null` clears keys from lower layers.
 - **Monorepo project-root discovery** (`CLI-1463`): `bitloops_project_root()` walks upward from `cwd` to find the nearest `.bitloops/` directory marker. Falls back to git root when no marker exists. Git hooks still install at git root; config, stores, and agent directories resolve from the Bitloops project root.
 - **Provider-less store backend model** (`CLI-1481`–`CLI-1484`): Removed `provider` enum fields from `RelationalBackendConfig`, `EventsBackendConfig`, and `BlobStorageConfig`. Local backends (SQLite, DuckDB, local blob) are always present; remote backends (Postgres, ClickHouse, S3, GCS) activate when their connection string or bucket is configured. Consumer dispatch sites use capability checks (`has_postgres()`, `has_clickhouse()`, `s3_bucket.is_some()`) instead of `match provider`.

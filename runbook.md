@@ -35,7 +35,7 @@ mkdir -p src/models src/repositories src/services tests/e2e
 cat > Cargo.toml <<'EOF'
 [package]
 name = "test_harness_proof"
-version = "0.1.0"
+version = "0.0.11"
 edition = "2021"
 
 [dependencies]
