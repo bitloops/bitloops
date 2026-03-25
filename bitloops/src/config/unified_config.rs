@@ -1,4 +1,4 @@
-//! Unified multi-scope configuration for Bitloops 0.1.0.
+//! Unified multi-scope configuration for Bitloops 0.0.11.
 //!
 //! One config schema, one merge pipeline: code defaults → global → project → project_local → env.
 

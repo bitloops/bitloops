@@ -131,7 +131,7 @@ Edit `Cargo.toml`:
 
 ```toml
 [package]
-version = "0.1.0"   # ← change this
+version = "0.0.11"   # ← change this
 ```
 
 ### 2. Run the release script
@@ -146,7 +146,7 @@ This will:
 
 - Read the version from `Cargo.toml`
 - Commit the version bump
-- Create and push the git tag (`v0.1.0`)
+- Create and push the git tag (`v0.0.11`)
 - GitHub Actions picks up the tag and builds all platform binaries automatically
 
 Before release builds, generate the environment-specific dashboard config:
@@ -206,7 +206,7 @@ The `install.sh` script at the repo root detects the platform, downloads the mat
 class Bitloops < Formula
   desc "Bitloops CLI"
   homepage "https://github.com/bitloops/bitloops-cli"
-  version "0.1.0"
+  version "0.0.11"
   license "MIT"
 
   on_macos do

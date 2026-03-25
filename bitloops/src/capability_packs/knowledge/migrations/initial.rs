@@ -12,7 +12,7 @@ fn run_initial_knowledge_migration(ctx: &mut dyn KnowledgeMigrationContext) -> R
 
 pub static KNOWLEDGE_MIGRATIONS: &[CapabilityMigration] = &[CapabilityMigration {
     capability_id: "knowledge",
-    version: "0.1.0",
+    version: "0.0.11",
     description: "Initial knowledge schema",
     run: MigrationRunner::Knowledge(run_initial_knowledge_migration),
 }];
