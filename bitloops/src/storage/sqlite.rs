@@ -40,6 +40,8 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
+        self.migrate_workspace_revisions_uniqueness()
+            .context("migrating SQLite workspace_revisions uniqueness (pre-schema)")?;
         self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
             .context("initialising SQLite DevQL schema")?;
         self.migrate_devql_checkpoint_columns()
@@ -102,6 +104,9 @@ impl SqliteConnectionPool {
 
     fn migrate_workspace_revisions_uniqueness(&self) -> Result<()> {
         self.with_connection(|conn| {
+            if !sqlite_table_exists(conn, "workspace_revisions")? {
+                return Ok(());
+            }
             conn.execute_batch(
                 r#"
 DELETE FROM workspace_revisions
@@ -645,6 +650,61 @@ mod tests {
             exists,
             "workspace_revisions should still exist after double init"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn initialise_devql_schema_recovers_legacy_workspace_revision_duplicates() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+
+        sqlite.execute_batch(
+            r#"
+CREATE TABLE workspace_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id    TEXT    NOT NULL,
+    tree_hash  TEXT    NOT NULL,
+    created_at TEXT    DEFAULT (datetime('now'))
+);
+
+CREATE INDEX workspace_revisions_repo_idx
+ON workspace_revisions (repo_id);
+
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1');
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1');
+INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2');
+"#,
+        )?;
+
+        sqlite.initialise_devql_schema()?;
+
+        let duplicate_count: i64 = sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = 'repo-a' AND tree_hash = 'hash-1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            duplicate_count, 1,
+            "legacy duplicate workspace_revisions rows should be deduplicated"
+        );
+
+        let duplicate_insert_rejected = sqlite.with_connection(|conn| {
+            Ok(conn
+                .execute(
+                    "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2')",
+                    [],
+                )
+                .is_err())
+        })?;
+        assert!(
+            duplicate_insert_rejected,
+            "unique repo/tree_hash inserts must be enforced after migration"
+        );
+
         Ok(())
     }
 
