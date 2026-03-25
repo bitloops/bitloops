@@ -1,0 +1,97 @@
+name: Develop CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "bitloops/**"
+      - "scripts/check-rust-file-size.sh"
+      - ".github/workflows/dev-ci.yml"
+
+permissions:
+  contents: read
+
+# Caching / two compiles:
+# - llvm-cov uses target/llvm-cov-target/ (-C instrument-coverage); clippy uses the normal target/ tree — not shared (e.g. bundled DuckDB builds twice if both run).
+# - rust-cache shared-key helps when the cache hits; persistent CARGO_TARGET_DIR on the runner helps repeat runs.
+#
+# Coverage link errors vs clippy “passing”:
+# - Clippy is mostly `cargo check` + lints — often no final link of integration tests. llvm-cov runs tests and must link them.
+# - fastembed → onnxruntime (libort_sys) ships prebuilt native code. If the link fails with undefined __isoc23_strtol(l|ll),
+#   __libc_single_threaded, or new libstdc++ ABI symbols, the runner glibc is too old (need glibc ≥ 2.38, e.g. Ubuntu 24.04+).
+#   myoung34/github-runner default is Ubuntu 20.04 — too old for current ORT wheels. Fix: upgrade runner base to 24.04 (or newer),
+#   or pin/downgrade fastembed/onnxruntime to artifacts built for older manylinux, or drop fastembed for coverage-only builds.
+#
+# Clippy is merge-blocking; coverage is informational (continue-on-error). Require only the blocking job names in branch protection.
+#
+# DuckDB: use official prebuilt libduckdb (no C++ compile) via libduckdb-sys. Requires --no-default-features so
+# `duckdb-bundled` is off. Do not set DUCKDB_DOWNLOAD_LIB for linux-musl cross builds (no prebuilt archive).
+
+env:
+  DUCKDB_DOWNLOAD_LIB: "1"
+
+jobs:
+  rust-file-size:
+    name: Rust file size
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Check Rust file size limits
+        run: bash scripts/check-rust-file-size.sh
+
+  fmt:
+    name: Format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        run: cargo fmt --all --check --manifest-path bitloops/Cargo.toml
+
+  clippy:
+    name: Clippy
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-ci
+      - name: cargo clippy
+        run: cargo clippy --manifest-path bitloops/Cargo.toml --all-targets --no-default-features -- -D warnings
+
+  coverage-baseline:
+    name: Coverage baseline (informational)
+    continue-on-error: true
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bitloops
+          shared-key: dev-ci
+      - name: Install mold (optional; Ubuntu 22.04+ — speeds / stabilizes huge C++ links)
+        run: sudo apt-get update && sudo apt-get install -y mold || true
+      - name: coverage-baseline-check
+        working-directory: bitloops
+        env:
+          # Cap parallel rustc jobs to lower peak RAM while compiling/linking large deps (tune per runner).
+          CARGO_BUILD_JOBS: 4
+        run: |
+          cargo install cargo-llvm-cov --locked
+          if command -v mold >/dev/null 2>&1; then
+            mold -run bash scripts/coverage-baseline-check.sh check
+          else
+            bash scripts/coverage-baseline-check.sh check
+          fi

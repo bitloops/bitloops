@@ -1,7 +1,0 @@
-[alias]
-test-all = "test --no-fail-fast"
-test-core = "test --lib --no-fail-fast"
-test-cli = "test --bin bitloops --no-fail-fast"
-test-integration = "test --tests --no-fail-fast"
-test-coverage = "llvm-cov --workspace --all-features --all-targets --html --output-dir target/llvm-cov-html"
-test-coverage-lcov = "llvm-cov --workspace --all-features --all-targets --lcov --output-path target/llvm-cov.info"

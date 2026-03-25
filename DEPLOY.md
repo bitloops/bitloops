@@ -20,7 +20,7 @@ Cut a release only when:
 
 ## 3. Bump version and create tag
 
-Create a release PR that bumps `bitloops_cli/Cargo.toml` to `X.Y.Z`.
+Create a release PR that bumps `bitloops/Cargo.toml` to `X.Y.Z`.
 
 1. Open PR (example title: `chore: release vX.Y.Z`).
 2. Wait for CI.
@@ -38,7 +38,7 @@ git pull --ff-only origin main
 
 What the script does:
 
-- Reads `bitloops_cli/Cargo.toml` version
+- Reads `bitloops/Cargo.toml` version
 - Creates tag `vX.Y.Z`
 - Pushes the tag only (never pushes `main`)
 

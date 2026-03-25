@@ -1,6 +1,6 @@
 # Releasing
 
-1. Merge a PR that bumps `version` in `bitloops_cli/Cargo.toml`
+1. Merge a PR that bumps `version` in `bitloops/Cargo.toml`
 2. From clean local `main`, run:
 
 ```bash
@@ -12,6 +12,7 @@ That's it — the script tags current `main` and pushes the tag. GitHub Actions 
 Release assets include a `checksums-sha256.txt` file used by install scripts to verify integrity.
 
 Installers:
+
 - macOS/Linux: `scripts/install.sh`
 - Windows (PowerShell): `scripts/install.ps1`
 - Windows (CMD): `scripts/install.cmd`

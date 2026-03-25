@@ -3,7 +3,7 @@
 ## 1) Build and install local CLI
 
 ```bash
-cd bitloops_cli
+cd bitloops
 cargo install --path . --force
 bitloops --version
 ```

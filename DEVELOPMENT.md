@@ -2,7 +2,7 @@
 
 ## Build locally
 
-Run from the `bitloops_cli/` directory:
+Run from the `bitloops/` directory:
 
 ```bash
 # One-time local setup for build-time dashboard URL embedding
@@ -26,43 +26,55 @@ Dashboard bundle URLs are embedded at build time from `config/dashboard_urls.jso
 If this file is missing or invalid, `cargo build`/`cargo check` will fail with a
 clear remediation message.
 
-## Local git hooks (one-time setup)
+### DuckDB (optional speed-up)
 
-Run once from the repo root:
+By default, `cargo build` uses the **`duckdb-bundled`** feature and compiles DuckDB C++ locally (slow, but works offline and for exotic targets).
+
+For **much faster** builds on supported hosts, disable that default and let `libduckdb-sys` download the official DuckDB release for your target (linux-gnu amd64/arm64, macOS universal, Windows MSVC):
 
 ```bash
-bash scripts/setup-hooks.sh
+export DUCKDB_DOWNLOAD_LIB=1
+cargo check --no-default-features
 ```
 
-This configures git to use the versioned hooks in `.githooks/`:
+`./scripts/test-summary.sh`, `./scripts/coverage-baseline-check.sh`, and `bash scripts/check-dev.sh` do this automatically unless **`DUCKDB_USE_BUNDLED=1`** (force source build).
 
-- `pre-commit`: Rust file-size check, `cargo fmt`, `cargo clippy`
-- `pre-push`: strict coverage non-regression check via `./bitloops_cli/scripts/coverage-baseline-check.sh check`
+To use a **local** unpack instead of download, set **`DUCKDB_LIB_DIR`** (and **`DUCKDB_INCLUDE_DIR`** if headers are not beside the lib) and build with **`--no-default-features`**.
+
+**Unsupported** for prebuilts: **linux-musl** and other triples without an official `libduckdb-*.zip` — keep default features (bundled) for those, e.g. `cargo build --release --target x86_64-unknown-linux-musl`.
+
+## Local checks (optional)
+
+There are no repo-enforced git hooks. To match what runs on pull requests to `develop`, run from the repo root:
+
+```bash
+bash scripts/check-dev.sh           # file-size, fmt --check, clippy
+bash scripts/check-dev.sh --test   # also ./scripts/test-summary.sh (full suite + combined summaries)
+bash scripts/check-dev.sh --full   # also coverage baseline check
+```
+
+If you previously pointed `core.hooksPath` at this repository, run `bash scripts/setup-hooks.sh` once to clear it.
 
 ## Testing
 
-Run from the `bitloops_cli/` directory:
+Run from the `bitloops/` directory:
 
 ```bash
-# Test type aliases
-# - core: lib crate tests (domain/application/core logic)
-cargo test-core
-
-# - cli: bin crate tests (CLI adapter/command wiring)
-cargo test-cli
-
-# - integration: tests/*.rs (includes e2e-style scenarios)
-cargo test-integration
-
-# - all: full suite
-cargo test-all
-
-# Run tests and print one combined summary block at the end
+# Full suite (recommended): one command, combined “test result:” summaries at the end
 ./scripts/test-summary.sh
+# Equivalent without the script:
+cargo test --no-fail-fast
 
-# Run tests with coverage (single run) and print coverage summary at the end
+# Optional cargo aliases (see .cargo/config.toml): test-core, test-cli, test-integration, test-all
+# Those aliases are NOT visible if you run cargo from the git repo root with
+# `--manifest-path bitloops/Cargo.toml` — use `cargo test --manifest-path bitloops/Cargo.toml --no-fail-fast`
+# or `working-directory: bitloops` in CI.
+
+# Tests with coverage (single llvm-cov run) + coverage summary tables
 ./scripts/test-summary.sh --coverage
-# (prints overall lines/functions/branches plus lowest-coverage files)
+
+# HTML + LCOV reports (separate from the baseline gate)
+./scripts/test-coverage.sh baseline
 
 # Coverage setup (once)
 brew install cargo-llvm-cov  # macOS (Linux: `apt install llvm`)
@@ -94,18 +106,18 @@ Coverage outputs:
 
 - HTML: `target/llvm-cov-html/html/index.html`
 - LCOV: `target/llvm-cov.info`
-- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops_cli/`)
+- Baseline file: `.coverage-baseline.jsonl` (inside `bitloops/`)
 
 Coverage gate policy:
 
-- Enforced in local `pre-push`.
+- On pull requests to `develop`, CI runs the same check **informationally** (does not block merge); enforce locally with `bash scripts/check-dev.sh --full` before merge if you rely on the baseline.
 - Metrics: lines and functions.
 - Rule: `current >= baseline - 0.05` for both metrics (0.05 percentage-point tolerance).
 - Baseline source on check: latest JSONL record (`tail -n 1`).
 
 When baseline changes are intentional:
 
-- Run `./scripts/coverage-baseline-check.sh update` from `bitloops_cli/`.
+- Run `./scripts/coverage-baseline-check.sh update` from `bitloops/`.
 - Commit the appended baseline history entries with your code changes.
 - If baseline decreases, include a short justification in the PR description.
 
@@ -119,7 +131,7 @@ Edit `Cargo.toml`:
 
 ```toml
 [package]
-version = "0.1.0"   # ← change this
+version = "0.0.11"   # ← change this
 ```
 
 ### 2. Run the release script
@@ -134,7 +146,7 @@ This will:
 
 - Read the version from `Cargo.toml`
 - Commit the version bump
-- Create and push the git tag (`v0.1.0`)
+- Create and push the git tag (`v0.0.11`)
 - GitHub Actions picks up the tag and builds all platform binaries automatically
 
 Before release builds, generate the environment-specific dashboard config:
@@ -194,7 +206,7 @@ The `install.sh` script at the repo root detects the platform, downloads the mat
 class Bitloops < Formula
   desc "Bitloops CLI"
   homepage "https://github.com/bitloops/bitloops-cli"
-  version "0.1.0"
+  version "0.0.11"
   license "MIT"
 
   on_macos do
@@ -255,7 +267,7 @@ Dashboard bundle URL settings are now build-time embedded:
 - Input file: `config/dashboard_urls.json` (gitignored)
 - Template: `config/dashboard_urls.template.json`
 - Build generator: `build.rs`
-- Runtime consumer: `src/server/dashboard/bundle.rs`
+- Runtime consumer: `src/api/bundle.rs`
 
 Optional emergency runtime overrides are still supported:
 

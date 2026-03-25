@@ -8,11 +8,10 @@ if [[ ! -d "$ROOT/.git" ]]; then
   exit 1
 fi
 
-git -C "$ROOT" config core.hooksPath .githooks
-chmod +x "$ROOT/.githooks/pre-commit" "$ROOT/.githooks/pre-push"
+git -C "$ROOT" config --unset-all core.hooksPath 2>/dev/null || true
 
-echo "Hooks configured."
-echo "core.hooksPath=$(git -C "$ROOT" config --get core.hooksPath)"
-echo "Installed hooks:"
-echo "  - $ROOT/.githooks/pre-commit"
-echo "  - $ROOT/.githooks/pre-push"
+echo "Repo-local git hooks are cleared (core.hooksPath unset if it pointed here)."
+echo "Run checks manually when needed:"
+echo "  bash $ROOT/scripts/check-dev.sh"
+echo "  bash $ROOT/scripts/check-dev.sh --test"
+echo "  bash $ROOT/scripts/check-dev.sh --full"

@@ -7,7 +7,7 @@ set -euo pipefail
 # - test files are ignored by default (set INCLUDE_TESTS=1 to include)
 # - gitignored files are skipped
 
-ROOT="${1:-bitloops_cli}"
+ROOT="${1:-bitloops}"
 WARN_LINES="${RUST_FILE_WARN_LINES:-500}"
 MAX_LINES="${RUST_FILE_MAX_LINES:-1000}"
 INCLUDE_TESTS="${INCLUDE_TESTS:-0}"
@@ -47,7 +47,7 @@ resolve_legacy_max_for_file() {
   local key
   local short_key
   for key in "${!LEGACY_MAX_LINES[@]}"; do
-    short_key="${key#bitloops_cli/}"
+    short_key="${key#bitloops/}"
     if [[ "$file" == "$key" \
       || "$file" == "./$key" \
       || "$file" == "../$key" \
@@ -116,7 +116,14 @@ fi
 
 if [[ "${#size_index[@]}" -gt 0 ]]; then
   echo "Top non-test Rust files by line count:"
-  printf '%s\n' "${size_index[@]}" | sort -nr | head -n 15 | sed 's/^/  /'
+  # Sort fully then take top N in bash — avoids sort|head SIGPIPE ("Broken pipe") under set -o pipefail.
+  mapfile -t _top_by_lines < <(printf '%s\n' "${size_index[@]}" | sort -nr)
+  _n="${#_top_by_lines[@]}"
+  ((_n > 15)) && _n=15
+  for ((i = 0; i < _n; i++)); do
+    echo "  ${_top_by_lines[i]}"
+  done
+  unset -v _top_by_lines _n
   echo
 fi
 
