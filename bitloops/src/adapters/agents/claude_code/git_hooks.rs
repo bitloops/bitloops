@@ -339,6 +339,9 @@ fn detect_hook_managers(repo_root: &Path) -> Vec<HookManager> {
 fn extract_command_line(hook_content: &str) -> String {
     for line in hook_content.lines() {
         let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
         if trimmed.contains(" hooks git ") {
             return trimmed.to_string();
         }

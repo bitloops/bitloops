@@ -292,6 +292,11 @@ fn test_extract_command_line() {
             "#!/bin/sh\n# comment\n  bitloops hooks git commit-msg \"$1\" || exit 1  \n",
             "bitloops hooks git commit-msg \"$1\" || exit 1",
         ),
+        (
+            "comment line contains hooks git substring",
+            "#!/bin/sh\n# Pre-push: `bitloops hooks git pre-push` (default manual-commit: no-op)\nbitloops hooks git pre-push \"$1\" || true\n",
+            "bitloops hooks git pre-push \"$1\" || true",
+        ),
     ];
 
     for (_name, content, want) in cases {
