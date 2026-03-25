@@ -93,8 +93,8 @@ The Knowledge pack ingests repository-scoped external knowledge, versions it, st
 `knowledge/descriptor.rs` defines:
 
 - id: `knowledge`
-- version: `0.1.0`
-- dependency: `test_harness >= 0.1.0`
+- version: `0.0.11`
+- dependency: `test_harness >= 0.0.11`
 
 ### Contributions
 
@@ -157,7 +157,7 @@ The Test Harness pack manages verification data such as test discovery, coverage
 `test_harness/descriptor.rs` defines:
 
 - id: `test_harness`
-- version: `0.1.0`
+- version: `0.0.11`
 - no declared pack dependencies
 
 ### Contributions
@@ -232,7 +232,7 @@ The Semantic Clones pack runs semantic feature extraction, embeddings, and clone
 `semantic_clones/descriptor.rs` defines:
 
 - id: `semantic_clones`
-- version: `0.1.0`
+- version: `0.0.11`
 - no declared pack dependencies
 
 ### Contributions
