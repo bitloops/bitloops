@@ -276,7 +276,7 @@ async fn initialise_devql_schema_for_command(
     if backends.events.has_clickhouse() {
         init_clickhouse_schema(cfg).await?;
     } else {
-        init_duckdb_schema(&backends.events).await?;
+        init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
     }
     init_relational_schema(cfg, &relational).await?;
     Ok(relational)

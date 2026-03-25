@@ -49,35 +49,35 @@ pub(crate) fn init_devql_schema_with_postgres_dsn(
 }
 
 fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {
-    let postgres_dsn_json =
-        serde_json::to_string(&postgres_dsn).expect("serialize postgres_dsn for test config");
+    let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
+    let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
+    let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
+    let cfg = serde_json::json!({
+        "version": "1.0",
+        "scope": "project",
+        "settings": {
+            "stores": {
+                "relational": {
+                    "sqlite_path": sqlite_path,
+                    "postgres_dsn": postgres_dsn
+                },
+                "event": {
+                    "duckdb_path": duckdb_path,
+                    "clickhouse_url": null,
+                    "clickhouse_user": null,
+                    "clickhouse_password": null,
+                    "clickhouse_database": null
+                },
+                "blob": {
+                    "local_path": blob_local_path
+                }
+            }
+        }
+    });
+
     fs::write(
         repo_root.join(".bitloops/config.json"),
-        format!(
-            r#"{{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {{
-    "stores": {{
-      "relational": {{
-        "sqlite_path": ".bitloops/stores/relational/post-commit-devql.db",
-        "postgres_dsn": {}
-      }},
-      "event": {{
-        "duckdb_path": ".bitloops/stores/events/post-commit-events.duckdb",
-        "clickhouse_url": null,
-        "clickhouse_user": null,
-        "clickhouse_password": null,
-        "clickhouse_database": null
-      }},
-      "blob": {{
-        "local_path": ".bitloops/stores/blobs/post-commit"
-      }}
-    }}
-  }}
-}}"#,
-            postgres_dsn_json
-        ),
+        serde_json::to_vec_pretty(&cfg).expect("serialise post-commit test config"),
     )
     .expect("write repo-local store config for post-commit tests");
 }

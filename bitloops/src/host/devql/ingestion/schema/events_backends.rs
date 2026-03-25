@@ -26,7 +26,10 @@ ORDER BY (repo_id, event_time, event_id)
     Ok(())
 }
 
-pub(crate) async fn init_duckdb_schema(events_cfg: &EventsBackendConfig) -> Result<()> {
+pub(crate) async fn init_duckdb_schema(
+    repo_root: &Path,
+    events_cfg: &EventsBackendConfig,
+) -> Result<()> {
     let sql = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
     event_id VARCHAR PRIMARY KEY,
@@ -50,7 +53,8 @@ CREATE INDEX IF NOT EXISTS checkpoint_events_repo_commit_idx
 ON checkpoint_events (repo_id, commit_sha);
 "#;
 
-    duckdb_exec_path_allow_create(&events_cfg.duckdb_path_or_default(), sql)
+    let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(repo_root);
+    duckdb_exec_path_allow_create(&duckdb_path, sql)
         .await
         .context("creating DuckDB checkpoint_events table")?;
     Ok(())
