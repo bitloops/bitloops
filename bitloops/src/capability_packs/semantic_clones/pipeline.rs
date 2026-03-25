@@ -40,10 +40,11 @@ pub(crate) async fn init_postgres_semantic_clones_schema(pg_client: &Client) -> 
 }
 
 async fn ensure_semantic_clones_schema(relational: &RelationalStorage) -> Result<()> {
-    match relational {
-        RelationalStorage::Postgres(client) => init_postgres_semantic_clones_schema(client).await,
-        RelationalStorage::Sqlite { path } => init_sqlite_semantic_clones_schema(path).await,
+    init_sqlite_semantic_clones_schema(&relational.local.path).await?;
+    if let Some(remote) = relational.remote.as_ref() {
+        init_postgres_semantic_clones_schema(&remote.client).await?;
     }
+    Ok(())
 }
 
 pub(crate) async fn rebuild_symbol_clone_edges(

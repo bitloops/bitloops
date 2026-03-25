@@ -63,9 +63,7 @@ async fn init_relational_schema_creates_test_harness_tables() {
 
     let mut cfg = test_cfg();
     cfg.repo_root = repo_root;
-    let relational = RelationalStorage::Sqlite {
-        path: db_path.clone(),
-    };
+    let relational = RelationalStorage::local_only(db_path.clone());
     init_relational_schema(&cfg, &relational)
         .await
         .expect("initialise sqlite relational schema");

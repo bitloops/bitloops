@@ -147,7 +147,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
     assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
-    assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
+    assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));

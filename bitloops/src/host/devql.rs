@@ -225,10 +225,10 @@ pub fn run_capability_packs_report(
 }
 
 async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<()> {
-    match relational {
-        RelationalStorage::Postgres(client) => init_postgres_schema(cfg, client).await,
-        RelationalStorage::Sqlite { path } => init_sqlite_schema(path).await,
-    }?;
+    init_sqlite_schema(&relational.local.path).await?;
+    if let Some(remote) = relational.remote.as_ref() {
+        init_postgres_schema(cfg, &remote.client).await?;
+    }
 
     let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     capability_host
@@ -263,22 +263,6 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
     }
-}
-
-fn require_postgres_dsn<'a>(
-    cfg: &'a DevqlConfig,
-    relational: &'a RelationalBackendConfig,
-    command: &str,
-) -> Result<&'a str> {
-    relational
-        .postgres_dsn
-        .as_deref()
-        .or(cfg.pg_dsn.as_deref())
-        .ok_or_else(|| {
-            anyhow!(
-                "{DEVQL_POSTGRES_DSN_REQUIRED_PREFIX}: `{command}` requires `stores.relational.postgres_dsn` when `stores.relational.provider=postgres`"
-            )
-        })
 }
 
 async fn initialise_devql_schema_for_command(

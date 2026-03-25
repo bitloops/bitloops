@@ -701,23 +701,21 @@ fn run_devql_reference_transaction_cleanup(
             .context("resolving repository identity for reference-transaction cleanup")?;
         let backends = crate::config::resolve_store_backend_config_for_repo(&repo_root)
             .context("resolving backend config for reference-transaction cleanup")?;
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(&repo_root)
+            .context("resolving SQLite path for reference-transaction cleanup")?;
 
-        if !deletions.local_branches.is_empty() {
-            let sqlite_path = backends
-                .relational
-                .resolve_sqlite_db_path_for_repo(&repo_root)
-                .context("resolving SQLite path for reference-transaction cleanup")?;
-            if sqlite_path.exists() {
-                let sqlite = crate::host::devql::RelationalStorage::Sqlite { path: sqlite_path };
-                let statements =
-                    build_current_state_cleanup_sql(&repo.repo_id, &deletions.local_branches);
-                if let Err(err) = sqlite.exec_batch_transactional(&statements).await
-                    && !is_missing_devql_current_state_schema_error(&err)
-                {
-                    return Err(err).context(
-                        "cleaning local branch current-state rows in SQLite for reference-transaction",
-                    );
-                }
+        if !deletions.local_branches.is_empty() && sqlite_path.exists() {
+            let sqlite = crate::host::devql::RelationalStorage::local_only(sqlite_path.clone());
+            let statements =
+                build_current_state_cleanup_sql(&repo.repo_id, &deletions.local_branches);
+            if let Err(err) = sqlite.exec_batch_transactional(&statements).await
+                && !is_missing_devql_current_state_schema_error(&err)
+            {
+                return Err(err).context(
+                    "cleaning local branch current-state rows in SQLite for reference-transaction",
+                );
             }
         }
 
@@ -743,10 +741,11 @@ fn run_devql_reference_transaction_cleanup(
                 }
             });
 
-            let postgres = crate::host::devql::RelationalStorage::Postgres(client);
+            let postgres =
+                crate::host::devql::RelationalStorage::with_remote_client(sqlite_path, client);
             let statements =
                 build_current_state_cleanup_sql(&repo.repo_id, &deletions.remote_branches);
-            if let Err(err) = postgres.exec_batch_transactional(&statements).await
+            if let Err(err) = postgres.exec_remote_batch_transactional(&statements).await
                 && !is_missing_devql_current_state_schema_error(&err)
             {
                 return Err(err).context(

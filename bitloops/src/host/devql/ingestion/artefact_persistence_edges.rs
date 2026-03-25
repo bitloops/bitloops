@@ -647,9 +647,7 @@ mod tests {
     #[test]
     fn build_upsert_historical_edge_sql_targets_historical_table() {
         let cfg = sample_cfg();
-        let relational = RelationalStorage::Sqlite {
-            path: PathBuf::from("devql.sqlite"),
-        };
+        let relational = RelationalStorage::local_only(PathBuf::from("devql.sqlite"));
         let sql =
             build_upsert_historical_edge_sql(&cfg, &relational, "blob-sha", &sample_edge_record());
         assert!(
@@ -665,9 +663,7 @@ mod tests {
     #[test]
     fn build_upsert_current_edge_sql_accepts_branch_argument() {
         let cfg = sample_cfg();
-        let relational = RelationalStorage::Sqlite {
-            path: PathBuf::from("devql.sqlite"),
-        };
+        let relational = RelationalStorage::local_only(PathBuf::from("devql.sqlite"));
         let revision = TemporalRevisionRef {
             kind: TemporalRevisionKind::Commit,
             id: "commit-sha",

@@ -113,7 +113,7 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     })
     .await
     .expect("join blocking clone DDL");
-    RelationalStorage::Sqlite { path: path_buf }
+    RelationalStorage::local_only(path_buf)
 }
 
 #[tokio::test]

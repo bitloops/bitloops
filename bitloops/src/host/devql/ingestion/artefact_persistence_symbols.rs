@@ -260,9 +260,7 @@ mod tests {
     #[test]
     fn build_upsert_historical_artefact_sql_targets_historical_table() {
         let cfg = sample_cfg();
-        let relational = RelationalStorage::Sqlite {
-            path: PathBuf::from("devql.sqlite"),
-        };
+        let relational = RelationalStorage::local_only(PathBuf::from("devql.sqlite"));
         let sql = build_upsert_historical_artefact_sql(
             &cfg,
             &relational,
@@ -284,9 +282,7 @@ mod tests {
     #[test]
     fn build_upsert_current_artefact_sql_accepts_branch_argument() {
         let cfg = sample_cfg();
-        let relational = RelationalStorage::Sqlite {
-            path: PathBuf::from("devql.sqlite"),
-        };
+        let relational = RelationalStorage::local_only(PathBuf::from("devql.sqlite"));
         let record = sample_record();
         let revision = TemporalRevisionRef {
             kind: TemporalRevisionKind::Commit,
