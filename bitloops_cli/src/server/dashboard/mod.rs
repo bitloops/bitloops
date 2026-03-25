@@ -3,7 +3,9 @@ mod bundle_types;
 mod db;
 mod dto;
 mod handlers;
+mod hosts;
 mod router;
+pub mod tls;
 
 use crate::engine::db_status::{
     DatabaseConnectionStatus, DatabaseStatusRow, classify_connection_error,
@@ -22,12 +24,13 @@ use std::ffi::OsStr;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
 const PREFERRED_LOCAL_HOST: &str = "bitloops.local";
-const FALLBACK_LOCAL_HOST: &str = "127.0.0.1";
 const DEFAULT_BUNDLE_RELATIVE_DIR: &str = ".bitloops/dashboard/bundle";
 pub(super) const API_GIT_SCAN_LIMIT: usize = 5_000;
 pub(super) const API_DEFAULT_PAGE_LIMIT: usize = 100;
@@ -137,14 +140,47 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         bail!("dashboard database startup health check failed");
     }
 
-    let selected_host = select_host_with_probe(config.host.as_deref(), |candidate| {
-        host_resolves_to_loopback(candidate, config.port)
-    });
-    let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
+    // Default path (no `--host`): repair `bitloops.local` in hosts before any bind-time probe.
+    let bind_host_str = if let Some(explicit) = config.host.as_deref().and_then(normalized_host) {
+        if !matches!(explicit, "0.0.0.0" | "::" | "[::]") {
+            resolve_bind_addr(explicit, config.port).with_context(|| {
+                format!(
+                    "host {explicit} must resolve on this machine for binding \
+                     (Bitloops does not edit the hosts file when --host is set)"
+                )
+            })?;
+        }
+        explicit.to_string()
+    } else {
+        match hosts::ensure_default_dashboard_host_mapping()? {
+            hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
+                PREFERRED_LOCAL_HOST.to_string()
+            }
+            hosts::HostMappingOutcome::NeedsFallback { reason } => {
+                eprintln!(
+                    "Warning: could not map {PREFERRED_LOCAL_HOST} in the hosts file: {reason}\n\
+                     Falling back to localhost for this run."
+                );
+                "localhost".to_string()
+            }
+        }
+    };
+
+    let bind_addr = resolve_bind_addr(&bind_host_str, config.port)?;
+    let browser_host = browser_host_for_url(&bind_host_str, bind_addr);
+
+    println!("Verifying mkcert installation and HTTPS certificates…");
+    let tls_material = tls::ensure_dashboard_tls_material(&browser_host)?;
+    log::debug!(
+        "Dashboard TLS: cert={} key={}",
+        tls_material.cert_path.display(),
+        tls_material.key_path.display()
+    );
+    let tls_acceptor = TlsAcceptor::from(tls_material.server_config.clone());
 
     let listener = TcpListener::bind(bind_addr).await.with_context(|| {
         format!(
-            "Binding dashboard server to {selected_host}:{}",
+            "Binding dashboard server to {bind_host_str}:{}",
             config.port
         )
     })?;
@@ -162,7 +198,6 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    let browser_host = browser_host_for_url(&selected_host, local_addr);
     let url = format_dashboard_url(&browser_host, local_addr.port());
 
     println!();
@@ -199,8 +234,9 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         eprintln!("Warning: failed to open default browser: {err:#}");
     }
 
-    serve_until_ctrl_c(
+    serve_until_ctrl_c_tls(
         listener,
+        tls_acceptor,
         DashboardState {
             repo_root,
             mode: serve_mode,
@@ -233,15 +269,59 @@ fn map_backend_health_status(health: &db::BackendHealth) -> DatabaseConnectionSt
     }
 }
 
-async fn serve_until_ctrl_c(listener: TcpListener, state: DashboardState) -> Result<()> {
+async fn serve_until_ctrl_c_tls(
+    listener: TcpListener,
+    tls_acceptor: TlsAcceptor,
+    state: DashboardState,
+) -> Result<()> {
+    use hyper::server::conn::http1::Builder as Http1Builder;
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+
     let app = router::build_dashboard_router(state);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("Serving dashboard requests")?;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
+            accept = listener.accept() => {
+                let (stream, _) = accept.context("accepting dashboard TCP connection")?;
+                let tls_acceptor = tls_acceptor.clone();
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let tls_stream = match tls_acceptor.accept(stream).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let detail = e.to_string();
+                            if detail.contains("CertificateUnknown")
+                                || detail.contains("UnknownIssuer")
+                            {
+                                log::warn!(
+                                    "TLS handshake failed: {e} \
+                                     (the client rejected the certificate — run `mkcert -install` once, quit Chrome fully, retry)"
+                                );
+                            } else {
+                                log::warn!("TLS handshake failed: {e}");
+                            }
+                            return;
+                        }
+                    };
+                    let io = TokioIo::new(tls_stream);
+                    let service = TowerToHyperService::new(app);
+                    if let Err(e) = Http1Builder::new()
+                        .serve_connection(io, service)
+                        .await
+                    {
+                        log::warn!("HTTP connection error: {e}");
+                    }
+                });
+            }
+        }
+    }
+
+    drop(listener);
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     println!("Dashboard server stopped.");
     Ok(())
@@ -716,6 +796,11 @@ pub(super) fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBu
     path.to_path_buf()
 }
 
+#[cfg(test)]
+const FALLBACK_LOCAL_HOST: &str = "127.0.0.1";
+
+/// Legacy host-selection helper kept for unit tests (production uses [`hosts::ensure_default_dashboard_host_mapping`]).
+#[cfg(test)]
 pub(super) fn select_host_with_probe<F>(explicit_host: Option<&str>, probe: F) -> String
 where
     F: Fn(&str) -> bool,
@@ -734,13 +819,6 @@ where
 fn normalized_host(input: &str) -> Option<&str> {
     let host = input.trim();
     if host.is_empty() { None } else { Some(host) }
-}
-
-fn host_resolves_to_loopback(host: &str, port: u16) -> bool {
-    let Ok(addrs) = (host, port).to_socket_addrs() else {
-        return false;
-    };
-    addrs.into_iter().any(|addr| addr.ip().is_loopback())
 }
 
 fn resolve_bind_addr(host: &str, port: u16) -> Result<SocketAddr> {
@@ -781,9 +859,9 @@ pub(super) fn browser_host_for_url(bind_host: &str, local_addr: SocketAddr) -> S
 
 pub(super) fn format_dashboard_url(host: &str, port: u16) -> String {
     if host.contains(':') && !host.starts_with('[') {
-        format!("http://[{host}]:{port}")
+        format!("https://[{host}]:{port}")
     } else {
-        format!("http://{host}:{port}")
+        format!("https://{host}:{port}")
     }
 }
 

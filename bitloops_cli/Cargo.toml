@@ -31,6 +31,15 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 semver = "1"
 tar = "0.4"
 zstd = "0.13"
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+x509-parser = "0.16"
+hyper = { version = "1", features = ["server", "http1"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

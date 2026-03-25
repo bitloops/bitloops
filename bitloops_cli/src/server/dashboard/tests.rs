@@ -538,7 +538,7 @@ fn browser_host_uses_localhost_for_unspecified_ipv6_bind() {
 
 #[test]
 fn format_dashboard_url_wraps_ipv6_hosts() {
-    assert_eq!(format_dashboard_url("::1", 5667), "http://[::1]:5667");
+    assert_eq!(format_dashboard_url("::1", 5667), "https://[::1]:5667");
 }
 
 #[test]
