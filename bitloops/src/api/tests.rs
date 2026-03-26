@@ -1599,6 +1599,193 @@ fn seed_graphql_clone_data(repo_root: &Path) {
     }
 }
 
+fn seed_graphql_test_harness_stage_data(
+    repo_root: &Path,
+    commit_sha: &str,
+    rows: &[(&str, &str, &str, &str)],
+) {
+    use crate::capability_packs::test_harness::storage::{
+        TestHarnessRepository, open_repository_for_repo,
+    };
+    use crate::models::{
+        CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind,
+        TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+    };
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let mut repository = open_repository_for_repo(repo_root).expect("open test harness repository");
+    let discovery_run = TestDiscoveryRunRecord {
+        discovery_run_id: format!("discovery:{commit_sha}"),
+        repo_id: repo_id.clone(),
+        commit_sha: commit_sha.to_string(),
+        language: Some("typescript".to_string()),
+        started_at: "2026-03-26T11:00:00Z".to_string(),
+        finished_at: Some("2026-03-26T11:00:01Z".to_string()),
+        status: "complete".to_string(),
+        enumeration_status: Some("complete".to_string()),
+        notes_json: None,
+        stats_json: None,
+    };
+
+    let mut test_artefacts = Vec::<TestArtefactCurrentRecord>::new();
+    let mut test_edges = Vec::<TestArtefactEdgeCurrentRecord>::new();
+    let mut coverage_captures = Vec::<CoverageCaptureRecord>::new();
+    let mut coverage_hits = Vec::<CoverageHitRecord>::new();
+
+    for (index, (production_symbol_id, production_artefact_id, production_path, test_name)) in
+        rows.iter().enumerate()
+    {
+        let suite_symbol_id = format!("test-suite-symbol-{index}");
+        let suite_artefact_id = format!("test-suite-artefact-{index}");
+        let test_symbol_id = format!("test-scenario-symbol-{index}");
+        let test_artefact_id = format!("test-scenario-artefact-{index}");
+        let test_path = format!("tests/generated_{index}.ts");
+
+        test_artefacts.push(TestArtefactCurrentRecord {
+            artefact_id: suite_artefact_id.clone(),
+            symbol_id: suite_symbol_id.clone(),
+            repo_id: repo_id.clone(),
+            commit_sha: commit_sha.to_string(),
+            blob_sha: format!("test-blob-suite-{index}"),
+            path: test_path.clone(),
+            language: "typescript".to_string(),
+            canonical_kind: "test_suite".to_string(),
+            language_kind: Some("describe".to_string()),
+            symbol_fqn: Some(format!("tests::suite::{index}")),
+            name: format!("suite_{index}"),
+            parent_artefact_id: None,
+            parent_symbol_id: None,
+            start_line: 1,
+            end_line: 20,
+            start_byte: Some(0),
+            end_byte: Some(200),
+            signature: None,
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: commit_sha.to_string(),
+        });
+
+        test_artefacts.push(TestArtefactCurrentRecord {
+            artefact_id: test_artefact_id.clone(),
+            symbol_id: test_symbol_id.clone(),
+            repo_id: repo_id.clone(),
+            commit_sha: commit_sha.to_string(),
+            blob_sha: format!("test-blob-scenario-{index}"),
+            path: test_path.clone(),
+            language: "typescript".to_string(),
+            canonical_kind: "test_scenario".to_string(),
+            language_kind: Some("it".to_string()),
+            symbol_fqn: Some(format!("tests::scenario::{index}")),
+            name: (*test_name).to_string(),
+            parent_artefact_id: Some(suite_artefact_id.clone()),
+            parent_symbol_id: Some(suite_symbol_id.clone()),
+            start_line: 2,
+            end_line: 10,
+            start_byte: Some(10),
+            end_byte: Some(100),
+            signature: None,
+            modifiers: "[]".to_string(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static".to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: commit_sha.to_string(),
+        });
+
+        test_edges.push(TestArtefactEdgeCurrentRecord {
+            edge_id: format!("test-edge-{index}"),
+            repo_id: repo_id.clone(),
+            commit_sha: commit_sha.to_string(),
+            blob_sha: format!("test-blob-edge-{index}"),
+            path: test_path,
+            from_artefact_id: test_artefact_id.clone(),
+            from_symbol_id: test_symbol_id.clone(),
+            to_artefact_id: Some((*production_artefact_id).to_string()),
+            to_symbol_id: Some((*production_symbol_id).to_string()),
+            to_symbol_ref: None,
+            edge_kind: "covers".to_string(),
+            language: "typescript".to_string(),
+            start_line: Some(3),
+            end_line: Some(8),
+            metadata: json!({
+                "confidence": 0.91,
+                "link_source": "static_analysis",
+                "linkage_status": "linked"
+            })
+            .to_string(),
+            revision_kind: "commit".to_string(),
+            revision_id: commit_sha.to_string(),
+        });
+
+        coverage_captures.push(CoverageCaptureRecord {
+            capture_id: format!("capture-{index}"),
+            repo_id: repo_id.clone(),
+            commit_sha: commit_sha.to_string(),
+            tool: "lcov".to_string(),
+            format: CoverageFormat::Lcov,
+            scope_kind: ScopeKind::TestScenario,
+            subject_test_symbol_id: Some(test_symbol_id),
+            line_truth: true,
+            branch_truth: true,
+            captured_at: format!("2026-03-26T11:00:0{}Z", index + 2),
+            status: "complete".to_string(),
+            metadata_json: None,
+        });
+
+        coverage_hits.push(CoverageHitRecord {
+            capture_id: format!("capture-{index}"),
+            production_symbol_id: (*production_symbol_id).to_string(),
+            file_path: (*production_path).to_string(),
+            line: 4,
+            branch_id: -1,
+            covered: true,
+            hit_count: 2,
+        });
+        coverage_hits.push(CoverageHitRecord {
+            capture_id: format!("capture-{index}"),
+            production_symbol_id: (*production_symbol_id).to_string(),
+            file_path: (*production_path).to_string(),
+            line: 5,
+            branch_id: -1,
+            covered: false,
+            hit_count: 0,
+        });
+        coverage_hits.push(CoverageHitRecord {
+            capture_id: format!("capture-{index}"),
+            production_symbol_id: (*production_symbol_id).to_string(),
+            file_path: (*production_path).to_string(),
+            line: 4,
+            branch_id: 0,
+            covered: true,
+            hit_count: 2,
+        });
+    }
+
+    repository
+        .replace_test_discovery(
+            commit_sha,
+            &test_artefacts,
+            &test_edges,
+            &discovery_run,
+            &[],
+        )
+        .expect("replace test discovery");
+    for capture in &coverage_captures {
+        repository
+            .insert_coverage_capture(capture)
+            .expect("insert coverage capture");
+    }
+    repository
+        .insert_coverage_hits(&coverage_hits)
+        .expect("insert coverage hits");
+    repository
+        .rebuild_classifications_from_coverage(commit_sha)
+        .expect("rebuild classifications from coverage");
+}
+
 fn seed_graphql_monorepo_repo_with_duckdb_events() -> TempDir {
     let repo = seed_graphql_monorepo_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
@@ -4780,6 +4967,233 @@ async fn devql_graphql_clone_source_target_loader_caches_within_a_request_and_re
 }
 
 #[tokio::test]
+async fn devql_graphql_test_harness_pack_fields_resolve_typed_and_generic_results() {
+    let repo = seed_graphql_devql_repo();
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::caller",
+            "artefact::caller",
+            "src/caller.ts",
+            "caller_tests",
+        )],
+    );
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                file(path: "src/caller.ts") {{
+                  artefacts(filter: {{ symbolFqn: "src/caller.ts::caller" }}, first: 10) {{
+                    edges {{
+                      node {{
+                        tests(minConfidence: 0.8, linkageSource: "static_analysis", first: 5) {{
+                          artefact {{
+                            artefactId
+                            filePath
+                          }}
+                          coveringTests {{
+                            testName
+                            confidence
+                            linkageSource
+                          }}
+                          summary {{
+                            totalCoveringTests
+                          }}
+                        }}
+                        coverage(first: 5) {{
+                          artefact {{
+                            artefactId
+                          }}
+                          coverage {{
+                            coverageSource
+                            lineCoveragePct
+                            branchDataAvailable
+                            uncoveredLines
+                          }}
+                          summary {{
+                            uncoveredLineCount
+                          }}
+                        }}
+                        extension(stage: "coverage", first: 5)
+                      }}
+                    }}
+                  }}
+                }}
+                asOf(input: {{ commit: "{commit_sha}" }}) {{
+                  project(path: "src") {{
+                    extension(stage: "test_harness_tests_summary", first: 5)
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let node = &json["repo"]["file"]["artefacts"]["edges"][0]["node"];
+    assert_eq!(
+        node["tests"][0]["artefact"]["artefactId"],
+        json!("artefact::caller")
+    );
+    assert_eq!(
+        node["tests"][0]["artefact"]["filePath"],
+        json!("src/caller.ts")
+    );
+    assert_eq!(
+        node["tests"][0]["coveringTests"][0]["testName"],
+        json!("caller_tests")
+    );
+    assert_eq!(
+        node["tests"][0]["coveringTests"][0]["linkageSource"],
+        json!("static_analysis")
+    );
+    assert_eq!(node["tests"][0]["summary"]["totalCoveringTests"], json!(1));
+    assert_eq!(
+        node["coverage"][0]["coverage"]["coverageSource"],
+        json!("lcov")
+    );
+    assert_eq!(
+        node["coverage"][0]["coverage"]["lineCoveragePct"],
+        json!(50.0)
+    );
+    assert_eq!(
+        node["coverage"][0]["coverage"]["branchDataAvailable"],
+        json!(true)
+    );
+    assert_eq!(
+        node["coverage"][0]["coverage"]["uncoveredLines"],
+        json!([5])
+    );
+    assert_eq!(
+        node["coverage"][0]["summary"]["uncoveredLineCount"],
+        json!(1)
+    );
+    assert_eq!(
+        node["extension"][0]["coverage"]["coverage_source"],
+        json!("lcov")
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["extension"][0]["commit_sha"],
+        json!(commit_sha)
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["extension"][0]["coverage_present"],
+        json!(true)
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors() {
+    let repo = seed_graphql_monorepo_repo();
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[
+            (
+                "sym::api-caller",
+                "artefact::api-caller",
+                "packages/api/src/caller.ts",
+                "api_tests",
+            ),
+            (
+                "sym::web-render",
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "web_tests",
+            ),
+        ],
+    );
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                asOf(input: {{ commit: "{commit_sha}" }}) {{
+                  project(path: "packages/api") {{
+                    extension(stage: "coverage", first: 10)
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let rows = json["repo"]["asOf"]["project"]["extension"]
+        .as_array()
+        .expect("extension rows");
+    assert_eq!(rows.len(), 4);
+    assert!(
+        rows.iter().all(|row| {
+            row["artefact"]["file_path"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("packages/api/")
+        }),
+        "expected only project-scoped rows, got {rows:?}"
+    );
+
+    let bad_stage = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  extension(stage: "unknown_stage", first: 10)
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(bad_stage.errors.len(), 1, "expected one graphql error");
+    let extensions = bad_stage.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        bad_stage.errors[0]
+            .message
+            .contains("unsupported DevQL stage"),
+        "unexpected error: {:?}",
+        bad_stage.errors
+    );
+}
+
+#[tokio::test]
 async fn devql_event_resolvers_query_duckdb_checkpoints_and_telemetry() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -5513,6 +5927,25 @@ async fn api_agents_returns_kebab_case_keys() {
     let agents = payload.as_array().expect("agents array");
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["key"], "claude-code");
+}
+
+#[tokio::test]
+async fn api_users_returns_name_and_email_from_graphql_wrapper() {
+    let repo = seed_dashboard_repo();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json(app, "/api/users?branch=main").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let users = payload.as_array().expect("users array");
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0]["key"], "alice@example.com");
+    assert_eq!(users[0]["name"], "Alice");
+    assert_eq!(users[0]["email"], "alice@example.com");
 }
 
 #[tokio::test]

@@ -1,0 +1,73 @@
+use async_graphql::SimpleObject;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct TestHarnessArtefactRef {
+    pub artefact_id: String,
+    pub name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub start_line: i32,
+    pub end_line: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessCoveringTest {
+    pub test_id: String,
+    pub test_name: String,
+    pub suite_name: Option<String>,
+    pub file_path: String,
+    pub confidence: f64,
+    pub discovery_source: String,
+    pub linkage_source: String,
+    pub linkage_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct TestHarnessTestsSummary {
+    pub total_covering_tests: i32,
+    pub cross_cutting: bool,
+    pub data_sources: Vec<String>,
+    pub diagnostic_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessTestsResult {
+    pub artefact: TestHarnessArtefactRef,
+    pub covering_tests: Vec<TestHarnessCoveringTest>,
+    pub summary: TestHarnessTestsSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct TestHarnessCoverageBranch {
+    pub line: i32,
+    pub block: i32,
+    pub branch: i32,
+    pub covered: bool,
+    pub hit_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessCoverage {
+    pub coverage_source: String,
+    pub line_coverage_pct: f64,
+    pub branch_coverage_pct: f64,
+    pub line_data_available: bool,
+    pub branch_data_available: bool,
+    pub uncovered_lines: Vec<i32>,
+    pub branches: Vec<TestHarnessCoverageBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct TestHarnessCoverageSummary {
+    pub uncovered_line_count: i32,
+    pub uncovered_branch_count: i32,
+    pub diagnostic_count: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessCoverageResult {
+    pub artefact: TestHarnessArtefactRef,
+    pub coverage: TestHarnessCoverage,
+    pub summary: TestHarnessCoverageSummary,
+}

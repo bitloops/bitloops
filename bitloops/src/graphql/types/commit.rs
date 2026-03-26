@@ -8,6 +8,7 @@ use super::{CheckpointConnection, CheckpointEdge, DateTimeScalar, paginate_items
 #[graphql(complex)]
 pub struct Commit {
     pub sha: String,
+    pub parents: Vec<String>,
     pub author_name: String,
     pub author_email: String,
     pub commit_message: String,

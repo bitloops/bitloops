@@ -1,12 +1,16 @@
 use async_graphql::{ComplexObject, Context, Result, SimpleObject};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
+use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope, paginate_items,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext, JsonScalar,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -207,4 +211,173 @@ impl Project {
             page.total_count,
         ))
     }
+
+    async fn tests(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(name = "minConfidence")] min_confidence: Option<f64>,
+        #[graphql(name = "linkageSource")] linkage_source: Option<String>,
+        #[graphql(default = 100)] first: i32,
+    ) -> Result<Vec<TestHarnessTestsResult>> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+
+        let artefacts = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_artefacts(None, filter.as_ref(), &self.scope)
+            .await
+            .map_err(|err| backend_error(format!("failed to query project artefacts: {err:#}")))?;
+        let args = build_tests_stage_args(min_confidence, linkage_source)?;
+        decode_stage_rows(
+            "tests",
+            StageResolverAdapter::new(ctx.data_unchecked::<DevqlGraphqlContext>().clone(), "tests")
+                .resolve(
+                    &self.scope,
+                    artefacts
+                        .iter()
+                        .map(project_stage_row_from_artefact)
+                        .collect(),
+                    Some(args),
+                    stage_limit(first)?,
+                )
+                .await
+                .map_err(|err| map_stage_adapter_error("project tests", err))?,
+        )
+    }
+
+    async fn coverage(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(default = 100)] first: i32,
+    ) -> Result<Vec<TestHarnessCoverageResult>> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+
+        let artefacts = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_artefacts(None, filter.as_ref(), &self.scope)
+            .await
+            .map_err(|err| backend_error(format!("failed to query project artefacts: {err:#}")))?;
+        decode_stage_rows(
+            "coverage",
+            StageResolverAdapter::new(
+                ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+                "coverage",
+            )
+            .resolve(
+                &self.scope,
+                artefacts
+                    .iter()
+                    .map(project_stage_row_from_artefact)
+                    .collect(),
+                None,
+                stage_limit(first)?,
+            )
+            .await
+            .map_err(|err| map_stage_adapter_error("project coverage", err))?,
+        )
+    }
+
+    async fn extension(
+        &self,
+        ctx: &Context<'_>,
+        stage: String,
+        args: Option<JsonScalar>,
+        #[graphql(default = 100)] first: i32,
+    ) -> Result<Vec<JsonScalar>> {
+        let artefacts = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_artefacts(None, None, &self.scope)
+            .await
+            .map_err(|err| backend_error(format!("failed to query project artefacts: {err:#}")))?;
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            stage.as_str(),
+        )
+        .resolve(
+            &self.scope,
+            artefacts
+                .iter()
+                .map(project_stage_row_from_artefact)
+                .collect(),
+            args.map(|value| value.0),
+            stage_limit(first)?,
+        )
+        .await
+        .map_err(|err| map_stage_adapter_error(&format!("project stage `{stage}`"), err))?;
+        Ok(rows.into_iter().map(async_graphql::types::Json).collect())
+    }
+}
+
+fn stage_limit(first: i32) -> Result<usize> {
+    if first <= 0 {
+        return Err(bad_user_input_error("`first` must be greater than 0"));
+    }
+    Ok(first as usize)
+}
+
+fn build_tests_stage_args(
+    min_confidence: Option<f64>,
+    linkage_source: Option<String>,
+) -> Result<Value> {
+    if let Some(min_confidence) = min_confidence
+        && !(0.0..=1.0).contains(&min_confidence)
+    {
+        return Err(bad_user_input_error(
+            "`minConfidence` must be between 0 and 1",
+        ));
+    }
+
+    let mut args = serde_json::Map::new();
+    if let Some(min_confidence) = min_confidence {
+        args.insert(
+            "min_confidence".to_string(),
+            Value::String(min_confidence.to_string()),
+        );
+    }
+    if let Some(linkage_source) = linkage_source
+        && !linkage_source.trim().is_empty()
+    {
+        args.insert(
+            "linkage_source".to_string(),
+            Value::String(linkage_source.trim().to_string()),
+        );
+    }
+    Ok(Value::Object(args))
+}
+
+fn project_stage_row_from_artefact(artefact: &super::Artefact) -> Value {
+    json!({
+        "artefact_id": artefact.id.as_ref(),
+        "symbol_id": &artefact.symbol_id,
+        "symbol_fqn": &artefact.symbol_fqn,
+        "canonical_kind": artefact.canonical_kind.as_devql_value(),
+        "path": &artefact.path,
+        "start_line": artefact.start_line,
+        "end_line": artefact.end_line,
+    })
+}
+
+fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<Vec<T>> {
+    rows.into_iter()
+        .map(|row| {
+            serde_json::from_value(row).map_err(|err| {
+                backend_error(format!(
+                    "failed to decode `{stage}` stage payload into typed GraphQL result: {err}"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn map_stage_adapter_error(scope: &str, err: anyhow::Error) -> async_graphql::Error {
+    let message = format!("{err:#}");
+    if message.contains("unsupported DevQL stage") || message.contains("ambiguous DevQL stage") {
+        return bad_user_input_error(message);
+    }
+    backend_error(format!("failed to resolve {scope}: {message}"))
 }

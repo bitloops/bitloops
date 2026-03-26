@@ -250,7 +250,7 @@ impl DevqlGraphqlContext {
             let mut args = vec![
                 "show".to_string(),
                 "--quiet".to_string(),
-                "--format=%H%x1f%an%x1f%ae%x1f%cI%x1f%s%x1e".to_string(),
+                "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%s%x1e".to_string(),
                 "--ignore-missing".to_string(),
             ];
             args.extend(commit_shas.iter().cloned());
@@ -289,7 +289,7 @@ fn build_git_log_args(
     let mut args = vec![
         "log".to_string(),
         branch.to_string(),
-        "--format=%H%x1f%an%x1f%ae%x1f%cI%x1f%s%x1e".to_string(),
+        "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%cI%x1f%s%x1e".to_string(),
         "--max-count".to_string(),
         GRAPHQL_GIT_SCAN_LIMIT.to_string(),
         "--no-color".to_string(),
@@ -325,6 +325,13 @@ fn parse_git_log(raw: &str, branch: &str) -> Result<Vec<Commit>> {
         else {
             continue;
         };
+        let parents = parts
+            .next()
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let author_name = parts.next().unwrap_or_default().trim().to_string();
         let author_email = parts.next().unwrap_or_default().trim().to_string();
         let committed_at_raw = parts.next().unwrap_or_default().trim();
@@ -334,6 +341,7 @@ fn parse_git_log(raw: &str, branch: &str) -> Result<Vec<Commit>> {
 
         commits.push(Commit {
             sha: sha.to_string(),
+            parents,
             author_name,
             author_email,
             commit_message,

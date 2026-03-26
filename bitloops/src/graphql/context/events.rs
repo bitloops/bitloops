@@ -258,16 +258,27 @@ fn duckdb_project_filter(project_path: &str) -> String {
 
 fn checkpoint_from_row(row: Value) -> Result<Checkpoint> {
     let checkpoint_id = required_string(&row, "checkpoint_id")?;
+    let event_time = parse_event_time(&required_string(&row, "latest_event_time")?)?;
+    let agent = optional_string(&row, "agent");
+    let agents = agent.clone().into_iter().collect::<Vec<_>>();
     Ok(Checkpoint {
         id: checkpoint_id.clone().into(),
         session_id: required_string(&row, "session_id")?,
         commit_sha: optional_string(&row, "commit_sha"),
         branch: optional_string(&row, "branch"),
-        agent: optional_string(&row, "agent"),
-        event_time: parse_event_time(&required_string(&row, "latest_event_time")?)?,
+        agent,
+        event_time: event_time.clone(),
         strategy: optional_string(&row, "strategy"),
         files_touched: parse_string_array(row.get("files_touched"))?,
         payload: parse_payload(row.get("payload"))?,
+        checkpoints_count: 0,
+        session_count: 0,
+        token_usage: None,
+        agents,
+        first_prompt_preview: None,
+        created_at: Some(event_time.as_str().to_string()),
+        is_task: false,
+        tool_use_id: None,
     })
 }
 

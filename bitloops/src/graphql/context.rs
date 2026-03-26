@@ -12,10 +12,11 @@ use crate::config::StoreBackendConfig;
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::{DevqlConfig, RepoIdentity};
 use crate::storage::blob::BlobStore;
+use anyhow::{Result, anyhow};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use super::loaders::LoaderMetrics;
 
@@ -67,6 +68,24 @@ impl fmt::Debug for DevqlGraphqlContext {
 impl DevqlGraphqlContext {
     pub(crate) fn loader_metrics(&self) -> &LoaderMetrics {
         &self.loader_metrics
+    }
+
+    pub(crate) fn repo_id(&self) -> &str {
+        self.repo_identity.repo_id.as_str()
+    }
+
+    pub(crate) async fn capability_host_handle(
+        &self,
+    ) -> Result<MutexGuard<'_, DevqlCapabilityHost>> {
+        let Some(capability_host) = self.capability_host.as_ref() else {
+            return Err(anyhow!(
+                "{}",
+                self.capability_host_bootstrap_error
+                    .clone()
+                    .unwrap_or_else(|| "capability host unavailable".to_string())
+            ));
+        };
+        Ok(capability_host.lock().await)
     }
 
     #[cfg(test)]

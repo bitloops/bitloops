@@ -8,12 +8,12 @@ mod router;
 use crate::config::dashboard_use_bitloops_local;
 use crate::graphql::{self, DevqlGraphqlContext};
 use crate::host::checkpoints::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed_info, run_git,
+    CommittedInfo, read_commit_checkpoint_mappings, read_committed_info, run_git,
 };
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
 use crate::utils::paths;
 use anyhow::{Context, Result, anyhow, bail};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -91,13 +91,6 @@ impl ApiPage {
             offset: self.offset,
         }
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct CommitCheckpointPair {
-    pub(super) commit: DashboardCommitNode,
-    pub(super) user: DashboardUser,
-    pub(super) checkpoint: CommittedInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -298,27 +291,7 @@ fn user_matches_filter(user: &DashboardUser, user_filter: Option<&str>) -> bool 
     user.key == normalized || user.name.to_ascii_lowercase() == normalized
 }
 
-fn agent_matches_filter(info: &CommittedInfo, agent_filter: Option<&str>) -> bool {
-    let Some(filter) = agent_filter else {
-        return true;
-    };
-
-    let normalized = canonical_agent_key(filter);
-    if normalized.is_empty() {
-        return true;
-    }
-
-    if !info.agents.is_empty() {
-        return info
-            .agents
-            .iter()
-            .map(|agent| canonical_agent_key(agent))
-            .any(|agent| agent == normalized);
-    }
-
-    canonical_agent_key(&info.agent) == normalized
-}
-
+#[cfg(test)]
 fn normalize_branch_name(branch: &str) -> &str {
     let trimmed = branch.trim().trim_start_matches('*').trim();
     if let Some(short) = trimmed.strip_prefix("refs/heads/") {
@@ -330,39 +303,12 @@ fn normalize_branch_name(branch: &str) -> &str {
     trimmed
 }
 
+#[cfg(test)]
 pub(super) fn branch_is_excluded(branch: &str) -> bool {
     let normalized = normalize_branch_name(branch);
     let without_origin = normalized.strip_prefix("origin/").unwrap_or(normalized);
 
     without_origin == paths::METADATA_BRANCH_NAME || without_origin.starts_with("bitloops/")
-}
-
-pub(super) fn list_dashboard_branches(repo_root: &Path) -> Result<Vec<String>> {
-    let refs = run_git(
-        repo_root,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads",
-            "refs/remotes/origin",
-        ],
-    )?;
-
-    let mut branches: HashSet<String> = HashSet::new();
-    for branch in refs.lines() {
-        let branch = branch.trim();
-        if branch.is_empty() || branch.ends_with("/HEAD") {
-            continue;
-        }
-        if branch_is_excluded(branch) {
-            continue;
-        }
-        branches.insert(branch.to_string());
-    }
-
-    let mut out: Vec<String> = branches.into_iter().collect();
-    out.sort();
-    Ok(out)
 }
 
 pub(super) fn build_branch_commit_log_args(
@@ -528,70 +474,6 @@ pub(super) fn paginate<T: Clone>(items: &[T], page: ApiPage) -> Vec<T> {
     let start = page.offset.min(items.len());
     let end = start.saturating_add(page.limit).min(items.len());
     items[start..end].to_vec()
-}
-
-pub(super) fn build_committed_info_map(repo_root: &Path) -> Result<HashMap<String, CommittedInfo>> {
-    Ok(list_committed(repo_root)?
-        .into_iter()
-        .map(|info| (info.checkpoint_id.clone(), info))
-        .collect())
-}
-
-pub(super) fn query_commit_checkpoint_pairs(
-    repo_root: &Path,
-    query: &CommitCheckpointQuery,
-) -> Result<Vec<CommitCheckpointPair>> {
-    let pairs = query_commit_checkpoint_pairs_all(repo_root, query)?;
-    Ok(paginate(&pairs, query.page))
-}
-
-pub(super) fn query_commit_checkpoint_pairs_all(
-    repo_root: &Path,
-    query: &CommitCheckpointQuery,
-) -> Result<Vec<CommitCheckpointPair>> {
-    let commits = walk_branch_commits_with_checkpoints(
-        repo_root,
-        &query.branch,
-        query.from_unix,
-        query.to_unix,
-        API_GIT_SCAN_LIMIT,
-    )?;
-    let committed_map = build_committed_info_map(repo_root)?;
-
-    let mut pairs = Vec::new();
-    for commit in commits {
-        if commit.checkpoint_id.is_empty() {
-            continue;
-        }
-
-        let Some(info) = committed_map.get(&commit.checkpoint_id) else {
-            continue;
-        };
-
-        let user = dashboard_user(&commit.author_name, &commit.author_email);
-        if !user_matches_filter(&user, query.user.as_deref()) {
-            continue;
-        }
-        if !agent_matches_filter(info, query.agent.as_deref()) {
-            continue;
-        }
-
-        pairs.push(CommitCheckpointPair {
-            commit,
-            user,
-            checkpoint: info.clone(),
-        });
-    }
-
-    pairs.sort_by(|left, right| {
-        right
-            .commit
-            .timestamp
-            .cmp(&left.commit.timestamp)
-            .then_with(|| right.commit.sha.cmp(&left.commit.sha))
-    });
-
-    Ok(pairs)
 }
 
 pub(super) fn read_checkpoint_info_for_filtering(

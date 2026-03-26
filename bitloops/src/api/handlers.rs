@@ -7,22 +7,123 @@ use super::dto::{
     DashboardApiDoc,
 };
 use super::{
-    API_DEFAULT_PAGE_LIMIT, API_GIT_SCAN_LIMIT, ApiPage, CommitCheckpointPair,
-    CommitCheckpointQuery, DashboardState, build_committed_info_map, canonical_agent_key, db,
-    list_dashboard_branches, query_commit_checkpoint_pairs, query_commit_checkpoint_pairs_all,
-    read_checkpoint_info_for_filtering, read_commit_numstat, walk_branch_commits_with_checkpoints,
+    API_DEFAULT_PAGE_LIMIT, API_GIT_SCAN_LIMIT, ApiPage, CommitCheckpointQuery, DashboardState,
+    canonical_agent_key, db, read_checkpoint_info_for_filtering, read_commit_numstat,
+    walk_branch_commits_with_checkpoints,
 };
 use super::{bundle, bundle_types::BundleError};
 use crate::host::checkpoints::checkpoint_id::is_valid_checkpoint_id;
 use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_session_content};
+use async_graphql::{Request as GraphqlRequest, Variables};
 use axum::{
     Json,
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
 };
+use chrono::{DateTime, TimeZone, Utc};
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use utoipa::OpenApi;
+
+const DASHBOARD_GRAPHQL_REPO_NAME: &str = "dashboard";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlBranchesData {
+    repo: DashboardGraphqlBranchesRepo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlBranchesRepo {
+    branches: Vec<DashboardGraphqlBranch>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlBranch {
+    name: String,
+    checkpoint_count: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCommitsData {
+    repo: DashboardGraphqlCommitsRepo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCommitsRepo {
+    commits: DashboardGraphqlCommitConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCommitConnection {
+    edges: Vec<DashboardGraphqlCommitEdge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCommitEdge {
+    node: DashboardGraphqlCommitNode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCommitNode {
+    sha: String,
+    parents: Vec<String>,
+    author_name: String,
+    author_email: String,
+    committed_at: String,
+    commit_message: String,
+    checkpoints: DashboardGraphqlCheckpointConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCheckpointConnection {
+    edges: Vec<DashboardGraphqlCheckpointEdge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCheckpointEdge {
+    node: DashboardGraphqlCheckpointNode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlCheckpointNode {
+    id: String,
+    branch: Option<String>,
+    agent: Option<String>,
+    strategy: Option<String>,
+    files_touched: Vec<String>,
+    checkpoints_count: usize,
+    session_count: usize,
+    token_usage: Option<DashboardGraphqlTokenUsage>,
+    session_id: String,
+    agents: Vec<String>,
+    first_prompt_preview: Option<String>,
+    created_at: Option<String>,
+    is_task: bool,
+    tool_use_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardGraphqlTokenUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    api_call_count: u64,
+}
 
 #[utoipa::path(
     get,
@@ -57,10 +158,8 @@ pub(crate) async fn handle_api_kpis(
         query.user,
         query.agent,
     )?;
-    let pairs = query_commit_checkpoint_pairs_all(&state.repo_root, &filter)
-        .map_err(|err| ApiError::internal(format!("failed to query dashboard KPIs: {err:#}")))?;
-
-    Ok(Json(build_kpis_response(&pairs)))
+    let rows = load_dashboard_commit_rows_via_graphql(&state, &filter).await?;
+    Ok(Json(build_kpis_response_from_graphql_rows(&rows)))
 }
 
 #[utoipa::path(
@@ -92,23 +191,22 @@ pub(crate) async fn handle_api_commits(
     .normalized();
     filter.page = page;
 
-    let rows = query_commit_checkpoint_pairs(&state.repo_root, &filter)
-        .map_err(|err| ApiError::internal(format!("failed to query dashboard commits: {err:#}")))?;
-
+    let rows = load_dashboard_commit_rows_via_graphql(&state, &filter).await?;
+    let rows = super::paginate(&rows, filter.page);
     let mut result = Vec::with_capacity(rows.len());
-    for pair in rows {
-        let files_touched = match read_commit_numstat(&state.repo_root, &pair.commit.sha) {
+    for row in rows {
+        let files_touched = match read_commit_numstat(&state.repo_root, &row.commit.sha) {
             Ok(stats) => api_file_diff_list_from_numstat(stats),
             Err(err) => {
                 log::warn!(
                     "dashboard commits endpoint: failed to read numstat for {}: {:#}",
-                    pair.commit.sha,
+                    row.commit.sha,
                     err
                 );
-                api_zeroed_file_diff_list(&pair.checkpoint.files_touched)
+                api_zeroed_file_diff_list(&row.checkpoint.files_touched)
             }
         };
-        result.push(api_commit_row_from_pair(pair, files_touched));
+        result.push(api_commit_row_from_graphql(row, files_touched));
     }
     Ok(Json(result))
 }
@@ -130,47 +228,9 @@ pub(crate) async fn handle_api_branches(
     let from_unix = parse_optional_unix_seconds("from", query.from)?;
     let to_unix = parse_optional_unix_seconds("to", query.to)?;
     validate_time_window(from_unix, to_unix)?;
-
-    let branches = list_dashboard_branches(&state.repo_root)
-        .map_err(|err| ApiError::internal(format!("failed to list dashboard branches: {err:#}")))?;
-    let committed_map = build_committed_info_map(&state.repo_root).map_err(|err| {
-        ApiError::internal(format!(
-            "failed to read committed checkpoint metadata for branch filtering: {err:#}"
-        ))
-    })?;
-
-    let mut items = Vec::new();
-    for branch in branches {
-        let commits = walk_branch_commits_with_checkpoints(
-            &state.repo_root,
-            &branch,
-            from_unix,
-            to_unix,
-            API_GIT_SCAN_LIMIT,
-        )
-        .map_err(|err| {
-            ApiError::internal(format!(
-                "failed to walk branch {branch} for dashboard: {err:#}"
-            ))
-        })?;
-
-        let checkpoint_commits = commits
-            .iter()
-            .filter(|commit| {
-                !commit.checkpoint_id.is_empty()
-                    && committed_map.contains_key(&commit.checkpoint_id)
-            })
-            .count();
-
-        if checkpoint_commits > 0 {
-            items.push(ApiBranchSummaryDto {
-                branch,
-                checkpoint_commits,
-            });
-        }
-    }
-
-    Ok(Json(items))
+    Ok(Json(
+        load_dashboard_branches_via_graphql(&state, from_unix, to_unix).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -189,14 +249,14 @@ pub(crate) async fn handle_api_users(
 ) -> std::result::Result<Json<Vec<ApiUserDto>>, ApiError> {
     let filter =
         parse_commit_checkpoint_filter(query.branch, query.from, query.to, None, query.agent)?;
-    let pairs = query_commit_checkpoint_pairs_all(&state.repo_root, &filter)
-        .map_err(|err| ApiError::internal(format!("failed to query dashboard users: {err:#}")))?;
+    let rows = load_dashboard_commit_rows_via_graphql(&state, &filter).await?;
 
     let mut users_by_key: HashMap<String, ApiUserDto> = HashMap::new();
-    for pair in pairs {
-        let key = pair.user.key;
-        let name = pair.user.name;
-        let email = pair.user.email;
+    for row in rows {
+        let user = super::dashboard_user(&row.commit.author_name, &row.commit.author_email);
+        let key = user.key;
+        let name = user.name;
+        let email = user.email;
 
         let entry = users_by_key.entry(key.clone()).or_insert(ApiUserDto {
             key,
@@ -238,12 +298,11 @@ pub(crate) async fn handle_api_agents(
 ) -> std::result::Result<Json<Vec<ApiAgentDto>>, ApiError> {
     let filter =
         parse_commit_checkpoint_filter(query.branch, query.from, query.to, query.user, None)?;
-    let pairs = query_commit_checkpoint_pairs_all(&state.repo_root, &filter)
-        .map_err(|err| ApiError::internal(format!("Failed to query dashboard agents: {err:#}")))?;
+    let rows = load_dashboard_commit_rows_via_graphql(&state, &filter).await?;
 
     let mut agents: Vec<ApiAgentDto> = Vec::new();
-    for pair in pairs {
-        for key in checkpoint_agent_keys(&pair.checkpoint) {
+    for row in rows {
+        for key in checkpoint_agents(&row.checkpoint) {
             agents.push(ApiAgentDto { key });
         }
     }
@@ -632,7 +691,186 @@ fn parse_commit_checkpoint_filter(
     })
 }
 
-fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
+#[derive(Debug, Clone)]
+struct DashboardGraphqlCommitRow {
+    commit: DashboardGraphqlCommitNode,
+    checkpoint: DashboardGraphqlCheckpointNode,
+}
+
+async fn load_dashboard_branches_via_graphql(
+    state: &DashboardState,
+    from_unix: Option<i64>,
+    to_unix: Option<i64>,
+) -> std::result::Result<Vec<ApiBranchSummaryDto>, ApiError> {
+    let data: DashboardGraphqlBranchesData = execute_dashboard_graphql(
+        state,
+        r#"
+        query DashboardBranches($repo: String!, $since: DateTime, $until: DateTime) {
+          repo(name: $repo) {
+            branches(since: $since, until: $until) {
+              name
+              checkpointCount
+            }
+          }
+        }
+        "#,
+        json!({
+            "repo": DASHBOARD_GRAPHQL_REPO_NAME,
+            "since": optional_rfc3339_from_unix_seconds(from_unix),
+            "until": optional_rfc3339_from_unix_seconds(to_unix),
+        }),
+    )
+    .await?;
+
+    Ok(data
+        .repo
+        .branches
+        .into_iter()
+        .map(|branch| ApiBranchSummaryDto {
+            branch: branch.name,
+            checkpoint_commits: branch.checkpoint_count,
+        })
+        .collect())
+}
+
+async fn load_dashboard_commit_rows_via_graphql(
+    state: &DashboardState,
+    filter: &CommitCheckpointQuery,
+) -> std::result::Result<Vec<DashboardGraphqlCommitRow>, ApiError> {
+    let data: DashboardGraphqlCommitsData = execute_dashboard_graphql(
+        state,
+        r#"
+        query DashboardCommits($repo: String!, $branch: String!, $since: DateTime, $until: DateTime) {
+          repo(name: $repo) {
+            commits(branch: $branch, since: $since, until: $until, first: 5000) {
+              edges {
+                node {
+                  sha
+                  parents
+                  authorName
+                  authorEmail
+                  committedAt
+                  commitMessage
+                  checkpoints(first: 1) {
+                    edges {
+                      node {
+                        id
+                        branch
+                        agent
+                        strategy
+                        filesTouched
+                        checkpointsCount
+                        sessionCount
+                        tokenUsage {
+                          inputTokens
+                          outputTokens
+                          cacheCreationTokens
+                          cacheReadTokens
+                          apiCallCount
+                        }
+                        sessionId
+                        agents
+                        firstPromptPreview
+                        createdAt
+                        isTask
+                        toolUseId
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        "#,
+        json!({
+            "repo": DASHBOARD_GRAPHQL_REPO_NAME,
+            "branch": filter.branch.as_str(),
+            "since": optional_rfc3339_from_unix_seconds(filter.from_unix),
+            "until": optional_rfc3339_from_unix_seconds(filter.to_unix),
+        }),
+    )
+    .await?;
+
+    let mut rows = Vec::new();
+    for edge in data.repo.commits.edges {
+        let commit = edge.node;
+        let Some(checkpoint) = commit
+            .checkpoints
+            .edges
+            .first()
+            .cloned()
+            .map(|edge| edge.node)
+        else {
+            continue;
+        };
+
+        let user = super::dashboard_user(&commit.author_name, &commit.author_email);
+        if !super::user_matches_filter(&user, filter.user.as_deref()) {
+            continue;
+        }
+        if !graphql_checkpoint_matches_agent_filter(&checkpoint, filter.agent.as_deref()) {
+            continue;
+        }
+
+        rows.push(DashboardGraphqlCommitRow { commit, checkpoint });
+    }
+
+    Ok(rows)
+}
+
+async fn execute_dashboard_graphql<T: DeserializeOwned>(
+    state: &DashboardState,
+    query: &str,
+    variables: serde_json::Value,
+) -> std::result::Result<T, ApiError> {
+    let response = state
+        .devql_schema()
+        .execute(GraphqlRequest::new(query).variables(Variables::from_json(variables)))
+        .await;
+
+    if let Some(error) = response.errors.first() {
+        return Err(map_dashboard_graphql_error(error));
+    }
+
+    let data = response.data.into_json().map_err(|err| {
+        ApiError::internal(format!("failed to decode dashboard GraphQL data: {err:#}"))
+    })?;
+
+    serde_json::from_value(data).map_err(|err| {
+        ApiError::internal(format!(
+            "failed to decode dashboard GraphQL response payload: {err}"
+        ))
+    })
+}
+
+fn map_dashboard_graphql_error(error: &async_graphql::ServerError) -> ApiError {
+    let code = error
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get("code"))
+        .and_then(|value| match value {
+            async_graphql::Value::String(value) => Some(value.as_str()),
+            _ => None,
+        });
+    match code {
+        Some("BAD_USER_INPUT") | Some("BAD_CURSOR") => ApiError::bad_request(error.message.clone()),
+        _ => ApiError::internal(format!(
+            "dashboard GraphQL wrapper failed: {}",
+            error.message
+        )),
+    }
+}
+
+fn optional_rfc3339_from_unix_seconds(value: Option<i64>) -> Option<String> {
+    value.and_then(|timestamp| {
+        Utc.timestamp_opt(timestamp, 0)
+            .single()
+            .map(|value| value.to_rfc3339())
+    })
+}
+
+fn build_kpis_response_from_graphql_rows(rows: &[DashboardGraphqlCommitRow]) -> ApiKpisResponse {
     let mut unique_checkpoint_ids: HashSet<String> = HashSet::new();
     let mut unique_agents: HashSet<String> = HashSet::new();
     let mut total_sessions = 0usize;
@@ -643,20 +881,20 @@ fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
     let mut cache_read_tokens = 0u64;
     let mut api_call_count = 0u64;
 
-    for pair in pairs {
-        if !unique_checkpoint_ids.insert(pair.checkpoint.checkpoint_id.clone()) {
+    for row in rows {
+        if !unique_checkpoint_ids.insert(row.checkpoint.id.clone()) {
             continue;
         }
 
-        for agent_key in checkpoint_agent_keys(&pair.checkpoint) {
+        for agent_key in checkpoint_agents(&row.checkpoint) {
             unique_agents.insert(agent_key);
         }
-        total_sessions += pair.checkpoint.session_count;
-        for file in &pair.checkpoint.files_touched {
+        total_sessions += row.checkpoint.session_count;
+        for file in &row.checkpoint.files_touched {
             files_touched.insert(file.clone());
         }
 
-        if let Some(token_usage) = pair.checkpoint.token_usage.as_ref() {
+        if let Some(token_usage) = row.checkpoint.token_usage.as_ref() {
             input_tokens += token_usage.input_tokens;
             output_tokens += token_usage.output_tokens;
             cache_creation_tokens += token_usage.cache_creation_tokens;
@@ -679,7 +917,7 @@ fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
     };
 
     ApiKpisResponse {
-        total_commits: pairs.len(),
+        total_commits: rows.len(),
         total_checkpoints,
         total_agents: unique_agents.len(),
         total_sessions,
@@ -694,11 +932,29 @@ fn build_kpis_response(pairs: &[CommitCheckpointPair]) -> ApiKpisResponse {
     }
 }
 
-fn checkpoint_agent_keys(info: &CommittedInfo) -> Vec<String> {
+fn graphql_checkpoint_matches_agent_filter(
+    checkpoint: &DashboardGraphqlCheckpointNode,
+    agent_filter: Option<&str>,
+) -> bool {
+    let Some(filter) = agent_filter else {
+        return true;
+    };
+
+    let normalized = canonical_agent_key(filter);
+    if normalized.is_empty() {
+        return true;
+    }
+
+    checkpoint_agents(checkpoint)
+        .into_iter()
+        .any(|agent| agent == normalized)
+}
+
+fn checkpoint_agents(info: &DashboardGraphqlCheckpointNode) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
 
     if info.agents.is_empty() {
-        let key = canonical_agent_key(&info.agent);
+        let key = canonical_agent_key(info.agent.as_deref().unwrap_or_default());
         if !key.is_empty() {
             keys.push(key);
         }
@@ -713,6 +969,18 @@ fn checkpoint_agent_keys(info: &CommittedInfo) -> Vec<String> {
         keys.push(key);
     }
     keys
+}
+
+fn api_token_usage_from_graphql(
+    usage: Option<&DashboardGraphqlTokenUsage>,
+) -> Option<ApiTokenUsageDto> {
+    usage.map(|usage| ApiTokenUsageDto {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        api_call_count: usage.api_call_count,
+    })
 }
 
 fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {
@@ -801,45 +1069,40 @@ fn resolve_checkpoint_files_touched(
     }
 }
 
-fn api_checkpoint_from_committed(
-    info: CommittedInfo,
-    files_touched: Vec<ApiCommitFileDiffDto>,
-) -> ApiCheckpointDto {
-    let token_usage = api_token_usage_from_committed(&info);
-    let agents = checkpoint_agent_keys(&info);
-
-    ApiCheckpointDto {
-        checkpoint_id: info.checkpoint_id,
-        strategy: info.strategy,
-        branch: info.branch,
-        checkpoints_count: info.checkpoints_count,
-        files_touched,
-        session_count: info.session_count,
-        token_usage,
-        session_id: info.session_id,
-        agents,
-        first_prompt_preview: info.first_prompt_preview,
-        created_at: info.created_at,
-        is_task: info.is_task,
-        tool_use_id: info.tool_use_id,
-    }
-}
-
-fn api_commit_row_from_pair(
-    pair: CommitCheckpointPair,
+fn api_commit_row_from_graphql(
+    row: DashboardGraphqlCommitRow,
     files_touched: Vec<ApiCommitFileDiffDto>,
 ) -> ApiCommitRowDto {
+    let DashboardGraphqlCommitRow { commit, checkpoint } = row;
+    let agents = checkpoint_agents(&checkpoint);
     let checkpoint_files_touched = files_touched.clone();
+    let timestamp = DateTime::parse_from_rfc3339(&commit.committed_at)
+        .map(|value| value.timestamp())
+        .unwrap_or(0);
     ApiCommitRowDto {
         commit: ApiCommitDto {
-            sha: pair.commit.sha,
-            parents: pair.commit.parents,
-            author_name: pair.commit.author_name,
-            author_email: pair.commit.author_email,
-            timestamp: pair.commit.timestamp,
-            message: pair.commit.message,
+            sha: commit.sha,
+            parents: commit.parents,
+            author_name: commit.author_name,
+            author_email: commit.author_email,
+            timestamp,
+            message: commit.commit_message,
             files_touched,
         },
-        checkpoint: api_checkpoint_from_committed(pair.checkpoint, checkpoint_files_touched),
+        checkpoint: ApiCheckpointDto {
+            checkpoint_id: checkpoint.id,
+            strategy: checkpoint.strategy.unwrap_or_default(),
+            branch: checkpoint.branch.unwrap_or_default(),
+            checkpoints_count: checkpoint.checkpoints_count.try_into().unwrap_or(u32::MAX),
+            files_touched: checkpoint_files_touched,
+            session_count: checkpoint.session_count,
+            token_usage: api_token_usage_from_graphql(checkpoint.token_usage.as_ref()),
+            session_id: checkpoint.session_id,
+            agents,
+            first_prompt_preview: checkpoint.first_prompt_preview.unwrap_or_default(),
+            created_at: checkpoint.created_at.unwrap_or_default(),
+            is_task: checkpoint.is_task,
+            tool_use_id: checkpoint.tool_use_id.unwrap_or_default(),
+        },
     }
 }

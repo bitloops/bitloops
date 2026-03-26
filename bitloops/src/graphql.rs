@@ -2,6 +2,7 @@ mod context;
 mod error;
 mod loaders;
 mod mutation_root;
+mod pack_adapter;
 mod query_root;
 mod scope;
 mod subscription_root;

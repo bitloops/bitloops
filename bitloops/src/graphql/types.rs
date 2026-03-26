@@ -13,6 +13,7 @@ pub mod repository;
 pub mod scalars;
 pub mod telemetry;
 pub mod temporal_scope;
+pub mod test_harness;
 
 pub use artefact::{Artefact, ArtefactFilterInput, CanonicalKind};
 pub use chat::{ChatEntry, ChatRole};
@@ -38,3 +39,4 @@ pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
+pub use test_harness::{TestHarnessCoverageResult, TestHarnessTestsResult};
