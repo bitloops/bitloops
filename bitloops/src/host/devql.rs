@@ -424,7 +424,10 @@ use self::query_parser::*;
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;
 use self::vocab::*;
-pub(crate) use self::vocab::{EDGE_KIND_CALLS, EDGE_KIND_EXPORTS};
+pub(crate) use self::vocab::{
+    CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution, EDGE_KIND_CALLS,
+    EDGE_KIND_EXPORTS,
+};
 
 #[cfg(test)]
 pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
