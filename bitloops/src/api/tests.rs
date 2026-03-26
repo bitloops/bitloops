@@ -9,7 +9,7 @@ use super::{
     select_host_with_dashboard_preference,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
-use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars};
+use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};
 use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode},
@@ -775,6 +775,41 @@ fn seed_graphql_devql_repo() -> TempDir {
         )
         .expect("insert edge current row");
     }
+
+    dir
+}
+
+fn seed_graphql_mutation_repo() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    fs::write(
+        repo_root.join("src/lib.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo_root, &["add", "."]);
+    git_ok(repo_root, &["commit", "-m", "Seed GraphQL mutation repo"]);
+
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": ".bitloops/stores/mutations.sqlite"
+                },
+                "events": {
+                    "duckdb_path": ".bitloops/stores/mutations.duckdb"
+                },
+                "embedding_provider": "disabled"
+            },
+            "semantic": {
+                "provider": "disabled"
+            }
+        }),
+    );
 
     dir
 }
@@ -2819,6 +2854,183 @@ async fn devql_schema_builds_and_executes_in_process() {
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["repo"]["name"], "demo");
     assert_eq!(json["repo"]["provider"], "local");
+}
+
+#[tokio::test]
+async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+                repoIdentity
+                repoId
+                relationalBackend
+                eventsBackend
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+    let init_json = init_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(init_json["initSchema"]["success"], true);
+    assert_eq!(init_json["initSchema"]["relationalBackend"], "sqlite");
+    assert_eq!(init_json["initSchema"]["eventsBackend"], "duckdb");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    for table in ["repositories", "artefacts", "artefacts_current"] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("query sqlite schema");
+        assert_eq!(count, 1, "expected sqlite table `{table}`");
+    }
+
+    let second_init = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        second_init.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_init.errors
+    );
+    let second_init_json = second_init.data.into_json().expect("graphql data to json");
+    assert_eq!(second_init_json["initSchema"]["success"], true);
+
+    let ingest_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: 500 }) {
+                success
+                initRequested
+                checkpointsProcessed
+                eventsInserted
+                artefactsUpserted
+                checkpointsWithoutCommit
+                temporaryRowsPromoted
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        ingest_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        ingest_response.errors
+    );
+    let ingest_json = ingest_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(ingest_json["ingest"]["success"], true);
+    assert_eq!(ingest_json["ingest"]["initRequested"], true);
+    assert_eq!(ingest_json["ingest"]["checkpointsProcessed"], 0);
+    assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
+    assert_eq!(ingest_json["ingest"]["temporaryRowsPromoted"], 0);
+
+    let repository_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .expect("count repositories");
+    assert_eq!(repository_count, 1, "expected repository row after ingest");
+}
+
+#[tokio::test]
+async fn devql_mutations_report_validation_and_backend_errors() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let invalid_input = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: -1 }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(invalid_input.errors.len(), 1, "expected one graphql error");
+    let invalid_extensions = invalid_input.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        invalid_extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        invalid_extensions.get("kind"),
+        Some(&async_graphql::Value::from("validation"))
+    );
+    assert_eq!(
+        invalid_extensions.get("operation"),
+        Some(&async_graphql::Value::from("ingest"))
+    );
+
+    let missing_schema = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: false, maxCheckpoints: 1 }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(missing_schema.errors.len(), 1, "expected one graphql error");
+    let backend_extensions = missing_schema.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        backend_extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert_eq!(
+        backend_extensions.get("kind"),
+        Some(&async_graphql::Value::from("ingestion"))
+    );
+    assert_eq!(
+        backend_extensions.get("operation"),
+        Some(&async_graphql::Value::from("ingest"))
+    );
 }
 
 #[tokio::test]
@@ -5416,14 +5628,20 @@ async fn devql_sdl_route_returns_schema_text() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("type QueryRoot"));
+    assert!(body.contains("type MutationRoot"));
     assert!(body.contains("repo(name: String!): Repository!"));
+    assert!(body.contains("initSchema: InitSchemaResult!"));
+    assert!(body.contains("ingest(input: IngestInput!): IngestResult!"));
     assert!(body.contains("checkpoints(agent: String, since: DateTime"));
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
     assert!(body.contains("chatHistory"));
+    assert!(body.contains("input IngestInput"));
     assert!(body.contains("type Clone"));
     assert!(body.contains("type ChatEntry"));
+    assert!(body.contains("type InitSchemaResult"));
+    assert!(body.contains("type IngestResult"));
     assert!(body.contains("type KnowledgeItem"));
     assert!(body.contains("type KnowledgePayload"));
     assert!(body.contains("type TelemetryEvent"));

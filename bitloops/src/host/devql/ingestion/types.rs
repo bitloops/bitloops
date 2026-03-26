@@ -2,19 +2,22 @@ use super::*;
 
 // Shared types used across ingestion modules.
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct IngestionCounters {
-    pub(super) checkpoints_processed: usize,
-    pub(super) events_inserted: usize,
-    pub(super) artefacts_upserted: usize,
-    pub(super) checkpoints_without_commit: usize,
-    pub(super) temporary_rows_promoted: usize,
-    pub(super) semantic_feature_rows_upserted: usize,
-    pub(super) semantic_feature_rows_skipped: usize,
-    pub(super) symbol_embedding_rows_upserted: usize,
-    pub(super) symbol_embedding_rows_skipped: usize,
-    pub(super) symbol_clone_edges_upserted: usize,
-    pub(super) symbol_clone_sources_scored: usize,
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IngestionCounters {
+    pub(crate) success: bool,
+    pub(crate) init_requested: bool,
+    pub(crate) checkpoints_processed: usize,
+    pub(crate) events_inserted: usize,
+    pub(crate) artefacts_upserted: usize,
+    pub(crate) checkpoints_without_commit: usize,
+    pub(crate) temporary_rows_promoted: usize,
+    pub(crate) semantic_feature_rows_upserted: usize,
+    pub(crate) semantic_feature_rows_skipped: usize,
+    pub(crate) symbol_embedding_rows_upserted: usize,
+    pub(crate) symbol_embedding_rows_skipped: usize,
+    pub(crate) symbol_clone_edges_upserted: usize,
+    pub(crate) symbol_clone_sources_scored: usize,
 }
 
 #[derive(Debug, Clone)]

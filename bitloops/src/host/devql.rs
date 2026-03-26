@@ -43,6 +43,7 @@ mod connection_status;
 pub(crate) mod identity;
 mod types;
 
+pub(crate) use self::commands_ingest::execute_ingest;
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_query::{
     RegisteredStageCompositionContext, execute_query_json_with_composition,
@@ -75,6 +76,40 @@ const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitSchemaSummary {
+    pub success: bool,
+    pub repo_identity: String,
+    pub repo_id: String,
+    pub relational_backend: String,
+    pub events_backend: String,
+}
+
+pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String {
+    format!(
+        "DevQL schema ready for repo {} ({})",
+        summary.repo_identity, summary.repo_id
+    )
+}
+
+pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
+    format!(
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        summary.checkpoints_processed,
+        summary.events_inserted,
+        summary.artefacts_upserted,
+        summary.checkpoints_without_commit,
+        summary.temporary_rows_promoted,
+        summary.semantic_feature_rows_upserted,
+        summary.semantic_feature_rows_skipped,
+        summary.symbol_embedding_rows_upserted,
+        summary.symbol_embedding_rows_skipped,
+        summary.symbol_clone_edges_upserted,
+        summary.symbol_clone_sources_scored
+    )
+}
 
 fn core_extension_host() -> Result<&'static CoreExtensionHost> {
     static CORE_EXTENSION_HOST: OnceLock<Result<CoreExtensionHost, String>> = OnceLock::new();
@@ -268,7 +303,7 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
 async fn initialise_devql_schema_for_command(
     cfg: &DevqlConfig,
     command: &str,
-) -> Result<RelationalStorage> {
+) -> Result<(RelationalStorage, InitSchemaSummary)> {
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
@@ -279,25 +314,43 @@ async fn initialise_devql_schema_for_command(
         init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
     }
     init_relational_schema(cfg, &relational).await?;
-    Ok(relational)
+    Ok((
+        relational,
+        InitSchemaSummary {
+            success: true,
+            repo_identity: cfg.repo.identity.clone(),
+            repo_id: cfg.repo.repo_id.clone(),
+            relational_backend: if backends.relational.has_postgres() {
+                "postgres".to_string()
+            } else {
+                "sqlite".to_string()
+            },
+            events_backend: if backends.events.has_clickhouse() {
+                "clickhouse".to_string()
+            } else {
+                "duckdb".to_string()
+            },
+        },
+    ))
+}
+
+pub(crate) async fn execute_init_schema(
+    cfg: &DevqlConfig,
+    command: &str,
+) -> Result<InitSchemaSummary> {
+    let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
+    Ok(summary)
 }
 
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
-    let _relational = initialise_devql_schema_for_command(cfg, "devql init").await?;
-
-    println!(
-        "DevQL schema ready for repo {} ({})",
-        cfg.repo.identity, cfg.repo.repo_id
-    );
+    let summary = execute_init_schema(cfg, "devql init").await?;
+    println!("{}", format_init_schema_summary(&summary));
     Ok(())
 }
 
 pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
-    let relational = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
-    println!(
-        "DevQL schema ready for repo {} ({})",
-        cfg.repo.identity, cfg.repo.repo_id
-    );
+    let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
+    println!("{}", format_init_schema_summary(&summary));
 
     if skip_baseline {
         println!("Baseline ingestion skipped (`--skip-baseline`).");
@@ -419,6 +472,7 @@ pub(crate) use self::ingestion_schema::{
     checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
     knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
 };
+pub(crate) use self::ingestion_types::IngestionCounters;
 use self::ingestion_types::*;
 use self::query_executor::*;
 use self::query_parser::*;

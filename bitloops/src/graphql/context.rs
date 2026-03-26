@@ -70,6 +70,17 @@ impl DevqlGraphqlContext {
         &self.loader_metrics
     }
 
+    pub(crate) fn devql_config(&self) -> Result<DevqlConfig> {
+        self.config.clone().ok_or_else(|| {
+            anyhow!(
+                "{}",
+                self.config_error
+                    .clone()
+                    .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
+            )
+        })
+    }
+
     pub(crate) fn repo_id(&self) -> &str {
         self.repo_identity.repo_id.as_str()
     }

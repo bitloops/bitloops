@@ -16,8 +16,9 @@ use self::loaders::LoaderRegistryExtension;
 use self::mutation_root::MutationRoot;
 use self::query_root::QueryRoot;
 use self::subscription_root::SubscriptionRoot;
-use async_graphql::Schema;
+use anyhow::{Result, anyhow};
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
+use async_graphql::{Request, Schema, ServerError, Variables};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
@@ -27,14 +28,33 @@ use axum::{
 pub(crate) type DevqlSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
 pub(crate) fn build_schema(context: DevqlGraphqlContext) -> DevqlSchema {
-    Schema::build(
-        QueryRoot,
-        async_graphql::EmptyMutation,
-        async_graphql::EmptySubscription,
-    )
-    .data(context)
-    .extension(LoaderRegistryExtension)
-    .finish()
+    Schema::build(QueryRoot, MutationRoot, async_graphql::EmptySubscription)
+        .data(context)
+        .extension(LoaderRegistryExtension)
+        .finish()
+}
+
+pub(crate) async fn execute_in_process(
+    repo_root: std::path::PathBuf,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let schema = build_schema(DevqlGraphqlContext::new(
+        repo_root,
+        crate::api::DashboardDbPools::default(),
+    ));
+    let response = schema
+        .execute(Request::new(query).variables(Variables::from_json(variables)))
+        .await;
+
+    if let Some(error) = response.errors.first() {
+        return Err(map_execution_error(error));
+    }
+
+    response
+        .data
+        .into_json()
+        .map_err(|err| anyhow!("failed to decode GraphQL response payload: {err:#}"))
 }
 
 pub(crate) async fn graphql_handler(
@@ -63,4 +83,20 @@ pub(crate) async fn graphql_sdl_handler(
         [("content-type", "text/plain; charset=utf-8")],
         state.devql_schema().sdl(),
     )
+}
+
+fn map_execution_error(error: &ServerError) -> anyhow::Error {
+    let code = error
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get("code"))
+        .and_then(|value| match value {
+            async_graphql::Value::String(value) => Some(value.as_str()),
+            _ => None,
+        });
+    match code {
+        Some("BAD_USER_INPUT") | Some("BAD_CURSOR") => anyhow!(error.message.clone()),
+        Some(other) => anyhow!("{other}: {}", error.message),
+        None => anyhow!("GraphQL execution failed: {}", error.message),
+    }
 }
