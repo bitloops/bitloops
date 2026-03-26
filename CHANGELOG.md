@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **DevQL test-harness stage boundary cleanup:** `coverage()` now requires `symbol_id` from upstream core artefact rows and no longer resolves coverage by falling back through `artefacts_current`. The direct `replace_production_artefacts` test-harness repository path and the dead `ProductionIngestionBatch` model were removed, with test-only production seeding moved to direct SQLite setup helpers.
 - **Dashboard REST compatibility wrappers now execute GraphQL internally** (`CLI-1523`): `/api/kpis`, `/api/commits`, `/api/branches`, `/api/users`, and `/api/agents` now execute the in-process DevQL GraphQL schema instead of duplicating direct SQL-style handler logic. This keeps the existing dashboard contract intact while routing branch, commit, checkpoint, and user aggregation through the new GraphQL surface, and the API regression tests now cover the wrapper behaviour end to end.
+- **DevQL CLI write-command migration cleanup** (`CLI-1526`): the remaining DevQL write-command wrapper coverage now explicitly pins `bitloops devql init` and `bitloops devql ingest` to the in-process GraphQL mutation path, and the obsolete host-backed knowledge write shims were removed now that `knowledge add`, `associate`, and `refresh` no longer bypass GraphQL.
 
 ### Fixed
 

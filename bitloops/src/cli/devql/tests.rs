@@ -221,6 +221,45 @@ fn devql_run_requires_subcommand() {
 }
 
 #[test]
+fn devql_run_init_executes_graphql_mutation() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root, query, variables| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "initSchema": {
+                        "success": true,
+                        "repoIdentity": "repo:bitloops",
+                        "repoId": "repo-id-1",
+                        "relationalBackend": "sqlite",
+                        "eventsBackend": "duckdb"
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
+                }))
+                .expect("devql init should succeed");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("initSchema"));
+    assert_eq!(variables, json!({}));
+}
+
+#[test]
 fn devql_run_init_executes_graphql_mutation_and_is_idempotent() {
     let repo = seed_devql_cli_repo();
     let sqlite_path = sqlite_path_for_repo(repo.path());
@@ -248,6 +287,64 @@ fn devql_run_init_executes_graphql_mutation_and_is_idempotent() {
             .expect("query sqlite schema");
         assert_eq!(count, 1, "expected sqlite table `{table}`");
     }
+}
+
+#[test]
+fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root, query, variables| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "ingest": {
+                        "success": true,
+                        "initRequested": false,
+                        "checkpointsProcessed": 2,
+                        "eventsInserted": 3,
+                        "artefactsUpserted": 5,
+                        "checkpointsWithoutCommit": 0,
+                        "temporaryRowsPromoted": 0,
+                        "semanticFeatureRowsUpserted": 0,
+                        "semanticFeatureRowsSkipped": 0,
+                        "symbolEmbeddingRowsUpserted": 0,
+                        "symbolEmbeddingRowsSkipped": 0,
+                        "symbolCloneEdgesUpserted": 0,
+                        "symbolCloneSourcesScored": 0
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                        init: false,
+                        max_checkpoints: 42,
+                    })),
+                }))
+                .expect("devql ingest should succeed");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("ingest"));
+    assert_eq!(
+        variables,
+        json!({
+            "input": {
+                "init": false,
+                "maxCheckpoints": 42
+            }
+        })
+    );
 }
 
 #[test]

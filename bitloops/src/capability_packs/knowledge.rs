@@ -37,9 +37,6 @@ pub mod storage;
 pub mod types;
 pub mod url;
 
-pub use cli::{
-    run_knowledge_add_via_host, run_knowledge_associate_via_host, run_knowledge_refresh_via_host,
-    run_knowledge_versions_via_host,
-};
+pub use cli::run_knowledge_versions_via_host;
 pub use pack::KnowledgePack;
 pub use types::*;
