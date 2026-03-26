@@ -1,7 +1,7 @@
 use super::*;
-use crate::host::language_adapter::resolve_canonical_kind;
 use crate::adapters::languages::rust::canonical::RUST_CANONICAL_MAPPINGS;
 use crate::adapters::languages::ts_js::canonical::TS_JS_CANONICAL_MAPPINGS;
+use crate::host::language_adapter::resolve_canonical_kind;
 
 #[test]
 fn canonical_projection_maps_to_core_contract_kinds() {

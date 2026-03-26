@@ -1,7 +1,7 @@
 use super::edges_shared::{
-    js_ts_identifier_is_value_reference, js_ts_node_is_in_extends_clause,
-    push_reference_edge, rust_identifier_is_value_reference, smallest_enclosing_callable,
-    EdgeCollector, ReferenceCtx, SymbolLookup,
+    EdgeCollector, ReferenceCtx, SymbolLookup, js_ts_identifier_is_value_reference,
+    js_ts_node_is_in_extends_clause, push_reference_edge, rust_identifier_is_value_reference,
+    smallest_enclosing_callable,
 };
 use crate::host::devql::RefKind;
 

@@ -21,7 +21,6 @@ use crate::config::{
     resolve_store_backend_config_for_repo, resolve_store_embedding_config,
     resolve_store_semantic_config,
 };
-use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
     read_committed, read_session_content, run_git,
@@ -32,6 +31,7 @@ use crate::host::db_status::{
 use crate::host::extension_host::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
+use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::utils::terminal::print_db_status_table;
 
 #[path = "devql/commands_ingest.rs"]
@@ -101,9 +101,9 @@ fn language_adapter_registry() -> Result<&'static LanguageAdapterRegistry> {
     });
     match registry_result {
         Ok(registry) => Ok(registry),
-        Err(error_message) => bail!(
-            "failed to initialize language adapter registry: {error_message}"
-        ),
+        Err(error_message) => {
+            bail!("failed to initialize language adapter registry: {error_message}")
+        }
     }
 }
 
@@ -143,7 +143,8 @@ fn collect_language_adapter_lifecycle(
 ) -> Result<LanguageAdapterLifecycleCollection> {
     let registry = language_adapter_registry()?;
     if apply_migrations {
-        let context = LanguageAdapterContext::new(cfg.repo_root.clone(), cfg.repo.repo_id.clone(), None);
+        let context =
+            LanguageAdapterContext::new(cfg.repo_root.clone(), cfg.repo.repo_id.clone(), None);
         let _ = registry.run_migrations(&context);
     }
 
@@ -175,7 +176,11 @@ fn collect_language_adapter_lifecycle(
     let packs = registry
         .registered_pack_ids()
         .into_iter()
-        .filter_map(|pack_id| registry.get(pack_id).map(|pack| (pack_id.to_string(), pack)))
+        .filter_map(|pack_id| {
+            registry
+                .get(pack_id)
+                .map(|pack| (pack_id.to_string(), pack))
+        })
         .map(|(pack_id, pack)| {
             let descriptor = pack.descriptor();
             crate::host::capability_host::diagnostics::LanguageAdapterPackRegistryEntry {
@@ -223,12 +228,14 @@ fn collect_language_adapter_lifecycle(
         registry
             .collect_health_outcomes(runtime)
             .into_iter()
-            .map(|(check_id, result)| crate::host::capability_host::diagnostics::HealthOutcome {
-                check_id,
-                healthy: result.healthy,
-                message: result.message,
-                details: result.details,
-            })
+            .map(
+                |(check_id, result)| crate::host::capability_host::diagnostics::HealthOutcome {
+                    check_id,
+                    healthy: result.healthy,
+                    message: result.message,
+                    details: result.details,
+                },
+            )
             .collect()
     } else {
         Vec::new()
@@ -358,15 +365,17 @@ pub fn run_capability_packs_report(
     let (core_extension_host, core_extension_host_error) = if with_extensions {
         match crate::host::extension_host::CoreExtensionHost::with_builtins() {
             Ok(ext_host) => {
-                let snapshot = ext_host.readiness_snapshot().with_language_adapter_readiness(
-                    language_adapter_lifecycle
-                        .summary
-                        .packs
-                        .iter()
-                        .map(|pack| pack.id.clone())
-                        .collect(),
-                    language_adapter_lifecycle.readiness_reports.clone(),
-                );
+                let snapshot = ext_host
+                    .readiness_snapshot()
+                    .with_language_adapter_readiness(
+                        language_adapter_lifecycle
+                            .summary
+                            .packs
+                            .iter()
+                            .map(|pack| pack.id.clone())
+                            .collect(),
+                        language_adapter_lifecycle.readiness_reports.clone(),
+                    );
                 (Some(ext_host.registry_report_with_snapshot(snapshot)), None)
             }
             Err(err) => (None, Some(err.to_string())),
@@ -537,6 +546,7 @@ mod query_parser;
 #[path = "devql/query/utils.rs"]
 mod query_utils;
 
+pub(crate) use self::core_contracts::CanonicalKindProjection;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
@@ -566,14 +576,11 @@ use self::query_parser::*;
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;
 use self::vocab::*;
-pub(crate) use self::core_contracts::CanonicalKindProjection;
 pub(crate) use self::vocab::{
-    CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution, EDGE_KIND_CALLS,
-    EDGE_KIND_EXPORTS,
+    CallForm, EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, EdgeKind, ExportForm, ImportForm, RefKind,
+    Resolution,
 };
 
-#[cfg(test)]
-pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
 #[cfg(test)]
 use crate::adapters::languages::rust::edges::*;
 #[cfg(test)]
@@ -583,9 +590,11 @@ use crate::adapters::languages::ts_js::edges::*;
 #[cfg(test)]
 use crate::adapters::languages::ts_js::extraction::*;
 #[cfg(test)]
-use crate::host::language_adapter::edges_shared::*;
+pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
 #[cfg(test)]
 use crate::host::language_adapter::EdgeMetadata;
+#[cfg(test)]
+use crate::host::language_adapter::edges_shared::*;
 use crate::host::language_adapter::{DependencyEdge, LanguageArtefact};
 
 #[cfg(test)]

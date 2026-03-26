@@ -2,8 +2,7 @@ use anyhow::Result;
 
 use super::LanguageAdapterContext;
 
-pub(crate) type LanguageAdapterMigrationRunner =
-    fn(&LanguageAdapterMigrationContext) -> Result<()>;
+pub(crate) type LanguageAdapterMigrationRunner = fn(&LanguageAdapterMigrationContext) -> Result<()>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LanguageAdapterMigrationDescriptor {

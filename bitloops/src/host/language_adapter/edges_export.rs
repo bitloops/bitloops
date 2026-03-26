@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::edges_shared::{
-    symbol_lookup_name_from_text, syntax_node_trimmed_text, strip_string_delimiters,
-    EdgeCollector, EdgeTarget, SymbolLookup,
+    EdgeCollector, EdgeTarget, SymbolLookup, strip_string_delimiters, symbol_lookup_name_from_text,
+    syntax_node_trimmed_text,
 };
 use super::{DependencyEdge, EdgeMetadata, RustUseExportEntry};
 use crate::host::devql::{EdgeKind, ExportForm, Resolution};

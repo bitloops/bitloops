@@ -42,9 +42,6 @@ pub(crate) fn resolve_canonical_kind(
 }
 
 /// Check whether a language_kind is in the supported set.
-pub(crate) fn is_supported_language_kind(
-    supported: &[&str],
-    language_kind: &str,
-) -> bool {
+pub(crate) fn is_supported_language_kind(supported: &[&str], language_kind: &str) -> bool {
     supported.contains(&language_kind)
 }

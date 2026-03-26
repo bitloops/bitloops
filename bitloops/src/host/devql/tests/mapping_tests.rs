@@ -1,11 +1,11 @@
 use super::*;
-use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 use crate::adapters::languages::rust::canonical::{
     RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS,
 };
 use crate::adapters::languages::ts_js::canonical::{
     TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS,
 };
+use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 
 fn extension_runtime_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -413,7 +413,10 @@ fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
         .iter()
         .map(|pack| pack.id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(pack_ids, vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]);
+    assert_eq!(
+        pack_ids,
+        vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]
+    );
     assert!(
         lifecycle
             .readiness_reports
@@ -430,15 +433,17 @@ fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_a
         .expect("collect language adapter lifecycle summary");
     let ext_host = crate::host::extension_host::CoreExtensionHost::with_builtins()
         .expect("bootstrap core extension host");
-    let snapshot = ext_host.readiness_snapshot().with_language_adapter_readiness(
-        lifecycle
-            .summary
-            .packs
-            .iter()
-            .map(|pack| pack.id.clone())
-            .collect(),
-        lifecycle.readiness_reports,
-    );
+    let snapshot = ext_host
+        .readiness_snapshot()
+        .with_language_adapter_readiness(
+            lifecycle
+                .summary
+                .packs
+                .iter()
+                .map(|pack| pack.id.clone())
+                .collect(),
+            lifecycle.readiness_reports,
+        );
     let report = ext_host.registry_report_with_snapshot(snapshot);
 
     assert_eq!(

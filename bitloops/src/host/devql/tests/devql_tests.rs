@@ -261,11 +261,7 @@ fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> 
     }
 }
 
-fn test_unresolved_call_edge(
-    from_symbol_fqn: &str,
-    symbol_ref: &str,
-    line: i32,
-) -> DependencyEdge {
+fn test_unresolved_call_edge(from_symbol_fqn: &str, symbol_ref: &str, line: i32) -> DependencyEdge {
     DependencyEdge {
         edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),

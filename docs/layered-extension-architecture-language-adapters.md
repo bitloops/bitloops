@@ -42,7 +42,7 @@ flowchart TD
 
 `host/extension_host/language` remains the metadata layer.
 
-It resolves language-pack ownership by language/profile/file-path and returns a stable pack id such as:
+It is the chooser layer: it resolves language-pack ownership from language hints, profile inputs, file extension/path, and optional dialect/source-version context, then returns a stable pack id such as:
 
 - `rust-language-pack`
 - `ts-js-language-pack`
@@ -99,9 +99,13 @@ Built-ins now live under `adapters/languages`:
 
 `builtin_language_adapter_packs()` currently registers only compiled built-ins. The contract is extensible, but external runtime pack loading is not implemented yet.
 
-### 2. Metadata and runtime remain in different top-level modules
+### 2. Descriptor metadata and runtime execution are split by design
 
-Metadata remains under `host/extension_host`, while runtime packs live under `adapters/languages` and `host/language_adapter`. This split is intentional, but it is still a two-layer mental model.
+`host/extension_host/language` contains descriptor metadata and resolution rules (pack ids, aliases, profiles, file extensions, source-version compatibility). It answers: "which pack should own this input?"
+
+`host/language_adapter` plus `adapters/languages` contain runtime extraction behavior. They answer: "how does the selected pack extract artefacts and edges?"
+
+This keeps pack-selection/validation separate from runtime parsing code, with the tradeoff that contributors need to understand both layers.
 
 ## Related but separate code
 

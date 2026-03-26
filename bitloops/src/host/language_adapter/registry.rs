@@ -14,8 +14,8 @@ use super::{
     LanguageAdapterHealthCheck, LanguageAdapterHealthContext, LanguageAdapterHealthResult,
     LanguageAdapterMigrationContext, LanguageAdapterMigrationDescriptor,
     LanguageAdapterMigrationExecution, LanguageAdapterMigrationFailure,
-    LanguageAdapterMigrationRunReport, LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep,
-    LanguageAdapterPack, LanguageArtefact,
+    LanguageAdapterMigrationRunReport, LanguageAdapterMigrationStatus,
+    LanguageAdapterMigrationStep, LanguageAdapterPack, LanguageArtefact,
 };
 
 #[derive(Debug, Default)]
@@ -60,7 +60,8 @@ impl LanguageAdapterRegistry {
         }
 
         self.migrations.insert(pack_id.clone(), pack.migrations());
-        self.health_checks.insert(pack_id.clone(), pack.health_checks());
+        self.health_checks
+            .insert(pack_id.clone(), pack.health_checks());
         self.packs.insert(pack_id, Arc::from(pack));
         Ok(())
     }
@@ -83,7 +84,9 @@ impl LanguageAdapterRegistry {
         &self,
         pack_id: &str,
     ) -> Option<&'static [CanonicalMapping]> {
-        self.packs.get(pack_id).map(|pack| pack.canonical_mappings())
+        self.packs
+            .get(pack_id)
+            .map(|pack| pack.canonical_mappings())
     }
 
     pub(crate) fn extract_artefacts(
@@ -201,8 +204,7 @@ impl LanguageAdapterRegistry {
             .collect();
 
         let orchestration = orchestrate_capability_migrations(orchestration_steps, |step| {
-            let Some(descriptor) = self
-                .migration_descriptor_for(&step.pack_id, &step.migration_id)
+            let Some(descriptor) = self.migration_descriptor_for(&step.pack_id, &step.migration_id)
             else {
                 return Err(format!(
                     "language adapter migration descriptor not found: pack=`{}` migration=`{}`",
@@ -233,15 +235,14 @@ impl LanguageAdapterRegistry {
                     order: execution.order,
                 })
                 .collect(),
-            failure: orchestration
-                .failure
-                .as_ref()
-                .map(|failure| LanguageAdapterMigrationFailure {
+            failure: orchestration.failure.as_ref().map(|failure| {
+                LanguageAdapterMigrationFailure {
                     pack_id: failure.pack_id.clone(),
                     migration_id: failure.migration_id.clone(),
                     order: failure.order,
                     reason: failure.reason.clone(),
-                }),
+                }
+            }),
         };
 
         self.persist_migration_state(&report, &total_plan, &packs_without_migrations);
@@ -253,11 +254,7 @@ impl LanguageAdapterRegistry {
         pack_id: &str,
         runtime: &str,
     ) -> Vec<(String, LanguageAdapterHealthResult)> {
-        let checks = self
-            .health_checks
-            .get(pack_id)
-            .copied()
-            .unwrap_or(&[]);
+        let checks = self.health_checks.get(pack_id).copied().unwrap_or(&[]);
         let context = self.health_context(pack_id, runtime);
         checks
             .iter()
@@ -412,7 +409,9 @@ impl LanguageAdapterRegistry {
     ) {
         let mut total_steps_per_pack: HashMap<String, usize> = HashMap::new();
         for step in total_plan {
-            *total_steps_per_pack.entry(step.pack_id.clone()).or_insert(0) += 1;
+            *total_steps_per_pack
+                .entry(step.pack_id.clone())
+                .or_insert(0) += 1;
         }
 
         let mut state = self
@@ -425,14 +424,10 @@ impl LanguageAdapterRegistry {
         }
 
         for execution in &report.executed {
-            if state
-                .applied_migrations
-                .iter()
-                .any(|existing| {
-                    existing.pack_id == execution.pack_id
-                        && existing.migration_id == execution.migration_id
-                })
-            {
+            if state.applied_migrations.iter().any(|existing| {
+                existing.pack_id == execution.pack_id
+                    && existing.migration_id == execution.migration_id
+            }) {
                 continue;
             }
             state.applied_migrations.push(execution.clone());
@@ -469,27 +464,28 @@ mod tests {
 
     static MIGRATION_EXECUTED: AtomicBool = AtomicBool::new(false);
 
-    const TEST_DESCRIPTOR: LanguagePackDescriptor = LanguagePackDescriptor {
-        id: "test-language-pack",
-        version: "1.0.0",
-        api_version: 1,
-        display_name: "Test Language Pack",
-        aliases: &["test-pack"],
-        supported_languages: &["testlang"],
-        language_profiles: &[],
-        compatibility: crate::host::extension_host::ExtensionCompatibility::phase1_local_cli(&[
-            "language-packs",
-            "readiness",
-            "diagnostics",
-        ]),
-    };
+    const TEST_DESCRIPTOR: LanguagePackDescriptor =
+        LanguagePackDescriptor {
+            id: "test-language-pack",
+            version: "1.0.0",
+            api_version: 1,
+            display_name: "Test Language Pack",
+            aliases: &["test-pack"],
+            supported_languages: &["testlang"],
+            language_profiles: &[],
+            compatibility: crate::host::extension_host::ExtensionCompatibility::phase1_local_cli(
+                &["language-packs", "readiness", "diagnostics"],
+            ),
+        };
 
     fn migration_mark_executed(_ctx: &LanguageAdapterMigrationContext) -> Result<()> {
         MIGRATION_EXECUTED.store(true, Ordering::SeqCst);
         Ok(())
     }
 
-    fn health_fails_when_pending(ctx: &LanguageAdapterHealthContext) -> LanguageAdapterHealthResult {
+    fn health_fails_when_pending(
+        ctx: &LanguageAdapterHealthContext,
+    ) -> LanguageAdapterHealthResult {
         if ctx.has_pending_migrations() {
             LanguageAdapterHealthResult::failed("pending migrations", "apply migrations first")
         } else {

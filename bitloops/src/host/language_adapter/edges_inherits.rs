@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use super::edges_shared::{
-    push_extends_edge, symbol_lookup_name_from_node, EdgeCollector, SymbolLookup,
-};
 use super::DependencyEdge;
+use super::edges_shared::{
+    EdgeCollector, SymbolLookup, push_extends_edge, symbol_lookup_name_from_node,
+};
 
 // Extension edge extraction for JS/TS (extends) and Rust (supertraits).
 

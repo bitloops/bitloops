@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use crate::host::language_adapter::{
-    is_supported_language_kind, resolve_canonical_kind, LanguageArtefact,
-};
 use super::canonical::{RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS};
+use crate::host::language_adapter::{
+    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+};
 
 // Rust artefact extraction via tree-sitter.
 
@@ -78,8 +78,12 @@ pub(crate) fn collect_rust_nodes_recursive(
             return;
         }
         out.push(LanguageArtefact {
-            canonical_kind: resolve_canonical_kind(RUST_CANONICAL_MAPPINGS, language_kind, inside_impl)
-                .map(|p| p.as_str().to_string()),
+            canonical_kind: resolve_canonical_kind(
+                RUST_CANONICAL_MAPPINGS,
+                language_kind,
+                inside_impl,
+            )
+            .map(|p| p.as_str().to_string()),
             language_kind: language_kind.to_string(),
             name,
             symbol_fqn,

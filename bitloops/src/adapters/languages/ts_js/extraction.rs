@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 
-use crate::host::language_adapter::{
-    is_supported_language_kind, resolve_canonical_kind, LanguageArtefact,
-};
 use super::canonical::{TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS};
+use crate::host::language_adapter::{
+    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+};
 
 // JS/TS artefact extraction via tree-sitter.
 
@@ -227,7 +227,8 @@ pub(crate) fn push_js_ts_artefact(
         parent_symbol_fqn,
     } = descriptor;
 
-    if name.is_empty() || !is_supported_language_kind(TS_JS_SUPPORTED_LANGUAGE_KINDS, language_kind) {
+    if name.is_empty() || !is_supported_language_kind(TS_JS_SUPPORTED_LANGUAGE_KINDS, language_kind)
+    {
         return;
     }
 

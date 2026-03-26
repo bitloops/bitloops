@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use super::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck, LanguageAdapterMigrationDescriptor,
-    LanguageArtefact,
+    CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck,
+    LanguageAdapterMigrationDescriptor, LanguageArtefact,
 };
 use crate::host::extension_host::LanguagePackDescriptor;
 

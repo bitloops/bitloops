@@ -1,8 +1,6 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::host::devql::{
-    CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution,
-};
+use crate::host::devql::{CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LanguageArtefact {

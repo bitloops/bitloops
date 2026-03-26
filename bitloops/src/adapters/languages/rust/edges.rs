@@ -6,14 +6,12 @@ use regex::Regex;
 use crate::host::devql::{CallForm, EdgeKind, ImportForm, Resolution};
 use crate::host::language_adapter::{
     DependencyEdge, EdgeMetadata, LanguageArtefact,
-    edges_export::{
-        collect_rust_export_edges_recursive, collect_rust_use_export_entries,
-    },
+    edges_export::{collect_rust_export_edges_recursive, collect_rust_use_export_entries},
     edges_inherits::collect_rust_extends_edges_recursive,
     edges_reference::collect_rust_reference_edges_recursive,
     edges_shared::{
-        rust_reference_target_maps, smallest_enclosing_callable, top_level_export_target_map,
-        CallCtx, EdgeCollector, ReferenceCtx,
+        CallCtx, EdgeCollector, ReferenceCtx, rust_reference_target_maps,
+        smallest_enclosing_callable, top_level_export_target_map,
     },
 };
 

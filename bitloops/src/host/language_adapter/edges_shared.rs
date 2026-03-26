@@ -170,7 +170,9 @@ pub(crate) fn rust_reference_target_maps(
     (type_targets, value_targets)
 }
 
-pub(crate) fn top_level_export_target_map(artefacts: &[LanguageArtefact]) -> HashMap<String, String> {
+pub(crate) fn top_level_export_target_map(
+    artefacts: &[LanguageArtefact],
+) -> HashMap<String, String> {
     let mut targets = HashMap::new();
 
     for artefact in artefacts {
