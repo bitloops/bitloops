@@ -179,10 +179,15 @@ fn seed_checkpoint_storage_for_dashboard(repo_root: &Path, seed: SeedCheckpointS
 }
 
 fn test_state(repo_root: PathBuf, mode: ServeMode, bundle_dir: PathBuf) -> DashboardState {
+    let db = super::db::DashboardDbPools::default();
     DashboardState {
+        devql_schema: crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+            repo_root.clone(),
+            db.clone(),
+        )),
         repo_root,
         mode,
-        db: super::db::DashboardDbPools::default(),
+        db,
         bundle_dir,
     }
 }
@@ -651,6 +656,32 @@ async fn request_json_with_method(
     (status, parsed)
 }
 
+async fn request_json_with_method_and_content_type(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    content_type: &str,
+    body: Body,
+) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", content_type)
+                .body(body)
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let parsed = serde_json::from_slice::<Value>(&body).unwrap_or_else(|_| json!({}));
+    (status, parsed)
+}
+
 const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
 const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
 
@@ -761,6 +792,122 @@ async fn request_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
         .await
         .expect("read body");
     (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+async fn request_text_with_method(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+) -> (StatusCode, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+#[tokio::test]
+async fn devql_schema_builds_and_executes_in_process() {
+    let temp = TempDir::new().expect("temp dir");
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        temp.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ repo(name: "demo") { id name provider organization } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["name"], "demo");
+    assert_eq!(json["repo"]["provider"], "local");
+}
+
+#[tokio::test]
+async fn devql_playground_route_serves_explorer() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, body) = request_text(app, "/devql/playground").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("DevQL Explorer"));
+    assert!(body.contains("/devql"));
+}
+
+#[tokio::test]
+async fn devql_sdl_route_returns_schema_text() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, body) = request_text(app, "/devql/sdl").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("type QueryRoot"));
+    assert!(body.contains("repo(name: String!): Repository!"));
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_graphql_requests() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql",
+        "application/json",
+        Body::from(r#"{"query":"{ repo(name: \"demo\") { name provider } }"}"#),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["data"]["repo"]["name"], "demo");
+    assert_eq!(payload["data"]["repo"]["provider"], "local");
+}
+
+#[tokio::test]
+async fn devql_ws_route_is_registered() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, _) = request_text_with_method(app, Method::GET, "/devql/ws").await;
+
+    assert_ne!(status, StatusCode::NOT_FOUND);
 }
 
 #[test]

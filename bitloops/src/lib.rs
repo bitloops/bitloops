@@ -4,6 +4,7 @@ pub mod capability_packs;
 pub mod cli;
 pub mod config;
 pub mod git;
+pub mod graphql;
 pub mod host;
 pub mod models;
 pub mod storage;

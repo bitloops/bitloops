@@ -6,6 +6,7 @@ mod handlers;
 mod router;
 
 use crate::config::dashboard_use_bitloops_local;
+use crate::graphql::{self, DevqlGraphqlContext};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed_info, run_git,
 };
@@ -19,6 +20,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tokio::net::TcpListener;
+
+pub(crate) use self::db::DashboardDbPools;
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
@@ -113,12 +116,19 @@ pub(super) enum ServeMode {
     Bundle(PathBuf),
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct DashboardState {
+#[derive(Clone)]
+pub(crate) struct DashboardState {
     pub(super) repo_root: PathBuf,
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) devql_schema: graphql::DevqlSchema,
+}
+
+impl DashboardState {
+    pub(crate) fn devql_schema(&self) -> &graphql::DevqlSchema {
+        &self.devql_schema
+    }
 }
 
 /// True when BITLOOPS_DEV is set (show extra info on CLI).
@@ -162,6 +172,10 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
 
     let browser_host = browser_host_for_url(&selected_host, local_addr);
     let url = format_dashboard_url(&browser_host, local_addr.port());
+    let devql_schema = graphql::build_schema(DevqlGraphqlContext::new(
+        repo_root.clone(),
+        db_init.pools.clone(),
+    ));
 
     println!();
     println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
@@ -200,6 +214,7 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
             mode: serve_mode,
             db: db_init.pools,
             bundle_dir,
+            devql_schema,
         },
     )
     .await
