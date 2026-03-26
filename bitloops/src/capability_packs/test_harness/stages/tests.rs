@@ -19,6 +19,13 @@ struct TestsStagePayload {
     input_rows: Vec<Value>,
     #[serde(default)]
     args: BTreeMap<String, String>,
+    #[serde(default)]
+    query_context: TestsQueryContext,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TestsQueryContext {
+    resolved_commit_sha: Option<String>,
 }
 
 pub struct TestsStageHandler(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
@@ -43,6 +50,7 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
         .transpose()?;
     let linkage_source = payload.args.get("linkage_source").map(String::as_str);
     let repo_id = ctx.repo().repo_id.clone();
+    let commit_sha = payload.query_context.resolved_commit_sha;
 
     // Upstream core owns the contract row shape here: artefact_id, symbol_id,
     // symbol_fqn, canonical_kind, path, start_line, end_line.
@@ -76,6 +84,7 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
         let covering = store.load_stage_covering_tests(
             &repo_id,
             production_symbol_id,
+            commit_sha.as_deref(),
             min_confidence,
             linkage_source,
             limit,
@@ -194,6 +203,7 @@ mod guardrail_tests {
     struct StageCall {
         repo_id: String,
         production_symbol_id: String,
+        commit_sha: Option<String>,
         min_confidence: Option<f64>,
         linkage_source: Option<String>,
         limit: usize,
@@ -271,6 +281,7 @@ mod guardrail_tests {
             &self,
             repo_id: &str,
             production_symbol_id: &str,
+            commit_sha: Option<&str>,
             min_confidence: Option<f64>,
             linkage_source: Option<&str>,
             limit: usize,
@@ -278,6 +289,7 @@ mod guardrail_tests {
             self.calls.lock().expect("calls lock").push(StageCall {
                 repo_id: repo_id.to_string(),
                 production_symbol_id: production_symbol_id.to_string(),
+                commit_sha: commit_sha.map(str::to_string),
                 min_confidence,
                 linkage_source: linkage_source.map(str::to_string),
                 limit,
@@ -496,6 +508,9 @@ mod guardrail_tests {
                 "args": {
                     "min_confidence": "0.75",
                     "linkage_source": "coverage_ingest"
+                },
+                "query_context": {
+                    "resolved_commit_sha": "commit-old"
                 }
             }),
         )
@@ -504,6 +519,7 @@ mod guardrail_tests {
         let call = repo.calls().pop().expect("call");
         assert_eq!(call.repo_id, "repo-1");
         assert_eq!(call.production_symbol_id, "symbol-a");
+        assert_eq!(call.commit_sha.as_deref(), Some("commit-old"));
         assert_eq!(call.min_confidence, Some(0.75));
         assert_eq!(call.linkage_source.as_deref(), Some("coverage_ingest"));
         assert_eq!(call.limit, 7);

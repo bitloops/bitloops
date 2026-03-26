@@ -274,6 +274,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -282,6 +283,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Sqlite(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,
@@ -289,6 +291,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Postgres(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,
