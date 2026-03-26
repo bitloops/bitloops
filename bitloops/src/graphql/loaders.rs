@@ -188,25 +188,25 @@ impl Loader<ArtefactBatchKey> for ArtefactByIdLoader {
         keys: &[ArtefactBatchKey],
     ) -> Result<HashMap<ArtefactBatchKey, Self::Value>, Self::Error> {
         self.context.loader_metrics().record_artefact_batch();
-        let mut grouped_ids = HashMap::<Option<String>, Vec<String>>::new();
+        let mut grouped_ids = HashMap::<ResolverScope, Vec<String>>::new();
         for key in keys {
             grouped_ids
-                .entry(key.project_path.clone())
+                .entry(key.scope.clone())
                 .or_default()
                 .push(key.artefact_id.clone());
         }
 
         let mut artefacts_by_key = HashMap::new();
-        for (project_path, artefact_ids) in grouped_ids {
+        for (scope, artefact_ids) in grouped_ids {
             let artefacts = self
                 .context
-                .load_artefacts_by_ids(&artefact_ids, project_path.as_deref())
+                .load_artefacts_by_ids(&artefact_ids, &scope)
                 .await
                 .map_err(|err| format!("{err:#}"))?;
             for artefact_id in artefact_ids {
                 if let Some(artefact) = artefacts.get(&artefact_id).cloned() {
                     artefacts_by_key.insert(
-                        ArtefactBatchKey::from_project_path(artefact_id, project_path.clone()),
+                        ArtefactBatchKey::from_scope(artefact_id, scope.clone()),
                         artefact,
                     );
                 }
@@ -271,7 +271,7 @@ impl Loader<EdgeBatchKey> for EdgesByArtefactLoader {
                     &artefact_ids,
                     self.direction.as_deps_direction(),
                     filter,
-                    filter_key.project_path(),
+                    &filter_key.scope,
                 )
                 .await
                 .map_err(|err| format!("{err:#}"))?;
@@ -311,22 +311,19 @@ impl Loader<String> for CommitByShaLoader {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ArtefactBatchKey {
     artefact_id: String,
-    project_path: Option<String>,
+    scope: ResolverScope,
 }
 
 impl ArtefactBatchKey {
     fn new(artefact_id: &str, scope: &ResolverScope) -> Self {
         Self {
             artefact_id: artefact_id.to_string(),
-            project_path: scope.project_path().map(str::to_string),
+            scope: scope.clone(),
         }
     }
 
-    fn from_project_path(artefact_id: String, project_path: Option<String>) -> Self {
-        Self {
-            artefact_id,
-            project_path,
-        }
+    fn from_scope(artefact_id: String, scope: ResolverScope) -> Self {
+        Self { artefact_id, scope }
     }
 }
 
@@ -335,7 +332,7 @@ struct EdgeBatchKey {
     artefact_id: String,
     kind: Option<EdgeKind>,
     include_unresolved: bool,
-    project_path: Option<String>,
+    scope: ResolverScope,
 }
 
 impl EdgeBatchKey {
@@ -344,7 +341,7 @@ impl EdgeBatchKey {
             artefact_id: artefact_id.to_string(),
             kind: filter.kind,
             include_unresolved: filter.include_unresolved,
-            project_path: scope.project_path().map(str::to_string),
+            scope: scope.clone(),
         }
     }
 
@@ -352,7 +349,7 @@ impl EdgeBatchKey {
         EdgeFilterKey {
             kind: self.kind,
             include_unresolved: self.include_unresolved,
-            project_path: self.project_path.clone(),
+            scope: self.scope.clone(),
         }
     }
 
@@ -361,7 +358,7 @@ impl EdgeBatchKey {
             artefact_id,
             kind: filter_key.kind,
             include_unresolved: filter_key.include_unresolved,
-            project_path: filter_key.project_path.clone(),
+            scope: filter_key.scope.clone(),
         }
     }
 }
@@ -370,7 +367,7 @@ impl EdgeBatchKey {
 struct EdgeFilterKey {
     kind: Option<EdgeKind>,
     include_unresolved: bool,
-    project_path: Option<String>,
+    scope: ResolverScope,
 }
 
 impl EdgeFilterKey {
@@ -380,9 +377,5 @@ impl EdgeFilterKey {
             direction,
             include_unresolved: self.include_unresolved,
         }
-    }
-
-    fn project_path(&self) -> Option<&str> {
-        self.project_path.as_deref()
     }
 }

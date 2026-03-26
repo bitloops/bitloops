@@ -10,10 +10,10 @@ use self::sql::{
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
-use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
 };
+use crate::graphql::{ResolverScope, TemporalAccessMode};
 use crate::host::devql::{execute_query_json_with_composition, sqlite_query_rows_path};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -57,6 +57,7 @@ impl DevqlGraphqlContext {
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             path,
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -75,6 +76,7 @@ impl DevqlGraphqlContext {
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             glob,
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -104,6 +106,7 @@ impl DevqlGraphqlContext {
             path,
             scope.project_path(),
             filter,
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -115,7 +118,7 @@ impl DevqlGraphqlContext {
     pub(crate) async fn load_artefacts_by_ids(
         &self,
         artefact_ids: &[String],
-        project_path: Option<&str>,
+        scope: &ResolverScope,
     ) -> Result<HashMap<String, Artefact>> {
         if artefact_ids.is_empty() {
             return Ok(HashMap::new());
@@ -125,11 +128,11 @@ impl DevqlGraphqlContext {
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             artefact_ids,
-            project_path,
+            scope.project_path(),
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         let mut artefacts = HashMap::new();
-        let scope = scope_from_project_path(project_path);
         for row in rows {
             let artefact = artefact_from_value(row)?.with_scope(scope.clone());
             artefacts.insert(artefact.id.to_string(), artefact);
@@ -147,6 +150,7 @@ impl DevqlGraphqlContext {
             &self.current_branch_name(),
             parent_artefact_id,
             scope.project_path(),
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -170,6 +174,7 @@ impl DevqlGraphqlContext {
             DependencyScope::File(path),
             scope.project_path(),
             filter.copied().unwrap_or_default(),
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -193,6 +198,7 @@ impl DevqlGraphqlContext {
             DependencyScope::Project(project_path),
             None,
             filter.copied().unwrap_or_default(),
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -206,7 +212,7 @@ impl DevqlGraphqlContext {
         artefact_ids: &[String],
         direction: DepsDirection,
         filter: DepsFilterInput,
-        project_path: Option<&str>,
+        scope: &ResolverScope,
     ) -> Result<HashMap<String, Vec<DependencyEdge>>> {
         if artefact_ids.is_empty() {
             return Ok(HashMap::new());
@@ -218,11 +224,11 @@ impl DevqlGraphqlContext {
             artefact_ids,
             direction,
             filter,
-            project_path,
+            scope.project_path(),
+            scope.temporal_scope(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         let mut edges_by_artefact = HashMap::<String, Vec<DependencyEdge>>::new();
-        let scope = scope_from_project_path(project_path);
         for row in rows {
             let owner_artefact_id = row
                 .get("owner_artefact_id")
@@ -247,6 +253,9 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
     ) -> Result<Vec<Artefact>> {
         let mut stages = Vec::new();
+        if let Some(temporal_stage) = devql_temporal_stage(scope)? {
+            stages.push(temporal_stage);
+        }
         let scoped_path = match (path, scope.project_path()) {
             (Some(path), _) => Some(path.to_string()),
             (None, Some(project_path)) => Some(format!("{project_path}/**")),
@@ -323,9 +332,20 @@ impl DevqlGraphqlContext {
     }
 }
 
-fn scope_from_project_path(project_path: Option<&str>) -> ResolverScope {
-    match project_path {
-        Some(project_path) => ResolverScope::default().with_project_path(project_path.to_string()),
-        None => ResolverScope::default(),
+fn devql_temporal_stage(scope: &ResolverScope) -> Result<Option<String>> {
+    let Some(temporal_scope) = scope.temporal_scope() else {
+        return Ok(None);
+    };
+
+    match temporal_scope.access_mode() {
+        TemporalAccessMode::HistoricalCommit => Ok(Some(format!(
+            "asOf(commit:{})",
+            quote_devql_string(temporal_scope.resolved_commit())
+        ))),
+        TemporalAccessMode::SaveCurrent => Ok(None),
+        TemporalAccessMode::SaveRevision(revision_id) => anyhow::bail!(
+            "event-backed artefact filters do not support asOf(saveRevision:\"{}\") yet",
+            revision_id
+        ),
     }
 }

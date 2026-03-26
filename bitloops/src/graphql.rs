@@ -9,7 +9,7 @@ mod types;
 
 pub(crate) use context::DevqlGraphqlContext;
 pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
-pub(crate) use scope::ResolverScope;
+pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode};
 
 use self::loaders::LoaderRegistryExtension;
 use self::mutation_root::MutationRoot;

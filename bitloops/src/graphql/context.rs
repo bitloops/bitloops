@@ -2,6 +2,7 @@ mod bootstrap;
 mod commit_checkpoints;
 mod git_history;
 mod repository_graph;
+mod temporal_scope;
 
 use crate::api::DashboardDbPools;
 use crate::config::StoreBackendConfig;

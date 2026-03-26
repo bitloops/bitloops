@@ -3,8 +3,8 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, paginate_items,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, TemporalScope, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -23,6 +23,29 @@ impl Project {
 
 #[ComplexObject]
 impl Project {
+    #[graphql(name = "asOf")]
+    async fn as_of(&self, ctx: &Context<'_>, input: AsOfInput) -> Result<TemporalScope> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let temporal_scope = context
+            .resolve_temporal_scope(&input)
+            .await
+            .map_err(|err| {
+                let message = format!("{err:#}");
+                if context.is_unknown_revision_error(&err)
+                    || message.contains("asOf(input:")
+                    || message.contains("unknown save revision")
+                {
+                    return bad_user_input_error(message);
+                }
+                backend_error(format!("failed to resolve temporal scope: {message}"))
+            })?;
+
+        Ok(TemporalScope::new(
+            &temporal_scope,
+            self.scope.with_temporal_scope(temporal_scope.clone()),
+        ))
+    }
+
     async fn file(&self, ctx: &Context<'_>, path: String) -> Result<FileContext> {
         let normalized = ctx
             .data_unchecked::<DevqlGraphqlContext>()
