@@ -138,7 +138,7 @@ pub(super) async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<Stri
     .await
 }
 
-pub(super) async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
+pub(crate) async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
     let mut query = sql.trim().to_string();
     if !query.to_ascii_uppercase().contains("FORMAT JSON") {
         query.push_str(" FORMAT JSON");
@@ -352,7 +352,7 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
     .context("joining SQLite transactional batch task")?
 }
 
-pub(super) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+pub(crate) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -524,7 +524,7 @@ pub(crate) fn esc_pg(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-pub(super) fn esc_ch(value: &str) -> String {
+pub(crate) fn esc_ch(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('\'', "\\'")

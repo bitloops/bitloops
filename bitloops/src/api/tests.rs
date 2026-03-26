@@ -69,6 +69,86 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     .expect("write config");
 }
 
+struct SeedGraphqlEvent<'a> {
+    event_id: &'a str,
+    event_time: &'a str,
+    checkpoint_id: &'a str,
+    session_id: &'a str,
+    commit_sha: &'a str,
+    branch: &'a str,
+    event_type: &'a str,
+    agent: &'a str,
+    strategy: &'a str,
+    files_touched: &'a [&'a str],
+    payload: serde_json::Value,
+}
+
+fn duckdb_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn seed_duckdb_events(repo_root: &Path, events: &[SeedGraphqlEvent<'_>]) {
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let backend_config = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    let duckdb_path = backend_config
+        .events
+        .resolve_duckdb_db_path_for_repo(repo_root);
+    if let Some(parent) = duckdb_path.parent() {
+        fs::create_dir_all(parent).expect("create duckdb parent");
+    }
+
+    let conn = duckdb::Connection::open(&duckdb_path).expect("open duckdb");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS checkpoint_events (
+            event_id VARCHAR PRIMARY KEY,
+            event_time VARCHAR,
+            repo_id VARCHAR,
+            checkpoint_id VARCHAR,
+            session_id VARCHAR,
+            commit_sha VARCHAR,
+            branch VARCHAR,
+            event_type VARCHAR,
+            agent VARCHAR,
+            strategy VARCHAR,
+            files_touched VARCHAR,
+            payload VARCHAR
+        );
+        "#,
+    )
+    .expect("create checkpoint_events table");
+
+    for event in events {
+        let files_touched =
+            serde_json::to_string(event.files_touched).expect("serialise files_touched");
+        let payload = serde_json::to_string(&event.payload).expect("serialise payload");
+        let sql = format!(
+            "INSERT INTO checkpoint_events (
+                event_id, event_time, repo_id, checkpoint_id, session_id, commit_sha,
+                branch, event_type, agent, strategy, files_touched, payload
+            ) VALUES (
+                '{event_id}', '{event_time}', '{repo_id}', '{checkpoint_id}', '{session_id}',
+                '{commit_sha}', '{branch}', '{event_type}', '{agent}', '{strategy}',
+                '{files_touched}', '{payload}'
+            )",
+            event_id = duckdb_literal(event.event_id),
+            event_time = duckdb_literal(event.event_time),
+            repo_id = duckdb_literal(repo_id.as_str()),
+            checkpoint_id = duckdb_literal(event.checkpoint_id),
+            session_id = duckdb_literal(event.session_id),
+            commit_sha = duckdb_literal(event.commit_sha),
+            branch = duckdb_literal(event.branch),
+            event_type = duckdb_literal(event.event_type),
+            agent = duckdb_literal(event.agent),
+            strategy = duckdb_literal(event.strategy),
+            files_touched = duckdb_literal(&files_touched),
+            payload = duckdb_literal(&payload),
+        );
+        conn.execute_batch(&sql).expect("insert checkpoint event");
+    }
+}
+
 struct SeedCheckpointSession<'a> {
     session_index: i64,
     session_id: &'a str,
@@ -330,6 +410,46 @@ fn seed_dashboard_repo() -> TempDir {
     );
 
     dir
+}
+
+fn seed_dashboard_repo_with_duckdb_events() -> TempDir {
+    let repo = seed_dashboard_repo();
+    let head_commit = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let previous_commit = git_ok(repo.path(), &["rev-parse", "HEAD^"]);
+
+    seed_duckdb_events(
+        repo.path(),
+        &[
+            SeedGraphqlEvent {
+                event_id: "evt-dashboard-head",
+                event_time: "2026-03-26T09:30:00Z",
+                checkpoint_id: "checkpoint-dashboard-head",
+                session_id: "session-dashboard-head",
+                commit_sha: &head_commit,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "codex",
+                strategy: "manual-commit",
+                files_touched: &["app.rs"],
+                payload: json!({"source": "dashboard-head"}),
+            },
+            SeedGraphqlEvent {
+                event_id: "evt-dashboard-previous",
+                event_time: "2026-03-26T09:15:00Z",
+                checkpoint_id: "checkpoint-dashboard-previous",
+                session_id: "session-dashboard-previous",
+                commit_sha: &previous_commit,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "codex",
+                strategy: "manual-commit",
+                files_touched: &["app.rs"],
+                payload: json!({"source": "dashboard-previous"}),
+            },
+        ],
+    );
+
+    repo
 }
 
 fn seed_graphql_devql_repo() -> TempDir {
@@ -965,6 +1085,58 @@ fn seed_graphql_monorepo_repo() -> TempDir {
     }
 
     dir
+}
+
+fn seed_graphql_monorepo_repo_with_duckdb_events() -> TempDir {
+    let repo = seed_graphql_monorepo_repo();
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+    seed_duckdb_events(
+        repo.path(),
+        &[
+            SeedGraphqlEvent {
+                event_id: "evt-checkpoint-api",
+                event_time: "2026-03-26T10:20:00Z",
+                checkpoint_id: "checkpoint-api",
+                session_id: "session-api",
+                commit_sha: &commit_sha,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "codex",
+                strategy: "manual-commit",
+                files_touched: &["packages/api/src/caller.ts", "packages/api/src/target.ts"],
+                payload: json!({"scope": "api"}),
+            },
+            SeedGraphqlEvent {
+                event_id: "evt-checkpoint-web",
+                event_time: "2026-03-26T10:25:00Z",
+                checkpoint_id: "checkpoint-web",
+                session_id: "session-web",
+                commit_sha: &commit_sha,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "codex",
+                strategy: "manual-commit",
+                files_touched: &["packages/web/src/page.ts"],
+                payload: json!({"scope": "web"}),
+            },
+            SeedGraphqlEvent {
+                event_id: "evt-telemetry-tool",
+                event_time: "2026-03-26T10:30:00Z",
+                checkpoint_id: "",
+                session_id: "session-api",
+                commit_sha: &commit_sha,
+                branch: "main",
+                event_type: "tool_invocation",
+                agent: "codex",
+                strategy: "",
+                files_touched: &["packages/api/src/caller.ts"],
+                payload: json!({"tool": "Edit", "path": "packages/api/src/caller.ts"}),
+            },
+        ],
+    );
+
+    repo
 }
 
 struct SeededGraphqlTemporalRepo {
@@ -3460,6 +3632,199 @@ async fn devql_graphql_commit_loader_caches_within_a_request_and_resets_per_requ
 }
 
 #[tokio::test]
+async fn devql_event_resolvers_query_duckdb_checkpoints_and_telemetry() {
+    let repo = seed_graphql_monorepo_repo_with_duckdb_events();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                checkpoints(first: 10) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      sessionId
+                      commitSha
+                      branch
+                      agent
+                      strategy
+                      filesTouched
+                      eventTime
+                    }
+                  }
+                }
+                telemetry(eventType: "tool_invocation", first: 10) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      sessionId
+                      eventType
+                      agent
+                      eventTime
+                      commitSha
+                      branch
+                      payload
+                    }
+                  }
+                }
+                project(path: "packages/api") {
+                  checkpoints(first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        id
+                        filesTouched
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["checkpoints"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["id"],
+        "checkpoint-web"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][1]["node"]["id"],
+        "checkpoint-api"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][1]["node"]["filesTouched"],
+        json!(["packages/api/src/caller.ts", "packages/api/src/target.ts"])
+    );
+    assert_eq!(json["repo"]["telemetry"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["telemetry"]["edges"][0]["node"]["eventType"],
+        "tool_invocation"
+    );
+    assert_eq!(
+        json["repo"]["telemetry"]["edges"][0]["node"]["payload"],
+        json!({"tool": "Edit", "path": "packages/api/src/caller.ts"})
+    );
+    assert_eq!(json["repo"]["project"]["checkpoints"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["project"]["checkpoints"]["edges"][0]["node"]["id"],
+        "checkpoint-api"
+    );
+}
+
+#[tokio::test]
+async fn devql_event_resolvers_surface_backend_errors_when_duckdb_store_is_missing() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                checkpoints(first: 1) {
+                  totalCount
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("DuckDB database file not found"),
+        "unexpected error: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn devql_event_checkpoint_commit_loader_batches_repository_checkpoint_reads() {
+    let repo = seed_dashboard_repo_with_duckdb_events();
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                checkpoints(first: 2) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      commit {
+                        sha
+                        branch
+                      }
+                      commitAgain: commit {
+                        sha
+                        branch
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["checkpoints"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["commit"]["sha"],
+        json["repo"]["checkpoints"]["edges"][0]["node"]["commitAgain"]["sha"]
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][1]["node"]["commit"]["sha"],
+        json["repo"]["checkpoints"]["edges"][1]["node"]["commitAgain"]["sha"]
+    );
+
+    let snapshot = context.loader_metrics_snapshot();
+    assert_eq!(snapshot.commit_by_sha_batches, 1);
+}
+
+#[tokio::test]
 async fn devql_playground_route_serves_explorer() {
     let temp = TempDir::new().expect("temp dir");
     let app = build_dashboard_router(test_state(
@@ -3490,6 +3855,10 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("type QueryRoot"));
     assert!(body.contains("repo(name: String!): Repository!"));
+    assert!(body.contains("checkpoints(agent: String, since: DateTime"));
+    assert!(body.contains("telemetry(eventType: String, agent: String"));
+    assert!(body.contains("type TelemetryEvent"));
+    assert!(body.contains("type TelemetryEventConnection"));
     assert!(body.contains("project(path: String!): Project!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(body.contains("input AsOfInput"));

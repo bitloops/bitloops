@@ -3,8 +3,9 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, TemporalScope, paginate_items,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
+    CheckpointEdge, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
+    DepsFilterInput, FileContext, TemporalScope, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -118,6 +119,31 @@ impl Project {
                 .into_iter()
                 .map(DependencyConnectionEdge::new)
                 .collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn checkpoints(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        since: Option<DateTimeScalar>,
+        #[graphql(default = 50)] first: i32,
+        after: Option<String>,
+    ) -> Result<CheckpointConnection> {
+        let checkpoints = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_checkpoints(&self.scope, agent.as_deref(), since.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query project checkpoints: {err:#}"))
+            })?;
+        let page = paginate_items(&checkpoints, first, after.as_deref(), |checkpoint| {
+            checkpoint.cursor()
+        })?;
+        Ok(CheckpointConnection::new(
+            page.items.into_iter().map(CheckpointEdge::new).collect(),
             page.page_info,
             page.total_count,
         ))

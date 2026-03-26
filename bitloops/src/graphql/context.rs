@@ -1,5 +1,6 @@
 mod bootstrap;
 mod commit_checkpoints;
+mod events;
 mod git_history;
 mod repository_graph;
 mod temporal_scope;

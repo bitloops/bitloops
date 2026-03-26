@@ -390,7 +390,8 @@ use self::canonical_mapping::*;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
-    esc_pg, postgres_exec, sqlite_exec_path_allow_create, sqlite_query_rows_path,
+    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, postgres_exec,
+    sqlite_exec_path_allow_create, sqlite_query_rows_path,
 };
 use self::deps_query::*;
 use self::ingestion_artefact_identity::*;

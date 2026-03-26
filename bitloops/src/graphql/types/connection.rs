@@ -2,7 +2,7 @@ use async_graphql::{Result, SimpleObject};
 
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
-use super::{Artefact, Checkpoint, Commit, DependencyEdge};
+use super::{Artefact, Checkpoint, Commit, DependencyEdge, TelemetryEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct PageInfo {
@@ -94,6 +94,36 @@ pub struct CheckpointConnection {
 
 impl CheckpointConnection {
     pub fn new(edges: Vec<CheckpointEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct TelemetryEventEdge {
+    pub node: TelemetryEvent,
+    pub cursor: String,
+}
+
+impl TelemetryEventEdge {
+    pub fn new(node: TelemetryEvent) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct TelemetryEventConnection {
+    pub edges: Vec<TelemetryEventEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl TelemetryEventConnection {
+    pub fn new(edges: Vec<TelemetryEventEdge>, page_info: PageInfo, total_count: usize) -> Self {
         Self {
             edges,
             page_info,

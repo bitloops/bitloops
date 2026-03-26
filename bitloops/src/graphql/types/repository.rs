@@ -3,8 +3,9 @@ use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CommitConnection, CommitEdge,
-    DateTimeScalar, FileContext, Project, TemporalScope, paginate_items,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
+    CheckpointEdge, CommitConnection, CommitEdge, DateTimeScalar, FileContext, Project,
+    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -145,6 +146,63 @@ impl Repository {
             .list_branches(since.as_ref(), until.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query repository branches: {err:#}")))
+    }
+
+    async fn checkpoints(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        since: Option<DateTimeScalar>,
+        #[graphql(default = 50)] first: i32,
+        after: Option<String>,
+    ) -> Result<CheckpointConnection> {
+        let checkpoints = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_checkpoints(&self.scope, agent.as_deref(), since.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query repository checkpoints: {err:#}"))
+            })?;
+        let page = paginate_items(&checkpoints, first, after.as_deref(), |checkpoint| {
+            checkpoint.cursor()
+        })?;
+        Ok(CheckpointConnection::new(
+            page.items.into_iter().map(CheckpointEdge::new).collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn telemetry(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "eventType")] event_type: Option<String>,
+        agent: Option<String>,
+        since: Option<DateTimeScalar>,
+        #[graphql(default = 50)] first: i32,
+        after: Option<String>,
+    ) -> Result<TelemetryEventConnection> {
+        let telemetry = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_telemetry_events(
+                &self.scope,
+                event_type.as_deref(),
+                agent.as_deref(),
+                since.as_ref(),
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query repository telemetry: {err:#}"))
+            })?;
+        let page = paginate_items(&telemetry, first, after.as_deref(), |event| event.cursor())?;
+        Ok(TelemetryEventConnection::new(
+            page.items
+                .into_iter()
+                .map(TelemetryEventEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
     }
 
     async fn users(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
