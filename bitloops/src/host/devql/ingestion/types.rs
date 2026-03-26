@@ -1,4 +1,3 @@
-use super::*;
 use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 
 // Shared types used across ingestion modules.

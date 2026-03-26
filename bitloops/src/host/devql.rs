@@ -593,8 +593,6 @@ mod ingestion_artefact_persistence;
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
-#[path = "devql/ingestion/edges_rust.rs"]
-mod ingestion_edges_rust;
 #[path = "devql/query/dsl_compiler.rs"]
 mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]

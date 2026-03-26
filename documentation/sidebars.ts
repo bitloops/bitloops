@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         'guides/end-to-end-workflow',
         'guides/team-setup',
         'guides/configuring-devql',
+        'guides/devql-graphql',
         'guides/devql-query-cookbook',
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',

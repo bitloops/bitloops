@@ -33,9 +33,14 @@ use axum::{
 
 pub(crate) type DevqlSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
+pub(crate) const MAX_DEVQL_QUERY_DEPTH: usize = 16;
+pub(crate) const MAX_DEVQL_QUERY_COMPLEXITY: usize = 256;
+
 pub(crate) fn build_schema(context: DevqlGraphqlContext) -> DevqlSchema {
     Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(context)
+        .limit_depth(MAX_DEVQL_QUERY_DEPTH)
+        .limit_complexity(MAX_DEVQL_QUERY_COMPLEXITY)
         .extension(LoaderRegistryExtension)
         .finish()
 }

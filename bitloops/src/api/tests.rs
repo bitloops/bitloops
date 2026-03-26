@@ -17,6 +17,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -6133,6 +6134,80 @@ fn checked_in_schema_file_matches_runtime_sdl() {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.graphql");
     let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.graphql");
     assert_eq!(actual, expected);
+}
+
+fn graphql_parent_depth_limit_query(parent_depth: usize) -> String {
+    let mut query = String::from(
+        r#"{ repo(name: "demo") { file(path: "src/caller.ts") { artefacts(first: 1) { edges { node {"#,
+    );
+    for _ in 0..parent_depth {
+        query.push_str(" parent {");
+    }
+    query.push_str(" id");
+    for _ in 0..parent_depth {
+        query.push_str(" }");
+    }
+    query.push_str(" } } } } } }");
+    query
+}
+
+fn graphql_complexity_limit_query(alias_count: usize) -> String {
+    let mut query = String::from("{");
+    for index in 0..alias_count {
+        write!(
+            &mut query,
+            r#" q{index}: health {{ relational {{ backend connected }} }}"#
+        )
+        .expect("writing GraphQL query should succeed");
+    }
+    query.push('}');
+    query
+}
+
+#[tokio::test]
+async fn devql_graphql_rejects_queries_over_the_depth_limit() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+    let query = graphql_parent_depth_limit_query(crate::graphql::MAX_DEVQL_QUERY_DEPTH);
+
+    let response = schema.execute(async_graphql::Request::new(query)).await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    assert!(
+        response.errors[0]
+            .message
+            .to_ascii_lowercase()
+            .contains("nested too deep"),
+        "expected depth-limit error, got {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_rejects_queries_over_the_complexity_limit() {
+    let temp = TempDir::new().expect("temp dir");
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        temp.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+    let query = graphql_complexity_limit_query(
+        crate::graphql::MAX_DEVQL_QUERY_COMPLEXITY.saturating_add(1),
+    );
+
+    let response = schema.execute(async_graphql::Request::new(query)).await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    assert!(
+        response.errors[0]
+            .message
+            .to_ascii_lowercase()
+            .contains("too complex"),
+        "expected complexity-limit error, got {:?}",
+        response.errors
+    );
 }
 
 #[tokio::test]
