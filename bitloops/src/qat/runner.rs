@@ -28,7 +28,7 @@ pub struct QatArgs {
 }
 
 pub async fn run(args: QatArgs) -> Result<()> {
-    let binary_path = env::current_exe().context("resolving current bitloops executable")?;
+    let binary_path = env::current_exe().context("resolving current bitloops executable")?; // it gets bitloops binary path from target/debug/bitloops
     let runs_root = resolve_runs_root(args.runs_dir.clone())?;
     let suite_root = create_suite_root(&runs_root)?;
     let feature_path = resolve_feature_path(&args)?;
