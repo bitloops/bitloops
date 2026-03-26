@@ -14,7 +14,7 @@ pub(super) const CAPABILITY_PACK_FEATURES: &[&str] = &[
     "capability-migrations",
 ];
 
-pub(super) const RUST_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+pub(crate) const RUST_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
     id: "rust-language-pack",
     version: "1.0.0",
     api_version: 1,

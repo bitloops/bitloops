@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod git;
 pub mod host;
+pub mod language_adapters;
 pub mod models;
 pub mod storage;
 pub mod telemetry;
