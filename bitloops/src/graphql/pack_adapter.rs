@@ -101,10 +101,7 @@ fn normalise_stage_args(args: Option<Value>) -> Result<Value> {
         Value::Object(entries) => {
             let mut normalised = Map::new();
             for (key, value) in entries {
-                let Some(value) = normalise_stage_arg_value(value)? else {
-                    continue;
-                };
-                normalised.insert(key, Value::String(value));
+                normalised.insert(key, normalise_stage_arg_value(value)?);
             }
             Ok(Value::Object(normalised))
         }
@@ -112,12 +109,50 @@ fn normalise_stage_args(args: Option<Value>) -> Result<Value> {
     }
 }
 
-fn normalise_stage_arg_value(value: Value) -> Result<Option<String>> {
+fn normalise_stage_arg_value(value: Value) -> Result<Value> {
     match value {
-        Value::Null => Ok(None),
-        Value::String(value) => Ok(Some(value)),
-        Value::Number(value) => Ok(Some(value.to_string())),
-        Value::Bool(value) => Ok(Some(value.to_string())),
+        Value::Null | Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(value),
         _ => bail!("extension args must contain only string, number, boolean, or null values"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalise_stage_args;
+
+    #[test]
+    fn normalise_stage_args_preserves_scalar_json_values() {
+        let args = normalise_stage_args(Some(json!({
+            "label": "coverage",
+            "limit": 5,
+            "enabled": true,
+            "cursor": null,
+        })))
+        .expect("normalise args");
+
+        assert_eq!(
+            args,
+            json!({
+                "label": "coverage",
+                "limit": 5,
+                "enabled": true,
+                "cursor": null,
+            })
+        );
+    }
+
+    #[test]
+    fn normalise_stage_args_rejects_nested_json_values() {
+        let err = normalise_stage_args(Some(json!({
+            "filter": { "branch": "main" }
+        })))
+        .expect_err("nested JSON values must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("string, number, boolean, or null values")
+        );
     }
 }

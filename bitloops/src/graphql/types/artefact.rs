@@ -384,10 +384,7 @@ fn build_tests_stage_args(
 
     let mut args = serde_json::Map::new();
     if let Some(min_confidence) = min_confidence {
-        args.insert(
-            "min_confidence".to_string(),
-            Value::String(min_confidence.to_string()),
-        );
+        args.insert("min_confidence".to_string(), json!(min_confidence));
     }
     if let Some(linkage_source) = linkage_source
         && !linkage_source.trim().is_empty()
@@ -430,7 +427,10 @@ fn map_stage_adapter_error(
     err: anyhow::Error,
 ) -> async_graphql::Error {
     let message = format!("{err:#}");
-    if message.contains("unsupported DevQL stage") || message.contains("ambiguous DevQL stage") {
+    if message.contains("unsupported DevQL stage")
+        || message.contains("ambiguous DevQL stage")
+        || message.contains("extension args must")
+    {
         return bad_user_input_error(message);
     }
     backend_error(format!(

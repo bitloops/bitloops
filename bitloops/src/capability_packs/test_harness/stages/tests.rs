@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map as JsonMap, Value, json};
 
 use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, TestHarnessQueryRepository,
@@ -18,7 +17,7 @@ struct TestsStagePayload {
     #[serde(default)]
     input_rows: Vec<Value>,
     #[serde(default)]
-    args: BTreeMap<String, String>,
+    args: JsonMap<String, Value>,
     #[serde(default)]
     query_context: TestsQueryContext,
 }
@@ -30,6 +29,50 @@ struct TestsQueryContext {
 
 pub struct TestsStageHandler(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
 
+fn parse_optional_numeric_arg(
+    args: &JsonMap<String, Value>,
+    key: &str,
+) -> anyhow::Result<Option<f64>> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+
+    match value {
+        Value::Null => Ok(None),
+        Value::Number(value) => value
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| anyhow!("tests({key}:...) must be a valid numeric value")),
+        Value::String(value) => value
+            .trim()
+            .parse::<f64>()
+            .map(Some)
+            .map_err(|_| anyhow!("tests({key}:...) must be a valid numeric value")),
+        _ => Err(anyhow!("tests({key}:...) must be a valid numeric value")),
+    }
+}
+
+fn parse_optional_string_arg(
+    args: &JsonMap<String, Value>,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+
+    match value {
+        Value::Null => Ok(None),
+        Value::String(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(value.to_string()))
+        }
+        _ => Err(anyhow!("tests({key}:...) must be a string value")),
+    }
+}
+
 fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
     store: &R,
     request: StageRequest,
@@ -38,17 +81,9 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
     let payload: TestsStagePayload = request.parse_json()?;
     let limit = request.limit().unwrap_or(100).max(1);
 
-    let min_confidence = payload
-        .args
-        .get("min_confidence")
-        .map(|value| {
-            value
-                .parse::<f64>()
-                .map(|parsed| parsed.clamp(0.0, 1.0))
-                .map_err(|_| anyhow!("tests(min_confidence:...) must be a valid numeric value"))
-        })
-        .transpose()?;
-    let linkage_source = payload.args.get("linkage_source").map(String::as_str);
+    let min_confidence = parse_optional_numeric_arg(&payload.args, "min_confidence")?
+        .map(|value| value.clamp(0.0, 1.0));
+    let linkage_source = parse_optional_string_arg(&payload.args, "linkage_source")?;
     let repo_id = ctx.repo().repo_id.clone();
     let commit_sha = payload.query_context.resolved_commit_sha;
 
@@ -86,7 +121,7 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
             production_symbol_id,
             commit_sha.as_deref(),
             min_confidence,
-            linkage_source,
+            linkage_source.as_deref(),
             limit,
         )?;
 
@@ -522,6 +557,49 @@ mod guardrail_tests {
         assert_eq!(call.commit_sha.as_deref(), Some("commit-old"));
         assert_eq!(call.min_confidence, Some(0.75));
         assert_eq!(call.linkage_source.as_deref(), Some("coverage_ingest"));
+        assert_eq!(call.limit, 7);
+    }
+
+    #[tokio::test]
+    async fn tests_stage_accepts_json_scalar_args_from_graphql_extension() {
+        let repo = FakeRepo::default().with_response(
+            "symbol-a",
+            vec![StageCoveringTestRecord {
+                test_id: "test-a".into(),
+                test_name: "covers_a".into(),
+                suite_name: None,
+                file_path: "tests/a.rs".into(),
+                confidence: 0.5,
+                discovery_source: "static".into(),
+                linkage_source: "coverage".into(),
+                linkage_status: "linked".into(),
+            }],
+        );
+
+        let _ = execute(
+            &repo,
+            json!({
+                "input_rows": [
+                    stage_row(Some("artefact-a"), "symbol-a", "tests::a", "test_case", "tests/a.rs", 10, 12)
+                ],
+                "limit": 7,
+                "args": {
+                    "min_confidence": 0.75,
+                    "linkage_source": null
+                },
+                "query_context": {
+                    "resolved_commit_sha": "commit-new"
+                }
+            }),
+        )
+        .await;
+
+        let call = repo.calls().pop().expect("call");
+        assert_eq!(call.repo_id, "repo-1");
+        assert_eq!(call.production_symbol_id, "symbol-a");
+        assert_eq!(call.commit_sha.as_deref(), Some("commit-new"));
+        assert_eq!(call.min_confidence, Some(0.75));
+        assert_eq!(call.linkage_source, None);
         assert_eq!(call.limit, 7);
     }
 }

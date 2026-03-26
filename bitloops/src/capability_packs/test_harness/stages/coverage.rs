@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map as JsonMap, Value, json};
 
 use crate::capability_packs::test_harness::storage::{
     BitloopsTestHarnessRepository, TestHarnessQueryRepository,
@@ -18,7 +17,7 @@ struct CoverageStagePayload {
     #[serde(default)]
     input_rows: Vec<Value>,
     #[serde(default)]
-    args: BTreeMap<String, String>,
+    args: JsonMap<String, Value>,
     #[serde(default)]
     query_context: CoverageQueryContext,
 }

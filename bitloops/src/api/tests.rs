@@ -5874,6 +5874,37 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
         "unexpected error: {:?}",
         bad_stage.errors
     );
+
+    let bad_args = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  extension(stage: "coverage", args: { nested: { enabled: true } }, first: 10)
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(bad_args.errors.len(), 1, "expected one graphql error");
+    let extensions = bad_args.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        bad_args.errors[0]
+            .message
+            .contains("extension args must contain only string, number, boolean, or null values"),
+        "unexpected error: {:?}",
+        bad_args.errors
+    );
 }
 
 #[tokio::test]

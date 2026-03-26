@@ -243,7 +243,7 @@ DevQL exposes capability-pack functionality in three ways:
 - Generic `extension(stage:, args:, first:)` fields on `Project` and `Artefact`
 - `applyMigrations` for capability-pack schema migrations
 
-`extension()` expects a stage name plus an optional JSON object whose values are strings, numbers, booleans, or `null`. Unsupported or ambiguous stage names fail before execution.
+`extension()` expects a stage name plus an optional JSON object whose values are strings, numbers, booleans, or `null`. The GraphQL `extension()` adapter forwards those scalar values to the stage without stringifying them. Unsupported or ambiguous stage names fail before execution.
 
 ## Error Codes And Limits
 
