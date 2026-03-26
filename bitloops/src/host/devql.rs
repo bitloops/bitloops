@@ -34,6 +34,8 @@ use crate::host::extension_host::{
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::utils::terminal::print_db_status_table;
 
+#[path = "devql/artefact_sql.rs"]
+pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
 pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/commands_ingest.rs"]

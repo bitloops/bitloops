@@ -1,6 +1,10 @@
-use crate::artefact_query_planner::{ArtefactKindFilter, ArtefactQuerySpec};
+use crate::artefact_query_planner::ArtefactQuerySpec;
 use crate::graphql::ResolvedTemporalScope;
 use crate::graphql::types::{DepsDirection, DepsFilterInput};
+use crate::host::devql::artefact_sql::{
+    build_filtered_artefacts_cte_sql, build_filtered_artefacts_select_sql,
+    filtered_artefact_columns_sql, filtered_artefact_order_sql,
+};
 use crate::host::devql::{esc_pg, escape_like_pattern, glob_to_sql_like, sql_like_with_escape};
 use std::path::{Component, Path};
 
@@ -140,18 +144,7 @@ pub(super) fn build_file_context_list_sql(
 }
 
 pub(super) fn build_current_artefacts_sql(spec: &ArtefactQuerySpec) -> String {
-    debug_assert!(spec.activity_filter.is_none());
-    let (use_historical_tables, clauses) = build_artefact_where_clauses(spec);
-    format!(
-        "SELECT {} \
-           FROM {} a \
-          WHERE {} \
-       ORDER BY {}",
-        artefact_select_columns_sql("a", use_historical_tables),
-        artefacts_table_sql(use_historical_tables),
-        clauses.join(" AND "),
-        artefact_order_sql("a"),
-    )
+    build_filtered_artefacts_select_sql(spec)
 }
 
 pub(super) fn build_current_artefacts_count_sql(spec: &ArtefactQuerySpec) -> String {
@@ -175,7 +168,6 @@ pub(super) fn build_current_artefacts_cursor_exists_sql(
 }
 
 pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> String {
-    debug_assert!(spec.activity_filter.is_none());
     let filtered_cte = build_filtered_artefacts_cte_sql(spec);
     let pagination = spec
         .pagination
@@ -558,42 +550,6 @@ pub(super) enum DependencyScope<'a> {
     Project(&'a str),
 }
 
-fn canonical_kind_clause(column: &str, kind: &ArtefactKindFilter) -> String {
-    let values: &[&str] = match kind {
-        ArtefactKindFilter::File => &["file"],
-        ArtefactKindFilter::Namespace => &["namespace"],
-        ArtefactKindFilter::Module => &["module"],
-        ArtefactKindFilter::Import => &["import"],
-        ArtefactKindFilter::Type => &["type", "interface", "enum"],
-        ArtefactKindFilter::Interface => &["interface"],
-        ArtefactKindFilter::Enum => &["enum"],
-        ArtefactKindFilter::Callable => &["callable", "function", "method"],
-        ArtefactKindFilter::Function => &["function"],
-        ArtefactKindFilter::Method => &["method"],
-        ArtefactKindFilter::Value => &["value", "variable", "constant"],
-        ArtefactKindFilter::Variable => &["variable", "constant"],
-        ArtefactKindFilter::Constant => &["constant"],
-        ArtefactKindFilter::Member => &["member"],
-        ArtefactKindFilter::Parameter => &["parameter"],
-        ArtefactKindFilter::TypeParameter => &["type_parameter"],
-        ArtefactKindFilter::Alias => &["alias"],
-        ArtefactKindFilter::Raw(value) => return format!("{column} = '{}'", esc_pg(value)),
-    };
-
-    if values.len() == 1 {
-        return format!("{column} = '{}'", esc_pg(values[0]));
-    }
-
-    format!(
-        "({})",
-        values
-            .iter()
-            .map(|value| format!("{column} = '{}'", esc_pg(value)))
-            .collect::<Vec<_>>()
-            .join(" OR ")
-    )
-}
-
 fn current_revision_clause(alias: &str, revision_id: &str) -> String {
     format!(
         "{alias}.revision_kind = 'temporary' AND {alias}.revision_id = '{}'",
@@ -643,67 +599,6 @@ fn quoted_string_list(values: &[String]) -> String {
         .join(", ")
 }
 
-fn build_artefact_where_clauses(spec: &ArtefactQuerySpec) -> (bool, Vec<String>) {
-    let use_historical_tables = spec.temporal_scope.use_historical_tables();
-    let mut clauses = vec![format!("a.repo_id = '{}'", esc_pg(spec.repo_id.as_str()))];
-    if !use_historical_tables {
-        let branch = spec
-            .branch
-            .as_deref()
-            .expect("current/save artefact queries require a branch in the shared spec");
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
-    }
-    if let Some(revision_id) = spec.temporal_scope.save_revision() {
-        clauses.push("a.revision_kind = 'temporary'".to_string());
-        clauses.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
-    }
-    if let Some(commit_sha) = spec.temporal_scope.resolved_commit() {
-        clauses.push(file_state_exists_clause(
-            "a.path",
-            "a.blob_sha",
-            spec.repo_id.as_str(),
-            commit_sha,
-        ));
-    }
-
-    if let Some(path) = spec.scope.path.as_deref() {
-        clauses.push(format!("a.path = '{}'", esc_pg(path)));
-    }
-    if let Some(project_path) = spec.scope.project_path.as_deref() {
-        clauses.push(repo_path_prefix_clause("a.path", project_path));
-    }
-
-    if let Some(kind) = spec.structural_filter.kind.as_ref() {
-        clauses.push(canonical_kind_clause("a.canonical_kind", kind));
-    }
-    if let Some(symbol_fqn) = spec.structural_filter.symbol_fqn.as_deref() {
-        clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
-    }
-    if let Some(lines) = spec.structural_filter.lines.as_ref() {
-        clauses.push(format!(
-            "a.start_line <= {} AND a.end_line >= {}",
-            lines.end, lines.start
-        ));
-    }
-
-    (use_historical_tables, clauses)
-}
-
-fn build_filtered_artefacts_cte_sql(spec: &ArtefactQuerySpec) -> String {
-    let (use_historical_tables, clauses) = build_artefact_where_clauses(spec);
-    format!(
-        "WITH filtered AS ( \
-             SELECT {}, {} AS kind_rank \
-               FROM {} a \
-              WHERE {} \
-         )",
-        artefact_select_columns_sql("a", use_historical_tables),
-        artefact_kind_rank_sql("a"),
-        artefacts_table_sql(use_historical_tables),
-        clauses.join(" AND "),
-    )
-}
-
 fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
     if use_historical_tables {
         "artefacts"
@@ -727,12 +622,6 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
     )
 }
 
-fn filtered_artefact_columns_sql() -> &'static str {
-    "symbol_id, artefact_id, path, language, canonical_kind, language_kind, symbol_fqn, \
-     parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, \
-     docstring, blob_sha, content_hash, created_at"
-}
-
 fn artefact_kind_rank_sql(alias: &str) -> String {
     format!("CASE WHEN {alias}.canonical_kind = 'file' THEN 0 ELSE 1 END")
 }
@@ -744,6 +633,66 @@ fn artefact_order_sql(alias: &str) -> String {
     )
 }
 
-fn filtered_artefact_order_sql() -> &'static str {
-    "path, kind_rank, start_line, end_line, artefact_id"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artefact_query_planner::{
+        ArtefactActivityFilter, ArtefactPagination, ArtefactScope, ArtefactStructuralFilter,
+        ArtefactTemporalScope,
+    };
+
+    fn activity_spec() -> ArtefactQuerySpec {
+        ArtefactQuerySpec {
+            repo_id: "repo-1".to_string(),
+            branch: Some("main".to_string()),
+            scope: ArtefactScope {
+                project_path: Some("packages/api".to_string()),
+                path: Some("packages/api/src/lib.rs".to_string()),
+                files_path: None,
+            },
+            temporal_scope: ArtefactTemporalScope::Current,
+            structural_filter: ArtefactStructuralFilter::default(),
+            activity_filter: Some(ArtefactActivityFilter {
+                agent: Some("codex".to_string()),
+                since: Some("2026-03-20T00:00:00Z".to_string()),
+            }),
+            pagination: Some(ArtefactPagination::new(Some("cursor-1"), 11)),
+        }
+    }
+
+    #[test]
+    fn count_sql_uses_projection_backed_filtered_relation() {
+        let sql = build_current_artefacts_count_sql(&activity_spec());
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("cfs.path = a.path"));
+        assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+        assert!(sql.contains("cfs.agent = 'codex'"));
+        assert!(sql.contains("SELECT COUNT(*) AS total_count FROM filtered"));
+        assert!(!sql.contains("blob_sha IN"));
+    }
+
+    #[test]
+    fn cursor_exists_sql_validates_against_activity_filtered_relation() {
+        let sql = build_current_artefacts_cursor_exists_sql(&activity_spec(), "cursor-1");
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM filtered"));
+        assert!(sql.contains("WHERE artefact_id = 'cursor-1'"));
+        assert!(!sql.contains("blob_sha IN"));
+    }
+
+    #[test]
+    fn window_sql_pages_over_activity_filtered_relation() {
+        let sql = build_current_artefacts_window_sql(&activity_spec());
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+        assert!(sql.contains("FROM filtered"));
+        assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
+        assert!(sql.contains("LIMIT 11"));
+        assert!(!sql.contains("blob_sha IN"));
+    }
 }

@@ -21,6 +21,28 @@ async fn build_relational_artefacts_query_includes_language_kind_and_symbol_fqn_
 }
 
 #[tokio::test]
+async fn build_relational_artefacts_query_uses_projection_exists_for_activity_filters() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",agent:"codex",since:"2026-03-20T00:00:00Z")->limit(10)"#,
+    )
+    .unwrap();
+
+    let sql = build_relational_artefacts_query(&cfg, &events_cfg, &parsed, None, &cfg.repo.repo_id)
+        .await
+        .unwrap();
+
+    assert!(sql.contains("WITH filtered AS"));
+    assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+    assert!(sql.contains("cfs.path = a.path"));
+    assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+    assert!(sql.contains("cfs.agent = 'codex'"));
+    assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
+    assert!(!sql.contains("blob_sha IN"));
+}
+
+#[tokio::test]
 async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_store() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
@@ -76,6 +98,158 @@ async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_stor
     );
     assert_eq!(rows[0]["path"], Value::String("src/main.ts".to_string()));
     assert!(rows[0]["modifiers"].is_array());
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_filters_activity_by_exact_snapshot_identity() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    for (artefact_id, symbol_id, path) in [
+        ("artefact::matched", "sym::matched", "src/matched.ts"),
+        ("artefact::unmatched", "sym::unmatched", "src/unmatched.ts"),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+                end_byte, modifiers, content_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                symbol_id,
+                artefact_id,
+                "commit-1",
+                "shared-blob",
+                path,
+                "typescript",
+                "function",
+                "function_declaration",
+                format!("{path}::run"),
+                1,
+                5,
+                0,
+                42,
+                "[]",
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact");
+    }
+
+    conn.execute(
+        "INSERT INTO checkpoint_file_snapshots (
+            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha,
+            path, blob_sha
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "checkpoint-1",
+            "session-1",
+            "2026-03-21T10:00:00Z",
+            "codex",
+            "main",
+            "manual",
+            "commit-1",
+            "src/matched.ts",
+            "shared-blob",
+        ],
+    )
+    .expect("insert matching checkpoint snapshot");
+
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->artefacts(kind:"function",agent:"codex")->limit(10)"#)
+            .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute projection-backed relational artefacts query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["artefact_id"],
+        Value::String("artefact::matched".to_string())
+    );
+    assert_eq!(rows[0]["path"], Value::String("src/matched.ts".to_string()));
+}
+
+#[tokio::test]
+async fn execute_relational_pipeline_does_not_duplicate_artefacts_for_multiple_matching_checkpoints()
+ {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, content_hash
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        rusqlite::params![
+            cfg.repo.repo_id.as_str(),
+            "sym::deduped",
+            "artefact::deduped",
+            "commit-1",
+            "blob-1",
+            "src/deduped.ts",
+            "typescript",
+            "function",
+            "function_declaration",
+            "src/deduped.ts::run",
+            1,
+            5,
+            0,
+            42,
+            "[]",
+            "hash-deduped",
+        ],
+    )
+    .expect("insert artefact row");
+
+    for (checkpoint_id, event_time, commit_sha) in [
+        ("checkpoint-1", "2026-03-21T10:00:00Z", "commit-1"),
+        ("checkpoint-2", "2026-03-22T10:00:00Z", "commit-2"),
+    ] {
+        conn.execute(
+            "INSERT INTO checkpoint_file_snapshots (
+                repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+                commit_sha, path, blob_sha
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                cfg.repo.repo_id.as_str(),
+                checkpoint_id,
+                format!("session-{checkpoint_id}"),
+                event_time,
+                "codex",
+                "main",
+                "manual",
+                commit_sha,
+                "src/deduped.ts",
+                "blob-1",
+            ],
+        )
+        .expect("insert checkpoint snapshot row");
+    }
+
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->artefacts(kind:"function",agent:"codex")->limit(10)"#)
+            .expect("parse query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute deduplicated relational artefacts query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["artefact_id"],
+        Value::String("artefact::deduped".to_string())
+    );
 }
 
 #[tokio::test]

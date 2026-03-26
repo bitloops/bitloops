@@ -1,6 +1,6 @@
 use super::*;
 use crate::artefact_query_planner::plan_devql_artefact_query;
-use anyhow::anyhow;
+use crate::host::devql::artefact_sql::build_filtered_artefacts_select_sql;
 
 pub(crate) async fn execute_relational_pipeline(
     cfg: &DevqlConfig,
@@ -35,138 +35,19 @@ pub(crate) async fn execute_relational_pipeline(
 
 pub(crate) async fn build_relational_artefacts_query(
     cfg: &DevqlConfig,
-    events_cfg: &EventsBackendConfig,
+    _events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    relational: Option<&RelationalStorage>,
+    _relational: Option<&RelationalStorage>,
     repo_id: &str,
 ) -> Result<String> {
     let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
-    let use_historical_tables = spec.temporal_scope.use_historical_tables();
-    let artefacts_table = if use_historical_tables {
-        "artefacts"
-    } else {
-        "artefacts_current"
-    };
-    let created_at_select = if use_historical_tables {
-        "a.created_at"
-    } else {
-        "a.updated_at AS created_at"
-    };
-
-    let mut where_clauses = build_relational_artefact_filters(repo_id, "a", &spec);
-
-    if let Some(activity_filter) = spec.activity_filter.as_ref() {
-        let relational = relational.ok_or_else(|| anyhow!("relational storage is required"))?;
-        let blob_shas = blob_shas_changed_in_events(
-            cfg,
-            events_cfg,
-            relational,
-            repo_id,
-            activity_filter.agent.as_deref(),
-            activity_filter.since.as_deref(),
-        )
-        .await?;
-        if blob_shas.is_empty() {
-            where_clauses.push("1 = 0".to_string());
-        } else {
-            where_clauses.push(format!(
-                "a.blob_sha IN ({})",
-                sql_string_list_pg(&blob_shas)
-            ));
-        }
-    }
-
-    let sql = format!(
-        "SELECT a.artefact_id, a.symbol_id, a.path, a.canonical_kind, a.language_kind, a.language, a.parent_artefact_id, a.start_line, a.end_line, a.start_byte, a.end_byte, a.signature, a.modifiers, a.docstring, a.blob_sha, a.symbol_fqn, a.content_hash, {} \
-FROM {} a \
-WHERE {} \
-ORDER BY a.path, a.start_line \
-LIMIT {}",
-        created_at_select,
-        artefacts_table,
-        where_clauses.join(" AND "),
+    Ok(format!(
+        "{} LIMIT {}",
+        build_filtered_artefacts_select_sql(&spec),
         spec.pagination
             .as_ref()
             .map_or(1, |pagination| pagination.limit)
-    );
-
-    Ok(sql)
-}
-
-fn build_relational_artefact_filters(
-    repo_id: &str,
-    alias: &str,
-    spec: &crate::artefact_query_planner::ArtefactQuerySpec,
-) -> Vec<String> {
-    let mut clauses = vec![format!("{alias}.repo_id = '{}'", esc_pg(repo_id))];
-    if !spec.temporal_scope.use_historical_tables() {
-        let branch = spec
-            .branch
-            .as_deref()
-            .expect("current/save artefact queries require a branch in the shared spec");
-        clauses.push(format!("{alias}.branch = '{}'", esc_pg(branch)));
-    }
-    if let Some(revision_id) = spec.temporal_scope.save_revision() {
-        clauses.push(format!("{alias}.revision_kind = 'temporary'"));
-        clauses.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
-    }
-    if let Some(commit_sha) = spec.temporal_scope.resolved_commit() {
-        clauses.push(file_state_exists_clause(alias, repo_id, commit_sha));
-    }
-    if let Some(kind) = spec.structural_filter.kind.as_ref() {
-        clauses.push(canonical_kind_filter_sql(
-            &format!("{alias}.canonical_kind"),
-            kind.as_str(),
-        ));
-    }
-    if let Some(symbol_fqn) = spec.structural_filter.symbol_fqn.as_deref() {
-        clauses.push(format!("{alias}.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
-    }
-    if let Some(lines) = spec.structural_filter.lines.as_ref() {
-        clauses.push(format!(
-            "{alias}.start_line <= {} AND {alias}.end_line >= {}",
-            lines.end, lines.start
-        ));
-    }
-    if let Some(path) = spec.scope.path.as_deref() {
-        let path_candidates = build_path_candidates(path);
-        clauses.push(format!(
-            "({})",
-            sql_path_candidates_clause(&format!("{alias}.path"), &path_candidates)
-        ));
-    }
-    if let Some(project_path) = spec.scope.project_path.as_deref() {
-        clauses.push(repo_path_prefix_clause(
-            &format!("{alias}.path"),
-            project_path,
-        ));
-    }
-    if let Some(glob) = spec.scope.files_path.as_deref() {
-        let like = glob_to_sql_like(glob);
-        clauses.push(sql_like_with_escape(&format!("{alias}.path"), &like));
-    }
-
-    clauses
-}
-
-fn file_state_exists_clause(alias: &str, repo_id: &str, commit_sha: &str) -> String {
-    format!(
-        "EXISTS (SELECT 1 FROM file_state fs WHERE fs.repo_id = '{repo_id}' \
-           AND fs.commit_sha = '{commit_sha}' AND fs.path = {alias}.path AND fs.blob_sha = {alias}.blob_sha)",
-        repo_id = esc_pg(repo_id),
-        commit_sha = esc_pg(commit_sha),
-        alias = alias,
-    )
-}
-
-fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
-    let prefix = format!("{}/%", escape_like_pattern(project_path));
-    format!(
-        "({column} = '{path}' OR {like_clause})",
-        column = column,
-        path = esc_pg(project_path),
-        like_clause = sql_like_with_escape(column, &prefix),
-    )
+    ))
 }
 
 pub(crate) async fn execute_relational_clones_pipeline(
