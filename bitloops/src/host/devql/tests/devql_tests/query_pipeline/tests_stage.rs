@@ -488,7 +488,10 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
         let symbol_fqn = if symbol_id.starts_with("suite::") {
             name.to_string()
         } else {
-            format!("{}.{name}", parent_symbol_id.expect("scenario parent symbol"))
+            format!(
+                "{}.{name}",
+                parent_symbol_id.expect("scenario parent symbol")
+            )
         };
         conn.execute(
             "INSERT INTO test_artefacts_current (

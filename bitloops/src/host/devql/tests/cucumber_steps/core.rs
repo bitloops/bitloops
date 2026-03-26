@@ -1,5 +1,3 @@
-use anyhow::Context;
-use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::capability_packs::test_harness::mapping::languages::rust::scenarios::collect_rust_suites;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
@@ -8,6 +6,7 @@ use crate::capability_packs::test_harness::mapping::materialize::{
 use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, ReferenceCandidate, StructuralMappingStats,
 };
+use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
 use crate::models::{
@@ -15,9 +14,10 @@ use crate::models::{
     TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
 };
 use crate::telemetry::logging;
-use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::logger_lock::with_logger_test_lock;
 use crate::test_support::process_state::{enter_process_state, with_cwd};
+use anyhow::Context;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
 use serde_json::Value;
@@ -707,7 +707,11 @@ struct SeededArtefact {
 }
 
 fn write_repo_sources(repo_root: &Path, world: &DevqlBddWorld) {
-    for (path, source) in world.production_sources.iter().chain(world.test_sources.iter()) {
+    for (path, source) in world
+        .production_sources
+        .iter()
+        .chain(world.test_sources.iter())
+    {
         let full_path = repo_root.join(path);
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent).expect("create source parent directory");
@@ -867,7 +871,10 @@ fn seed_target_production_artefact(
 ) -> anyhow::Result<SeededArtefact> {
     for (path, source) in &world.production_sources {
         let artefacts = extract_rust_artefacts(source, path).context("extract rust artefacts")?;
-        if artefacts.iter().any(|artefact| artefact.name == artefact_name) {
+        if artefacts
+            .iter()
+            .any(|artefact| artefact.name == artefact_name)
+        {
             let blob_sha = git_ok(repo_root, &["rev-parse", &format!("{commit_sha}:{path}")]);
             let symbol_id = format!("sym:{path}:{artefact_name}");
             let current_artefact_id = format!("current:{path}:{artefact_name}");
@@ -1097,7 +1104,9 @@ async fn execute_registered_stage_query(
     let mut rows = execute_registered_stages(&cfg, &parsed, base_rows)
         .await
         .context("execute registered stage")?;
-    let row = rows.pop().context("expected registered stage response row")?;
+    let row = rows
+        .pop()
+        .context("expected registered stage response row")?;
     if stage_name == "tests"
         && row
             .get("covering_tests")
@@ -1837,8 +1846,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_registered_stage_query_tests_current_does_not_invent_links_for_other_artefacts(
-    ) {
+    async fn execute_registered_stage_query_tests_current_does_not_invent_links_for_other_artefacts()
+     {
         let mut world = fixture_world();
         let response = execute_registered_stage_query(
             &mut world,
@@ -1872,9 +1881,11 @@ mod tests {
             response["artefact"]["artefact_id"],
             Value::String("current:src/user/service.rs:create_user".to_string())
         );
-        assert!(response["coverage"]["line_coverage_pct"]
-            .as_f64()
-            .is_some_and(|value| value >= 0.0));
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
     }
 
     #[tokio::test]
@@ -1893,9 +1904,11 @@ mod tests {
             response["artefact"]["artefact_id"],
             Value::String("historical:src/user/service.rs:create_user".to_string())
         );
-        assert!(response["coverage"]["line_coverage_pct"]
-            .as_f64()
-            .is_some_and(|value| value >= 0.0));
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
     }
 
     #[tokio::test]
@@ -1914,14 +1927,16 @@ mod tests {
             response["artefact"]["artefact_id"],
             Value::String("historical:src/user/service.rs:create_user".to_string())
         );
-        assert!(response["coverage"]["line_coverage_pct"]
-            .as_f64()
-            .is_some_and(|value| value >= 0.0));
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
     }
 
     #[tokio::test]
-    async fn execute_registered_stage_query_coverage_current_does_not_invent_hits_for_other_artefacts(
-    ) {
+    async fn execute_registered_stage_query_coverage_current_does_not_invent_hits_for_other_artefacts()
+     {
         let mut world = fixture_world();
         let response = execute_registered_stage_query(
             &mut world,

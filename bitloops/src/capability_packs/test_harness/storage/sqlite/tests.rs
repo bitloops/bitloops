@@ -5,12 +5,12 @@ use tempfile::TempDir;
 
 use super::SqliteTestHarnessRepository;
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
+use crate::models::ScopeKind;
 use crate::models::{
     CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, TestArtefactCurrentRecord,
     TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
     TestRunRecord,
 };
-use crate::models::ScopeKind;
 use crate::storage::init::init_database;
 
 const REPO_ID: &str = "ruff-workspace";

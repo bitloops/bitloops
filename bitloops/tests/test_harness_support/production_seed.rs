@@ -187,7 +187,11 @@ pub fn seed_production_artefacts(workspace: &Workspace, commit_sha: &str) {
         .expect("seed production artefacts");
 }
 
-pub fn execute(db_path: &Path, repo_dir: &Path, commit_sha: &str) -> Result<IngestProductionSummary> {
+pub fn execute(
+    db_path: &Path,
+    repo_dir: &Path,
+    commit_sha: &str,
+) -> Result<IngestProductionSummary> {
     let repo = resolve_repository_record(repo_dir)?;
     let production_files = find_production_files(repo_dir)?;
     let committed_at = chrono::Utc::now().to_rfc3339();
@@ -358,7 +362,9 @@ fn persist_production_rows(
 ) -> Result<()> {
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("failed opening sqlite database at {}", db_path.display()))?;
-    let tx = conn.transaction().context("failed to open sqlite transaction")?;
+    let tx = conn
+        .transaction()
+        .context("failed to open sqlite transaction")?;
 
     tx.execute(
         "DELETE FROM test_artefact_edges_current WHERE commit_sha = ?1",
@@ -468,7 +474,12 @@ ON CONFLICT(repo_id, commit_sha, path) DO UPDATE SET
 "#,
             params![row.repo_id, row.commit_sha, row.path, row.blob_sha],
         )
-        .with_context(|| format!("failed upserting file_state {} {}", row.commit_sha, row.path))?;
+        .with_context(|| {
+            format!(
+                "failed upserting file_state {} {}",
+                row.commit_sha, row.path
+            )
+        })?;
     }
 
     for row in &batch.current_file_states {
@@ -603,7 +614,8 @@ ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
         .with_context(|| format!("failed upserting current artefact {}", artefact.symbol_id))?;
     }
 
-    tx.commit().context("failed to commit production seed transaction")?;
+    tx.commit()
+        .context("failed to commit production seed transaction")?;
     Ok(())
 }
 

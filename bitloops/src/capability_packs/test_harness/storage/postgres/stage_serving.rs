@@ -57,7 +57,11 @@ pub(super) async fn load_stage_covering_tests(
         " ORDER BY confidence DESC, ts.path, ts.name LIMIT {limit}"
     ));
 
-    let rows = match (commit_sha.as_deref(), min_confidence, linkage_source_owned.as_deref()) {
+    let rows = match (
+        commit_sha.as_deref(),
+        min_confidence,
+        linkage_source_owned.as_deref(),
+    ) {
         (Some(sha), Some(mc), Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &sha, &mc, &ls])

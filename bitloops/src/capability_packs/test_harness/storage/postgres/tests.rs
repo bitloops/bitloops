@@ -141,8 +141,8 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
 }
 
 #[test]
-fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_classifications(
-) -> Result<()> {
+fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_classifications()
+-> Result<()> {
     let Some(postgres) = TempPostgres::start()? else {
         eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
         return Ok(());
@@ -162,7 +162,10 @@ fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_cla
     repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
     repository.insert_coverage_capture(&coverage_capture_record())?;
     repository.insert_coverage_hits(&coverage_hits())?;
-    assert_eq!(repository.rebuild_classifications_from_coverage(COMMIT_SHA)?, 1);
+    assert_eq!(
+        repository.rebuild_classifications_from_coverage(COMMIT_SHA)?,
+        1
+    );
 
     assert_eq!(table_count(&repository, "test_runs")?, 1);
     assert_eq!(table_count(&repository, "coverage_captures")?, 1);
