@@ -1,0 +1,136 @@
+use anyhow::Result;
+use serde::de::DeserializeOwned;
+use serde_json::json;
+use std::path::Path;
+
+use crate::host::devql::{
+    IngestionCounters, InitSchemaSummary, format_ingestion_summary, format_init_schema_summary,
+};
+
+const INIT_SCHEMA_MUTATION: &str = r#"
+    mutation InitSchema {
+      initSchema {
+        success
+        repoIdentity
+        repoId
+        relationalBackend
+        eventsBackend
+      }
+    }
+"#;
+
+const INGEST_MUTATION: &str = r#"
+    mutation Ingest($input: IngestInput!) {
+      ingest(input: $input) {
+        success
+        initRequested
+        checkpointsProcessed
+        eventsInserted
+        artefactsUpserted
+        checkpointsWithoutCommit
+        temporaryRowsPromoted
+        semanticFeatureRowsUpserted
+        semanticFeatureRowsSkipped
+        symbolEmbeddingRowsUpserted
+        symbolEmbeddingRowsSkipped
+        symbolCloneEdgesUpserted
+        symbolCloneSourcesScored
+      }
+    }
+"#;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitSchemaMutationData {
+    init_schema: InitSchemaSummary,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IngestMutationData {
+    ingest: IngestionCounters,
+}
+
+#[cfg(test)]
+thread_local! {
+    static GRAPHQL_EXECUTOR_HOOK: std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type GraphqlExecutorHook =
+    dyn Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static;
+
+pub(super) async fn execute_devql_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<T> {
+    #[cfg(test)]
+    if let Some(data) = maybe_execute_devql_graphql_via_hook(repo_root, query, &variables) {
+        return Ok(serde_json::from_value(data?)?);
+    }
+
+    let data =
+        crate::graphql::execute_in_process(repo_root.to_path_buf(), query, variables).await?;
+    Ok(serde_json::from_value(data)?)
+}
+
+pub(super) async fn run_init_via_graphql(repo_root: &Path) -> Result<()> {
+    let response: InitSchemaMutationData =
+        execute_devql_graphql(repo_root, INIT_SCHEMA_MUTATION, json!({})).await?;
+    println!("{}", format_init_schema_summary(&response.init_schema));
+    Ok(())
+}
+
+pub(super) async fn run_ingest_via_graphql(
+    repo_root: &Path,
+    init: bool,
+    max_checkpoints: usize,
+) -> Result<()> {
+    let response: IngestMutationData = execute_devql_graphql(
+        repo_root,
+        INGEST_MUTATION,
+        json!({
+            "input": {
+                "init": init,
+                "maxCheckpoints": max_checkpoints,
+            }
+        }),
+    )
+    .await?;
+    println!("{}", format_ingestion_summary(&response.ingest));
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn with_graphql_executor_hook<T>(
+    hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    GRAPHQL_EXECUTOR_HOOK.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "graphql executor hook already installed"
+        );
+        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+    });
+    let result = f();
+    GRAPHQL_EXECUTOR_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
+}
+
+#[cfg(test)]
+fn maybe_execute_devql_graphql_via_hook(
+    repo_root: &Path,
+    query: &str,
+    variables: &serde_json::Value,
+) -> Option<Result<serde_json::Value>> {
+    GRAPHQL_EXECUTOR_HOOK.with(|hook| {
+        hook.borrow()
+            .as_ref()
+            .map(|hook| hook(repo_root, query, variables))
+    })
+}

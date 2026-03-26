@@ -17,6 +17,29 @@ use crate::host::devql::{
 };
 
 impl DevqlGraphqlContext {
+    pub(crate) async fn find_knowledge_item_by_id(
+        &self,
+        knowledge_item_id: &str,
+    ) -> Result<Option<KnowledgeItem>> {
+        let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
+        let sql = format!(
+            "SELECT i.knowledge_item_id, i.knowledge_source_id, i.latest_knowledge_item_version_id, \
+s.provider, s.source_kind, s.canonical_external_id, s.canonical_url \
+FROM knowledge_items i \
+JOIN knowledge_sources s ON s.knowledge_source_id = i.knowledge_source_id \
+WHERE i.repo_id = '{}' AND i.knowledge_item_id = '{}' \
+LIMIT 1",
+            esc_pg(self.repo_identity.repo_id.as_str()),
+            esc_pg(knowledge_item_id)
+        );
+
+        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        rows.into_iter()
+            .next()
+            .map(knowledge_item_from_row)
+            .transpose()
+    }
+
     pub(crate) async fn list_knowledge_items(
         &self,
         provider: Option<KnowledgeProvider>,
@@ -65,6 +88,28 @@ ORDER BY created_at DESC, relation_assertion_id DESC",
 
         let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
         rows.into_iter().map(knowledge_relation_from_row).collect()
+    }
+
+    pub(crate) async fn find_knowledge_relation_by_id(
+        &self,
+        relation_assertion_id: &str,
+    ) -> Result<Option<KnowledgeRelation>> {
+        let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
+        let sql = format!(
+            "SELECT relation_assertion_id, source_knowledge_item_version_id, target_type, target_id, \
+target_knowledge_item_version_id, relation_type, association_method, confidence, provenance_json \
+FROM knowledge_relation_assertions \
+WHERE repo_id = '{}' AND relation_assertion_id = '{}' \
+LIMIT 1",
+            esc_pg(self.repo_identity.repo_id.as_str()),
+            esc_pg(relation_assertion_id)
+        );
+
+        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        rows.into_iter()
+            .next()
+            .map(knowledge_relation_from_row)
+            .transpose()
     }
 
     pub(crate) async fn load_knowledge_versions_by_item_ids(
@@ -236,7 +281,8 @@ fn parse_storage_datetime(value: &str) -> Result<DateTimeScalar> {
         return Ok(timestamp);
     }
 
-    let parsed = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+    let parsed = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
+        .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S"))
         .with_context(|| format!("parsing storage timestamp `{value}`"))?;
     let zero_offset = FixedOffset::east_opt(0).expect("zero offset is valid");
     let normalised =

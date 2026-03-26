@@ -17,9 +17,10 @@ use axum::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::thread;
 use tempfile::TempDir;
 use tower::util::ServiceExt;
 
@@ -67,6 +68,86 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
         .expect("serialise config"),
     )
     .expect("write config");
+}
+
+struct MockHttpResponse {
+    status_code: u16,
+    body: String,
+}
+
+impl MockHttpResponse {
+    fn json(status_code: u16, body: serde_json::Value) -> Self {
+        Self {
+            status_code,
+            body: serde_json::to_string(&body).expect("serialise mock body"),
+        }
+    }
+}
+
+struct MockSequentialHttpServer {
+    url: String,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl MockSequentialHttpServer {
+    fn start(responses: Vec<MockHttpResponse>) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        listener
+            .set_nonblocking(true)
+            .expect("set nonblocking mock server");
+        let addr = listener.local_addr().expect("mock server addr");
+        let url = format!("http://{}", addr);
+
+        let handle = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut responses = std::collections::VecDeque::from(responses);
+
+            while let Some(response) = responses.pop_front() {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buffer = [0_u8; 8192];
+                        let _ = stream.read(&mut buffer);
+
+                        let status_text = match response.status_code {
+                            200 => "OK",
+                            404 => "Not Found",
+                            500 => "Internal Server Error",
+                            _ => "Status",
+                        };
+                        let response_text = format!(
+                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response.status_code,
+                            status_text,
+                            response.body.len(),
+                            response.body
+                        );
+                        let _ = stream.write_all(response_text.as_bytes());
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            break;
+                        }
+                        thread::sleep(std::time::Duration::from_millis(10));
+                        responses.push_front(response);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            url,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for MockSequentialHttpServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 struct SeedGraphqlEvent<'a> {
@@ -812,6 +893,60 @@ fn seed_graphql_mutation_repo() -> TempDir {
     );
 
     dir
+}
+
+fn seed_graphql_knowledge_mutation_repo(jira_site_url: &str) -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    fs::write(
+        repo_root.join("src/lib.rs"),
+        "pub fn answer() -> i32 {\n    42\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo_root, &["add", "."]);
+    git_ok(
+        repo_root,
+        &["commit", "-m", "Seed GraphQL knowledge mutation repo"],
+    );
+
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": ".bitloops/stores/knowledge-mutations.sqlite"
+                },
+                "events": {
+                    "duckdb_path": ".bitloops/stores/knowledge-mutations.duckdb"
+                },
+                "embedding_provider": "disabled"
+            },
+            "semantic": {
+                "provider": "disabled"
+            },
+            "knowledge": {
+                "providers": {
+                    "jira": {
+                        "site_url": jira_site_url,
+                        "email": "jira@example.com",
+                        "token": "jira-token"
+                    }
+                }
+            }
+        }),
+    );
+
+    dir
+}
+
+fn knowledge_duckdb_path(repo_root: &Path) -> PathBuf {
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config")
+        .events
+        .resolve_duckdb_db_path_for_repo(repo_root)
 }
 
 fn seed_graphql_chat_history_data(repo_root: &Path) {
@@ -3030,6 +3165,340 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     assert_eq!(
         backend_extensions.get("operation"),
         Some(&async_graphql::Value::from("ingest"))
+    );
+}
+
+#[tokio::test]
+async fn devql_mutations_manage_knowledge_and_apply_migrations() {
+    let server = MockSequentialHttpServer::start(vec![
+        MockHttpResponse::json(
+            200,
+            json!({
+                "fields": {
+                    "summary": "Knowledge item",
+                    "status": { "name": "Open" },
+                    "reporter": { "displayName": "Spiros" },
+                    "updated": "2026-03-26T10:00:00Z",
+                    "description": {
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "First Jira body" }]
+                            }
+                        ]
+                    }
+                }
+            }),
+        ),
+        MockHttpResponse::json(
+            200,
+            json!({
+                "fields": {
+                    "summary": "Knowledge item",
+                    "status": { "name": "In Progress" },
+                    "reporter": { "displayName": "Spiros" },
+                    "updated": "2026-03-26T11:00:00Z",
+                    "description": {
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "Updated Jira body" }]
+                            }
+                        ]
+                    }
+                }
+            }),
+        ),
+    ]);
+    let repo = seed_graphql_knowledge_mutation_repo(server.url.as_str());
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let duckdb_path = knowledge_duckdb_path(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let apply_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              applyMigrations {
+                success
+                migrationsApplied {
+                  packId
+                  migrationName
+                  description
+                  appliedAt
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        apply_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        apply_response.errors
+    );
+    let apply_json = apply_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(apply_json["applyMigrations"]["success"], true);
+    let applied = apply_json["applyMigrations"]["migrationsApplied"]
+        .as_array()
+        .expect("migrationsApplied array");
+    assert!(
+        applied
+            .iter()
+            .any(|migration| migration["packId"] == "knowledge"),
+        "expected knowledge pack migration in {applied:?}"
+    );
+
+    let add_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              addKnowledge(input: {{ url: "{}/browse/CLI-1525" }}) {{
+                success
+                knowledgeItemVersionId
+                itemCreated
+                newVersionCreated
+                knowledgeItem {{
+                  id
+                  provider
+                  sourceKind
+                  externalUrl
+                  latestVersion {{
+                    id
+                    title
+                    bodyPreview
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            server.url
+        )))
+        .await;
+    assert!(
+        add_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        add_response.errors
+    );
+    let add_json = add_response.data.into_json().expect("graphql data to json");
+    assert_eq!(add_json["addKnowledge"]["success"], true);
+    assert_eq!(add_json["addKnowledge"]["itemCreated"], true);
+    assert_eq!(add_json["addKnowledge"]["newVersionCreated"], true);
+    assert_eq!(
+        add_json["addKnowledge"]["knowledgeItem"]["provider"],
+        "JIRA"
+    );
+    assert_eq!(
+        add_json["addKnowledge"]["knowledgeItem"]["latestVersion"]["bodyPreview"],
+        "First Jira body"
+    );
+    let knowledge_item_id = add_json["addKnowledge"]["knowledgeItem"]["id"]
+        .as_str()
+        .expect("knowledge item id")
+        .to_string();
+    let first_version_id = add_json["addKnowledge"]["knowledgeItemVersionId"]
+        .as_str()
+        .expect("knowledge item version id")
+        .to_string();
+
+    let associate_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              associateKnowledge(
+                input: {{
+                  sourceRef: "knowledge:{knowledge_item_id}"
+                  targetRef: "commit:HEAD"
+                }}
+              ) {{
+                success
+                relation {{
+                  id
+                  targetType
+                  targetId
+                  relationType
+                  associationMethod
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+    assert!(
+        associate_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        associate_response.errors
+    );
+    let associate_json = associate_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(associate_json["associateKnowledge"]["success"], true);
+    assert_eq!(
+        associate_json["associateKnowledge"]["relation"]["targetType"],
+        "COMMIT"
+    );
+    assert_eq!(
+        associate_json["associateKnowledge"]["relation"]["relationType"],
+        "associated_with"
+    );
+
+    let refresh_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              refreshKnowledge(input: {{ knowledgeRef: "knowledge:{knowledge_item_id}" }}) {{
+                success
+                latestDocumentVersionId
+                contentChanged
+                newVersionCreated
+                knowledgeItem {{
+                  id
+                  latestVersion {{
+                    id
+                    title
+                    bodyPreview
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+    assert!(
+        refresh_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        refresh_response.errors
+    );
+    let refresh_json = refresh_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(refresh_json["refreshKnowledge"]["success"], true);
+    assert_eq!(refresh_json["refreshKnowledge"]["contentChanged"], true);
+    assert_eq!(refresh_json["refreshKnowledge"]["newVersionCreated"], true);
+    assert_ne!(
+        refresh_json["refreshKnowledge"]["latestDocumentVersionId"],
+        json!(first_version_id)
+    );
+    assert_eq!(
+        refresh_json["refreshKnowledge"]["knowledgeItem"]["latestVersion"]["bodyPreview"],
+        "Updated Jira body"
+    );
+
+    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let knowledge_item_count: i64 = sqlite
+        .query_row("SELECT COUNT(*) FROM knowledge_items", [], |row| row.get(0))
+        .expect("count knowledge items");
+    assert_eq!(knowledge_item_count, 1);
+    let relation_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_relation_assertions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count knowledge relations");
+    assert_eq!(relation_count, 1);
+
+    let duckdb = duckdb::Connection::open(duckdb_path).expect("open duckdb");
+    let document_count: i64 = duckdb
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_document_versions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count knowledge versions");
+    assert_eq!(document_count, 2);
+}
+
+#[tokio::test]
+async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows() {
+    let server = MockSequentialHttpServer::start(vec![MockHttpResponse::json(
+        500,
+        json!({ "errorMessages": ["provider boom"] }),
+    )]);
+    let repo = seed_graphql_knowledge_mutation_repo(server.url.as_str());
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let provider_error = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              addKnowledge(input: {{ url: "{}/browse/CLI-1525" }}) {{
+                success
+              }}
+            }}
+            "#,
+            server.url
+        )))
+        .await;
+    assert_eq!(provider_error.errors.len(), 1, "expected one graphql error");
+    let provider_extensions = provider_error.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        provider_extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert_eq!(
+        provider_extensions.get("kind"),
+        Some(&async_graphql::Value::from("provider"))
+    );
+    assert_eq!(
+        provider_extensions.get("operation"),
+        Some(&async_graphql::Value::from("addKnowledge"))
+    );
+
+    let invalid_reference = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              associateKnowledge(
+                input: {
+                  sourceRef: "knowledge:missing-item"
+                  targetRef: "commit:HEAD"
+                }
+              ) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        invalid_reference.errors.len(),
+        1,
+        "expected one graphql error"
+    );
+    let reference_extensions = invalid_reference.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        reference_extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        reference_extensions.get("kind"),
+        Some(&async_graphql::Value::from("reference"))
+    );
+    assert_eq!(
+        reference_extensions.get("operation"),
+        Some(&async_graphql::Value::from("associateKnowledge"))
     );
 }
 
