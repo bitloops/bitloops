@@ -19,7 +19,7 @@ pub(crate) mod test_support;
 #[tokio::main]
 async fn main() {
     // Print text to the console.
-    println!("Hello World!");
+    println!("Hello World!!");
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cmd = cli::Cli::parse();
 
