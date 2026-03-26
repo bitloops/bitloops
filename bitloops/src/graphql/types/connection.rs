@@ -2,7 +2,10 @@ use async_graphql::{Result, SimpleObject};
 
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
-use super::{Artefact, Checkpoint, Commit, DependencyEdge, TelemetryEvent};
+use super::{
+    Artefact, Checkpoint, Commit, DependencyEdge, KnowledgeItem, KnowledgeRelation,
+    KnowledgeVersion, TelemetryEvent,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct PageInfo {
@@ -158,6 +161,96 @@ impl DependencyEdgeConnection {
         page_info: PageInfo,
         total_count: usize,
     ) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeItemEdge {
+    pub node: KnowledgeItem,
+    pub cursor: String,
+}
+
+impl KnowledgeItemEdge {
+    pub fn new(node: KnowledgeItem) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeItemConnection {
+    pub edges: Vec<KnowledgeItemEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeItemConnection {
+    pub fn new(edges: Vec<KnowledgeItemEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeVersionEdge {
+    pub node: KnowledgeVersion,
+    pub cursor: String,
+}
+
+impl KnowledgeVersionEdge {
+    pub fn new(node: KnowledgeVersion) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeVersionConnection {
+    pub edges: Vec<KnowledgeVersionEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeVersionConnection {
+    pub fn new(edges: Vec<KnowledgeVersionEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeRelationEdge {
+    pub node: KnowledgeRelation,
+    pub cursor: String,
+}
+
+impl KnowledgeRelationEdge {
+    pub fn new(node: KnowledgeRelation) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeRelationConnection {
+    pub edges: Vec<KnowledgeRelationEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeRelationConnection {
+    pub fn new(edges: Vec<KnowledgeRelationEdge>, page_info: PageInfo, total_count: usize) -> Self {
         Self {
             edges,
             page_info,

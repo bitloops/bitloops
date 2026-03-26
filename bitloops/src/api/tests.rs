@@ -779,6 +779,341 @@ fn seed_graphql_devql_repo() -> TempDir {
     dir
 }
 
+#[derive(Debug, Clone)]
+struct SeededKnowledgeFixture {
+    primary_item_id: String,
+    primary_latest_version_id: String,
+    secondary_item_id: String,
+    secondary_latest_version_id: String,
+}
+
+fn seed_graphql_knowledge_data(repo_root: &Path) -> SeededKnowledgeFixture {
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let backend_config = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    let sqlite_path = backend_config
+        .relational
+        .resolve_sqlite_db_path_for_repo(repo_root)
+        .expect("resolve sqlite path");
+    let duckdb_path = backend_config
+        .events
+        .resolve_duckdb_db_path_for_repo(repo_root);
+    if let Some(parent) = duckdb_path.parent() {
+        fs::create_dir_all(parent).expect("create duckdb parent");
+    }
+
+    let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    sqlite
+        .execute_batch(crate::host::devql::knowledge_schema_sql_sqlite())
+        .expect("initialise knowledge sqlite schema");
+
+    let duckdb = duckdb::Connection::open(&duckdb_path).expect("open duckdb");
+    duckdb
+        .execute_batch(crate::host::devql::knowledge_schema_sql_duckdb())
+        .expect("initialise knowledge duckdb schema");
+
+    let primary_source_id = crate::capability_packs::knowledge::storage::knowledge_source_id(
+        "https://bitloops.atlassian.net/browse/CLI-1521",
+    );
+    let primary_item_id = crate::capability_packs::knowledge::storage::knowledge_item_id(
+        repo_id.as_str(),
+        &primary_source_id,
+    );
+    let primary_v1_payload = json!({
+        "raw_payload": {
+            "key": "CLI-1521",
+            "summary": "Implement knowledge queries"
+        },
+        "body_text": "Initial GraphQL knowledge design.",
+        "body_html": "<p>Initial GraphQL knowledge design.</p>",
+        "body_adf": null,
+        "discussion": null
+    });
+    let primary_v2_payload = json!({
+        "raw_payload": {
+            "key": "CLI-1521",
+            "summary": "Implement knowledge queries and payload loading"
+        },
+        "body_text": "Deliver the typed GraphQL knowledge model and lazy payload reads.",
+        "body_html": "<p>Deliver the typed GraphQL knowledge model and lazy payload reads.</p>",
+        "body_adf": null,
+        "discussion": null
+    });
+    let primary_v1_bytes =
+        crate::capability_packs::knowledge::storage::serialize_payload(&primary_v1_payload)
+            .expect("serialise primary v1 payload");
+    let primary_v2_bytes =
+        crate::capability_packs::knowledge::storage::serialize_payload(&primary_v2_payload)
+            .expect("serialise primary v2 payload");
+    let primary_v1_hash =
+        crate::capability_packs::knowledge::storage::content_hash(&primary_v1_bytes);
+    let primary_v2_hash =
+        crate::capability_packs::knowledge::storage::content_hash(&primary_v2_bytes);
+    let primary_v1_id = crate::capability_packs::knowledge::storage::knowledge_item_version_id(
+        &primary_item_id,
+        &primary_v1_hash,
+    );
+    let primary_v2_id = crate::capability_packs::knowledge::storage::knowledge_item_version_id(
+        &primary_item_id,
+        &primary_v2_hash,
+    );
+
+    let secondary_source_id = crate::capability_packs::knowledge::storage::knowledge_source_id(
+        "https://github.com/bitloops/bitloops/issues/42",
+    );
+    let secondary_item_id = crate::capability_packs::knowledge::storage::knowledge_item_id(
+        repo_id.as_str(),
+        &secondary_source_id,
+    );
+    let secondary_payload = json!({
+        "raw_payload": {
+            "number": 42,
+            "title": "Secondary GraphQL knowledge item"
+        },
+        "body_text": "Secondary knowledge item used for relation traversal tests.",
+        "body_html": null,
+        "body_adf": null,
+        "discussion": null
+    });
+    let secondary_bytes =
+        crate::capability_packs::knowledge::storage::serialize_payload(&secondary_payload)
+            .expect("serialise secondary payload");
+    let secondary_hash =
+        crate::capability_packs::knowledge::storage::content_hash(&secondary_bytes);
+    let secondary_v1_id = crate::capability_packs::knowledge::storage::knowledge_item_version_id(
+        &secondary_item_id,
+        &secondary_hash,
+    );
+
+    sqlite
+        .execute(
+            "INSERT INTO knowledge_sources (
+                knowledge_source_id, provider, source_kind, canonical_external_id, canonical_url,
+                provenance_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                primary_source_id.as_str(),
+                "jira",
+                "jira_issue",
+                "https://bitloops.atlassian.net/browse/CLI-1521",
+                "https://bitloops.atlassian.net/browse/CLI-1521",
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-25T09:00:00Z",
+                "2026-03-26T09:30:00Z",
+            ],
+        )
+        .expect("insert primary source");
+    sqlite
+        .execute(
+            "INSERT INTO knowledge_sources (
+                knowledge_source_id, provider, source_kind, canonical_external_id, canonical_url,
+                provenance_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                secondary_source_id.as_str(),
+                "github",
+                "github_issue",
+                "https://github.com/bitloops/bitloops/issues/42",
+                "https://github.com/bitloops/bitloops/issues/42",
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-25T08:00:00Z",
+                "2026-03-26T08:30:00Z",
+            ],
+        )
+        .expect("insert secondary source");
+
+    sqlite
+        .execute(
+            "INSERT INTO knowledge_items (
+                knowledge_item_id, repo_id, knowledge_source_id, item_kind,
+                latest_knowledge_item_version_id, provenance_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                primary_item_id.as_str(),
+                repo_id.as_str(),
+                primary_source_id.as_str(),
+                "jira_issue",
+                primary_v2_id.as_str(),
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-25T09:00:00Z",
+                "2026-03-26T09:30:00Z",
+            ],
+        )
+        .expect("insert primary item");
+    sqlite
+        .execute(
+            "INSERT INTO knowledge_items (
+                knowledge_item_id, repo_id, knowledge_source_id, item_kind,
+                latest_knowledge_item_version_id, provenance_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                secondary_item_id.as_str(),
+                repo_id.as_str(),
+                secondary_source_id.as_str(),
+                "github_issue",
+                secondary_v1_id.as_str(),
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-25T08:00:00Z",
+                "2026-03-26T08:30:00Z",
+            ],
+        )
+        .expect("insert secondary item");
+
+    let primary_v1_path = crate::capability_packs::knowledge::storage::knowledge_payload_key(
+        repo_id.as_str(),
+        &primary_item_id,
+        &primary_v1_id,
+    );
+    let primary_v2_path = crate::capability_packs::knowledge::storage::knowledge_payload_key(
+        repo_id.as_str(),
+        &primary_item_id,
+        &primary_v2_id,
+    );
+    let secondary_v1_path = crate::capability_packs::knowledge::storage::knowledge_payload_key(
+        repo_id.as_str(),
+        &secondary_item_id,
+        &secondary_v1_id,
+    );
+
+    duckdb
+        .execute(
+            "INSERT INTO knowledge_document_versions (
+                knowledge_item_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                title, state, author, updated_at, body_preview, normalized_fields_json,
+                storage_backend, storage_path, payload_mime_type, payload_size_bytes,
+                provenance_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            duckdb::params![
+                primary_v1_id.as_str(),
+                primary_item_id.as_str(),
+                "jira",
+                "jira_issue",
+                primary_v1_hash.as_str(),
+                "CLI-1521 draft design",
+                "open",
+                "Vasilis Danias",
+                "2026-03-25T09:00:00Z",
+                "Initial GraphQL knowledge design.",
+                "{\"summary\":\"draft\"}",
+                "local",
+                primary_v1_path.as_str(),
+                "application/json",
+                primary_v1_bytes.len() as i64,
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-25 09:00:00",
+            ],
+        )
+        .expect("insert primary v1");
+    duckdb
+        .execute(
+            "INSERT INTO knowledge_document_versions (
+                knowledge_item_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                title, state, author, updated_at, body_preview, normalized_fields_json,
+                storage_backend, storage_path, payload_mime_type, payload_size_bytes,
+                provenance_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            duckdb::params![
+                primary_v2_id.as_str(),
+                primary_item_id.as_str(),
+                "jira",
+                "jira_issue",
+                primary_v2_hash.as_str(),
+                "Implement knowledge queries and payload loading",
+                "in_progress",
+                "Vasilis Danias",
+                "2026-03-26T09:30:00Z",
+                "Deliver the typed GraphQL knowledge model and lazy payload reads.",
+                "{\"summary\":\"latest\"}",
+                "local",
+                primary_v2_path.as_str(),
+                "application/json",
+                primary_v2_bytes.len() as i64,
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-26 09:30:00",
+            ],
+        )
+        .expect("insert primary v2");
+    duckdb
+        .execute(
+            "INSERT INTO knowledge_document_versions (
+                knowledge_item_version_id, knowledge_item_id, provider, source_kind, content_hash,
+                title, state, author, updated_at, body_preview, normalized_fields_json,
+                storage_backend, storage_path, payload_mime_type, payload_size_bytes,
+                provenance_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            duckdb::params![
+                secondary_v1_id.as_str(),
+                secondary_item_id.as_str(),
+                "github",
+                "github_issue",
+                secondary_hash.as_str(),
+                "Secondary GraphQL knowledge item",
+                "open",
+                "Alice",
+                "2026-03-26T08:30:00Z",
+                "Secondary knowledge item used for relation traversal tests.",
+                "{\"summary\":\"secondary\"}",
+                "local",
+                secondary_v1_path.as_str(),
+                "application/json",
+                secondary_bytes.len() as i64,
+                "{\"seed\":\"graphql-tests\"}",
+                "2026-03-26 08:30:00",
+            ],
+        )
+        .expect("insert secondary v1");
+
+    sqlite
+        .execute(
+            "INSERT INTO knowledge_relation_assertions (
+                relation_assertion_id, repo_id, knowledge_item_id, source_knowledge_item_version_id,
+                target_type, target_id, target_knowledge_item_version_id, relation_type,
+                association_method, confidence, provenance_json, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                crate::capability_packs::knowledge::storage::relation_assertion_id(
+                    &primary_item_id,
+                    &primary_v2_id,
+                    "knowledge_item",
+                    &secondary_item_id,
+                    Some(&secondary_v1_id),
+                    "manual_attachment",
+                ),
+                repo_id.as_str(),
+                primary_item_id.as_str(),
+                primary_v2_id.as_str(),
+                "knowledge_item",
+                secondary_item_id.as_str(),
+                secondary_v1_id.as_str(),
+                "associated_with",
+                "manual_attachment",
+                0.9_f64,
+                "{\"source\":\"graphql-tests\"}",
+                "2026-03-26T09:31:00Z",
+            ],
+        )
+        .expect("insert knowledge relation");
+
+    let blob_root = repo_local_blob_root(repo_root);
+    for (storage_path, bytes) in [
+        (primary_v1_path.as_str(), primary_v1_bytes.as_slice()),
+        (primary_v2_path.as_str(), primary_v2_bytes.as_slice()),
+    ] {
+        let path = blob_root.join(storage_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create knowledge blob parent");
+        }
+        fs::write(path, bytes).expect("write knowledge blob");
+    }
+
+    SeededKnowledgeFixture {
+        primary_item_id,
+        primary_latest_version_id: primary_v2_id,
+        secondary_item_id,
+        secondary_latest_version_id: secondary_v1_id,
+    }
+}
+
 fn seed_graphql_monorepo_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
@@ -3632,6 +3967,331 @@ async fn devql_graphql_commit_loader_caches_within_a_request_and_resets_per_requ
 }
 
 #[tokio::test]
+async fn devql_graphql_knowledge_queries_resolve_metadata_versions_relations_and_project_access() {
+    let repo = seed_graphql_devql_repo();
+    let seeded = seed_graphql_knowledge_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                jiraOnly: knowledge(provider: JIRA, first: 10) {
+                  totalCount
+                }
+                knowledge(first: 10) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      provider
+                      sourceKind
+                      canonicalExternalId
+                      externalUrl
+                      title
+                      latestVersion {
+                        id
+                        contentHash
+                        title
+                        state
+                        author
+                        updatedAt
+                        bodyPreview
+                        createdAt
+                        payload {
+                          bodyText
+                          bodyHtml
+                          rawPayload
+                        }
+                      }
+                      versions(first: 10) {
+                        totalCount
+                        edges {
+                          node {
+                            id
+                            title
+                            updatedAt
+                            createdAt
+                          }
+                        }
+                      }
+                      relations(first: 10) {
+                        totalCount
+                        edges {
+                          node {
+                            targetType
+                            targetId
+                            targetVersionId
+                            relationType
+                            associationMethod
+                            confidence
+                            provenance
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                project(path: "src") {
+                  knowledge(first: 10) {
+                    totalCount
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["jiraOnly"]["totalCount"], 1);
+    assert_eq!(json["repo"]["knowledge"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["id"],
+        seeded.primary_item_id
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["provider"],
+        "JIRA"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["sourceKind"],
+        "JIRA_ISSUE"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["canonicalExternalId"],
+        "https://bitloops.atlassian.net/browse/CLI-1521"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["externalUrl"],
+        "https://bitloops.atlassian.net/browse/CLI-1521"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["title"],
+        "Implement knowledge queries and payload loading"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["id"],
+        seeded.primary_latest_version_id
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["title"],
+        "Implement knowledge queries and payload loading"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["updatedAt"],
+        "2026-03-26T09:30:00+00:00"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["bodyPreview"],
+        "Deliver the typed GraphQL knowledge model and lazy payload reads."
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["payload"]["bodyText"],
+        "Deliver the typed GraphQL knowledge model and lazy payload reads."
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["payload"]["rawPayload"],
+        json!({
+            "key": "CLI-1521",
+            "summary": "Implement knowledge queries and payload loading"
+        })
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["versions"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["versions"]["edges"][0]["node"]["title"],
+        "Implement knowledge queries and payload loading"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["versions"]["edges"][1]["node"]["title"],
+        "CLI-1521 draft design"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["targetType"],
+        "KNOWLEDGE"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["targetId"],
+        seeded.secondary_item_id
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["targetVersionId"],
+        seeded.secondary_latest_version_id
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["relationType"],
+        "associated_with"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["associationMethod"],
+        "manual_attachment"
+    );
+    assert_eq!(
+        json["repo"]["knowledge"]["edges"][0]["node"]["relations"]["edges"][0]["node"]["confidence"],
+        0.9
+    );
+    assert_eq!(json["repo"]["project"]["knowledge"]["totalCount"], 2);
+}
+
+#[tokio::test]
+async fn devql_graphql_knowledge_payloads_are_lazy_and_missing_blobs_return_null() {
+    let repo = seed_graphql_devql_repo();
+    let seeded = seed_graphql_knowledge_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let metadata_only = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                knowledge(first: 10) {
+                  edges {
+                    node {
+                      id
+                      title
+                      latestVersion {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        metadata_only.errors.is_empty(),
+        "graphql errors: {:?}",
+        metadata_only.errors
+    );
+
+    let metadata_json = metadata_only
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(
+        metadata_json["repo"]["knowledge"]["edges"][0]["node"]["id"],
+        seeded.primary_item_id
+    );
+    assert_eq!(
+        metadata_json["repo"]["knowledge"]["edges"][1]["node"]["id"],
+        seeded.secondary_item_id
+    );
+
+    let with_payloads = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                knowledge(first: 10) {
+                  edges {
+                    node {
+                      id
+                      latestVersion {
+                        payload {
+                          bodyText
+                          rawPayload
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        with_payloads.errors.is_empty(),
+        "graphql errors: {:?}",
+        with_payloads.errors
+    );
+
+    let payload_json = with_payloads
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(
+        payload_json["repo"]["knowledge"]["edges"][0]["node"]["latestVersion"]["payload"]["bodyText"],
+        "Deliver the typed GraphQL knowledge model and lazy payload reads."
+    );
+    assert_eq!(
+        payload_json["repo"]["knowledge"]["edges"][1]["node"]["latestVersion"]["payload"],
+        Value::Null
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_knowledge_version_loader_caches_within_a_request_and_resets_per_request() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_knowledge_data(repo.path());
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+    let query = r#"
+        {
+          repo(name: "demo") {
+            knowledge(first: 10) {
+              edges {
+                node {
+                  versions(first: 10) {
+                    totalCount
+                  }
+                  versionsAgain: versions(first: 10) {
+                    totalCount
+                  }
+                }
+              }
+            }
+          }
+        }
+    "#;
+
+    let first_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        first_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        first_response.errors
+    );
+    let first_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(first_snapshot.knowledge_version_batches, 1);
+
+    let second_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        second_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_response.errors
+    );
+    let second_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(second_snapshot.knowledge_version_batches, 2);
+}
+
+#[tokio::test]
 async fn devql_event_resolvers_query_duckdb_checkpoints_and_telemetry() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -3857,6 +4517,9 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("repo(name: String!): Repository!"));
     assert!(body.contains("checkpoints(agent: String, since: DateTime"));
     assert!(body.contains("telemetry(eventType: String, agent: String"));
+    assert!(body.contains("knowledge(provider: KnowledgeProvider"));
+    assert!(body.contains("type KnowledgeItem"));
+    assert!(body.contains("type KnowledgePayload"));
     assert!(body.contains("type TelemetryEvent"));
     assert!(body.contains("type TelemetryEventConnection"));
     assert!(body.contains("project(path: String!): Project!"));

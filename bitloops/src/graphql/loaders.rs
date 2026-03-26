@@ -9,7 +9,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use super::types::{Artefact, Commit, DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind};
+use super::types::{
+    Artefact, Commit, DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind, KnowledgeVersion,
+};
 use super::{DevqlGraphqlContext, ResolverScope};
 
 #[derive(Debug, Clone, Default)]
@@ -18,6 +20,7 @@ pub(crate) struct LoaderMetrics {
     outgoing_edge_batches: Arc<AtomicUsize>,
     incoming_edge_batches: Arc<AtomicUsize>,
     commit_by_sha_batches: Arc<AtomicUsize>,
+    knowledge_version_batches: Arc<AtomicUsize>,
 }
 
 impl LoaderMetrics {
@@ -37,6 +40,11 @@ impl LoaderMetrics {
         self.commit_by_sha_batches.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_knowledge_version_batch(&self) {
+        self.knowledge_version_batches
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> LoaderMetricsSnapshot {
         LoaderMetricsSnapshot {
@@ -44,6 +52,7 @@ impl LoaderMetrics {
             outgoing_edge_batches: self.outgoing_edge_batches.load(Ordering::Relaxed),
             incoming_edge_batches: self.incoming_edge_batches.load(Ordering::Relaxed),
             commit_by_sha_batches: self.commit_by_sha_batches.load(Ordering::Relaxed),
+            knowledge_version_batches: self.knowledge_version_batches.load(Ordering::Relaxed),
         }
     }
 }
@@ -55,6 +64,7 @@ pub(crate) struct LoaderMetricsSnapshot {
     pub(crate) outgoing_edge_batches: usize,
     pub(crate) incoming_edge_batches: usize,
     pub(crate) commit_by_sha_batches: usize,
+    pub(crate) knowledge_version_batches: usize,
 }
 
 pub(crate) struct LoaderRegistryExtension;
@@ -85,6 +95,7 @@ pub(crate) struct DataLoaders {
     outgoing_edges_by_artefact: DataLoader<EdgesByArtefactLoader, HashMapCache>,
     incoming_edges_by_artefact: DataLoader<EdgesByArtefactLoader, HashMapCache>,
     commit_by_sha: DataLoader<CommitByShaLoader, HashMapCache>,
+    knowledge_versions_by_item: DataLoader<KnowledgeVersionsByItemLoader, HashMapCache>,
 }
 
 impl DataLoaders {
@@ -115,6 +126,13 @@ impl DataLoaders {
             ),
             commit_by_sha: DataLoader::with_cache(
                 CommitByShaLoader {
+                    context: context.clone(),
+                },
+                tokio::spawn,
+                HashMapCache::default(),
+            ),
+            knowledge_versions_by_item: DataLoader::with_cache(
+                KnowledgeVersionsByItemLoader {
                     context: context.clone(),
                 },
                 tokio::spawn,
@@ -172,6 +190,17 @@ impl DataLoaders {
         commit_sha: &str,
     ) -> Result<Option<Commit>, String> {
         self.commit_by_sha.load_one(commit_sha.to_string()).await
+    }
+
+    pub(crate) async fn load_knowledge_versions_by_item(
+        &self,
+        knowledge_item_id: &str,
+    ) -> Result<Vec<KnowledgeVersion>, String> {
+        Ok(self
+            .knowledge_versions_by_item
+            .load_one(knowledge_item_id.to_string())
+            .await?
+            .unwrap_or_default())
     }
 }
 
@@ -303,6 +332,25 @@ impl Loader<String> for CommitByShaLoader {
         self.context.loader_metrics().record_commit_batch();
         self.context
             .load_commits_by_shas(keys)
+            .await
+            .map_err(|err| format!("{err:#}"))
+    }
+}
+
+struct KnowledgeVersionsByItemLoader {
+    context: DevqlGraphqlContext,
+}
+
+impl Loader<String> for KnowledgeVersionsByItemLoader {
+    type Value = Vec<KnowledgeVersion>;
+    type Error = String;
+
+    async fn load(&self, keys: &[String]) -> Result<HashMap<String, Self::Value>, Self::Error> {
+        self.context
+            .loader_metrics()
+            .record_knowledge_version_batch();
+        self.context
+            .load_knowledge_versions_by_item_ids(keys)
             .await
             .map_err(|err| format!("{err:#}"))
     }

@@ -318,7 +318,7 @@ impl DevqlGraphqlContext {
         sqlite_query_rows_path(&sqlite_path, sql).await
     }
 
-    fn devql_sqlite_path(&self) -> Result<std::path::PathBuf> {
+    pub(crate) fn devql_sqlite_path(&self) -> Result<std::path::PathBuf> {
         self.backend_config
             .as_ref()
             .context("store backend configuration unavailable")?

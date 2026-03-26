@@ -5,7 +5,8 @@ use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, TemporalScope, paginate_items,
+    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
+    TemporalScope, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -144,6 +145,26 @@ impl Project {
         })?;
         Ok(CheckpointConnection::new(
             page.items.into_iter().map(CheckpointEdge::new).collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn knowledge(
+        &self,
+        ctx: &Context<'_>,
+        provider: Option<KnowledgeProvider>,
+        #[graphql(default = 25)] first: i32,
+        after: Option<String>,
+    ) -> Result<KnowledgeItemConnection> {
+        let items = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_knowledge_items(provider, &self.scope)
+            .await
+            .map_err(|err| backend_error(format!("failed to query project knowledge: {err:#}")))?;
+        let page = paginate_items(&items, first, after.as_deref(), |item| item.cursor())?;
+        Ok(KnowledgeItemConnection::new(
+            page.items.into_iter().map(KnowledgeItemEdge::new).collect(),
             page.page_info,
             page.total_count,
         ))

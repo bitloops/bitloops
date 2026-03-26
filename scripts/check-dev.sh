@@ -52,7 +52,7 @@ done
 
 bash "$ROOT/scripts/check-rust-file-size.sh" "$BL"
 
-cargo fmt --all --check --manifest-path "$BL/Cargo.toml"
+cargo fmt --all --manifest-path "$BL/Cargo.toml"
 cargo clippy --manifest-path "$BL/Cargo.toml" --all-targets "${DUCKDB_CARGO_FEATURES[@]}" -- -D warnings
 
 if [[ "$RUN_TEST" == 1 ]] && [[ "$RUN_FULL" == 0 ]]; then

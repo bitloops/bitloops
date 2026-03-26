@@ -5,6 +5,7 @@ pub mod connection;
 pub mod dependency_edge;
 pub mod file_context;
 pub mod health;
+pub mod knowledge;
 pub mod project;
 pub mod repository;
 pub mod scalars;
@@ -16,12 +17,18 @@ pub use checkpoint::Checkpoint;
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, CheckpointConnection, CheckpointEdge, CommitConnection,
-    CommitEdge, DependencyConnectionEdge, DependencyEdgeConnection, TelemetryEventConnection,
-    TelemetryEventEdge, paginate_items,
+    CommitEdge, DependencyConnectionEdge, DependencyEdgeConnection, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeRelationConnection, KnowledgeRelationEdge,
+    KnowledgeVersionConnection, KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge,
+    paginate_items,
 };
 pub use dependency_edge::{DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
+pub use knowledge::{
+    KnowledgeItem, KnowledgeProvider, KnowledgeRelation, KnowledgeSourceKind, KnowledgeTargetType,
+    KnowledgeVersion,
+};
 pub use project::Project;
 pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
