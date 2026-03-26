@@ -5,13 +5,13 @@ pub use bitloops::api;
 pub use bitloops::capability_packs;
 pub use bitloops::cli;
 pub use bitloops::config;
+pub use bitloops::ftf;
 pub use bitloops::git;
 pub use bitloops::host;
 pub use bitloops::models;
 pub use bitloops::storage;
 pub use bitloops::telemetry;
 pub use bitloops::utils;
-pub use bitloops::ftf;
 
 #[cfg(test)]
 #[allow(dead_code)]

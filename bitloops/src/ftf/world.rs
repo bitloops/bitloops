@@ -7,7 +7,7 @@ pub struct FtfRunConfig {
     pub suite_root: PathBuf,
 }
 
-#[derive(Debug, cucumber::World)]
+#[derive(Debug, Default, cucumber::World)]
 pub struct FtfWorld {
     pub scenario_name: Option<String>,
     pub scenario_slug: Option<String>,
@@ -17,21 +17,6 @@ pub struct FtfWorld {
     pub repo_dir: Option<PathBuf>,
     pub terminal_log_path: Option<PathBuf>,
     pub metadata_path: Option<PathBuf>,
-}
-
-impl Default for FtfWorld {
-    fn default() -> Self {
-        Self {
-            scenario_name: None,
-            scenario_slug: None,
-            flow_name: None,
-            run_config: None,
-            run_dir: None,
-            repo_dir: None,
-            terminal_log_path: None,
-            metadata_path: None,
-        }
-    }
 }
 
 impl FtfWorld {

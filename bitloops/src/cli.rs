@@ -95,8 +95,8 @@ pub enum Commands {
     CurlBashPostInstall,
     /// Help about any command.
     Help(root::HelpArgs),
-     /// Run Bitloops foundation tests from the integrated Rust BDD harness.
-     Ftf(crate::ftf::FtfArgs),
+    /// Run Bitloops foundation tests from the integrated Rust BDD harness.
+    Ftf(crate::ftf::FtfArgs),
 }
 
 /// Marker error: the command already printed a user-facing message.

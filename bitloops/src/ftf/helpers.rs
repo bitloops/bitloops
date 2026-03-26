@@ -1,7 +1,9 @@
 use super::world::FtfWorld;
-use crate::engine::agent::AGENT_NAME_CLAUDE_CODE;
-use crate::engine::session::create_session_backend_or_local;
-use crate::engine::strategy::manual_commit::{read_commit_checkpoint_mappings, read_committed};
+use crate::adapters::agents::AGENT_NAME_CLAUDE_CODE;
+use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::checkpoints::strategy::manual_commit::{
+    read_commit_checkpoint_mappings, read_committed,
+};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::Serialize;
 use std::ffi::OsString;
