@@ -106,3 +106,18 @@ Runtime registry initialization is in:
 - `bitloops/src/host/devql.rs` -> `language_adapter_registry()`
 
 `devql packs` language-adapter lifecycle/reporting is also assembled in `host/devql.rs`.
+
+## 7) Related but separate (current state)
+
+The test-harness capability keeps its own language-specific mapping code under:
+
+- `bitloops/src/capability_packs/test_harness/mapping/languages`
+
+That path is currently separate from the host language-adapter runtime in this guide.
+
+Future improvement direction:
+
+- move test-harness mapping into a capability-side projection layer that consumes
+  `LanguageArtefact` / `DependencyEdge` outputs from `LanguageAdapterPack`
+- keep `LanguageAdapterPack` generic and closed to capability-specific domain semantics
+- reduce duplicate language-logic maintenance across host and capability code
