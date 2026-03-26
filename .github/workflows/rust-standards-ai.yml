@@ -6,6 +6,7 @@ on:
       - develop
     types:
       - ready_for_review
+      - synchronize
     paths:
       - "**/*.rs"
       - "documentation/docs/reference/rust-code-standards.md"
