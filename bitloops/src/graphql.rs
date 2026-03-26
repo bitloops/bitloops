@@ -6,11 +6,17 @@ mod pack_adapter;
 mod query_root;
 mod scope;
 mod subscription_root;
+mod subscriptions;
 mod types;
 
 pub(crate) use context::DevqlGraphqlContext;
 pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
 pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode};
+
+#[cfg(test)]
+pub(crate) use types::ingestion::IngestionPhase;
+#[cfg(test)]
+pub(crate) use types::{Checkpoint, IngestionProgressEvent};
 
 use self::loaders::LoaderRegistryExtension;
 use self::mutation_root::MutationRoot;
@@ -28,10 +34,18 @@ use axum::{
 pub(crate) type DevqlSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
 pub(crate) fn build_schema(context: DevqlGraphqlContext) -> DevqlSchema {
-    Schema::build(QueryRoot, MutationRoot, async_graphql::EmptySubscription)
+    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(context)
         .extension(LoaderRegistryExtension)
         .finish()
+}
+
+pub fn schema_sdl() -> String {
+    build_schema(DevqlGraphqlContext::new(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        crate::api::DashboardDbPools::default(),
+    ))
+    .sdl()
 }
 
 pub(crate) async fn execute_in_process(

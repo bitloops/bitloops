@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 
 // Shared types used across ingestion modules.
 
@@ -18,6 +19,37 @@ pub(crate) struct IngestionCounters {
     pub(crate) symbol_embedding_rows_skipped: usize,
     pub(crate) symbol_clone_edges_upserted: usize,
     pub(crate) symbol_clone_sources_scored: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IngestionProgressPhase {
+    Initializing,
+    Extracting,
+    Persisting,
+    Complete,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IngestionProgressUpdate {
+    pub(crate) phase: IngestionProgressPhase,
+    pub(crate) checkpoints_total: usize,
+    pub(crate) checkpoints_processed: usize,
+    pub(crate) current_checkpoint_id: Option<String>,
+    pub(crate) current_commit_sha: Option<String>,
+    pub(crate) counters: IngestionCounters,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct IngestedCheckpointNotification {
+    pub(crate) checkpoint: CommittedInfo,
+    pub(crate) commit_sha: Option<String>,
+}
+
+pub(crate) trait IngestionObserver: Send + Sync {
+    fn on_progress(&self, update: IngestionProgressUpdate);
+
+    fn on_checkpoint_ingested(&self, checkpoint: IngestedCheckpointNotification);
 }
 
 #[derive(Debug, Clone)]

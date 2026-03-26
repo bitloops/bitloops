@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{
     DevqlGraphqlContext,
-    types::{DateTimeScalar, KnowledgeItem, KnowledgeRelation},
+    types::{Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation},
 };
 
 #[derive(Default)]
@@ -183,10 +183,15 @@ impl MutationRoot {
             .data_unchecked::<DevqlGraphqlContext>()
             .devql_config()
             .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
-        let summary =
-            crate::host::devql::execute_ingest(&cfg, input.init, input.max_checkpoints as usize)
-                .await
-                .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
+        let observer = GraphqlIngestionObserver::new(ctx.data_unchecked::<DevqlGraphqlContext>());
+        let summary = crate::host::devql::execute_ingest_with_observer(
+            &cfg,
+            input.init,
+            input.max_checkpoints as usize,
+            Some(&observer),
+        )
+        .await
+        .map_err(|err| operation_error("BACKEND_ERROR", "ingestion", "ingest", err))?;
         Ok(summary.into())
     }
 
@@ -479,4 +484,36 @@ fn operation_error(
 
 fn to_graphql_count(value: usize) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+struct GraphqlIngestionObserver {
+    repo_name: String,
+    context: DevqlGraphqlContext,
+}
+
+impl GraphqlIngestionObserver {
+    fn new(context: &DevqlGraphqlContext) -> Self {
+        Self {
+            repo_name: context.repo_name().to_string(),
+            context: context.clone(),
+        }
+    }
+}
+
+impl crate::host::devql::IngestionObserver for GraphqlIngestionObserver {
+    fn on_progress(&self, update: crate::host::devql::IngestionProgressUpdate) {
+        self.context
+            .subscriptions()
+            .publish_progress(self.repo_name.clone(), IngestionProgressEvent::from(update));
+    }
+
+    fn on_checkpoint_ingested(
+        &self,
+        checkpoint: crate::host::devql::IngestedCheckpointNotification,
+    ) {
+        self.context.subscriptions().publish_checkpoint(
+            self.repo_name.clone(),
+            Checkpoint::from_ingested(&checkpoint.checkpoint, checkpoint.commit_sha.as_deref()),
+        );
+    }
 }

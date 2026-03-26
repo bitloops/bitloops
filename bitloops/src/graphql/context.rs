@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 use super::loaders::LoaderMetrics;
+use super::subscriptions::SubscriptionHub;
 
 const BLOB_HEALTHCHECK_KEY: &str = "__bitloops/graphql/healthcheck";
 const GIT_FIELD_SEPARATOR: char = '\u{1f}';
@@ -41,6 +42,7 @@ pub(crate) struct DevqlGraphqlContext {
     capability_host: Option<Arc<Mutex<DevqlCapabilityHost>>>,
     capability_host_bootstrap_error: Option<String>,
     loader_metrics: LoaderMetrics,
+    subscriptions: Arc<SubscriptionHub>,
 }
 
 impl fmt::Debug for DevqlGraphqlContext {
@@ -97,6 +99,14 @@ impl DevqlGraphqlContext {
             ));
         };
         Ok(capability_host.lock().await)
+    }
+
+    pub(crate) fn repo_name(&self) -> &str {
+        self.repo_identity.name.as_str()
+    }
+
+    pub(crate) fn subscriptions(&self) -> Arc<SubscriptionHub> {
+        Arc::clone(&self.subscriptions)
     }
 
     #[cfg(test)]

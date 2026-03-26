@@ -43,7 +43,7 @@ mod connection_status;
 pub(crate) mod identity;
 mod types;
 
-pub(crate) use self::commands_ingest::execute_ingest;
+pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_query::{
     RegisteredStageCompositionContext, execute_query_json_with_composition,
@@ -475,8 +475,11 @@ pub(crate) use self::ingestion_schema::{
     checkpoint_schema_sql_postgres, checkpoint_schema_sql_sqlite, devql_schema_sql_sqlite,
     knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
 };
-pub(crate) use self::ingestion_types::IngestionCounters;
 use self::ingestion_types::*;
+pub(crate) use self::ingestion_types::{
+    IngestedCheckpointNotification, IngestionCounters, IngestionObserver, IngestionProgressPhase,
+    IngestionProgressUpdate,
+};
 use self::query_executor::*;
 use self::query_parser::*;
 pub(crate) use self::query_utils::sql_string_list_pg;

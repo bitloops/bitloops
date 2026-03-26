@@ -10,6 +10,7 @@ use super::{
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};
+use async_graphql::futures_util::StreamExt;
 use axum::{
     body::{Body, to_bytes},
     http::{Method, Request, StatusCode},
@@ -6115,10 +6116,23 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("type KnowledgePayload"));
     assert!(body.contains("type TelemetryEvent"));
     assert!(body.contains("type TelemetryEventConnection"));
+    assert!(body.contains("type SubscriptionRoot"));
+    assert!(body.contains("checkpointIngested(repoName: String!): Checkpoint!"));
+    assert!(body.contains("ingestionProgress(repoName: String!): IngestionProgressEvent!"));
+    assert!(body.contains("type IngestionProgressEvent"));
+    assert!(body.contains("enum IngestionPhase"));
     assert!(body.contains("project(path: String!): Project!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(body.contains("input AsOfInput"));
     assert!(body.contains("type TemporalScope"));
+}
+
+#[test]
+fn checked_in_schema_file_matches_runtime_sdl() {
+    let expected = crate::graphql::schema_sdl();
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.graphql");
+    let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.graphql");
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
@@ -6160,6 +6174,245 @@ async fn devql_ws_route_is_registered() {
     let (status, _) = request_text_with_method(app, Method::GET, "/devql/ws").await;
 
     assert_ne!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn devql_graphql_checkpoint_ingested_subscription_receives_published_checkpoint_events() {
+    let repo = seed_dashboard_repo();
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let stream = schema.execute_stream(async_graphql::Request::new(
+        r#"
+        subscription {
+          checkpointIngested(repoName: "demo") {
+            id
+            commitSha
+            sessionId
+          }
+        }
+        "#,
+    ));
+    let _collector = tokio::spawn(async move {
+        let mut stream = stream;
+        if let Some(event) = stream.next().await {
+            let _ = event_tx.send(event);
+        }
+    });
+    tokio::task::yield_now().await;
+
+    let checkpoint = crate::host::checkpoints::strategy::manual_commit::read_committed_info(
+        repo.path(),
+        "aabbccddeeff",
+    )
+    .expect("read committed checkpoint")
+    .expect("seeded checkpoint info");
+    context.subscriptions().publish_checkpoint(
+        "demo",
+        crate::graphql::Checkpoint::from_ingested(
+            &checkpoint,
+            Some(&git_ok(repo.path(), &["rev-parse", "HEAD"])),
+        ),
+    );
+
+    let first_event = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv())
+        .await
+        .expect("checkpoint subscription event should arrive")
+        .expect("checkpoint subscription response");
+    assert!(
+        first_event.errors.is_empty(),
+        "subscription errors: {:?}",
+        first_event.errors
+    );
+
+    let event_json = first_event
+        .data
+        .into_json()
+        .expect("subscription data to json");
+    assert_eq!(
+        event_json["checkpointIngested"]["commitSha"],
+        Value::String(git_ok(repo.path(), &["rev-parse", "HEAD"]))
+    );
+    assert!(
+        event_json["checkpointIngested"]["id"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+    );
+    assert!(event_json["checkpointIngested"]["sessionId"].is_string());
+}
+
+#[tokio::test]
+async fn devql_graphql_ingestion_progress_subscription_receives_published_progress_events() {
+    let repo = seed_dashboard_repo();
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let stream = schema.execute_stream(async_graphql::Request::new(
+        r#"
+        subscription {
+          ingestionProgress(repoName: "demo") {
+            phase
+            checkpointsTotal
+            checkpointsProcessed
+            currentCheckpointId
+            currentCheckpointSha
+          }
+        }
+        "#,
+    ));
+    let _collector = tokio::spawn(async move {
+        let mut stream = stream;
+        while let Some(event) = stream.next().await {
+            if event_tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    tokio::task::yield_now().await;
+
+    context.subscriptions().publish_progress(
+        "demo",
+        crate::graphql::IngestionProgressEvent {
+            phase: crate::graphql::IngestionPhase::Initializing,
+            checkpoints_total: 1,
+            checkpoints_processed: 0,
+            current_checkpoint_id: None,
+            current_checkpoint_sha: None,
+            events_inserted: 0,
+            artefacts_upserted: 0,
+            checkpoints_without_commit: 0,
+            temporary_rows_promoted: 0,
+        },
+    );
+    context.subscriptions().publish_progress(
+        "demo",
+        crate::graphql::IngestionProgressEvent {
+            phase: crate::graphql::IngestionPhase::Complete,
+            checkpoints_total: 1,
+            checkpoints_processed: 1,
+            current_checkpoint_id: Some("aabbccddeeff".to_string()),
+            current_checkpoint_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
+            events_inserted: 1,
+            artefacts_upserted: 2,
+            checkpoints_without_commit: 0,
+            temporary_rows_promoted: 0,
+        },
+    );
+
+    let mut phases = Vec::new();
+    let mut last_payload = Value::Null;
+    for _ in 0..2 {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv())
+            .await
+            .expect("progress subscription should emit")
+            .expect("progress response");
+        assert!(
+            event.errors.is_empty(),
+            "subscription errors: {:?}",
+            event.errors
+        );
+        let json = event.data.into_json().expect("progress event json");
+        let payload = json["ingestionProgress"].clone();
+        let phase = payload["phase"]
+            .as_str()
+            .expect("progress phase string")
+            .to_string();
+        phases.push(phase.clone());
+        last_payload = payload;
+        if phase == "COMPLETE" {
+            break;
+        }
+    }
+    assert!(phases.iter().any(|phase| phase == "INITIALIZING"));
+    assert_eq!(phases.last(), Some(&"COMPLETE".to_string()));
+    assert_eq!(last_payload["checkpointsTotal"], Value::from(1));
+    assert_eq!(last_payload["checkpointsProcessed"], Value::from(1));
+}
+
+#[tokio::test]
+async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subscription_hub() {
+    let repo = seed_dashboard_repo();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            ("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", Some("disabled")),
+            ("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", Some("disabled")),
+        ],
+    );
+    write_envelope_config(
+        repo.path(),
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": ".bitloops/stores/subscriptions.sqlite"
+                },
+                "events": {
+                    "duckdb_path": ".bitloops/stores/subscriptions.duckdb"
+                },
+                "embedding_provider": "disabled"
+            },
+            "semantic": {
+                "provider": "disabled"
+            }
+        }),
+    );
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let mut progress_rx = context.subscriptions().subscribe_progress();
+    let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
+    let schema = crate::graphql::build_schema(context);
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: 1 }) {
+                success
+                checkpointsProcessed
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let response_json = response.data.into_json().expect("mutation data to json");
+    if response_json["ingest"]["checkpointsProcessed"].as_i64() == Some(1) {
+        let checkpoint =
+            tokio::time::timeout(std::time::Duration::from_secs(5), checkpoint_rx.recv())
+                .await
+                .expect("checkpoint event should arrive")
+                .expect("checkpoint subscription payload");
+        assert_eq!(
+            checkpoint.checkpoint.commit_sha,
+            Some(git_ok(repo.path(), &["rev-parse", "HEAD"]))
+        );
+    }
+
+    let mut saw_complete = false;
+    for _ in 0..8 {
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(5), progress_rx.recv())
+            .await
+            .expect("progress event should arrive")
+            .expect("progress subscription payload");
+        if progress.event.phase == crate::graphql::IngestionPhase::Complete {
+            saw_complete = true;
+            break;
+        }
+    }
+    assert!(saw_complete, "expected a COMPLETE ingestion progress event");
 }
 
 #[test]

@@ -40,6 +40,10 @@ pub struct CheckpointTokenUsage {
 
 impl Checkpoint {
     pub fn from_committed(commit_sha: &str, info: &CommittedInfo) -> Self {
+        Self::from_ingested(info, Some(commit_sha))
+    }
+
+    pub fn from_ingested(info: &CommittedInfo, commit_sha: Option<&str>) -> Self {
         let event_time = DateTimeScalar::from_rfc3339(info.created_at.clone())
             .or_else(|_| DateTimeScalar::from_rfc3339(UNIX_EPOCH_RFC3339))
             .expect("static epoch timestamp must parse");
@@ -55,7 +59,10 @@ impl Checkpoint {
         Self {
             id: ID(info.checkpoint_id.clone()),
             session_id: info.session_id.clone(),
-            commit_sha: Some(commit_sha.to_string()),
+            commit_sha: commit_sha
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             branch: non_empty(info.branch.as_str()),
             agent: non_empty(info.agent.as_str()),
             event_time: event_time.clone(),

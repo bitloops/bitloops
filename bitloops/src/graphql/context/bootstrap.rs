@@ -11,6 +11,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::graphql::subscriptions::SubscriptionHub;
+
 impl DevqlGraphqlContext {
     pub(crate) fn new(repo_root: std::path::PathBuf, db: DashboardDbPools) -> Self {
         let backend_config = resolve_store_backend_config_for_repo(&repo_root).ok();
@@ -58,6 +60,7 @@ impl DevqlGraphqlContext {
             capability_host,
             capability_host_bootstrap_error,
             loader_metrics: LoaderMetrics::default(),
+            subscriptions: SubscriptionHub::shared(),
         }
     }
 
