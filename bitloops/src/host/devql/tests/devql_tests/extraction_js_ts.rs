@@ -305,7 +305,7 @@ function caller() {
 }
 "#;
     let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
-    let snapshot = |edges: &[JsTsDependencyEdge]| {
+    let snapshot = |edges: &[DependencyEdge]| {
         edges
             .iter()
             .map(|edge| {

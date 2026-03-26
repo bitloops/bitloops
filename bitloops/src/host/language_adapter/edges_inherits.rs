@@ -1,14 +1,19 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use super::DependencyEdge;
+use super::edges_shared::{
+    EdgeCollector, SymbolLookup, push_extends_edge, symbol_lookup_name_from_node,
+};
 
 // Extension edge extraction for JS/TS (extends) and Rust (supertraits).
 
-pub(super) fn collect_js_ts_extends_edges_recursive(
+pub(crate) fn collect_js_ts_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,
     imported_symbol_refs: &HashMap<String, String>,
     seen: &mut HashSet<String>,
-    out: &mut Vec<JsTsDependencyEdge>,
+    out: &mut Vec<DependencyEdge>,
 ) {
     match node.kind() {
         "class_declaration" => {
@@ -105,12 +110,12 @@ pub(super) fn collect_js_ts_extends_edges_recursive(
     }
 }
 
-pub(super) fn collect_rust_extends_edges_recursive(
+pub(crate) fn collect_rust_extends_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     type_targets: &HashMap<String, String>,
     seen: &mut HashSet<String>,
-    out: &mut Vec<JsTsDependencyEdge>,
+    out: &mut Vec<DependencyEdge>,
 ) {
     if node.kind() == "trait_item" {
         let Some(owner_name) = node

@@ -1,6 +1,9 @@
 use super::*;
 
-fn artefact_by_symbol_fqn<'a>(artefacts: &'a [JsTsArtefact], symbol_fqn: &str) -> &'a JsTsArtefact {
+fn artefact_by_symbol_fqn<'a>(
+    artefacts: &'a [LanguageArtefact],
+    symbol_fqn: &str,
+) -> &'a LanguageArtefact {
     artefacts
         .iter()
         .find(|artefact| artefact.symbol_fqn == symbol_fqn)

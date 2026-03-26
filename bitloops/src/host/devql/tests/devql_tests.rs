@@ -249,8 +249,8 @@ fn test_symbol_record(
     }
 }
 
-fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> JsTsDependencyEdge {
-    JsTsDependencyEdge {
+fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> DependencyEdge {
+    DependencyEdge {
         edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: Some(target_symbol_fqn.to_string()),
@@ -261,12 +261,8 @@ fn test_call_edge(from_symbol_fqn: &str, target_symbol_fqn: &str, line: i32) -> 
     }
 }
 
-fn test_unresolved_call_edge(
-    from_symbol_fqn: &str,
-    symbol_ref: &str,
-    line: i32,
-) -> JsTsDependencyEdge {
-    JsTsDependencyEdge {
+fn test_unresolved_call_edge(from_symbol_fqn: &str, symbol_ref: &str, line: i32) -> DependencyEdge {
+    DependencyEdge {
         edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: None,

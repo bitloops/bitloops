@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn symbol_id_is_stable_when_impl_block_moves_lines() {
-    let original = JsTsArtefact {
+    let original = LanguageArtefact {
         canonical_kind: None,
         language_kind: "impl_item".to_string(),
         name: "impl@12".to_string(),
@@ -16,7 +16,7 @@ fn symbol_id_is_stable_when_impl_block_moves_lines() {
         modifiers: vec![],
         docstring: None,
     };
-    let moved = JsTsArtefact {
+    let moved = LanguageArtefact {
         name: "impl@30".to_string(),
         symbol_fqn: "src/lib.rs::impl@30".to_string(),
         start_line: 30,

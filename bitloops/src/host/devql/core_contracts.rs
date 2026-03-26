@@ -53,7 +53,7 @@ impl CoreCanonicalArtefactKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum CanonicalKindProjection {
+pub(crate) enum CanonicalKindProjection {
     File,
     Module,
     Import,
@@ -66,7 +66,7 @@ pub(super) enum CanonicalKindProjection {
 }
 
 impl CanonicalKindProjection {
-    pub(super) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
             Self::Module => "module",
@@ -80,7 +80,7 @@ impl CanonicalKindProjection {
         }
     }
 
-    pub(super) fn from_str(value: &str) -> Option<Self> {
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Some(Self::File),
             "module" => Some(Self::Module),
@@ -95,6 +95,7 @@ impl CanonicalKindProjection {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn core_kind(self) -> CoreCanonicalArtefactKind {
         match self {
             Self::File => CoreCanonicalArtefactKind::File,
@@ -107,6 +108,7 @@ impl CanonicalKindProjection {
     }
 }
 
+#[cfg(test)]
 pub(super) fn artefact_core_kind(
     canonical_kind: Option<&str>,
 ) -> Option<CoreCanonicalArtefactKind> {
@@ -115,6 +117,7 @@ pub(super) fn artefact_core_kind(
         .map(CanonicalKindProjection::core_kind)
 }
 
+#[cfg(test)]
 pub(super) fn artefact_has_core_kind(
     canonical_kind: Option<&str>,
     expected: CoreCanonicalArtefactKind,

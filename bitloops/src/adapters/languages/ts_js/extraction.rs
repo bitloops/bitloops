@@ -1,22 +1,29 @@
-use super::*;
+use std::collections::HashSet;
+
+use anyhow::Result;
+
+use super::canonical::{TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS};
+use crate::host::language_adapter::{
+    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+};
 
 // JS/TS artefact extraction via tree-sitter.
 
-pub(super) struct JsTsArtefactDescriptor<'a> {
+pub(crate) struct TsJsArtefactDescriptor<'a> {
     language_kind: &'a str,
     name: &'a str,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,
 }
 
-pub(super) fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
+pub(crate) fn extract_js_ts_artefacts(content: &str, path: &str) -> Result<Vec<LanguageArtefact>> {
     Ok(extract_js_ts_artefacts_treesitter(content, path)?.unwrap_or_default())
 }
 
-pub(super) fn extract_js_ts_artefacts_treesitter(
+pub(crate) fn extract_js_ts_artefacts_treesitter(
     content: &str,
     path: &str,
-) -> Result<Option<Vec<JsTsArtefact>>> {
+) -> Result<Option<Vec<LanguageArtefact>>> {
     let mut parser = tree_sitter::Parser::new();
     let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
     let js_lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
@@ -65,11 +72,11 @@ pub(super) fn extract_js_ts_artefacts_treesitter(
     Ok(None)
 }
 
-pub(super) fn collect_js_ts_nodes_recursive(
+pub(crate) fn collect_js_ts_nodes_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
-    out: &mut Vec<JsTsArtefact>,
+    out: &mut Vec<LanguageArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
 ) {
     match node.kind() {
@@ -85,7 +92,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    JsTsArtefactDescriptor {
+                    TsJsArtefactDescriptor {
                         language_kind: node.kind(),
                         name,
                         symbol_fqn: format!("{path}::{name}"),
@@ -104,7 +111,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    JsTsArtefactDescriptor {
+                    TsJsArtefactDescriptor {
                         language_kind: "class_declaration",
                         name,
                         symbol_fqn: class_fqn.clone(),
@@ -129,7 +136,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                                         seen,
                                         child,
                                         content,
-                                        JsTsArtefactDescriptor {
+                                        TsJsArtefactDescriptor {
                                             language_kind,
                                             name,
                                             symbol_fqn: format!("{class_fqn}::{name}"),
@@ -147,7 +154,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                                         seen,
                                         child,
                                         content,
-                                        JsTsArtefactDescriptor {
+                                        TsJsArtefactDescriptor {
                                             language_kind: "public_field_definition",
                                             name,
                                             symbol_fqn: format!("{class_fqn}::{name}"),
@@ -172,7 +179,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                     seen,
                     node,
                     content,
-                    JsTsArtefactDescriptor {
+                    TsJsArtefactDescriptor {
                         language_kind: "variable_declarator",
                         name,
                         symbol_fqn: format!("{path}::{name}"),
@@ -189,7 +196,7 @@ pub(super) fn collect_js_ts_nodes_recursive(
                 seen,
                 node,
                 content,
-                JsTsArtefactDescriptor {
+                TsJsArtefactDescriptor {
                     language_kind: "import_statement",
                     name: &import_name,
                     symbol_fqn: format!("{path}::import::{import_name}"),
@@ -206,21 +213,22 @@ pub(super) fn collect_js_ts_nodes_recursive(
     }
 }
 
-pub(super) fn push_js_ts_artefact(
-    out: &mut Vec<JsTsArtefact>,
+pub(crate) fn push_js_ts_artefact(
+    out: &mut Vec<LanguageArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
     node: tree_sitter::Node,
     content: &str,
-    descriptor: JsTsArtefactDescriptor<'_>,
+    descriptor: TsJsArtefactDescriptor<'_>,
 ) {
-    let JsTsArtefactDescriptor {
+    let TsJsArtefactDescriptor {
         language_kind,
         name,
         symbol_fqn,
         parent_symbol_fqn,
     } = descriptor;
 
-    if name.is_empty() || !js_ts_supports_language_kind(language_kind) {
+    if name.is_empty() || !is_supported_language_kind(TS_JS_SUPPORTED_LANGUAGE_KINDS, language_kind)
+    {
         return;
     }
 
@@ -237,8 +245,9 @@ pub(super) fn push_js_ts_artefact(
         .trim()
         .to_string();
 
-    out.push(JsTsArtefact {
-        canonical_kind: js_ts_canonical_kind(language_kind).map(str::to_string),
+    out.push(LanguageArtefact {
+        canonical_kind: resolve_canonical_kind(TS_JS_CANONICAL_MAPPINGS, language_kind, false)
+            .map(|p| p.as_str().to_string()),
         language_kind: language_kind.to_string(),
         name: name.to_string(),
         symbol_fqn,
@@ -253,7 +262,7 @@ pub(super) fn push_js_ts_artefact(
     });
 }
 
-pub(super) fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
+pub(crate) fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
     let mut modifiers = Vec::new();
     let mut current = node;
     let mut wrappers = Vec::new();
@@ -273,7 +282,7 @@ pub(super) fn extract_js_ts_modifiers(node: tree_sitter::Node, content: &str) ->
     modifiers
 }
 
-pub(super) fn collect_js_ts_wrapper_modifiers(
+pub(crate) fn collect_js_ts_wrapper_modifiers(
     wrapper: tree_sitter::Node,
     child: tree_sitter::Node,
     content: &str,
@@ -296,7 +305,7 @@ pub(super) fn collect_js_ts_wrapper_modifiers(
     }
 }
 
-pub(super) fn collect_js_ts_inline_modifiers(
+pub(crate) fn collect_js_ts_inline_modifiers(
     node: tree_sitter::Node,
     content: &str,
     modifiers: &mut Vec<String>,
@@ -321,7 +330,7 @@ pub(super) fn collect_js_ts_inline_modifiers(
     }
 }
 
-pub(super) fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(crate) fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Option<String> {
     let kind = node.kind();
     let text = node.utf8_text(content.as_bytes()).ok()?.trim();
     let modifier = match kind {
@@ -334,7 +343,7 @@ pub(super) fn js_ts_modifier_name(node: tree_sitter::Node, content: &str) -> Opt
     Some(modifier.to_ascii_lowercase())
 }
 
-pub(super) fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option<String>) {
+pub(crate) fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option<String>) {
     let Some(modifier) = modifier.as_ref() else {
         return;
     };
@@ -343,7 +352,7 @@ pub(super) fn push_js_ts_modifier(modifiers: &mut Vec<String>, modifier: &Option
     }
 }
 
-pub(super) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(crate) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
         return None;
@@ -408,7 +417,7 @@ pub(super) fn extract_js_ts_docstring(node: tree_sitter::Node, content: &str) ->
     .filter(|doc| !doc.trim().is_empty())
 }
 
-pub(super) fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
+pub(crate) fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
     let mut anchor_line = node.start_position().row as i32 + 1;
     let mut current = node;
 
@@ -434,7 +443,7 @@ pub(super) fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
     anchor_line
 }
 
-pub(super) fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
+pub(crate) fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
     lines
         .iter()
         .map(|line| {
@@ -449,7 +458,7 @@ pub(super) fn normalize_js_ts_line_comment_block(lines: &[&str]) -> String {
         .to_string()
 }
 
-pub(super) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
+pub(crate) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
     let mut normalized = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let mut text = line.trim().to_string();
@@ -474,7 +483,7 @@ pub(super) fn normalize_js_ts_block_comment_block(lines: &[&str]) -> String {
     normalized.join("\n").trim().to_string()
 }
 
-pub(super) fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
+pub(crate) fn is_js_ts_top_level_variable(node: tree_sitter::Node) -> bool {
     let mut current = Some(node);
     while let Some(cursor) = current {
         let Some(parent) = cursor.parent() else {

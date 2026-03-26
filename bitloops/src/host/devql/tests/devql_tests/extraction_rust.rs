@@ -91,7 +91,7 @@ impl DoThing for User {
 }
 "#;
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
-    let snapshot = |edges: &[JsTsDependencyEdge]| {
+    let snapshot = |edges: &[DependencyEdge]| {
         edges
             .iter()
             .map(|edge| {
