@@ -1,5 +1,8 @@
 mod canonical;
 mod context;
+pub(crate) mod edges_export;
+pub(crate) mod edges_inherits;
+pub(crate) mod edges_reference;
 pub(crate) mod edges_shared;
 mod errors;
 mod pack;
