@@ -5,7 +5,8 @@ use crate::graphql::{
 };
 
 use super::{
-    ArtefactConnection, ArtefactEdge, DateTimeScalar, DependencyConnectionEdge,
+    ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
+    CloneEdge, ClonesFilterInput, DateTimeScalar, DependencyConnectionEdge,
     DependencyEdgeConnection, DepsFilterInput, paginate_items,
 };
 
@@ -224,6 +225,68 @@ impl Artefact {
                 .into_iter()
                 .map(DependencyConnectionEdge::new)
                 .collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn clones(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ClonesFilterInput>,
+        #[graphql(default = 20)] first: i32,
+        after: Option<String>,
+    ) -> Result<CloneConnection> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        let clones = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_artefact_clones(self.id.as_ref(), filter.as_ref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve semantic clones for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })?;
+        let page = paginate_items(&clones, first, after.as_deref(), |clone| clone.cursor())?;
+        Ok(CloneConnection::new(
+            page.items.into_iter().map(CloneEdge::new).collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn chat_history(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 10)] first: i32,
+        after: Option<String>,
+    ) -> Result<ChatEntryConnection> {
+        let history = ctx
+            .data_unchecked::<DataLoaders>()
+            .load_chat_history(self.path.as_str(), self.symbol_fqn.as_deref(), &self.scope)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve chat history for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })?;
+        let page = paginate_items(&history, first, after.as_deref(), |entry| entry.cursor())?;
+        Ok(ChatEntryConnection::new(
+            page.items.into_iter().map(ChatEntryEdge::new).collect(),
             page.page_info,
             page.total_count,
         ))

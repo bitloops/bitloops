@@ -4,9 +4,9 @@ use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
-    CheckpointEdge, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    TemporalScope, paginate_items,
+    CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -165,6 +165,44 @@ impl Project {
         let page = paginate_items(&items, first, after.as_deref(), |item| item.cursor())?;
         Ok(KnowledgeItemConnection::new(
             page.items.into_iter().map(KnowledgeItemEdge::new).collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    async fn clones(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ClonesFilterInput>,
+        #[graphql(default = 50)] first: i32,
+        after: Option<String>,
+    ) -> Result<CloneConnection> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        if self
+            .scope
+            .temporal_scope()
+            .is_some_and(|scope| scope.use_historical_tables() || scope.save_revision().is_some())
+        {
+            return Err(bad_user_input_error(
+                "`clones` does not support historical or temporary `asOf(...)` scopes yet",
+            ));
+        }
+
+        let clones = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_project_clones(&self.scope, filter.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to query project semantic clones for {}: {err:#}",
+                    self.path
+                ))
+            })?;
+        let page = paginate_items(&clones, first, after.as_deref(), |clone| clone.cursor())?;
+        Ok(CloneConnection::new(
+            page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
             page.total_count,
         ))

@@ -3,8 +3,8 @@ use async_graphql::{Result, SimpleObject};
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
 use super::{
-    Artefact, Checkpoint, Commit, DependencyEdge, KnowledgeItem, KnowledgeRelation,
-    KnowledgeVersion, TelemetryEvent,
+    Artefact, ChatEntry, Checkpoint, Commit, DependencyEdge, KnowledgeItem, KnowledgeRelation,
+    KnowledgeVersion, SemanticClone, TelemetryEvent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -75,10 +75,70 @@ impl ArtefactConnection {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ChatEntryEdge {
+    pub node: ChatEntry,
+    pub cursor: String,
+}
+
+impl ChatEntryEdge {
+    pub fn new(node: ChatEntry) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ChatEntryConnection {
+    pub edges: Vec<ChatEntryEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl ChatEntryConnection {
+    pub fn new(edges: Vec<ChatEntryEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct CheckpointEdge {
     pub node: Checkpoint,
     pub cursor: String,
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct CloneEdge {
+    pub node: SemanticClone,
+    pub cursor: String,
+}
+
+impl CloneEdge {
+    pub fn new(node: SemanticClone) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct CloneConnection {
+    pub edges: Vec<CloneEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl CloneConnection {
+    pub fn new(edges: Vec<CloneEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
 }
 
 impl CheckpointEdge {

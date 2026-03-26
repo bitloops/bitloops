@@ -10,7 +10,8 @@ use std::sync::{
 };
 
 use super::types::{
-    Artefact, Commit, DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind, KnowledgeVersion,
+    Artefact, ChatEntry, Commit, DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind,
+    KnowledgeVersion,
 };
 use super::{DevqlGraphqlContext, ResolverScope};
 
@@ -21,6 +22,7 @@ pub(crate) struct LoaderMetrics {
     incoming_edge_batches: Arc<AtomicUsize>,
     commit_by_sha_batches: Arc<AtomicUsize>,
     knowledge_version_batches: Arc<AtomicUsize>,
+    chat_history_batches: Arc<AtomicUsize>,
 }
 
 impl LoaderMetrics {
@@ -45,6 +47,10 @@ impl LoaderMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_chat_history_batch(&self) {
+        self.chat_history_batches.fetch_add(1, Ordering::Relaxed);
+    }
+
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> LoaderMetricsSnapshot {
         LoaderMetricsSnapshot {
@@ -53,6 +59,7 @@ impl LoaderMetrics {
             incoming_edge_batches: self.incoming_edge_batches.load(Ordering::Relaxed),
             commit_by_sha_batches: self.commit_by_sha_batches.load(Ordering::Relaxed),
             knowledge_version_batches: self.knowledge_version_batches.load(Ordering::Relaxed),
+            chat_history_batches: self.chat_history_batches.load(Ordering::Relaxed),
         }
     }
 }
@@ -65,6 +72,7 @@ pub(crate) struct LoaderMetricsSnapshot {
     pub(crate) incoming_edge_batches: usize,
     pub(crate) commit_by_sha_batches: usize,
     pub(crate) knowledge_version_batches: usize,
+    pub(crate) chat_history_batches: usize,
 }
 
 pub(crate) struct LoaderRegistryExtension;
@@ -96,6 +104,7 @@ pub(crate) struct DataLoaders {
     incoming_edges_by_artefact: DataLoader<EdgesByArtefactLoader, HashMapCache>,
     commit_by_sha: DataLoader<CommitByShaLoader, HashMapCache>,
     knowledge_versions_by_item: DataLoader<KnowledgeVersionsByItemLoader, HashMapCache>,
+    chat_history_by_artefact: DataLoader<ChatHistoryByArtefactLoader, HashMapCache>,
 }
 
 impl DataLoaders {
@@ -133,6 +142,13 @@ impl DataLoaders {
             ),
             knowledge_versions_by_item: DataLoader::with_cache(
                 KnowledgeVersionsByItemLoader {
+                    context: context.clone(),
+                },
+                tokio::spawn,
+                HashMapCache::default(),
+            ),
+            chat_history_by_artefact: DataLoader::with_cache(
+                ChatHistoryByArtefactLoader {
                     context: context.clone(),
                 },
                 tokio::spawn,
@@ -199,6 +215,19 @@ impl DataLoaders {
         Ok(self
             .knowledge_versions_by_item
             .load_one(knowledge_item_id.to_string())
+            .await?
+            .unwrap_or_default())
+    }
+
+    pub(crate) async fn load_chat_history(
+        &self,
+        path: &str,
+        symbol_fqn: Option<&str>,
+        scope: &ResolverScope,
+    ) -> Result<Vec<ChatEntry>, String> {
+        Ok(self
+            .chat_history_by_artefact
+            .load_one(ChatHistoryBatchKey::new(path, symbol_fqn, scope))
             .await?
             .unwrap_or_default())
     }
@@ -356,6 +385,52 @@ impl Loader<String> for KnowledgeVersionsByItemLoader {
     }
 }
 
+struct ChatHistoryByArtefactLoader {
+    context: DevqlGraphqlContext,
+}
+
+impl Loader<ChatHistoryBatchKey> for ChatHistoryByArtefactLoader {
+    type Value = Vec<ChatEntry>;
+    type Error = String;
+
+    async fn load(
+        &self,
+        keys: &[ChatHistoryBatchKey],
+    ) -> Result<HashMap<ChatHistoryBatchKey, Self::Value>, Self::Error> {
+        let mut history_by_key = HashMap::new();
+        let mut grouped_keys = HashMap::<ResolverScope, Vec<ChatHistoryBatchKey>>::new();
+
+        for key in keys {
+            grouped_keys
+                .entry(key.scope.clone())
+                .or_default()
+                .push(key.clone());
+        }
+
+        for (scope, scoped_keys) in grouped_keys {
+            self.context.loader_metrics().record_chat_history_batch();
+            let paths = scoped_keys
+                .iter()
+                .map(|key| key.path.clone())
+                .collect::<Vec<_>>();
+            let history_by_path = self
+                .context
+                .load_chat_history_by_paths(&paths, &scope)
+                .await
+                .map_err(|err| format!("{err:#}"))?;
+
+            for key in scoped_keys {
+                history_by_key.insert(
+                    key.clone(),
+                    history_by_path.get(&key.path).cloned().unwrap_or_default(),
+                );
+            }
+        }
+
+        Ok(history_by_key)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ArtefactBatchKey {
     artefact_id: String,
@@ -424,6 +499,26 @@ impl EdgeFilterKey {
             kind: self.kind,
             direction,
             include_unresolved: self.include_unresolved,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ChatHistoryBatchKey {
+    path: String,
+    symbol_fqn: Option<String>,
+    scope: ResolverScope,
+}
+
+impl ChatHistoryBatchKey {
+    fn new(path: &str, symbol_fqn: Option<&str>, scope: &ResolverScope) -> Self {
+        Self {
+            path: path.trim().to_string(),
+            symbol_fqn: symbol_fqn
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            scope: scope.clone(),
         }
     }
 }

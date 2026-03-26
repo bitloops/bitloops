@@ -1,5 +1,6 @@
 mod bootstrap;
 mod commit_checkpoints;
+mod enrichment;
 mod events;
 mod git_history;
 mod knowledge;

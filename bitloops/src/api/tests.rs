@@ -779,6 +779,91 @@ fn seed_graphql_devql_repo() -> TempDir {
     dir
 }
 
+fn seed_graphql_chat_history_data(repo_root: &Path) {
+    let commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+
+    let caller_sessions = [SeedCheckpointSession {
+        session_index: 0,
+        session_id: "session-chat-caller",
+        agent: "codex",
+        created_at: "2026-03-26T09:05:00Z",
+        checkpoints_count: 1,
+        transcript: r#"{"role":"user","content":"Explain caller()"}
+{"role":"assistant","content":"caller() delegates directly to target()."}"#,
+        prompts: "Explain caller()",
+        context: "",
+    }];
+    seed_checkpoint_storage_for_dashboard(
+        repo_root,
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-chat-caller",
+            branch: "main",
+            files_touched: &["src/caller.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({"input": 12, "output": 8}),
+            sessions: &caller_sessions,
+            insert_mapping: false,
+        },
+    );
+
+    let target_sessions = [SeedCheckpointSession {
+        session_index: 0,
+        session_id: "session-chat-target",
+        agent: "gemini",
+        created_at: "2026-03-26T09:15:00Z",
+        checkpoints_count: 1,
+        transcript: r#"{"messages":[{"type":"user","content":"What does target() return?"},{"type":"gemini","content":"target() returns 42."}]}"#,
+        prompts: "What does target() return?",
+        context: "",
+    }];
+    seed_checkpoint_storage_for_dashboard(
+        repo_root,
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-chat-target",
+            branch: "main",
+            files_touched: &["src/target.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({"input": 9, "output": 7}),
+            sessions: &target_sessions,
+            insert_mapping: false,
+        },
+    );
+
+    seed_duckdb_events(
+        repo_root,
+        &[
+            SeedGraphqlEvent {
+                event_id: "evt-chat-caller",
+                event_time: "2026-03-26T09:05:00Z",
+                checkpoint_id: "checkpoint-chat-caller",
+                session_id: "session-chat-caller",
+                commit_sha: &commit_sha,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "codex",
+                strategy: "manual-commit",
+                files_touched: &["src/caller.ts"],
+                payload: json!({"source": "chat-history"}),
+            },
+            SeedGraphqlEvent {
+                event_id: "evt-chat-target",
+                event_time: "2026-03-26T09:15:00Z",
+                checkpoint_id: "checkpoint-chat-target",
+                session_id: "session-chat-target",
+                commit_sha: &commit_sha,
+                branch: "main",
+                event_type: "checkpoint_committed",
+                agent: "gemini",
+                strategy: "manual-commit",
+                files_touched: &["src/target.ts"],
+                payload: json!({"source": "chat-history"}),
+            },
+        ],
+    );
+}
+
 #[derive(Debug, Clone)]
 struct SeededKnowledgeFixture {
     primary_item_id: String,
@@ -1420,6 +1505,98 @@ fn seed_graphql_monorepo_repo() -> TempDir {
     }
 
     dir
+}
+
+fn seed_graphql_clone_data(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open clone sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .expect("initialise clone sqlite schema");
+
+    for (
+        source_symbol_id,
+        source_artefact_id,
+        target_symbol_id,
+        target_artefact_id,
+        relation_kind,
+        score,
+        semantic_score,
+        lexical_score,
+        structural_score,
+        clone_input_hash,
+        explanation_json,
+    ) in [
+        (
+            "sym::api-caller",
+            "artefact::api-caller",
+            "sym::api-target",
+            "artefact::api-target",
+            "similar_implementation",
+            0.93_f64,
+            0.91_f64,
+            0.84_f64,
+            0.72_f64,
+            "clone-hash-1",
+            r#"{"reason":"shared invoice assembly"}"#,
+        ),
+        (
+            "sym::api-caller",
+            "artefact::api-caller",
+            "sym::web-render",
+            "artefact::web-render",
+            "similar_implementation",
+            0.71_f64,
+            0.68_f64,
+            0.64_f64,
+            0.58_f64,
+            "clone-hash-2",
+            r#"{"reason":"shared rendering pattern"}"#,
+        ),
+        (
+            "sym::web-render",
+            "artefact::web-render",
+            "sym::api-target",
+            "artefact::api-target",
+            "contextual_neighbor",
+            0.68_f64,
+            0.66_f64,
+            0.52_f64,
+            0.61_f64,
+            "clone-hash-3",
+            r#"{"reason":"cross-package helper overlap"}"#,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO symbol_clone_edges (
+                repo_id, source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id,
+                relation_kind, score, semantic_score, lexical_score, structural_score,
+                clone_input_hash, explanation_json
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                source_symbol_id,
+                source_artefact_id,
+                target_symbol_id,
+                target_artefact_id,
+                relation_kind,
+                score,
+                semantic_score,
+                lexical_score,
+                structural_score,
+                clone_input_hash,
+                explanation_json,
+            ],
+        )
+        .expect("insert clone edge");
+    }
 }
 
 fn seed_graphql_monorepo_repo_with_duckdb_events() -> TempDir {
@@ -4292,6 +4469,317 @@ async fn devql_graphql_knowledge_version_loader_caches_within_a_request_and_rese
 }
 
 #[tokio::test]
+async fn devql_graphql_chat_history_loader_batches_within_a_request_and_resets_per_request() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_chat_history_data(repo.path());
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+    let query = r#"
+        {
+          repo(name: "demo") {
+            caller: file(path: "src/caller.ts") {
+              artefacts(filter: { symbolFqn: "src/caller.ts::caller" }, first: 10) {
+                edges {
+                  node {
+                    symbolFqn
+                    chatHistory(first: 10) {
+                      totalCount
+                      edges {
+                        node {
+                          sessionId
+                          agent
+                          role
+                          content
+                          metadata
+                        }
+                      }
+                    }
+                    chatHistoryAgain: chatHistory(first: 1) {
+                      totalCount
+                    }
+                  }
+                }
+              }
+            }
+            target: file(path: "src/target.ts") {
+              artefacts(filter: { symbolFqn: "src/target.ts::target" }, first: 10) {
+                edges {
+                  node {
+                    symbolFqn
+                    chatHistory(first: 10) {
+                      totalCount
+                      edges {
+                        node {
+                          sessionId
+                          agent
+                          role
+                          content
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+    "#;
+
+    let first_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        first_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        first_response.errors
+    );
+
+    let json = first_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(
+        json["repo"]["caller"]["artefacts"]["edges"][0]["node"]["chatHistory"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["caller"]["artefacts"]["edges"][0]["node"]["chatHistory"]["edges"][0]["node"]
+            ["role"],
+        "USER"
+    );
+    assert_eq!(
+        json["repo"]["caller"]["artefacts"]["edges"][0]["node"]["chatHistory"]["edges"][0]["node"]
+            ["content"],
+        "Explain caller()"
+    );
+    assert_eq!(
+        json["repo"]["caller"]["artefacts"]["edges"][0]["node"]["chatHistoryAgain"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["target"]["artefacts"]["edges"][0]["node"]["chatHistory"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["target"]["artefacts"]["edges"][0]["node"]["chatHistory"]["edges"][1]["node"]
+            ["content"],
+        "target() returns 42."
+    );
+
+    let first_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(first_snapshot.chat_history_batches, 1);
+
+    let second_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        second_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_response.errors
+    );
+
+    let second_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(second_snapshot.chat_history_batches, 2);
+}
+
+#[tokio::test]
+async fn devql_graphql_chat_history_surfaces_backend_error_when_events_store_is_missing() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "src/caller.ts") {
+                  artefacts(filter: { symbolFqn: "src/caller.ts::caller" }, first: 10) {
+                    edges {
+                      node {
+                        chatHistory(first: 10) {
+                          totalCount
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("DuckDB database file not found"),
+        "unexpected error: {:?}",
+        response.errors
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_clone_queries_resolve_project_and_artefact_results() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  clones(filter: { minScore: 0.75 }, first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        relationKind
+                        score
+                        metadata
+                        sourceArtefact {
+                          symbolFqn
+                        }
+                        targetArtefact {
+                          symbolFqn
+                        }
+                      }
+                    }
+                  }
+                  file(path: "src/caller.ts") {
+                    artefacts(filter: { symbolFqn: "packages/api/src/caller.ts::caller" }, first: 10) {
+                      edges {
+                        node {
+                          clones(filter: { minScore: 0.70 }, first: 10) {
+                            totalCount
+                            edges {
+                              node {
+                                relationKind
+                                score
+                                targetArtefact {
+                                  symbolFqn
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["project"]["clones"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["relationKind"],
+        "similar_implementation"
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["score"],
+        0.93
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["sourceArtefact"]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["project"]["clones"]["edges"][0]["node"]["targetArtefact"]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][0]["node"]
+            ["targetArtefact"]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        json["repo"]["project"]["file"]["artefacts"]["edges"][0]["node"]["clones"]["edges"][1]["node"]
+            ["targetArtefact"]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_clone_source_target_loader_caches_within_a_request_and_resets_per_request() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let context = crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context.clone());
+    let query = r#"
+        {
+          repo(name: "demo") {
+            project(path: "packages/api") {
+              clones(filter: { minScore: 0.75 }, first: 10) {
+                edges {
+                  node {
+                    sourceArtefact {
+                      id
+                    }
+                    sourceAgain: sourceArtefact {
+                      id
+                    }
+                    targetArtefact {
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+    "#;
+
+    let first_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        first_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        first_response.errors
+    );
+    let first_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(first_snapshot.artefact_by_id_batches, 1);
+
+    let second_response = schema.execute(async_graphql::Request::new(query)).await;
+    assert!(
+        second_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_response.errors
+    );
+    let second_snapshot = context.loader_metrics_snapshot();
+    assert_eq!(second_snapshot.artefact_by_id_batches, 2);
+}
+
+#[tokio::test]
 async fn devql_event_resolvers_query_duckdb_checkpoints_and_telemetry() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -4518,6 +5006,10 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("checkpoints(agent: String, since: DateTime"));
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
+    assert!(body.contains("clones(filter:"));
+    assert!(body.contains("chatHistory"));
+    assert!(body.contains("type Clone"));
+    assert!(body.contains("type ChatEntry"));
     assert!(body.contains("type KnowledgeItem"));
     assert!(body.contains("type KnowledgePayload"));
     assert!(body.contains("type TelemetryEvent"));

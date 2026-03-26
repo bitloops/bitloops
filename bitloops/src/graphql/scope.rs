@@ -68,6 +68,13 @@ impl ResolverScope {
         }
     }
 
+    pub(crate) fn without_project_path(&self) -> Self {
+        Self {
+            project_path: None,
+            temporal_scope: self.temporal_scope.clone(),
+        }
+    }
+
     pub(crate) fn contains_repo_path(&self, path: &str) -> bool {
         match self.project_path() {
             Some(project_path) => {
