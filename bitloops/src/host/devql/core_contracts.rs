@@ -53,7 +53,7 @@ impl CoreCanonicalArtefactKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum CanonicalKindProjection {
+pub(crate) enum CanonicalKindProjection {
     File,
     Module,
     Import,

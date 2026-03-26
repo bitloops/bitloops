@@ -424,6 +424,7 @@ use self::query_parser::*;
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;
 use self::vocab::*;
+pub(crate) use self::core_contracts::CanonicalKindProjection;
 pub(crate) use self::vocab::{
     CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution, EDGE_KIND_CALLS,
     EDGE_KIND_EXPORTS,
