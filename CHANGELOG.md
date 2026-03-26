@@ -71,6 +71,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Global config fallback**: `load_effective_config` no longer falls back to `PathBuf::from(".")` when HOME is unset; the global layer is skipped entirely, preventing scope-validation failures that silently dropped all configuration.
 - **Conflicting blob backend detection**: `create_blob_store_with_backend` now returns an error when both `s3_bucket` and `gcs_bucket` are set, instead of silently picking S3.
 - **DevQL GraphQL extension argument handling** (`CLI-1523`): GraphQL `extension(stage:, args:, first:)` calls now preserve JSON scalar argument types instead of stringifying numbers and booleans or dropping explicit `null` values. Built-in test-harness stages accept the preserved scalar payloads while remaining compatible with the existing string-based DSL path, and invalid nested `args` values now surface as `BAD_USER_INPUT` errors.
+- **DevQL GraphQL subscription repo scoping**: `checkpointIngested(repoName:)` and `ingestionProgress(repoName:)` now carry the published repository name through the in-process broadcast hub and filter delivered events by the requested `repoName`, instead of accepting the argument and ignoring it.
 
 ### Changed
 
