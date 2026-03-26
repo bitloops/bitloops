@@ -12,9 +12,7 @@ use crate::capability_packs::test_harness::storage::{
     TestHarnessQueryRepository, TestHarnessRepository,
 };
 use crate::models::{
-    CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
-    CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
-    ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestArtefactCurrentRecord,
+    CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind, TestArtefactCurrentRecord,
     TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
     TestRunRecord,
 };
@@ -31,13 +29,7 @@ const REPO_ID: &str = "repo-postgres-test-harness";
 const COMMIT_SHA: &str = "commit-postgres-test-harness";
 const FILE_USER: &str = "src/services/user_service.rs";
 const FILE_EMAIL: &str = "src/services/email.rs";
-const FILE_USER_WORKSPACE_VIEW: &str = "workspace/src/services/user_service.rs";
-const BLOB_USER: &str = "blob-user";
-const ARTEFACT_FILE_USER: &str = "artefact:file:user_service";
 const ARTEFACT_CREATE_USER: &str = "artefact:function:create_user";
-const ARTEFACT_NORMALIZE_EMAIL: &str = "artefact:function:normalize_email";
-const ARTEFACT_STRUCT_USER: &str = "artefact:struct:user";
-const SYMBOL_FILE_USER: &str = "symbol:file:user_service";
 const SYMBOL_CREATE_USER: &str = "symbol:function:create_user";
 const SUITE_ID: &str = "suite:user-service";
 const SCENARIO_ID: &str = "scenario:checks-email-domain";
@@ -60,32 +52,6 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
     initialise_postgres_repository(&repository)?;
     seed_production_state(&repository)?;
-
-    assert_eq!(repository.load_repo_id_for_commit(COMMIT_SHA)?, REPO_ID);
-    let missing_repo_error = repository
-        .load_repo_id_for_commit("missing-commit")
-        .expect_err("missing commit should fail");
-    assert!(
-        missing_repo_error
-            .to_string()
-            .contains("materialize production artefacts first"),
-        "unexpected missing repo error: {missing_repo_error:#}"
-    );
-
-    let production_artefacts = repository.load_production_artefacts(COMMIT_SHA)?;
-    assert_eq!(production_artefacts.len(), 2);
-    assert_eq!(
-        production_artefacts[0].artefact_id,
-        ARTEFACT_NORMALIZE_EMAIL
-    );
-    assert_eq!(production_artefacts[1].artefact_id, ARTEFACT_CREATE_USER);
-
-    let file_artefacts =
-        repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
-    assert_eq!(
-        file_artefacts,
-        vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]
-    );
 
     repository.replace_test_discovery(
         COMMIT_SHA,
@@ -112,36 +78,6 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     assert_eq!(scenarios[0].scenario_id, SCENARIO_ID);
     assert_eq!(scenarios[0].suite_name, "UserService");
     assert_eq!(scenarios[0].test_name, "checks_email_domain");
-
-    let all_artefacts = repository.list_artefacts(COMMIT_SHA, None)?;
-    assert_eq!(all_artefacts.len(), 7);
-    let function_artefacts = repository.list_artefacts(COMMIT_SHA, Some("function"))?;
-    assert_eq!(function_artefacts.len(), 2);
-    let struct_artefacts = repository.list_artefacts(COMMIT_SHA, Some("struct"))?;
-    assert_eq!(struct_artefacts.len(), 1);
-    assert_eq!(struct_artefacts[0].artefact_id, ARTEFACT_STRUCT_USER);
-    let suite_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_suite"))?;
-    assert_eq!(suite_artefacts.len(), 1);
-    let scenario_artefacts = repository.list_artefacts(COMMIT_SHA, Some("test_scenario"))?;
-    assert_eq!(scenario_artefacts.len(), 1);
-
-    let queried =
-        repository.find_artefact(COMMIT_SHA, "src/services/user_service.rs::create_user")?;
-    assert_eq!(queried.artefact_id, ARTEFACT_CREATE_USER);
-    assert_eq!(queried.canonical_kind, "function");
-    let struct_queried = repository.find_artefact(COMMIT_SHA, "User")?;
-    assert_eq!(struct_queried.artefact_id, ARTEFACT_STRUCT_USER);
-    assert_eq!(struct_queried.canonical_kind, "struct");
-
-    let missing_artefact_error = repository
-        .find_artefact(COMMIT_SHA, "missing::symbol")
-        .expect_err("missing artefact should fail");
-    assert_eq!(missing_artefact_error.to_string(), "Artefact not found");
-
-    let repo_not_indexed_error = repository
-        .find_artefact("missing-commit", "missing::symbol")
-        .expect_err("unknown commit should fail as not indexed");
-    assert_eq!(repo_not_indexed_error.to_string(), "Repository not indexed");
 
     let fan_out = repository.load_linked_fan_out_by_test(COMMIT_SHA)?;
     assert_eq!(fan_out.get(SCENARIO_ID), Some(&1));
@@ -180,6 +116,7 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
     let covering_tests = repository.load_covering_tests(COMMIT_SHA, SYMBOL_CREATE_USER)?;
     assert_eq!(covering_tests.len(), 1);
     assert_eq!(covering_tests[0].test_id, SCENARIO_ID);
+    assert_eq!(covering_tests[0].suite_name.as_deref(), Some("UserService"));
     assert_eq!(covering_tests[0].classification.as_deref(), Some("unit"));
     assert_eq!(covering_tests[0].fan_out, Some(2));
 
@@ -200,14 +137,59 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
         1
     );
 
-    let unsupported = repository
-        .replace_production_artefacts(&dummy_batch())
-        .expect_err("Postgres repository should reject production replacement");
-    assert!(
-        unsupported.to_string().contains("bitloops devql ingest"),
-        "unexpected unsupported error: {unsupported:#}"
+    Ok(())
+}
+
+#[test]
+fn postgres_repository_replace_test_discovery_clears_stale_runs_coverage_and_classifications()
+-> Result<()> {
+    let Some(postgres) = TempPostgres::start()? else {
+        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
+        return Ok(());
+    };
+
+    let mut repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
+    initialise_postgres_repository(&repository)?;
+    seed_production_state(&repository)?;
+
+    repository.replace_test_discovery(
+        COMMIT_SHA,
+        &stale_test_artefacts(),
+        &stale_test_edges(),
+        &stale_discovery_run(),
+        &[stale_diagnostic()],
+    )?;
+    repository.replace_test_runs(COMMIT_SHA, &[test_run_record()])?;
+    repository.insert_coverage_capture(&coverage_capture_record())?;
+    repository.insert_coverage_hits(&coverage_hits())?;
+    assert_eq!(
+        repository.rebuild_classifications_from_coverage(COMMIT_SHA)?,
+        1
     );
 
+    assert_eq!(table_count(&repository, "test_runs")?, 1);
+    assert_eq!(table_count(&repository, "coverage_captures")?, 1);
+    assert_eq!(table_count(&repository, "coverage_hits")?, 6);
+    assert_eq!(table_count(&repository, "test_classifications")?, 1);
+
+    repository.replace_test_discovery(
+        COMMIT_SHA,
+        &test_artefacts(),
+        &test_edges(),
+        &discovery_run_record(),
+        &[diagnostic_record()],
+    )?;
+
+    assert_eq!(table_count(&repository, "test_runs")?, 0);
+    assert_eq!(table_count(&repository, "coverage_captures")?, 0);
+    assert_eq!(table_count(&repository, "coverage_hits")?, 0);
+    assert_eq!(table_count(&repository, "test_classifications")?, 0);
+    assert_eq!(table_count(&repository, "test_artefacts_current")?, 2);
+    assert_eq!(table_count(&repository, "test_artefact_edges_current")?, 1);
+
+    let scenarios = repository.load_test_scenarios(COMMIT_SHA)?;
+    assert_eq!(scenarios.len(), 1);
+    assert_eq!(scenarios[0].scenario_id, SCENARIO_ID);
     Ok(())
 }
 
@@ -241,26 +223,6 @@ fn postgres_repository_rebuild_classifications_returns_zero_without_covered_hits
     let inserted = repository.rebuild_classifications_from_coverage(COMMIT_SHA)?;
     assert_eq!(inserted, 0);
     assert_eq!(table_count(&repository, "test_classifications")?, 0);
-    Ok(())
-}
-
-#[test]
-fn postgres_repository_load_artefacts_for_file_lines_supports_exact_and_suffix_match() -> Result<()>
-{
-    let Some(postgres) = TempPostgres::start()? else {
-        eprintln!("skipping Postgres test-harness test; local Postgres binaries not found");
-        return Ok(());
-    };
-
-    let repository = PostgresTestHarnessRepository::connect(postgres.dsn())?;
-    initialise_postgres_repository(&repository)?;
-    seed_production_state(&repository)?;
-
-    let exact = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER)?;
-    assert_eq!(exact, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
-
-    let suffix = repository.load_artefacts_for_file_lines(COMMIT_SHA, FILE_USER_WORKSPACE_VIEW)?;
-    assert_eq!(suffix, vec![(ARTEFACT_CREATE_USER.to_string(), 10, 20)]);
     Ok(())
 }
 
@@ -637,83 +599,6 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
             hit_count: 0,
         },
     ]
-}
-
-fn dummy_batch() -> ProductionIngestionBatch {
-    ProductionIngestionBatch {
-        repository: RepositoryRecord {
-            repo_id: REPO_ID.to_string(),
-            provider: "local".to_string(),
-            organization: "local".to_string(),
-            name: "repo".to_string(),
-            default_branch: Some("main".to_string()),
-        },
-        commit: CommitRecord {
-            commit_sha: COMMIT_SHA.to_string(),
-            repo_id: REPO_ID.to_string(),
-            author_name: None,
-            author_email: None,
-            commit_message: None,
-            committed_at: Some("2026-03-19T12:00:00Z".to_string()),
-        },
-        file_states: vec![FileStateRecord {
-            repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            path: FILE_USER.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-        }],
-        current_file_states: vec![CurrentFileStateRecord {
-            repo_id: REPO_ID.to_string(),
-            path: FILE_USER.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            committed_at: "2026-03-19T12:00:00Z".to_string(),
-        }],
-        artefacts: vec![ProductionArtefactRecord {
-            artefact_id: ARTEFACT_CREATE_USER.to_string(),
-            symbol_id: SYMBOL_CREATE_USER.to_string(),
-            repo_id: REPO_ID.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            path: FILE_USER.to_string(),
-            language: "rust".to_string(),
-            canonical_kind: "function".to_string(),
-            language_kind: Some("function_item".to_string()),
-            symbol_fqn: Some("src/services/user_service.rs::create_user".to_string()),
-            parent_artefact_id: Some(ARTEFACT_FILE_USER.to_string()),
-            start_line: 10,
-            end_line: 20,
-            start_byte: 100,
-            end_byte: 350,
-            signature: Some("pub fn create_user(name: &str) -> User".to_string()),
-            modifiers: "[]".to_string(),
-            docstring: None,
-            content_hash: Some("hash-create-user".to_string()),
-        }],
-        current_artefacts: vec![CurrentProductionArtefactRecord {
-            repo_id: REPO_ID.to_string(),
-            symbol_id: SYMBOL_CREATE_USER.to_string(),
-            artefact_id: ARTEFACT_CREATE_USER.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            path: FILE_USER.to_string(),
-            language: "rust".to_string(),
-            canonical_kind: "function".to_string(),
-            language_kind: Some("function_item".to_string()),
-            symbol_fqn: Some("src/services/user_service.rs::create_user".to_string()),
-            parent_symbol_id: Some(SYMBOL_FILE_USER.to_string()),
-            parent_artefact_id: Some(ARTEFACT_FILE_USER.to_string()),
-            start_line: 10,
-            end_line: 20,
-            start_byte: 100,
-            end_byte: 350,
-            signature: Some("pub fn create_user(name: &str) -> User".to_string()),
-            modifiers: "[]".to_string(),
-            docstring: None,
-            content_hash: Some("hash-create-user".to_string()),
-        }],
-        edges: Vec::new(),
-        current_edges: Vec::new(),
-    }
 }
 
 struct TempPostgres {

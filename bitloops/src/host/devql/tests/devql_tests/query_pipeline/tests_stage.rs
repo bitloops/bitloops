@@ -396,3 +396,204 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
         Some(1)
     );
 }
+
+#[tokio::test]
+async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
+    let temp = tempdir().expect("tempdir");
+    let home = TempDir::new().expect("home dir");
+    let home_path = home.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            ("HOME", Some(home_path.as_str())),
+            ("USERPROFILE", Some(home_path.as_str())),
+            ("BITLOOPS_DEVQL_PG_DSN", None),
+            ("BITLOOPS_DEVQL_CH_URL", None),
+            ("BITLOOPS_DEVQL_CH_USER", None),
+            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+            ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ],
+    );
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    let mut cfg = test_cfg();
+    cfg.repo_root = repo_root;
+    let sqlite_path = temp.path().join("relational.sqlite");
+    if let Some(parent) = sqlite_path.parent() {
+        std::fs::create_dir_all(parent).expect("create relational parent dir");
+    }
+    let config_dir = cfg.repo_root.join(".bitloops");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": "1.0",
+            "scope": "project",
+            "settings": {
+                "stores": {
+                    "relational": {
+                        "sqlite_path": sqlite_path.to_string_lossy()
+                    }
+                }
+            }
+        }))
+        .expect("serialise config"),
+    )
+    .expect("write config");
+    crate::capability_packs::test_harness::storage::init_schema_for_repo(&cfg.repo_root)
+        .expect("initialise test harness schema");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+
+    for (artefact_id, symbol_id, name, parent_artefact_id, parent_symbol_id, commit_sha) in [
+        (
+            "test-artefact::suite::tests_old",
+            "suite::tests_old",
+            "tests_old",
+            None,
+            None,
+            "commit-old",
+        ),
+        (
+            "test-artefact::suite::tests_new",
+            "suite::tests_new",
+            "tests_new",
+            None,
+            None,
+            "commit-new",
+        ),
+        (
+            "test-artefact::scenario::test_create_user_old",
+            "scenario::test_create_user_old",
+            "test_create_user_old",
+            Some("test-artefact::suite::tests_old"),
+            Some("suite::tests_old"),
+            "commit-old",
+        ),
+        (
+            "test-artefact::scenario::test_create_user_new",
+            "scenario::test_create_user_new",
+            "test_create_user_new",
+            Some("test-artefact::suite::tests_new"),
+            Some("suite::tests_new"),
+            "commit-new",
+        ),
+    ] {
+        let canonical_kind = if symbol_id.starts_with("suite::") {
+            "test_suite"
+        } else {
+            "test_scenario"
+        };
+        let symbol_fqn = if symbol_id.starts_with("suite::") {
+            name.to_string()
+        } else {
+            format!(
+                "{}.{name}",
+                parent_symbol_id.expect("scenario parent symbol")
+            )
+        };
+        conn.execute(
+            "INSERT INTO test_artefacts_current (
+                artefact_id, symbol_id, repo_id, commit_sha, blob_sha, path, language,
+                canonical_kind, symbol_fqn, name, parent_artefact_id, parent_symbol_id,
+                start_line, end_line, modifiers, discovery_source, revision_kind, revision_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            rusqlite::params![
+                artefact_id,
+                symbol_id,
+                repo_id,
+                commit_sha,
+                format!("blob:{commit_sha}"),
+                "src/user/service_tests.rs",
+                "rust",
+                canonical_kind,
+                symbol_fqn,
+                name,
+                parent_artefact_id,
+                parent_symbol_id,
+                1i64,
+                10i64,
+                "[]",
+                "source",
+                "commit",
+                commit_sha,
+            ],
+        )
+        .expect("insert test artefact");
+    }
+
+    for (edge_id, from_artefact_id, from_symbol_id, commit_sha, confidence) in [
+        (
+            "link::old",
+            "test-artefact::scenario::test_create_user_old",
+            "scenario::test_create_user_old",
+            "commit-old",
+            0.6,
+        ),
+        (
+            "link::new",
+            "test-artefact::scenario::test_create_user_new",
+            "scenario::test_create_user_new",
+            "commit-new",
+            0.9,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO test_artefact_edges_current (
+                edge_id, repo_id, commit_sha, blob_sha, path, from_artefact_id, from_symbol_id,
+                to_artefact_id, to_symbol_id, edge_kind, language, start_line, end_line,
+                metadata, revision_kind, revision_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                edge_id,
+                repo_id,
+                commit_sha,
+                format!("blob:{commit_sha}"),
+                "src/user/service_tests.rs",
+                from_artefact_id,
+                from_symbol_id,
+                "artefact::create_user",
+                "sym::create_user",
+                "tests",
+                "rust",
+                5i64,
+                8i64,
+                format!("{{\"confidence\":{confidence},\"link_source\":\"static_analysis\",\"linkage_status\":\"resolved\"}}"),
+                "commit",
+                commit_sha,
+            ],
+        )
+        .expect("insert test link");
+    }
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->asOf(commit:"commit-old")->file("src/user/service.rs")->artefacts(kind:"function")->tests()->limit(10)"#,
+    )
+    .expect("parse query");
+    let rows = execute_registered_stages(
+        &cfg,
+        &parsed,
+        vec![json!({
+            "artefact_id": "historical:src/user/service.rs:create_user",
+            "symbol_id": "sym::create_user",
+            "symbol_fqn": "src/user/service.rs::create_user",
+            "canonical_kind": "function",
+            "path": "src/user/service.rs",
+            "start_line": 1,
+            "end_line": 3,
+        })],
+    )
+    .await
+    .expect("execute historical tests stage");
+
+    let covering_tests = rows[0]
+        .get("covering_tests")
+        .and_then(Value::as_array)
+        .expect("should have covering_tests");
+    assert_eq!(covering_tests.len(), 1);
+    assert_eq!(
+        covering_tests[0].get("test_name").and_then(Value::as_str),
+        Some("test_create_user_old")
+    );
+}

@@ -12,6 +12,7 @@ pub(super) fn load_stage_covering_tests(
     conn: &Connection,
     repo_id: &str,
     production_symbol_id: &str,
+    commit_sha: Option<&str>,
     min_confidence: Option<f64>,
     linkage_source: Option<&str>,
     limit: usize,
@@ -35,6 +36,10 @@ pub(super) fn load_stage_covering_tests(
            AND ts.canonical_kind = 'test_scenario'",
     );
     let mut param_idx = 3;
+    if commit_sha.is_some() {
+        sql.push_str(&format!(" AND te.commit_sha = ?{param_idx}"));
+        param_idx += 1;
+    }
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE(CAST(json_extract(te.metadata, '$.confidence') AS REAL), 0.0) >= ?{param_idx}"
@@ -59,6 +64,9 @@ pub(super) fn load_stage_covering_tests(
         Box::new(repo_id.to_string()),
         Box::new(production_symbol_id.to_string()),
     ];
+    if let Some(sha) = commit_sha {
+        params_vec.push(Box::new(sha.to_string()));
+    }
     if let Some(mc) = min_confidence {
         params_vec.push(Box::new(mc));
     }
@@ -101,15 +109,7 @@ pub(super) fn load_stage_line_coverage(
          FROM coverage_hits ch \
          JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
          WHERE cc.repo_id = ?1 \
-           AND ( \
-             ch.production_symbol_id = ?2 \
-             OR EXISTS ( \
-               SELECT 1 FROM artefacts_current ac \
-               WHERE ac.repo_id = cc.repo_id \
-                 AND ac.artefact_id = ?2 \
-                 AND ac.symbol_id = ch.production_symbol_id \
-             ) \
-           ) \
+           AND ch.production_symbol_id = ?2 \
            AND ch.branch_id = -1",
     );
     if commit_sha.is_some() {
@@ -163,15 +163,7 @@ pub(super) fn load_stage_branch_coverage(
          FROM coverage_hits ch \
          JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
          WHERE cc.repo_id = ?1 \
-           AND ( \
-             ch.production_symbol_id = ?2 \
-             OR EXISTS ( \
-               SELECT 1 FROM artefacts_current ac \
-               WHERE ac.repo_id = cc.repo_id \
-                 AND ac.artefact_id = ?2 \
-                 AND ac.symbol_id = ch.production_symbol_id \
-             ) \
-           ) \
+           AND ch.production_symbol_id = ?2 \
            AND ch.branch_id != -1",
     );
     if commit_sha.is_some() {

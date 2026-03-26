@@ -94,12 +94,14 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
+    use anyhow::Result;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::TestsSummaryStageHandler;
     use crate::capability_packs::test_harness::storage::{
-        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, init_test_domain_database,
+        BitloopsTestHarnessRepository, SqliteTestHarnessRepository, TestHarnessRepository,
+        init_test_domain_database,
     };
     use crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
     use crate::host::capability_host::gateways::{CanonicalGraphGateway, RelationalGateway};
@@ -204,5 +206,124 @@ mod tests {
         assert_eq!(counts["test_artefacts"], 0);
         assert_eq!(counts["test_artefact_edges"], 0);
         assert!(resp.human_output.contains("deadbeef"));
+    }
+
+    #[tokio::test]
+    async fn summary_stage_reads_pack_owned_counts_only() {
+        let temp = TempDir::new().expect("tempdir");
+        let db_path = temp.path().join("harness.db");
+        init_test_domain_database(&db_path).expect("init");
+
+        let mut repo = BitloopsTestHarnessRepository::Sqlite(
+            SqliteTestHarnessRepository::open_existing(&db_path).expect("open"),
+        );
+        seed_pack_owned_rows(&mut repo, "commit-123").expect("seed pack rows");
+
+        let handler = TestsSummaryStageHandler(Some(Arc::new(Mutex::new(repo))));
+        let mut ctx = DummyExecCtx {
+            repo: test_repo(),
+            graph: LocalCanonicalGraphGateway,
+        };
+        let req = StageRequest::new(json!({
+            "limit": 10,
+            "query_context": { "resolved_commit_sha": "commit-123" }
+        }));
+        let resp = handler.execute(req, &mut ctx).await.expect("execute");
+        assert_eq!(resp.payload["status"], "ok");
+        assert_eq!(resp.payload["commit_sha"], "commit-123");
+        let counts = resp.payload["counts"].as_object().expect("counts object");
+        assert_eq!(counts["test_artefacts"], 1);
+        assert_eq!(counts["test_artefact_edges"], 1);
+        assert_eq!(counts["coverage_captures"], 1);
+        assert_eq!(counts["coverage_hits"], 1);
+        assert_eq!(resp.payload["coverage_present"], true);
+        assert!(resp.human_output.contains("commit-123"));
+    }
+
+    fn seed_pack_owned_rows(repo: &mut impl TestHarnessRepository, commit_sha: &str) -> Result<()> {
+        let discovery_run = crate::models::TestDiscoveryRunRecord {
+            discovery_run_id: format!("discovery:{commit_sha}"),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            language: Some("rust".into()),
+            started_at: "2026-03-24T00:00:00Z".into(),
+            finished_at: Some("2026-03-24T00:00:01Z".into()),
+            status: "complete".into(),
+            enumeration_status: Some("complete".into()),
+            notes_json: None,
+            stats_json: None,
+        };
+        let artefact = crate::models::TestArtefactCurrentRecord {
+            artefact_id: "test-artefact-1".into(),
+            symbol_id: "test-symbol-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            blob_sha: "blob-1".into(),
+            path: "tests/example.rs".into(),
+            language: "rust".into(),
+            canonical_kind: "test_scenario".into(),
+            language_kind: None,
+            symbol_fqn: Some("tests::example".into()),
+            name: "example".into(),
+            parent_artefact_id: None,
+            parent_symbol_id: None,
+            start_line: 1,
+            end_line: 10,
+            start_byte: None,
+            end_byte: None,
+            signature: None,
+            modifiers: "[]".into(),
+            docstring: None,
+            content_hash: None,
+            discovery_source: "static".into(),
+            revision_kind: "commit".into(),
+            revision_id: commit_sha.into(),
+        };
+        let edge = crate::models::TestArtefactEdgeCurrentRecord {
+            edge_id: "edge-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            blob_sha: "blob-1".into(),
+            path: "tests/example.rs".into(),
+            from_artefact_id: "test-artefact-1".into(),
+            from_symbol_id: "test-symbol-1".into(),
+            to_artefact_id: None,
+            to_symbol_id: Some("prod-symbol-1".into()),
+            to_symbol_ref: None,
+            edge_kind: "covers".into(),
+            language: "rust".into(),
+            start_line: Some(1),
+            end_line: Some(10),
+            metadata: "{}".into(),
+            revision_kind: "commit".into(),
+            revision_id: commit_sha.into(),
+        };
+        repo.replace_test_discovery(commit_sha, &[artefact], &[edge], &discovery_run, &[])?;
+
+        let capture = crate::models::CoverageCaptureRecord {
+            capture_id: "capture-1".into(),
+            repo_id: "repo-1".into(),
+            commit_sha: commit_sha.into(),
+            tool: "lcov".into(),
+            format: crate::models::CoverageFormat::Lcov,
+            scope_kind: crate::models::ScopeKind::TestScenario,
+            subject_test_symbol_id: Some("test-symbol-1".into()),
+            line_truth: true,
+            branch_truth: false,
+            captured_at: "2026-03-24T00:00:02Z".into(),
+            status: "complete".into(),
+            metadata_json: None,
+        };
+        repo.insert_coverage_capture(&capture)?;
+        repo.insert_coverage_hits(&[crate::models::CoverageHitRecord {
+            capture_id: "capture-1".into(),
+            production_symbol_id: "prod-symbol-1".into(),
+            file_path: "src/example.rs".into(),
+            line: 42,
+            branch_id: -1,
+            covered: true,
+            hit_count: 1,
+        }])?;
+        Ok(())
     }
 }

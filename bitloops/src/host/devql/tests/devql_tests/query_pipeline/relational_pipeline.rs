@@ -70,6 +70,10 @@ async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_stor
         rows[0]["artefact_id"],
         Value::String("artefact::greet".to_string())
     );
+    assert_eq!(
+        rows[0]["symbol_id"],
+        Value::String("sym::greet".to_string())
+    );
     assert_eq!(rows[0]["path"], Value::String("src/main.ts".to_string()));
     assert!(rows[0]["modifiers"].is_array());
 }
@@ -481,6 +485,10 @@ async fn execute_relational_pipeline_scopes_commit_asof_artefacts_by_path_when_b
         .expect("execute commit asOf artefacts query");
 
     assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["symbol_id"],
+        Value::String("sym::shared-a".to_string())
+    );
     assert_eq!(
         rows[0]["path"],
         Value::String("src/shared-a.ts".to_string())

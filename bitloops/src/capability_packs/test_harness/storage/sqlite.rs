@@ -1,7 +1,6 @@
 // SQLite repository implementation for command-side persistence. This module
 // owns SQL statements, transactions, and row mapping for write workflows.
 
-mod lists;
 mod stage_serving;
 #[cfg(test)]
 mod tests;
@@ -11,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 use crate::capability_packs::test_harness::storage::{
     TestHarnessQueryRepository, TestHarnessRepository,
@@ -19,17 +18,13 @@ use crate::capability_packs::test_harness::storage::{
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
-    ListedArtefactRecord, QueriedArtefactRecord, ResolvedTestScenarioRecord,
-    StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
-    StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-    TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
+    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
 };
 use crate::storage::init::open_existing_database;
 
-use self::lists::{
-    load_listed_production_artefacts, load_listed_test_scenarios, load_listed_test_suites,
-};
 use self::stage_serving::{
     load_stage_branch_coverage as load_stage_branch_coverage_conn,
     load_stage_coverage_metadata as load_stage_coverage_metadata_conn,
@@ -37,10 +32,7 @@ use self::stage_serving::{
     load_stage_line_coverage as load_stage_line_coverage_conn,
 };
 use self::writes::{
-    clear_existing_production_data, clear_existing_test_discovery_data, table_exists,
-    upsert_commit, upsert_current_file_state, upsert_current_production_artefact,
-    upsert_current_production_edge, upsert_file_state, upsert_production_artefact,
-    upsert_production_edge, upsert_repository, upsert_test_artefact_current,
+    clear_existing_test_discovery_data, upsert_test_artefact_current,
     upsert_test_artefact_edge_current, upsert_test_classification,
     upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
 };
@@ -91,45 +83,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
             scenarios.push(row.context("failed decoding test scenario row")?);
         }
         Ok(scenarios)
-    }
-
-    fn replace_production_artefacts(
-        &mut self,
-        batch: &crate::models::ProductionIngestionBatch,
-    ) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction()
-            .context("failed to start production artefact transaction")?;
-        let has_current_file_state = table_exists(&tx, "current_file_state")?;
-        clear_existing_production_data(&tx, &batch.commit.commit_sha)?;
-
-        upsert_repository(&tx, &batch.repository)?;
-        upsert_commit(&tx, &batch.commit)?;
-        for row in &batch.file_states {
-            upsert_file_state(&tx, row)?;
-        }
-        if has_current_file_state {
-            for row in &batch.current_file_states {
-                upsert_current_file_state(&tx, row)?;
-            }
-        }
-        for artefact in &batch.artefacts {
-            upsert_production_artefact(&tx, artefact)?;
-        }
-        for artefact in &batch.current_artefacts {
-            upsert_current_production_artefact(&tx, artefact)?;
-        }
-        for edge in &batch.edges {
-            upsert_production_edge(&tx, edge)?;
-        }
-        for edge in &batch.current_edges {
-            upsert_current_production_edge(&tx, edge)?;
-        }
-
-        tx.commit()
-            .context("failed to commit production artefact transaction")?;
-        Ok(())
     }
 
     fn replace_test_discovery(
@@ -394,106 +347,6 @@ WHERE cc.commit_sha = ?1
 }
 
 impl TestHarnessQueryRepository for SqliteTestHarnessRepository {
-    fn find_artefact(
-        &self,
-        commit_sha: &str,
-        artefact_query: &str,
-    ) -> Result<QueriedArtefactRecord> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                r#"
-SELECT DISTINCT
-  a.artefact_id,
-  a.symbol_fqn,
-  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
-  a.path,
-  a.start_line,
-  a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = ?1
-  AND (
-    a.artefact_id = ?2
-    OR a.symbol_fqn = ?2
-    OR a.path = ?2
-    OR a.symbol_fqn LIKE '%' || ?2
-  )
-ORDER BY
-  CASE
-    WHEN a.symbol_fqn = ?2 THEN 0
-    WHEN a.artefact_id = ?2 THEN 1
-    WHEN a.path = ?2 THEN 2
-    ELSE 3
-  END ASC,
-  a.start_line ASC
-LIMIT 1
-"#,
-            )
-            .context("failed preparing artefact lookup query")?;
-
-        let mut rows = stmt
-            .query(params![commit_sha, artefact_query])
-            .context("failed querying artefact")?;
-        let Some(row) = rows.next().context("failed reading artefact row")? else {
-            let indexed_for_commit: Option<i64> = self
-                .conn
-                .query_row(
-                    "SELECT 1 FROM commits WHERE commit_sha = ?1 LIMIT 1",
-                    params![commit_sha],
-                    |row| row.get(0),
-                )
-                .optional()
-                .context("failed checking indexed state for commit")?;
-
-            if indexed_for_commit.is_some() {
-                anyhow::bail!("Artefact not found");
-            }
-
-            anyhow::bail!("Repository not indexed");
-        };
-
-        Ok(QueriedArtefactRecord {
-            artefact_id: row.get(0).context("missing artefact_id")?,
-            symbol_fqn: row.get(1).context("missing symbol_fqn")?,
-            canonical_kind: row.get(2).context("missing canonical_kind")?,
-            path: row.get(3).context("missing path")?,
-            start_line: row.get(4).context("missing start_line")?,
-            end_line: row.get(5).context("missing end_line")?,
-        })
-    }
-
-    fn list_artefacts(
-        &self,
-        commit_sha: &str,
-        kind: Option<&str>,
-    ) -> Result<Vec<ListedArtefactRecord>> {
-        let mut output = Vec::new();
-
-        if kind.is_none() || !matches!(kind, Some("test_suite" | "test_scenario")) {
-            output.extend(load_listed_production_artefacts(
-                &self.conn, commit_sha, kind,
-            )?);
-        }
-        if kind.is_none() || matches!(kind, Some("test_suite")) {
-            output.extend(load_listed_test_suites(&self.conn, commit_sha)?);
-        }
-        if kind.is_none() || matches!(kind, Some("test_scenario")) {
-            output.extend(load_listed_test_scenarios(&self.conn, commit_sha)?);
-        }
-
-        output.sort_by(|left, right| {
-            left.file_path
-                .cmp(&right.file_path)
-                .then(left.start_line.cmp(&right.start_line))
-                .then(left.kind.cmp(&right.kind))
-        });
-        Ok(output)
-    }
-
     fn load_covering_tests(
         &self,
         commit_sha: &str,
@@ -797,6 +650,7 @@ WHERE cc.commit_sha = ?1
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -805,6 +659,7 @@ WHERE cc.commit_sha = ?1
             &self.conn,
             repo_id,
             production_symbol_id,
+            commit_sha,
             min_confidence,
             linkage_source,
             limit,

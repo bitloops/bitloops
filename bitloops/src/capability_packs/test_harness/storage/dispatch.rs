@@ -9,8 +9,7 @@ use super::{
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
@@ -82,13 +81,6 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.load_test_scenarios(commit_sha),
             Self::Postgres(repository) => repository.load_test_scenarios(commit_sha),
-        }
-    }
-
-    fn replace_production_artefacts(&mut self, batch: &ProductionIngestionBatch) -> Result<()> {
-        match self {
-            Self::Sqlite(repository) => repository.replace_production_artefacts(batch),
-            Self::Postgres(repository) => repository.replace_production_artefacts(batch),
         }
     }
 
@@ -183,28 +175,6 @@ impl TestHarnessCoverageGateway for BitloopsTestHarnessRepository {
 }
 
 impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
-    fn find_artefact(
-        &self,
-        commit_sha: &str,
-        artefact_query: &str,
-    ) -> Result<QueriedArtefactRecord> {
-        match self {
-            Self::Sqlite(repository) => repository.find_artefact(commit_sha, artefact_query),
-            Self::Postgres(repository) => repository.find_artefact(commit_sha, artefact_query),
-        }
-    }
-
-    fn list_artefacts(
-        &self,
-        commit_sha: &str,
-        kind: Option<&str>,
-    ) -> Result<Vec<ListedArtefactRecord>> {
-        match self {
-            Self::Sqlite(repository) => repository.list_artefacts(commit_sha, kind),
-            Self::Postgres(repository) => repository.list_artefacts(commit_sha, kind),
-        }
-    }
-
     fn load_covering_tests(
         &self,
         commit_sha: &str,
@@ -296,6 +266,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,
@@ -304,6 +275,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Sqlite(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,
@@ -311,6 +283,7 @@ impl TestHarnessQueryRepository for BitloopsTestHarnessRepository {
             Self::Postgres(repository) => repository.load_stage_covering_tests(
                 repo_id,
                 production_symbol_id,
+                commit_sha,
                 min_confidence,
                 linkage_source,
                 limit,
