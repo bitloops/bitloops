@@ -6316,6 +6316,12 @@ async fn devql_graphql_checkpoint_ingested_subscription_receives_published_check
     )
     .expect("read committed checkpoint")
     .expect("seeded checkpoint info");
+    let mut other_repo_checkpoint =
+        crate::graphql::Checkpoint::from_ingested(&checkpoint, Some("wrong-repo-sha"));
+    other_repo_checkpoint.session_id = "other-repo-session".to_string();
+    context
+        .subscriptions()
+        .publish_checkpoint("other-repo", other_repo_checkpoint);
     context.subscriptions().publish_checkpoint(
         "demo",
         crate::graphql::Checkpoint::from_ingested(
@@ -6382,6 +6388,20 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
     });
     tokio::task::yield_now().await;
 
+    context.subscriptions().publish_progress(
+        "other-repo",
+        crate::graphql::IngestionProgressEvent {
+            phase: crate::graphql::IngestionPhase::Failed,
+            checkpoints_total: 99,
+            checkpoints_processed: 13,
+            current_checkpoint_id: Some("wrong-repo-checkpoint".to_string()),
+            current_commit_sha: Some("wrong-repo-sha".to_string()),
+            events_inserted: 8,
+            artefacts_upserted: 5,
+            checkpoints_without_commit: 3,
+            temporary_rows_promoted: 2,
+        },
+    );
     context.subscriptions().publish_progress(
         "demo",
         crate::graphql::IngestionProgressEvent {

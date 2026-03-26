@@ -8,11 +8,13 @@ const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CheckpointIngestedEvent {
+    pub(crate) repo_name: String,
     pub(crate) checkpoint: Checkpoint,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct IngestionProgressMessage {
+    pub(crate) repo_name: String,
     pub(crate) event: IngestionProgressEvent,
 }
 
@@ -47,10 +49,11 @@ impl SubscriptionHub {
     }
 
     pub(crate) fn publish_checkpoint(&self, repo_name: impl Into<String>, checkpoint: Checkpoint) {
-        let _ = repo_name.into();
-        let _ = self
-            .checkpoint_ingested
-            .send(CheckpointIngestedEvent { checkpoint });
+        let repo_name = repo_name.into();
+        let _ = self.checkpoint_ingested.send(CheckpointIngestedEvent {
+            repo_name,
+            checkpoint,
+        });
     }
 
     pub(crate) fn publish_progress(
@@ -58,9 +61,9 @@ impl SubscriptionHub {
         repo_name: impl Into<String>,
         event: IngestionProgressEvent,
     ) {
-        let _ = repo_name.into();
+        let repo_name = repo_name.into();
         let _ = self
             .ingestion_progress
-            .send(IngestionProgressMessage { event });
+            .send(IngestionProgressMessage { repo_name, event });
     }
 }
