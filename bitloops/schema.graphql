@@ -328,7 +328,7 @@ type IngestionProgressEvent {
 	checkpointsTotal: Int!
 	checkpointsProcessed: Int!
 	currentCheckpointId: String
-	currentCheckpointSha: String
+	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
 	checkpointsWithoutCommit: Int!

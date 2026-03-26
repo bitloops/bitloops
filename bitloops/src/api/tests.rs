@@ -6367,7 +6367,7 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
             checkpointsTotal
             checkpointsProcessed
             currentCheckpointId
-            currentCheckpointSha
+            currentCommitSha
           }
         }
         "#,
@@ -6389,7 +6389,7 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
             checkpoints_total: 1,
             checkpoints_processed: 0,
             current_checkpoint_id: None,
-            current_checkpoint_sha: None,
+            current_commit_sha: None,
             events_inserted: 0,
             artefacts_upserted: 0,
             checkpoints_without_commit: 0,
@@ -6403,7 +6403,7 @@ async fn devql_graphql_ingestion_progress_subscription_receives_published_progre
             checkpoints_total: 1,
             checkpoints_processed: 1,
             current_checkpoint_id: Some("aabbccddeeff".to_string()),
-            current_checkpoint_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
+            current_commit_sha: Some(git_ok(repo.path(), &["rev-parse", "HEAD"])),
             events_inserted: 1,
             artefacts_upserted: 2,
             checkpoints_without_commit: 0,

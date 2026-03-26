@@ -213,7 +213,7 @@ subscription IngestProgress {
     phase
     checkpointsProcessed
     checkpointsTotal
-    currentCheckpointSha
+    currentCommitSha
   }
 }
 ```
