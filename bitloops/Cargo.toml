@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-async-graphql = "7"
+async-graphql = { version = "7", features = ["dataloader"] }
 async-graphql-axum = "7"
 axum = "0.8"
 env_logger = "0.11"

@@ -1,6 +1,6 @@
 use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error};
+use crate::graphql::{backend_error, loaders::DataLoaders};
 use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 
 use super::{Commit, DateTimeScalar, JsonScalar};
@@ -51,15 +51,22 @@ impl Checkpoint {
             return Ok(None);
         };
 
-        ctx.data_unchecked::<DevqlGraphqlContext>()
-            .resolve_commit_by_sha(commit_sha, self.branch.as_deref())
+        let mut commit = ctx
+            .data_unchecked::<DataLoaders>()
+            .load_commit_by_sha(commit_sha)
             .await
             .map_err(|err| {
                 backend_error(format!(
                     "failed to resolve commit {} for checkpoint {:?}: {err:#}",
                     commit_sha, self.id
                 ))
-            })
+            })?;
+        if let Some(commit) = commit.as_mut()
+            && commit.branch.is_none()
+        {
+            commit.branch = self.branch.clone();
+        }
+        Ok(commit)
     }
 }
 

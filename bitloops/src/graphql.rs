@@ -9,6 +9,7 @@ mod types;
 pub(crate) use context::DevqlGraphqlContext;
 pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
 
+use self::loaders::LoaderRegistryExtension;
 use self::mutation_root::MutationRoot;
 use self::query_root::QueryRoot;
 use self::subscription_root::SubscriptionRoot;
@@ -29,6 +30,7 @@ pub(crate) fn build_schema(context: DevqlGraphqlContext) -> DevqlSchema {
         async_graphql::EmptySubscription,
     )
     .data(context)
+    .extension(LoaderRegistryExtension)
     .finish()
 }
 

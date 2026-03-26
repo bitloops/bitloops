@@ -3,9 +3,10 @@ mod sql;
 
 use self::parsing::{artefact_from_value, dependency_edge_from_value, file_context_from_value};
 use self::sql::{
-    DependencyScope, build_artefact_by_id_sql, build_child_artefacts_sql,
-    build_current_artefacts_sql, build_current_dependency_sql, build_file_context_list_sql,
-    build_file_context_lookup_sql, normalise_repo_relative_path, quote_devql_string,
+    DependencyScope, build_artefacts_by_ids_sql, build_child_artefacts_sql,
+    build_current_artefacts_sql, build_current_dependency_batch_sql, build_current_dependency_sql,
+    build_file_context_list_sql, build_file_context_lookup_sql, normalise_repo_relative_path,
+    quote_devql_string,
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
@@ -15,6 +16,7 @@ use crate::graphql::types::{
 use crate::host::devql::{execute_query_json_with_composition, sqlite_query_rows_path};
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 
 impl DevqlGraphqlContext {
     pub(crate) fn validate_repo_relative_path(
@@ -72,14 +74,26 @@ impl DevqlGraphqlContext {
         rows.into_iter().map(artefact_from_value).collect()
     }
 
-    pub(crate) async fn load_artefact_by_id(&self, artefact_id: &str) -> Result<Option<Artefact>> {
-        let sql = build_artefact_by_id_sql(
+    pub(crate) async fn load_artefacts_by_ids(
+        &self,
+        artefact_ids: &[String],
+    ) -> Result<HashMap<String, Artefact>> {
+        if artefact_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let sql = build_artefacts_by_ids_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
-            artefact_id,
+            artefact_ids,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().next().map(artefact_from_value).transpose()
+        let mut artefacts = HashMap::new();
+        for row in rows {
+            let artefact = artefact_from_value(row)?;
+            artefacts.insert(artefact.id.to_string(), artefact);
+        }
+        Ok(artefacts)
     }
 
     pub(crate) async fn list_child_artefacts(
@@ -110,22 +124,40 @@ impl DevqlGraphqlContext {
         rows.into_iter().map(dependency_edge_from_value).collect()
     }
 
-    pub(crate) async fn list_artefact_dependency_edges(
+    pub(crate) async fn load_dependency_edges_by_artefact_ids(
         &self,
-        artefact_id: &str,
+        artefact_ids: &[String],
         direction: DepsDirection,
-        filter: Option<&DepsFilterInput>,
-    ) -> Result<Vec<DependencyEdge>> {
-        let mut filter = filter.copied().unwrap_or_default();
-        filter.direction = direction;
-        let sql = build_current_dependency_sql(
+        filter: DepsFilterInput,
+    ) -> Result<HashMap<String, Vec<DependencyEdge>>> {
+        if artefact_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let sql = build_current_dependency_batch_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
-            DependencyScope::Artefact(artefact_id),
+            artefact_ids,
+            direction,
             filter,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().map(dependency_edge_from_value).collect()
+        let mut edges_by_artefact = HashMap::<String, Vec<DependencyEdge>>::new();
+        for row in rows {
+            let owner_artefact_id = row
+                .get("owner_artefact_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .context("missing owner artefact id for batched dependency edge")?;
+            let edge = dependency_edge_from_value(row)?;
+            edges_by_artefact
+                .entry(owner_artefact_id)
+                .or_default()
+                .push(edge);
+        }
+        Ok(edges_by_artefact)
     }
 
     async fn list_artefacts_via_devql(

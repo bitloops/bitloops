@@ -9,7 +9,7 @@ use crate::graphql::types::{Branch, Commit, DateTimeScalar};
 use crate::host::checkpoints::strategy::manual_commit::{list_committed, run_git};
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use tokio::task;
 
@@ -235,41 +235,36 @@ impl DevqlGraphqlContext {
         .context("joining commit files query task")?
     }
 
-    pub(crate) async fn resolve_commit_by_sha(
+    pub(crate) async fn load_commits_by_shas(
         &self,
-        commit_sha: &str,
-        branch_hint: Option<&str>,
-    ) -> Result<Option<Commit>> {
+        commit_shas: &[String],
+    ) -> Result<HashMap<String, Commit>> {
+        if commit_shas.is_empty() {
+            return Ok(HashMap::new());
+        }
+
         let repo_root = self.repo_root.clone();
-        let commit_sha = commit_sha.to_string();
-        let branch_hint = branch_hint.map(str::to_string);
+        let commit_shas = commit_shas.to_vec();
 
-        task::spawn_blocking(move || -> Result<Option<Commit>> {
-            let raw = match run_git(
-                repo_root.as_path(),
-                &[
-                    "show",
-                    "--quiet",
-                    "--format=%H%x1f%an%x1f%ae%x1f%cI%x1f%s",
-                    commit_sha.as_str(),
-                ],
-            ) {
-                Ok(raw) => raw,
-                Err(err) if is_unknown_revision_error(&err) => return Ok(None),
-                Err(err) => {
-                    return Err(err)
-                        .with_context(|| format!("reading git metadata for {commit_sha}"));
-                }
-            };
-
-            let mut commits = parse_git_log(
-                &format!("{raw}{GIT_RECORD_SEPARATOR}"),
-                branch_hint.as_deref().unwrap_or_default(),
-            )?;
-            Ok(commits.pop())
+        task::spawn_blocking(move || -> Result<HashMap<String, Commit>> {
+            let mut args = vec![
+                "show".to_string(),
+                "--quiet".to_string(),
+                "--format=%H%x1f%an%x1f%ae%x1f%cI%x1f%s%x1e".to_string(),
+                "--ignore-missing".to_string(),
+            ];
+            args.extend(commit_shas.iter().cloned());
+            let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+            let raw = run_git(repo_root.as_path(), &arg_refs)
+                .context("reading git metadata for batched commit lookup")?;
+            let mut commits_by_sha = HashMap::new();
+            for commit in parse_git_log(&raw, "")? {
+                commits_by_sha.insert(commit.sha.clone(), commit);
+            }
+            Ok(commits_by_sha)
         })
         .await
-        .context("joining commit lookup task")?
+        .context("joining batched commit lookup task")?
     }
 
     pub(crate) fn is_unknown_revision_error(&self, err: &anyhow::Error) -> bool {

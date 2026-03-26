@@ -1,10 +1,10 @@
 use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error};
+use crate::graphql::{backend_error, loaders::DataLoaders};
 
 use super::{Artefact, JsonScalar};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Enum)]
 pub enum EdgeKind {
     Imports,
     Calls,
@@ -78,7 +78,7 @@ impl DependencyEdge {
 impl DependencyEdge {
     #[graphql(name = "fromArtefact")]
     async fn source_artefact(&self, ctx: &Context<'_>) -> Result<Artefact> {
-        ctx.data_unchecked::<DevqlGraphqlContext>()
+        ctx.data_unchecked::<DataLoaders>()
             .load_artefact_by_id(self.from_artefact_id.as_ref())
             .await
             .map_err(|err| {
@@ -101,7 +101,7 @@ impl DependencyEdge {
             return Ok(None);
         };
 
-        ctx.data_unchecked::<DevqlGraphqlContext>()
+        ctx.data_unchecked::<DataLoaders>()
             .load_artefact_by_id(to_artefact_id.as_ref())
             .await
             .map_err(|err| {

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use super::loaders::DataLoaders;
+use super::loaders::LoaderMetrics;
 
 const BLOB_HEALTHCHECK_KEY: &str = "__bitloops/graphql/healthcheck";
 const GIT_FIELD_SEPARATOR: char = '\u{1f}';
@@ -35,7 +35,7 @@ pub(crate) struct DevqlGraphqlContext {
     blob_bootstrap_error: Option<String>,
     capability_host: Option<Arc<Mutex<DevqlCapabilityHost>>>,
     capability_host_bootstrap_error: Option<String>,
-    loaders: DataLoaders,
+    loader_metrics: LoaderMetrics,
 }
 
 impl fmt::Debug for DevqlGraphqlContext {
@@ -55,7 +55,18 @@ impl fmt::Debug for DevqlGraphqlContext {
                 "capability_host_bootstrap_error",
                 &self.capability_host_bootstrap_error,
             )
-            .field("loaders", &self.loaders)
+            .field("loader_metrics", &self.loader_metrics)
             .finish()
+    }
+}
+
+impl DevqlGraphqlContext {
+    pub(crate) fn loader_metrics(&self) -> &LoaderMetrics {
+        &self.loader_metrics
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loader_metrics_snapshot(&self) -> super::loaders::LoaderMetricsSnapshot {
+        self.loader_metrics.snapshot()
     }
 }

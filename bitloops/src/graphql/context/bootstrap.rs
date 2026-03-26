@@ -1,7 +1,7 @@
 use super::{BLOB_HEALTHCHECK_KEY, DevqlGraphqlContext};
 use crate::api::{BackendHealth, BackendHealthKind, DashboardDbPools};
 use crate::config::{StoreBackendConfig, resolve_store_backend_config_for_repo};
-use crate::graphql::loaders::DataLoaders;
+use crate::graphql::loaders::LoaderMetrics;
 use crate::graphql::types::{HealthBackendStatus, HealthStatus, Repository};
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, build_capability_host, deterministic_uuid, resolve_repo_identity,
@@ -57,7 +57,7 @@ impl DevqlGraphqlContext {
             blob_bootstrap_error,
             capability_host,
             capability_host_bootstrap_error,
-            loaders: DataLoaders,
+            loader_metrics: LoaderMetrics::default(),
         }
     }
 

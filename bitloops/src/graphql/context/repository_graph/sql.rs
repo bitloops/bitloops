@@ -88,15 +88,18 @@ pub(super) fn build_current_artefacts_sql(
     )
 }
 
-pub(super) fn build_artefact_by_id_sql(repo_id: &str, branch: &str, artefact_id: &str) -> String {
+pub(super) fn build_artefacts_by_ids_sql(
+    repo_id: &str,
+    branch: &str,
+    artefact_ids: &[String],
+) -> String {
     format!(
-        "{} WHERE a.repo_id = '{}' AND a.branch = '{}' AND a.artefact_id = '{}' \
-           ORDER BY a.path, a.start_line, a.artefact_id \
-           LIMIT 1",
+        "{} WHERE a.repo_id = '{}' AND a.branch = '{}' AND a.artefact_id IN ({}) \
+           ORDER BY a.path, a.start_line, a.artefact_id",
         current_artefact_select_sql(),
         esc_pg(repo_id),
         esc_pg(branch),
-        esc_pg(artefact_id),
+        quoted_string_list(artefact_ids),
     )
 }
 
@@ -150,18 +153,6 @@ pub(super) fn build_current_dependency_sql(
                 esc_pg(path)
             ));
         }
-        (DependencyScope::Artefact(artefact_id), DepsDirection::Out) => {
-            clauses.push(format!("e.from_artefact_id = '{}'", esc_pg(artefact_id)));
-        }
-        (DependencyScope::Artefact(artefact_id), DepsDirection::In) => {
-            clauses.push(format!("e.to_artefact_id = '{}'", esc_pg(artefact_id)));
-        }
-        (DependencyScope::Artefact(artefact_id), DepsDirection::Both) => {
-            clauses.push(format!(
-                "(e.from_artefact_id = '{artefact_id}' OR e.to_artefact_id = '{artefact_id}')",
-                artefact_id = esc_pg(artefact_id),
-            ));
-        }
     }
 
     format!(
@@ -177,6 +168,58 @@ pub(super) fn build_current_dependency_sql(
           WHERE {} \
        ORDER BY src.path, COALESCE(e.start_line, 0), COALESCE(e.end_line, 0), \
                 e.edge_kind, COALESCE(tgt.path, ''), e.edge_id",
+        clauses.join(" AND ")
+    )
+}
+
+pub(super) fn build_current_dependency_batch_sql(
+    repo_id: &str,
+    branch: &str,
+    artefact_ids: &[String],
+    direction: DepsDirection,
+    filter: DepsFilterInput,
+) -> String {
+    let mut clauses = vec![
+        format!("e.repo_id = '{}'", esc_pg(repo_id)),
+        format!("e.branch = '{}'", esc_pg(branch)),
+    ];
+
+    if let Some(kind) = filter.kind {
+        clauses.push(format!(
+            "e.edge_kind = '{}'",
+            esc_pg(kind.as_storage_value())
+        ));
+    }
+    if !filter.include_unresolved {
+        clauses.push("e.to_artefact_id IS NOT NULL".to_string());
+    }
+
+    let owner_column = match direction {
+        DepsDirection::Out => "e.from_artefact_id",
+        DepsDirection::In => "e.to_artefact_id",
+        DepsDirection::Both => {
+            unreachable!("batch dependency loader only supports a single direction")
+        }
+    };
+    clauses.push(format!(
+        "{owner_column} IN ({})",
+        quoted_string_list(artefact_ids)
+    ));
+
+    format!(
+        "SELECT {owner_column} AS owner_artefact_id, \
+                e.edge_id, e.edge_kind, e.language, e.from_artefact_id, e.to_artefact_id, \
+                e.to_symbol_ref, e.start_line, e.end_line, e.metadata, \
+                src.path AS from_path, src.symbol_fqn AS from_symbol_fqn, \
+                tgt.path AS to_path, tgt.symbol_fqn AS to_symbol_fqn \
+           FROM artefact_edges_current e \
+           JOIN artefacts_current src ON src.repo_id = e.repo_id AND src.branch = e.branch \
+                                     AND src.artefact_id = e.from_artefact_id \
+      LEFT JOIN artefacts_current tgt ON tgt.repo_id = e.repo_id AND tgt.branch = e.branch \
+                                     AND tgt.artefact_id = e.to_artefact_id \
+          WHERE {} \
+       ORDER BY owner_artefact_id, src.path, COALESCE(e.start_line, 0), \
+                COALESCE(e.end_line, 0), e.edge_kind, COALESCE(tgt.path, ''), e.edge_id",
         clauses.join(" AND ")
     )
 }
@@ -220,7 +263,6 @@ pub(super) fn quote_devql_string(value: &str) -> String {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DependencyScope<'a> {
     File(&'a str),
-    Artefact(&'a str),
 }
 
 fn current_artefact_select_sql() -> &'static str {
@@ -267,4 +309,12 @@ fn canonical_kind_clause(column: &str, kind: CanonicalKind) -> String {
 
 fn glob_to_like(glob: &str) -> String {
     glob.replace("**", "%").replace('*', "%").replace('?', "_")
+}
+
+fn quoted_string_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

@@ -1,10 +1,12 @@
 use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error, bad_user_input_error};
+use crate::graphql::{
+    DevqlGraphqlContext, backend_error, bad_user_input_error, loaders::DataLoaders,
+};
 
 use super::{
     ArtefactConnection, ArtefactEdge, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsDirection, DepsFilterInput, paginate_items,
+    DependencyEdgeConnection, DepsFilterInput, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -126,7 +128,7 @@ impl Artefact {
             return Ok(None);
         };
 
-        ctx.data_unchecked::<DevqlGraphqlContext>()
+        ctx.data_unchecked::<DataLoaders>()
             .load_artefact_by_id(parent_id.as_ref())
             .await
             .map_err(|err| {
@@ -172,8 +174,8 @@ impl Artefact {
         after: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
         let deps = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
-            .list_artefact_dependency_edges(self.id.as_ref(), DepsDirection::Out, filter.as_ref())
+            .data_unchecked::<DataLoaders>()
+            .load_outgoing_edges(self.id.as_ref(), filter)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -200,8 +202,8 @@ impl Artefact {
         after: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
         let deps = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
-            .list_artefact_dependency_edges(self.id.as_ref(), DepsDirection::In, filter.as_ref())
+            .data_unchecked::<DataLoaders>()
+            .load_incoming_edges(self.id.as_ref(), filter)
             .await
             .map_err(|err| {
                 backend_error(format!(
