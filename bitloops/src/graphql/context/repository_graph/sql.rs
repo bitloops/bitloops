@@ -146,57 +146,103 @@ pub(super) fn build_current_artefacts_sql(
     filter: Option<&ArtefactFilterInput>,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
-    let use_historical_tables =
-        temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
-    let mut clauses = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
-    if !use_historical_tables {
-        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
-    }
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-        clauses.push("a.revision_kind = 'temporary'".to_string());
-        clauses.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
-    }
-    if let Some(scope) = temporal_scope.filter(|scope| scope.use_historical_tables()) {
-        clauses.push(file_state_exists_clause(
-            "a.path",
-            "a.blob_sha",
-            repo_id,
-            scope.resolved_commit(),
-        ));
-    }
+    let (use_historical_tables, clauses) =
+        build_artefact_where_clauses(repo_id, branch, path, project_path, filter, temporal_scope);
+    format!(
+        "SELECT {} \
+           FROM {} a \
+          WHERE {} \
+       ORDER BY {}",
+        artefact_select_columns_sql("a", use_historical_tables),
+        artefacts_table_sql(use_historical_tables),
+        clauses.join(" AND "),
+        artefact_order_sql("a"),
+    )
+}
 
-    if let Some(path) = path {
-        clauses.push(format!("a.path = '{}'", esc_pg(path)));
-    }
-    if let Some(project_path) = project_path {
-        clauses.push(repo_path_prefix_clause("a.path", project_path));
-    }
+pub(super) fn build_current_artefacts_count_sql(
+    repo_id: &str,
+    branch: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+    filter: Option<&ArtefactFilterInput>,
+    temporal_scope: Option<&ResolvedTemporalScope>,
+) -> String {
+    let filtered_cte = build_filtered_artefacts_cte_sql(
+        repo_id,
+        branch,
+        path,
+        project_path,
+        filter,
+        temporal_scope,
+    );
+    format!("{filtered_cte} SELECT COUNT(*) AS total_count FROM filtered")
+}
 
-    if let Some(filter) = filter {
-        if let Some(kind) = filter.kind {
-            clauses.push(canonical_kind_clause("a.canonical_kind", kind));
-        }
-        if let Some(symbol_fqn) = filter.symbol_fqn.as_deref() {
-            clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
-        }
-        if let Some(lines) = filter.lines.as_ref() {
-            clauses.push(format!(
-                "a.start_line <= {} AND a.end_line >= {}",
-                lines.end, lines.start
-            ));
-        }
-    }
+pub(super) fn build_current_artefacts_cursor_exists_sql(
+    repo_id: &str,
+    branch: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+    filter: Option<&ArtefactFilterInput>,
+    temporal_scope: Option<&ResolvedTemporalScope>,
+    cursor: &str,
+) -> String {
+    let filtered_cte = build_filtered_artefacts_cte_sql(
+        repo_id,
+        branch,
+        path,
+        project_path,
+        filter,
+        temporal_scope,
+    );
+    format!(
+        "{filtered_cte} \
+         SELECT 1 AS cursor_match \
+           FROM filtered \
+          WHERE artefact_id = '{cursor}' \
+          LIMIT 1",
+        cursor = esc_pg(cursor),
+    )
+}
+
+pub(super) fn build_current_artefacts_window_sql(
+    repo_id: &str,
+    branch: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+    filter: Option<&ArtefactFilterInput>,
+    temporal_scope: Option<&ResolvedTemporalScope>,
+    after: Option<&str>,
+    limit: usize,
+) -> String {
+    let filtered_cte = build_filtered_artefacts_cte_sql(
+        repo_id,
+        branch,
+        path,
+        project_path,
+        filter,
+        temporal_scope,
+    );
+    let pagination_clause = after.map_or_else(String::new, |cursor| {
+        format!(
+            " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
+                    (SELECT path, kind_rank, start_line, end_line, artefact_id \
+                       FROM filtered \
+                      WHERE artefact_id = '{cursor}')",
+            cursor = esc_pg(cursor),
+        )
+    });
 
     format!(
-        "{} WHERE {} ORDER BY a.path, \
-         CASE WHEN a.canonical_kind = 'file' THEN 0 ELSE 1 END, \
-         a.start_line, a.end_line, a.artefact_id",
-        if use_historical_tables {
-            historical_artefact_select_sql()
-        } else {
-            current_artefact_select_sql()
-        },
-        clauses.join(" AND ")
+        "{filtered_cte} \
+         SELECT {columns} \
+           FROM filtered{pagination_clause} \
+       ORDER BY {order} \
+          LIMIT {limit}",
+        columns = filtered_artefact_columns_sql(),
+        order = filtered_artefact_order_sql(),
+        limit = limit,
     )
 }
 
@@ -220,14 +266,14 @@ pub(super) fn build_artefacts_by_ids_sql(
         clauses.push(repo_path_prefix_clause("a.path", project_path));
     }
     format!(
-        "{} WHERE {} \
-           ORDER BY a.path, a.start_line, a.artefact_id",
-        if use_historical_tables {
-            historical_artefact_select_sql()
-        } else {
-            current_artefact_select_sql()
-        },
+        "SELECT {} \
+           FROM {} a \
+          WHERE {} \
+       ORDER BY {}",
+        artefact_select_columns_sql("a", use_historical_tables),
+        artefacts_table_sql(use_historical_tables),
         clauses.join(" AND "),
+        artefact_order_sql("a"),
     )
 }
 
@@ -251,14 +297,14 @@ pub(super) fn build_child_artefacts_sql(
         clauses.push(repo_path_prefix_clause("a.path", project_path));
     }
     format!(
-        "{} WHERE {} \
-           ORDER BY a.path, a.start_line, a.artefact_id",
-        if use_historical_tables {
-            historical_artefact_select_sql()
-        } else {
-            current_artefact_select_sql()
-        },
+        "SELECT {} \
+           FROM {} a \
+          WHERE {} \
+       ORDER BY {}",
+        artefact_select_columns_sql("a", use_historical_tables),
+        artefacts_table_sql(use_historical_tables),
         clauses.join(" AND "),
+        artefact_order_sql("a"),
     )
 }
 
@@ -552,22 +598,6 @@ pub(super) enum DependencyScope<'a> {
     Project(&'a str),
 }
 
-fn current_artefact_select_sql() -> &'static str {
-    "SELECT a.symbol_id, a.artefact_id, a.path, a.language, a.canonical_kind, a.language_kind, \
-            a.symbol_fqn, a.parent_artefact_id, a.start_line, a.end_line, a.start_byte, \
-            a.end_byte, a.signature, a.modifiers, a.docstring, a.blob_sha, a.content_hash, \
-            a.updated_at AS created_at \
-       FROM artefacts_current a"
-}
-
-fn historical_artefact_select_sql() -> &'static str {
-    "SELECT a.symbol_id, a.artefact_id, a.path, a.language, a.canonical_kind, a.language_kind, \
-            a.symbol_fqn, a.parent_artefact_id, a.start_line, a.end_line, a.start_byte, \
-            a.end_byte, a.signature, a.modifiers, a.docstring, a.blob_sha, a.content_hash, \
-            a.created_at AS created_at \
-       FROM artefacts a"
-}
-
 fn canonical_kind_clause(column: &str, kind: CanonicalKind) -> String {
     let values: &[&str] = match kind {
         CanonicalKind::File => &["file"],
@@ -649,4 +679,123 @@ fn quoted_string_list(values: &[String]) -> String {
         .map(|value| format!("'{}'", esc_pg(value)))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn build_artefact_where_clauses(
+    repo_id: &str,
+    branch: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+    filter: Option<&ArtefactFilterInput>,
+    temporal_scope: Option<&ResolvedTemporalScope>,
+) -> (bool, Vec<String>) {
+    let use_historical_tables =
+        temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
+    let mut clauses = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
+    if !use_historical_tables {
+        clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
+    }
+    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+        clauses.push("a.revision_kind = 'temporary'".to_string());
+        clauses.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
+    }
+    if let Some(scope) = temporal_scope.filter(|scope| scope.use_historical_tables()) {
+        clauses.push(file_state_exists_clause(
+            "a.path",
+            "a.blob_sha",
+            repo_id,
+            scope.resolved_commit(),
+        ));
+    }
+
+    if let Some(path) = path {
+        clauses.push(format!("a.path = '{}'", esc_pg(path)));
+    }
+    if let Some(project_path) = project_path {
+        clauses.push(repo_path_prefix_clause("a.path", project_path));
+    }
+
+    if let Some(filter) = filter {
+        if let Some(kind) = filter.kind {
+            clauses.push(canonical_kind_clause("a.canonical_kind", kind));
+        }
+        if let Some(symbol_fqn) = filter.symbol_fqn.as_deref() {
+            clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
+        }
+        if let Some(lines) = filter.lines.as_ref() {
+            clauses.push(format!(
+                "a.start_line <= {} AND a.end_line >= {}",
+                lines.end, lines.start
+            ));
+        }
+    }
+
+    (use_historical_tables, clauses)
+}
+
+fn build_filtered_artefacts_cte_sql(
+    repo_id: &str,
+    branch: &str,
+    path: Option<&str>,
+    project_path: Option<&str>,
+    filter: Option<&ArtefactFilterInput>,
+    temporal_scope: Option<&ResolvedTemporalScope>,
+) -> String {
+    let (use_historical_tables, clauses) =
+        build_artefact_where_clauses(repo_id, branch, path, project_path, filter, temporal_scope);
+    format!(
+        "WITH filtered AS ( \
+             SELECT {}, {} AS kind_rank \
+               FROM {} a \
+              WHERE {} \
+         )",
+        artefact_select_columns_sql("a", use_historical_tables),
+        artefact_kind_rank_sql("a"),
+        artefacts_table_sql(use_historical_tables),
+        clauses.join(" AND "),
+    )
+}
+
+fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
+    if use_historical_tables {
+        "artefacts"
+    } else {
+        "artefacts_current"
+    }
+}
+
+fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> String {
+    let created_at_column = if use_historical_tables {
+        format!("{alias}.created_at AS created_at")
+    } else {
+        format!("{alias}.updated_at AS created_at")
+    };
+    format!(
+        "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
+         {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
+         {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
+         {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
+         {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {created_at_column}",
+    )
+}
+
+fn filtered_artefact_columns_sql() -> &'static str {
+    "symbol_id, artefact_id, path, language, canonical_kind, language_kind, symbol_fqn, \
+     parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, \
+     docstring, blob_sha, content_hash, created_at"
+}
+
+fn artefact_kind_rank_sql(alias: &str) -> String {
+    format!("CASE WHEN {alias}.canonical_kind = 'file' THEN 0 ELSE 1 END")
+}
+
+fn artefact_order_sql(alias: &str) -> String {
+    format!(
+        "{alias}.path, {}, {alias}.start_line, {alias}.end_line, {alias}.artefact_id",
+        artefact_kind_rank_sql(alias),
+    )
+}
+
+fn filtered_artefact_order_sql() -> &'static str {
+    "path, kind_rank, start_line, end_line, artefact_id"
 }

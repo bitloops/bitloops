@@ -3,14 +3,16 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::graphql::pack_adapter::StageResolverAdapter;
-use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
+use crate::graphql::{
+    DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
+};
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput, DateTimeScalar,
     DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext, JsonScalar,
     KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    TestHarnessCoverageResult, TestHarnessTestsResult, connection::PageInfo, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -89,18 +91,74 @@ impl Project {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
         }
-        let artefacts = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
-            .list_artefacts(None, filter.as_ref(), &self.scope)
+        if first <= 0 {
+            return Err(bad_user_input_error("`first` must be greater than zero"));
+        }
+
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        if filter
+            .as_ref()
+            .is_some_and(|filter| filter.needs_event_backed_filter())
+        {
+            let artefacts = context
+                .list_artefacts(None, filter.as_ref(), &self.scope)
+                .await
+                .map_err(|err| {
+                    backend_error(format!("failed to query project artefacts: {err:#}"))
+                })?;
+            let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
+                artefact.cursor()
+            })?;
+            return Ok(ArtefactConnection::new(
+                page.items.into_iter().map(ArtefactEdge::new).collect(),
+                page.page_info,
+                page.total_count,
+            ));
+        }
+
+        let total_count = context
+            .count_artefacts(None, filter.as_ref(), &self.scope)
             .await
             .map_err(|err| backend_error(format!("failed to query project artefacts: {err:#}")))?;
-        let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
-            artefact.cursor()
-        })?;
+
+        if let Some(cursor) = after.as_deref() {
+            let cursor_exists = context
+                .artefact_cursor_exists(None, filter.as_ref(), &self.scope, cursor)
+                .await
+                .map_err(|err| {
+                    backend_error(format!("failed to query project artefacts: {err:#}"))
+                })?;
+            if !cursor_exists {
+                return Err(bad_cursor_error(format!(
+                    "cursor `{cursor}` does not match any result in this connection"
+                )));
+            }
+        }
+
+        let mut artefacts = context
+            .list_artefacts_window(
+                None,
+                filter.as_ref(),
+                &self.scope,
+                after.as_deref(),
+                first as usize + 1,
+            )
+            .await
+            .map_err(|err| backend_error(format!("failed to query project artefacts: {err:#}")))?;
+        let has_next_page = artefacts.len() > first as usize;
+        artefacts.truncate(first as usize);
+        let start_cursor = artefacts.first().map(|artefact| artefact.cursor());
+        let end_cursor = artefacts.last().map(|artefact| artefact.cursor());
+
         Ok(ArtefactConnection::new(
-            page.items.into_iter().map(ArtefactEdge::new).collect(),
-            page.page_info,
-            page.total_count,
+            artefacts.into_iter().map(ArtefactEdge::new).collect(),
+            PageInfo {
+                has_next_page,
+                has_previous_page: after.is_some(),
+                start_cursor,
+                end_cursor,
+            },
+            total_count,
         ))
     }
 
