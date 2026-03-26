@@ -53,6 +53,7 @@ pub(super) fn build_current_artefacts_sql(
     repo_id: &str,
     branch: &str,
     path: Option<&str>,
+    project_path: Option<&str>,
     filter: Option<&ArtefactFilterInput>,
 ) -> String {
     let mut clauses = vec![
@@ -62,6 +63,9 @@ pub(super) fn build_current_artefacts_sql(
 
     if let Some(path) = path {
         clauses.push(format!("a.path = '{}'", esc_pg(path)));
+    }
+    if let Some(project_path) = project_path {
+        clauses.push(repo_path_prefix_clause("a.path", project_path));
     }
 
     if let Some(filter) = filter {
@@ -92,14 +96,21 @@ pub(super) fn build_artefacts_by_ids_sql(
     repo_id: &str,
     branch: &str,
     artefact_ids: &[String],
+    project_path: Option<&str>,
 ) -> String {
+    let mut clauses = vec![
+        format!("a.repo_id = '{}'", esc_pg(repo_id)),
+        format!("a.branch = '{}'", esc_pg(branch)),
+        format!("a.artefact_id IN ({})", quoted_string_list(artefact_ids)),
+    ];
+    if let Some(project_path) = project_path {
+        clauses.push(repo_path_prefix_clause("a.path", project_path));
+    }
     format!(
-        "{} WHERE a.repo_id = '{}' AND a.branch = '{}' AND a.artefact_id IN ({}) \
+        "{} WHERE {} \
            ORDER BY a.path, a.start_line, a.artefact_id",
         current_artefact_select_sql(),
-        esc_pg(repo_id),
-        esc_pg(branch),
-        quoted_string_list(artefact_ids),
+        clauses.join(" AND "),
     )
 }
 
@@ -107,14 +118,21 @@ pub(super) fn build_child_artefacts_sql(
     repo_id: &str,
     branch: &str,
     parent_artefact_id: &str,
+    project_path: Option<&str>,
 ) -> String {
+    let mut clauses = vec![
+        format!("a.repo_id = '{}'", esc_pg(repo_id)),
+        format!("a.branch = '{}'", esc_pg(branch)),
+        format!("a.parent_artefact_id = '{}'", esc_pg(parent_artefact_id)),
+    ];
+    if let Some(project_path) = project_path {
+        clauses.push(repo_path_prefix_clause("a.path", project_path));
+    }
     format!(
-        "{} WHERE a.repo_id = '{}' AND a.branch = '{}' AND a.parent_artefact_id = '{}' \
+        "{} WHERE {} \
            ORDER BY a.path, a.start_line, a.artefact_id",
         current_artefact_select_sql(),
-        esc_pg(repo_id),
-        esc_pg(branch),
-        esc_pg(parent_artefact_id),
+        clauses.join(" AND "),
     )
 }
 
@@ -122,6 +140,7 @@ pub(super) fn build_current_dependency_sql(
     repo_id: &str,
     branch: &str,
     scope: DependencyScope<'_>,
+    project_path: Option<&str>,
     filter: DepsFilterInput,
 ) -> String {
     let mut clauses = vec![
@@ -153,6 +172,27 @@ pub(super) fn build_current_dependency_sql(
                 esc_pg(path)
             ));
         }
+        (DependencyScope::Project(path), DepsDirection::Out) => {
+            clauses.push(repo_path_prefix_clause("src.path", path));
+        }
+        (DependencyScope::Project(path), DepsDirection::In) => {
+            clauses.push(repo_path_prefix_clause("tgt.path", path));
+        }
+        (DependencyScope::Project(path), DepsDirection::Both) => {
+            clauses.push(repo_path_either_clause("src.path", "tgt.path", path));
+        }
+    }
+
+    if let Some(project_path) = project_path {
+        match filter.direction {
+            DepsDirection::Out => clauses.push(repo_path_prefix_clause("src.path", project_path)),
+            DepsDirection::In => clauses.push(repo_path_prefix_clause("tgt.path", project_path)),
+            DepsDirection::Both => clauses.push(repo_path_either_clause(
+                "src.path",
+                "tgt.path",
+                project_path,
+            )),
+        }
     }
 
     format!(
@@ -178,6 +218,7 @@ pub(super) fn build_current_dependency_batch_sql(
     artefact_ids: &[String],
     direction: DepsDirection,
     filter: DepsFilterInput,
+    project_path: Option<&str>,
 ) -> String {
     let mut clauses = vec![
         format!("e.repo_id = '{}'", esc_pg(repo_id)),
@@ -205,6 +246,17 @@ pub(super) fn build_current_dependency_batch_sql(
         "{owner_column} IN ({})",
         quoted_string_list(artefact_ids)
     ));
+    if let Some(project_path) = project_path {
+        match direction {
+            DepsDirection::Out => clauses.push(repo_path_prefix_clause("src.path", project_path)),
+            DepsDirection::In => clauses.push(repo_path_prefix_clause("tgt.path", project_path)),
+            DepsDirection::Both => clauses.push(repo_path_either_clause(
+                "src.path",
+                "tgt.path",
+                project_path,
+            )),
+        }
+    }
 
     format!(
         "SELECT {owner_column} AS owner_artefact_id, \
@@ -236,10 +288,18 @@ pub(super) fn normalise_repo_relative_path(
         return Err("path must be relative to the repository root".to_string());
     }
 
+    let mut components = Vec::new();
     for component in Path::new(&normalized).components() {
         match component {
             Component::CurDir => {}
-            Component::Normal(_) => {}
+            Component::Normal(value) => {
+                components.push(
+                    value
+                        .to_str()
+                        .ok_or_else(|| "path must be valid UTF-8".to_string())?
+                        .to_string(),
+                );
+            }
             Component::ParentDir => {
                 return Err("path must not contain parent path traversal".to_string());
             }
@@ -248,6 +308,12 @@ pub(super) fn normalise_repo_relative_path(
             }
         }
     }
+
+    if components.is_empty() {
+        return Err("path cannot be empty".to_string());
+    }
+
+    let normalized = components.join("/");
 
     if !allow_glob && (normalized.contains('*') || normalized.contains('?')) {
         return Err("single-file lookups do not accept glob patterns".to_string());
@@ -263,6 +329,7 @@ pub(super) fn quote_devql_string(value: &str) -> String {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DependencyScope<'a> {
     File(&'a str),
+    Project(&'a str),
 }
 
 fn current_artefact_select_sql() -> &'static str {
@@ -309,6 +376,23 @@ fn canonical_kind_clause(column: &str, kind: CanonicalKind) -> String {
 
 fn glob_to_like(glob: &str) -> String {
     glob.replace("**", "%").replace('*', "%").replace('?', "_")
+}
+
+fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
+    format!(
+        "({column} = '{path}' OR {column} LIKE '{prefix}')",
+        column = column,
+        path = esc_pg(project_path),
+        prefix = esc_pg(&format!("{project_path}/%")),
+    )
+}
+
+fn repo_path_either_clause(source_column: &str, target_column: &str, project_path: &str) -> String {
+    format!(
+        "({} OR {})",
+        repo_path_prefix_clause(source_column, project_path),
+        repo_path_prefix_clause(target_column, project_path),
+    )
 }
 
 fn quoted_string_list(values: &[String]) -> String {

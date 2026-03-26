@@ -659,6 +659,314 @@ fn seed_graphql_devql_repo() -> TempDir {
     dir
 }
 
+fn seed_graphql_monorepo_repo() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    fs::create_dir_all(repo_root.join("packages/api/src")).expect("create api src dir");
+    fs::create_dir_all(repo_root.join("packages/web/src")).expect("create web src dir");
+    fs::write(
+        repo_root.join("packages/api/src/caller.ts"),
+        "import { target } from \"./target\";\nimport { render } from \"../../web/src/page\";\n\nexport function caller() {\n  return target() + render();\n}\n",
+    )
+    .expect("write api caller.ts");
+    fs::write(
+        repo_root.join("packages/api/src/target.ts"),
+        "export function target() {\n  return 41;\n}\n",
+    )
+    .expect("write api target.ts");
+    fs::write(
+        repo_root.join("packages/web/src/page.ts"),
+        "export function render() {\n  return 1;\n}\n",
+    )
+    .expect("write web page.ts");
+    git_ok(repo_root, &["add", "."]);
+    git_ok(repo_root, &["commit", "-m", "Seed GraphQL monorepo repo"]);
+    let commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+
+    let sqlite_path = repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("graphql-monorepo.sqlite");
+    crate::storage::init::init_database(&sqlite_path, false, &commit_sha)
+        .expect("initialise GraphQL monorepo sqlite store");
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }),
+    );
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL monorepo sqlite");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES (?1, 'local', 'local', 'graphql-monorepo', 'main')",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert repository row");
+    conn.execute(
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at)
+         VALUES (?1, ?2, 'Alice', 'alice@example.com', 'Seed GraphQL monorepo repo', '2026-03-26T10:00:00Z')",
+        rusqlite::params![commit_sha.as_str(), repo_id.as_str()],
+    )
+    .expect("insert commit row");
+
+    for (path, blob_sha) in [
+        ("packages/api/src/caller.ts", "blob-api-caller"),
+        ("packages/api/src/target.ts", "blob-api-target"),
+        ("packages/web/src/page.ts", "blob-web-page"),
+    ] {
+        conn.execute(
+            "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![repo_id.as_str(), commit_sha.as_str(), path, blob_sha],
+        )
+        .expect("insert file_state row");
+        conn.execute(
+            "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
+             VALUES (?1, ?2, ?3, ?4, '2026-03-26T10:00:00Z')",
+            rusqlite::params![repo_id.as_str(), path, commit_sha.as_str(), blob_sha],
+        )
+        .expect("insert current_file_state row");
+    }
+
+    let artefacts = [
+        (
+            "file::api-caller",
+            "artefact::file-api-caller",
+            "blob-api-caller",
+            "packages/api/src/caller.ts",
+            "file",
+            "source_file",
+            "packages/api/src/caller.ts",
+            Option::<&str>::None,
+            1_i64,
+            6_i64,
+        ),
+        (
+            "sym::api-caller",
+            "artefact::api-caller",
+            "blob-api-caller",
+            "packages/api/src/caller.ts",
+            "function",
+            "function_declaration",
+            "packages/api/src/caller.ts::caller",
+            Some("artefact::file-api-caller"),
+            4_i64,
+            6_i64,
+        ),
+        (
+            "file::api-target",
+            "artefact::file-api-target",
+            "blob-api-target",
+            "packages/api/src/target.ts",
+            "file",
+            "source_file",
+            "packages/api/src/target.ts",
+            Option::<&str>::None,
+            1_i64,
+            3_i64,
+        ),
+        (
+            "sym::api-target",
+            "artefact::api-target",
+            "blob-api-target",
+            "packages/api/src/target.ts",
+            "function",
+            "function_declaration",
+            "packages/api/src/target.ts::target",
+            Some("artefact::file-api-target"),
+            1_i64,
+            3_i64,
+        ),
+        (
+            "file::web-page",
+            "artefact::file-web-page",
+            "blob-web-page",
+            "packages/web/src/page.ts",
+            "file",
+            "source_file",
+            "packages/web/src/page.ts",
+            Option::<&str>::None,
+            1_i64,
+            3_i64,
+        ),
+        (
+            "sym::web-render",
+            "artefact::web-render",
+            "blob-web-page",
+            "packages/web/src/page.ts",
+            "function",
+            "function_declaration",
+            "packages/web/src/page.ts::render",
+            Some("artefact::file-web-page"),
+            1_i64,
+            3_i64,
+        ),
+    ];
+
+    for (
+        symbol_id,
+        artefact_id,
+        blob_sha,
+        path,
+        canonical_kind,
+        language_kind,
+        symbol_fqn,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in artefacts
+    {
+        let parent_symbol_id = match parent_artefact_id {
+            Some("artefact::file-api-caller") => Some("file::api-caller"),
+            Some("artefact::file-api-target") => Some("file::api-target"),
+            Some("artefact::file-web-page") => Some("file::web-page"),
+            _ => None,
+        };
+        conn.execute(
+            "INSERT INTO artefacts (
+                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
+                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
+                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                artefact_id,
+                symbol_id,
+                repo_id.as_str(),
+                blob_sha,
+                path,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"export\"]"
+                },
+                if canonical_kind == "file" {
+                    Option::<&str>::None
+                } else {
+                    Some("Monorepo docstring")
+                },
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact row");
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
+                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
+                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
+                start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+            ) VALUES (
+                ?1, 'main', ?2, ?3, ?4, 'commit', ?4,
+                NULL, ?5, ?6, 'typescript', ?7, ?8,
+                ?9, ?10, ?11, ?12, ?13,
+                0, ?14, NULL, ?15, ?16, ?17, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                symbol_id,
+                artefact_id,
+                commit_sha.as_str(),
+                blob_sha,
+                path,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"export\"]"
+                },
+                if canonical_kind == "file" {
+                    Option::<&str>::None
+                } else {
+                    Some("Monorepo docstring")
+                },
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact current row");
+    }
+
+    for (
+        edge_id,
+        from_symbol_id,
+        from_artefact_id,
+        to_symbol_id,
+        to_artefact_id,
+        to_symbol_ref,
+        line,
+    ) in [
+        (
+            "edge-api-local",
+            "sym::api-caller",
+            "artefact::api-caller",
+            Some("sym::api-target"),
+            Some("artefact::api-target"),
+            Some("packages/api/src/target.ts::target"),
+            5_i64,
+        ),
+        (
+            "edge-api-cross",
+            "sym::api-caller",
+            "artefact::api-caller",
+            Some("sym::web-render"),
+            Some("artefact::web-render"),
+            Some("packages/web/src/page.ts::render"),
+            5_i64,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefact_edges_current (
+                edge_id, repo_id, branch, commit_sha, revision_kind, revision_id,
+                temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+                start_line, end_line, metadata, updated_at
+            ) VALUES (
+                ?1, ?2, 'main', ?3, 'commit', ?3,
+                NULL, 'blob-api-caller', 'packages/api/src/caller.ts', ?4, ?5,
+                ?6, ?7, ?8, 'calls', 'typescript',
+                ?9, ?9, '{\"resolution\":\"local\"}', '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                edge_id,
+                repo_id.as_str(),
+                commit_sha.as_str(),
+                from_symbol_id,
+                from_artefact_id,
+                to_symbol_id,
+                to_artefact_id,
+                to_symbol_ref,
+                line,
+            ],
+        )
+        .expect("insert edge current row");
+    }
+
+    dir
+}
+
 fn seed_dashboard_repo_without_commit_mapping() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
@@ -1974,6 +2282,224 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
 }
 
 #[tokio::test]
+async fn devql_project_queries_scope_paths_and_isolate_cross_project_resolution() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                api: project(path: "packages/api") {
+                  path
+                  file(path: "src/caller.ts") {
+                    path
+                  }
+                  files(path: "src/*.ts") {
+                    path
+                  }
+                  artefacts(filter: { kind: FUNCTION }, first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        path
+                        outgoingDeps {
+                          totalCount
+                          edges {
+                            node {
+                              toSymbolRef
+                              toArtefact {
+                                symbolFqn
+                                path
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                  deps(filter: { direction: OUT }, first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        toSymbolRef
+                        toArtefact {
+                          symbolFqn
+                          path
+                        }
+                      }
+                    }
+                  }
+                }
+                web: project(path: "packages/web") {
+                  path
+                  artefacts(filter: { kind: FUNCTION }, first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        symbolFqn
+                        path
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["api"]["path"], "packages/api");
+    assert_eq!(
+        json["repo"]["api"]["file"]["path"],
+        "packages/api/src/caller.ts"
+    );
+    assert_eq!(
+        json["repo"]["api"]["files"],
+        json!([
+            { "path": "packages/api/src/caller.ts" },
+            { "path": "packages/api/src/target.ts" }
+        ])
+    );
+    assert_eq!(json["repo"]["api"]["artefacts"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][1]["node"]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][0]["node"]["toArtefact"]
+            ["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][1]["node"]["toSymbolRef"],
+        "packages/web/src/page.ts::render"
+    );
+    assert_eq!(
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][1]["node"]["toArtefact"],
+        serde_json::Value::Null
+    );
+    assert_eq!(json["repo"]["api"]["deps"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["api"]["deps"]["edges"][1]["node"]["toArtefact"],
+        serde_json::Value::Null
+    );
+    assert_eq!(json["repo"]["web"]["path"], "packages/web");
+    assert_eq!(json["repo"]["web"]["artefacts"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["web"]["artefacts"]["edges"][0]["node"]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn devql_project_queries_validate_project_paths() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let invalid = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "../packages/api") {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        invalid.errors.len(),
+        1,
+        "expected invalid project path error"
+    );
+    assert_eq!(
+        invalid.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+
+    let missing = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/missing") {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        missing.errors.len(),
+        1,
+        "expected missing project path error"
+    );
+    assert_eq!(
+        missing.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+
+    let not_directory = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api/src/caller.ts") {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        not_directory.errors.len(),
+        1,
+        "expected non-directory project path error"
+    );
+    assert_eq!(
+        not_directory.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+}
+
+#[tokio::test]
 async fn devql_graphql_artefact_resolvers_validate_paths_and_line_ranges() {
     let repo = seed_graphql_devql_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -2278,6 +2804,7 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("type QueryRoot"));
     assert!(body.contains("repo(name: String!): Repository!"));
+    assert!(body.contains("project(path: String!): Project!"));
 }
 
 #[tokio::test]

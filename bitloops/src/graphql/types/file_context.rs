@@ -1,6 +1,6 @@
 use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error};
+use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error};
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, DependencyConnectionEdge,
@@ -13,6 +13,15 @@ pub struct FileContext {
     pub path: String,
     pub language: Option<String>,
     pub blob_sha: Option<String>,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
+}
+
+impl FileContext {
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
+    }
 }
 
 #[ComplexObject]
@@ -29,7 +38,7 @@ impl FileContext {
         }
         let artefacts = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_artefacts(Some(self.path.as_str()), filter.as_ref())
+            .list_artefacts(Some(self.path.as_str()), filter.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -56,7 +65,7 @@ impl FileContext {
     ) -> Result<DependencyEdgeConnection> {
         let deps = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_file_dependency_edges(self.path.as_str(), filter.as_ref())
+            .list_file_dependency_edges(self.path.as_str(), filter.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(

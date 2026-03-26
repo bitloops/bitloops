@@ -1,7 +1,7 @@
 use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
 use crate::graphql::{
-    DevqlGraphqlContext, backend_error, bad_user_input_error, loaders::DataLoaders,
+    DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error, loaders::DataLoaders,
 };
 
 use super::{
@@ -113,11 +113,18 @@ pub struct Artefact {
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 impl Artefact {
     pub fn cursor(&self) -> String {
         self.id.to_string()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -129,7 +136,7 @@ impl Artefact {
         };
 
         ctx.data_unchecked::<DataLoaders>()
-            .load_artefact_by_id(parent_id.as_ref())
+            .load_artefact_by_id(parent_id.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -148,7 +155,7 @@ impl Artefact {
     ) -> Result<ArtefactConnection> {
         let artefacts = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_child_artefacts(self.id.as_ref())
+            .list_child_artefacts(self.id.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -175,7 +182,7 @@ impl Artefact {
     ) -> Result<DependencyEdgeConnection> {
         let deps = ctx
             .data_unchecked::<DataLoaders>()
-            .load_outgoing_edges(self.id.as_ref(), filter)
+            .load_outgoing_edges(self.id.as_ref(), filter, &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -203,7 +210,7 @@ impl Artefact {
     ) -> Result<DependencyEdgeConnection> {
         let deps = ctx
             .data_unchecked::<DataLoaders>()
-            .load_incoming_edges(self.id.as_ref(), filter)
+            .load_incoming_edges(self.id.as_ref(), filter, &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(

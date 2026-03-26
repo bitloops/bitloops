@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use serde_json::Value;
 
+use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, CanonicalKind, DateTimeScalar, DependencyEdge, EdgeKind, FileContext,
 };
@@ -12,6 +13,7 @@ pub(super) fn file_context_from_value(row: Value) -> Result<FileContext> {
         path,
         language: optional_string_field(&row, "language"),
         blob_sha: optional_string_field(&row, "blob_sha"),
+        scope: ResolverScope::default(),
     })
 }
 
@@ -37,6 +39,7 @@ pub(super) fn artefact_from_value(row: Value) -> Result<Artefact> {
         content_hash: optional_string_field(&row, "content_hash"),
         blob_sha: string_field(&row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(&row, "created_at")?.as_str())?,
+        scope: ResolverScope::default(),
     })
 }
 
@@ -52,6 +55,7 @@ pub(super) fn dependency_edge_from_value(row: Value) -> Result<DependencyEdge> {
         start_line: optional_i32_field(&row, "start_line"),
         end_line: optional_i32_field(&row, "end_line"),
         metadata: parse_json_field(&row, "metadata").map(async_graphql::types::Json),
+        scope: ResolverScope::default(),
     })
 }
 

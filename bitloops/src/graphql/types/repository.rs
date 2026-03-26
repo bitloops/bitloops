@@ -1,10 +1,10 @@
 use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error, bad_user_input_error};
+use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, CommitConnection, CommitEdge,
-    DateTimeScalar, FileContext, paginate_items,
+    DateTimeScalar, FileContext, Project, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -14,6 +14,8 @@ pub struct Repository {
     pub name: String,
     pub provider: String,
     pub organization: String,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 impl Repository {
@@ -23,6 +25,7 @@ impl Repository {
             name: name.to_string(),
             provider: provider.to_string(),
             organization: organization.to_string(),
+            scope: ResolverScope::default(),
         }
     }
 }
@@ -36,6 +39,17 @@ pub struct Branch {
 
 #[ComplexObject]
 impl Repository {
+    async fn project(&self, ctx: &Context<'_>, path: String) -> Result<Project> {
+        let project_path = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .validate_project_path(&path)
+            .map_err(bad_user_input_error)?;
+        Ok(Project::new(
+            project_path.clone(),
+            self.scope.with_project_path(project_path),
+        ))
+    }
+
     async fn default_branch(&self, ctx: &Context<'_>) -> String {
         ctx.data_unchecked::<DevqlGraphqlContext>()
             .default_branch_name()
@@ -127,10 +141,10 @@ impl Repository {
     async fn file(&self, ctx: &Context<'_>, path: String) -> Result<FileContext> {
         let normalized = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .validate_repo_relative_path(&path, false)
+            .resolve_scope_path(&self.scope, &path, false)
             .map_err(bad_user_input_error)?;
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .resolve_file_context(&normalized)
+            .resolve_file_context(&normalized, &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!("failed to resolve file `{normalized}`: {err:#}"))
@@ -141,10 +155,10 @@ impl Repository {
     async fn files(&self, ctx: &Context<'_>, path: String) -> Result<Vec<FileContext>> {
         let normalized = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .validate_repo_relative_path(&path, true)
+            .resolve_scope_path(&self.scope, &path, true)
             .map_err(bad_user_input_error)?;
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_file_contexts(&normalized)
+            .list_file_contexts(&normalized, &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!("failed to resolve files `{normalized}`: {err:#}"))
@@ -163,7 +177,7 @@ impl Repository {
         }
         let artefacts = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_artefacts(None, filter.as_ref())
+            .list_artefacts(None, filter.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!("failed to query repository artefacts: {err:#}"))

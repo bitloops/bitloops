@@ -10,6 +10,7 @@ use self::sql::{
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
+use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
 };
@@ -19,15 +20,39 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 impl DevqlGraphqlContext {
-    pub(crate) fn validate_repo_relative_path(
+    pub(crate) fn validate_project_path(&self, path: &str) -> std::result::Result<String, String> {
+        let normalized = normalise_repo_relative_path(path, false)?;
+        let candidate = self.repo_root.join(&normalized);
+        if !candidate.exists() {
+            return Err(format!("unknown project path `{normalized}`"));
+        }
+        if !candidate.is_dir() {
+            return Err(format!("project path `{normalized}` is not a directory"));
+        }
+        Ok(normalized)
+    }
+
+    pub(crate) fn resolve_scope_path(
         &self,
+        scope: &ResolverScope,
         path: &str,
         allow_glob: bool,
     ) -> std::result::Result<String, String> {
-        normalise_repo_relative_path(path, allow_glob)
+        let normalized = normalise_repo_relative_path(path, allow_glob)?;
+        Ok(match scope.project_path() {
+            Some(project_path) => format!("{project_path}/{normalized}"),
+            None => normalized,
+        })
     }
 
-    pub(crate) async fn resolve_file_context(&self, path: &str) -> Result<Option<FileContext>> {
+    pub(crate) async fn resolve_file_context(
+        &self,
+        path: &str,
+        scope: &ResolverScope,
+    ) -> Result<Option<FileContext>> {
+        if !scope.contains_repo_path(path) {
+            return Ok(None);
+        }
         let sql = build_file_context_lookup_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
@@ -37,30 +62,39 @@ impl DevqlGraphqlContext {
         rows.into_iter()
             .next()
             .map(file_context_from_value)
+            .map(|result| result.map(|file| file.with_scope(scope.clone())))
             .transpose()
     }
 
-    pub(crate) async fn list_file_contexts(&self, glob: &str) -> Result<Vec<FileContext>> {
+    pub(crate) async fn list_file_contexts(
+        &self,
+        glob: &str,
+        scope: &ResolverScope,
+    ) -> Result<Vec<FileContext>> {
         let sql = build_file_context_list_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             glob,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().map(file_context_from_value).collect()
+        rows.into_iter()
+            .map(file_context_from_value)
+            .map(|result| result.map(|file| file.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn list_artefacts(
         &self,
         path: Option<&str>,
         filter: Option<&ArtefactFilterInput>,
+        scope: &ResolverScope,
     ) -> Result<Vec<Artefact>> {
         if let Some(filter) = filter {
             filter
                 .validate()
                 .map_err(|err| anyhow::anyhow!(err.message))?;
             if filter.needs_event_backed_filter() {
-                return self.list_artefacts_via_devql(path, filter).await;
+                return self.list_artefacts_via_devql(path, filter, scope).await;
             }
         }
 
@@ -68,15 +102,20 @@ impl DevqlGraphqlContext {
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             path,
+            scope.project_path(),
             filter,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().map(artefact_from_value).collect()
+        rows.into_iter()
+            .map(artefact_from_value)
+            .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn load_artefacts_by_ids(
         &self,
         artefact_ids: &[String],
+        project_path: Option<&str>,
     ) -> Result<HashMap<String, Artefact>> {
         if artefact_ids.is_empty() {
             return Ok(HashMap::new());
@@ -86,11 +125,13 @@ impl DevqlGraphqlContext {
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             artefact_ids,
+            project_path,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         let mut artefacts = HashMap::new();
+        let scope = scope_from_project_path(project_path);
         for row in rows {
-            let artefact = artefact_from_value(row)?;
+            let artefact = artefact_from_value(row)?.with_scope(scope.clone());
             artefacts.insert(artefact.id.to_string(), artefact);
         }
         Ok(artefacts)
@@ -99,29 +140,65 @@ impl DevqlGraphqlContext {
     pub(crate) async fn list_child_artefacts(
         &self,
         parent_artefact_id: &str,
+        scope: &ResolverScope,
     ) -> Result<Vec<Artefact>> {
         let sql = build_child_artefacts_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             parent_artefact_id,
+            scope.project_path(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().map(artefact_from_value).collect()
+        rows.into_iter()
+            .map(artefact_from_value)
+            .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn list_file_dependency_edges(
         &self,
         path: &str,
         filter: Option<&DepsFilterInput>,
+        scope: &ResolverScope,
     ) -> Result<Vec<DependencyEdge>> {
+        if !scope.contains_repo_path(path) {
+            return Ok(Vec::new());
+        }
         let sql = build_current_dependency_sql(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             DependencyScope::File(path),
+            scope.project_path(),
             filter.copied().unwrap_or_default(),
         );
         let rows = self.query_sqlite_rows(&sql).await?;
-        rows.into_iter().map(dependency_edge_from_value).collect()
+        rows.into_iter()
+            .map(dependency_edge_from_value)
+            .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
+            .collect()
+    }
+
+    pub(crate) async fn list_project_dependency_edges(
+        &self,
+        scope: &ResolverScope,
+        filter: Option<&DepsFilterInput>,
+    ) -> Result<Vec<DependencyEdge>> {
+        let Some(project_path) = scope.project_path() else {
+            return Ok(Vec::new());
+        };
+
+        let sql = build_current_dependency_sql(
+            self.repo_identity.repo_id.as_str(),
+            &self.current_branch_name(),
+            DependencyScope::Project(project_path),
+            None,
+            filter.copied().unwrap_or_default(),
+        );
+        let rows = self.query_sqlite_rows(&sql).await?;
+        rows.into_iter()
+            .map(dependency_edge_from_value)
+            .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn load_dependency_edges_by_artefact_ids(
@@ -129,6 +206,7 @@ impl DevqlGraphqlContext {
         artefact_ids: &[String],
         direction: DepsDirection,
         filter: DepsFilterInput,
+        project_path: Option<&str>,
     ) -> Result<HashMap<String, Vec<DependencyEdge>>> {
         if artefact_ids.is_empty() {
             return Ok(HashMap::new());
@@ -140,9 +218,11 @@ impl DevqlGraphqlContext {
             artefact_ids,
             direction,
             filter,
+            project_path,
         );
         let rows = self.query_sqlite_rows(&sql).await?;
         let mut edges_by_artefact = HashMap::<String, Vec<DependencyEdge>>::new();
+        let scope = scope_from_project_path(project_path);
         for row in rows {
             let owner_artefact_id = row
                 .get("owner_artefact_id")
@@ -151,7 +231,7 @@ impl DevqlGraphqlContext {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .context("missing owner artefact id for batched dependency edge")?;
-            let edge = dependency_edge_from_value(row)?;
+            let edge = dependency_edge_from_value(row)?.with_scope(scope.clone());
             edges_by_artefact
                 .entry(owner_artefact_id)
                 .or_default()
@@ -164,10 +244,21 @@ impl DevqlGraphqlContext {
         &self,
         path: Option<&str>,
         filter: &ArtefactFilterInput,
+        scope: &ResolverScope,
     ) -> Result<Vec<Artefact>> {
         let mut stages = Vec::new();
-        if let Some(path) = path {
-            stages.push(format!("file({})", quote_devql_string(path)));
+        let scoped_path = match (path, scope.project_path()) {
+            (Some(path), _) => Some(path.to_string()),
+            (None, Some(project_path)) => Some(format!("{project_path}/**")),
+            (None, None) => None,
+        };
+
+        if let Some(path) = scoped_path.as_deref() {
+            if path.contains('*') || path.contains('?') {
+                stages.push(format!("files(path:{})", quote_devql_string(path)));
+            } else {
+                stages.push(format!("file({})", quote_devql_string(path)));
+            }
         }
 
         let mut args = Vec::new();
@@ -207,7 +298,10 @@ impl DevqlGraphqlContext {
             .as_array()
             .cloned()
             .with_context(|| "DevQL artefact query returned a non-array payload")?;
-        rows.into_iter().map(artefact_from_value).collect()
+        rows.into_iter()
+            .map(artefact_from_value)
+            .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
+            .collect()
     }
 
     async fn query_sqlite_rows(&self, sql: &str) -> Result<Vec<Value>> {
@@ -226,5 +320,12 @@ impl DevqlGraphqlContext {
 
     fn current_branch_name(&self) -> String {
         git_default_branch_name(self.repo_root.as_path())
+    }
+}
+
+fn scope_from_project_path(project_path: Option<&str>) -> ResolverScope {
+    match project_path {
+        Some(project_path) => ResolverScope::default().with_project_path(project_path.to_string()),
+        None => ResolverScope::default(),
     }
 }

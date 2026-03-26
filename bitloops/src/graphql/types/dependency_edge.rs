@@ -1,6 +1,6 @@
 use async_graphql::{ComplexObject, Context, Enum, ID, InputObject, Result, SimpleObject};
 
-use crate::graphql::{backend_error, loaders::DataLoaders};
+use crate::graphql::{ResolverScope, backend_error, loaders::DataLoaders};
 
 use super::{Artefact, JsonScalar};
 
@@ -66,11 +66,18 @@ pub struct DependencyEdge {
     pub start_line: Option<i32>,
     pub end_line: Option<i32>,
     pub metadata: Option<JsonScalar>,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 impl DependencyEdge {
     pub fn cursor(&self) -> String {
         self.id.to_string()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -79,7 +86,7 @@ impl DependencyEdge {
     #[graphql(name = "fromArtefact")]
     async fn source_artefact(&self, ctx: &Context<'_>) -> Result<Artefact> {
         ctx.data_unchecked::<DataLoaders>()
-            .load_artefact_by_id(self.from_artefact_id.as_ref())
+            .load_artefact_by_id(self.from_artefact_id.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -102,7 +109,7 @@ impl DependencyEdge {
         };
 
         ctx.data_unchecked::<DataLoaders>()
-            .load_artefact_by_id(to_artefact_id.as_ref())
+            .load_artefact_by_id(to_artefact_id.as_ref(), &self.scope)
             .await
             .map_err(|err| {
                 backend_error(format!(

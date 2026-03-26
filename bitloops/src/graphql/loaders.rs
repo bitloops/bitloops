@@ -9,8 +9,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use super::DevqlGraphqlContext;
 use super::types::{Artefact, Commit, DependencyEdge, DepsDirection, DepsFilterInput, EdgeKind};
+use super::{DevqlGraphqlContext, ResolverScope};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LoaderMetrics {
@@ -126,18 +126,26 @@ impl DataLoaders {
     pub(crate) async fn load_artefact_by_id(
         &self,
         artefact_id: &str,
+        scope: &ResolverScope,
     ) -> Result<Option<Artefact>, String> {
-        self.artefact_by_id.load_one(artefact_id.to_string()).await
+        self.artefact_by_id
+            .load_one(ArtefactBatchKey::new(artefact_id, scope))
+            .await
     }
 
     pub(crate) async fn load_outgoing_edges(
         &self,
         artefact_id: &str,
         filter: Option<DepsFilterInput>,
+        scope: &ResolverScope,
     ) -> Result<Vec<DependencyEdge>, String> {
         Ok(self
             .outgoing_edges_by_artefact
-            .load_one(EdgeBatchKey::new(artefact_id, filter.unwrap_or_default()))
+            .load_one(EdgeBatchKey::new(
+                artefact_id,
+                filter.unwrap_or_default(),
+                scope,
+            ))
             .await?
             .unwrap_or_default())
     }
@@ -146,10 +154,15 @@ impl DataLoaders {
         &self,
         artefact_id: &str,
         filter: Option<DepsFilterInput>,
+        scope: &ResolverScope,
     ) -> Result<Vec<DependencyEdge>, String> {
         Ok(self
             .incoming_edges_by_artefact
-            .load_one(EdgeBatchKey::new(artefact_id, filter.unwrap_or_default()))
+            .load_one(EdgeBatchKey::new(
+                artefact_id,
+                filter.unwrap_or_default(),
+                scope,
+            ))
             .await?
             .unwrap_or_default())
     }
@@ -166,16 +179,41 @@ struct ArtefactByIdLoader {
     context: DevqlGraphqlContext,
 }
 
-impl Loader<String> for ArtefactByIdLoader {
+impl Loader<ArtefactBatchKey> for ArtefactByIdLoader {
     type Value = Artefact;
     type Error = String;
 
-    async fn load(&self, keys: &[String]) -> Result<HashMap<String, Self::Value>, Self::Error> {
+    async fn load(
+        &self,
+        keys: &[ArtefactBatchKey],
+    ) -> Result<HashMap<ArtefactBatchKey, Self::Value>, Self::Error> {
         self.context.loader_metrics().record_artefact_batch();
-        self.context
-            .load_artefacts_by_ids(keys)
-            .await
-            .map_err(|err| format!("{err:#}"))
+        let mut grouped_ids = HashMap::<Option<String>, Vec<String>>::new();
+        for key in keys {
+            grouped_ids
+                .entry(key.project_path.clone())
+                .or_default()
+                .push(key.artefact_id.clone());
+        }
+
+        let mut artefacts_by_key = HashMap::new();
+        for (project_path, artefact_ids) in grouped_ids {
+            let artefacts = self
+                .context
+                .load_artefacts_by_ids(&artefact_ids, project_path.as_deref())
+                .await
+                .map_err(|err| format!("{err:#}"))?;
+            for artefact_id in artefact_ids {
+                if let Some(artefact) = artefacts.get(&artefact_id).cloned() {
+                    artefacts_by_key.insert(
+                        ArtefactBatchKey::from_project_path(artefact_id, project_path.clone()),
+                        artefact,
+                    );
+                }
+            }
+        }
+
+        Ok(artefacts_by_key)
     }
 }
 
@@ -233,13 +271,14 @@ impl Loader<EdgeBatchKey> for EdgesByArtefactLoader {
                     &artefact_ids,
                     self.direction.as_deps_direction(),
                     filter,
+                    filter_key.project_path(),
                 )
                 .await
                 .map_err(|err| format!("{err:#}"))?;
 
             for artefact_id in artefact_ids {
                 rows_by_key.insert(
-                    EdgeBatchKey::from_filter_key(artefact_id.clone(), filter_key),
+                    EdgeBatchKey::from_filter_key(artefact_id.clone(), &filter_key),
                     edges_by_artefact
                         .get(&artefact_id)
                         .cloned()
@@ -270,18 +309,42 @@ impl Loader<String> for CommitByShaLoader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ArtefactBatchKey {
+    artefact_id: String,
+    project_path: Option<String>,
+}
+
+impl ArtefactBatchKey {
+    fn new(artefact_id: &str, scope: &ResolverScope) -> Self {
+        Self {
+            artefact_id: artefact_id.to_string(),
+            project_path: scope.project_path().map(str::to_string),
+        }
+    }
+
+    fn from_project_path(artefact_id: String, project_path: Option<String>) -> Self {
+        Self {
+            artefact_id,
+            project_path,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct EdgeBatchKey {
     artefact_id: String,
     kind: Option<EdgeKind>,
     include_unresolved: bool,
+    project_path: Option<String>,
 }
 
 impl EdgeBatchKey {
-    fn new(artefact_id: &str, filter: DepsFilterInput) -> Self {
+    fn new(artefact_id: &str, filter: DepsFilterInput, scope: &ResolverScope) -> Self {
         Self {
             artefact_id: artefact_id.to_string(),
             kind: filter.kind,
             include_unresolved: filter.include_unresolved,
+            project_path: scope.project_path().map(str::to_string),
         }
     }
 
@@ -289,30 +352,37 @@ impl EdgeBatchKey {
         EdgeFilterKey {
             kind: self.kind,
             include_unresolved: self.include_unresolved,
+            project_path: self.project_path.clone(),
         }
     }
 
-    fn from_filter_key(artefact_id: String, filter_key: EdgeFilterKey) -> Self {
+    fn from_filter_key(artefact_id: String, filter_key: &EdgeFilterKey) -> Self {
         Self {
             artefact_id,
             kind: filter_key.kind,
             include_unresolved: filter_key.include_unresolved,
+            project_path: filter_key.project_path.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct EdgeFilterKey {
     kind: Option<EdgeKind>,
     include_unresolved: bool,
+    project_path: Option<String>,
 }
 
 impl EdgeFilterKey {
-    fn as_filter(self, direction: DepsDirection) -> DepsFilterInput {
+    fn as_filter(&self, direction: DepsDirection) -> DepsFilterInput {
         DepsFilterInput {
             kind: self.kind,
             direction,
             include_unresolved: self.include_unresolved,
         }
+    }
+
+    fn project_path(&self) -> Option<&str> {
+        self.project_path.as_deref()
     }
 }
