@@ -1,4 +1,4 @@
-use super::world::FtfWorld;
+use super::world::QatWorld;
 use crate::adapters::agents::AGENT_NAME_CLAUDE_CODE;
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::strategy::manual_commit::{
@@ -65,12 +65,12 @@ pub fn sanitize_name(input: &str) -> String {
 pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     ensure!(
         repo_name == BITLOOPS_REPO_NAME,
-        "unsupported repository `{repo_name}`; only `bitloops` is supported by ftf"
+        "unsupported repository `{repo_name}`; only `bitloops` is supported by qat"
     );
     Ok(())
 }
 
-pub fn run_clean_start(world: &mut FtfWorld, flow_name: &str) -> Result<()> {
+pub fn run_clean_start(world: &mut QatWorld, flow_name: &str) -> Result<()> {
     let config = world.run_config().clone();
     let flow_slug = sanitize_name(flow_name);
     ensure!(
@@ -89,7 +89,7 @@ pub fn run_clean_start(world: &mut FtfWorld, flow_name: &str) -> Result<()> {
     let terminal_log_path = run_dir.join("terminal.log");
     let metadata_path = run_dir.join("run.json");
 
-    fs::create_dir_all(&repo_dir).context("creating ftf repo directory")?;
+    fs::create_dir_all(&repo_dir).context("creating qat repo directory")?;
 
     world.flow_name = Some(flow_name.to_string());
     world.run_dir = Some(run_dir);
@@ -115,7 +115,7 @@ pub fn run_clean_start(world: &mut FtfWorld, flow_name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_init_commit_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result<()> {
+pub fn run_init_commit_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     if repo_has_head(world)? {
         append_world_log(world, "InitCommit skipped because HEAD already exists.\n")?;
@@ -139,7 +139,7 @@ pub fn run_init_commit_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result
 }
 
 pub fn run_init_commit_with_relative_day_for_repo(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     repo_name: &str,
     days_ago: i64,
 ) -> Result<()> {
@@ -173,23 +173,23 @@ pub fn run_init_commit_with_relative_day_for_repo(
     Ok(())
 }
 
-pub fn run_create_vite_app_project_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result<()> {
+pub fn run_create_vite_app_project_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     create_offline_vite_react_ts_scaffold(world.repo_dir())
 }
 
-pub fn run_init_bitloops_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result<()> {
+pub fn run_init_bitloops_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     run_bitloops_success(world, &["init", "--agent", "claude-code"], "bitloops init")
 }
 
-pub fn run_enable_cli_for_repo(world: &mut FtfWorld, repo_name: &str) -> Result<()> {
+pub fn run_enable_cli_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     run_bitloops_success(world, &["enable"], "bitloops enable")
 }
 
 pub fn run_first_change_using_claude_code_for_repo(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
@@ -197,7 +197,7 @@ pub fn run_first_change_using_claude_code_for_repo(
 }
 
 pub fn run_second_change_using_claude_code_for_repo(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
@@ -205,7 +205,7 @@ pub fn run_second_change_using_claude_code_for_repo(
 }
 
 pub fn commit_for_relative_day_for_repo(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     repo_name: &str,
     days_ago: i64,
     label: &str,
@@ -241,7 +241,7 @@ pub fn commit_for_relative_day_for_repo(
     Ok(())
 }
 
-pub fn assert_bitloops_stores_exist_for_repo(world: &FtfWorld, repo_name: &str) -> Result<()> {
+pub fn assert_bitloops_stores_exist_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let stores_dir = world.repo_dir().join(".bitloops").join("stores");
     ensure!(
@@ -264,7 +264,7 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &FtfWorld, repo_name: &str) 
     Ok(())
 }
 
-pub fn assert_claude_session_exists_for_repo(world: &FtfWorld, repo_name: &str) -> Result<()> {
+pub fn assert_claude_session_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let backend = create_session_backend_or_local(world.repo_dir());
     let sessions = backend
@@ -289,7 +289,7 @@ pub fn assert_claude_session_exists_for_repo(world: &FtfWorld, repo_name: &str) 
     Ok(())
 }
 
-pub fn assert_checkpoint_mapping_exists_for_repo(world: &FtfWorld, repo_name: &str) -> Result<()> {
+pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let mappings = read_commit_checkpoint_mappings(world.repo_dir())
         .context("reading Bitloops checkpoint mappings")?;
@@ -307,7 +307,7 @@ pub fn assert_checkpoint_mapping_exists_for_repo(world: &FtfWorld, repo_name: &s
 }
 
 pub fn assert_checkpoint_mapping_count_at_least_for_repo(
-    world: &FtfWorld,
+    world: &QatWorld,
     repo_name: &str,
     min_count: usize,
 ) -> Result<()> {
@@ -323,7 +323,7 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
 }
 
 pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
-    world: &FtfWorld,
+    world: &QatWorld,
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
@@ -376,7 +376,7 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
     Ok(())
 }
 
-fn repo_has_head(world: &FtfWorld) -> Result<bool> {
+fn repo_has_head(world: &QatWorld) -> Result<bool> {
     let output = run_command_capture(
         world,
         "git rev-parse HEAD",
@@ -385,10 +385,10 @@ fn repo_has_head(world: &FtfWorld) -> Result<bool> {
     Ok(output.status.success())
 }
 
-fn configure_git_identity(world: &FtfWorld) -> Result<()> {
+fn configure_git_identity(world: &QatWorld) -> Result<()> {
     let commands = [
-        ["config", "user.name", "Bitloops FTF"],
-        ["config", "user.email", "bitloops-ftf@example.com"],
+        ["config", "user.name", "Bitloops QAT"],
+        ["config", "user.email", "bitloops-qat@example.com"],
         ["config", "commit.gpgsign", "false"],
     ];
 
@@ -398,8 +398,8 @@ fn configure_git_identity(world: &FtfWorld) -> Result<()> {
     Ok(())
 }
 
-fn run_claude_code_prompt(world: &FtfWorld, prompt: &str) -> Result<()> {
-    let command_spec = std::env::var("BITLOOPS_FTF_CLAUDE_CMD")
+fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+    let command_spec = std::env::var("BITLOOPS_QAT_CLAUDE_CMD")
         .unwrap_or_else(|_| DEFAULT_CLAUDE_CODE_COMMAND.to_string());
     let output = run_command_capture(
         world,
@@ -413,25 +413,25 @@ fn run_claude_code_prompt(world: &FtfWorld, prompt: &str) -> Result<()> {
     ensure_success(&output, "claude prompt")
 }
 
-fn run_bitloops_success(world: &FtfWorld, args: &[&str], label: &str) -> Result<()> {
+fn run_bitloops_success(world: &QatWorld, args: &[&str], label: &str) -> Result<()> {
     let output = run_command_capture(world, label, build_bitloops_command(world, args)?)
         .with_context(|| format!("running {label}"))?;
     ensure_success(&output, label)
 }
 
-fn build_host_shell_command(world: &FtfWorld, script: &str) -> Result<Command> {
+fn build_host_shell_command(world: &QatWorld, script: &str) -> Result<Command> {
     let mut command = Command::new("bash");
     command
         .args(["-lc", script])
         .current_dir(world.repo_dir())
         .env("PWD", world.repo_dir())
         .env("ACCESSIBLE", "1")
-        .env("BITLOOPS_FTF_ACTIVE", "1");
+        .env("BITLOOPS_QAT_ACTIVE", "1");
     Ok(command)
 }
 
 fn run_git_success(
-    world: &FtfWorld,
+    world: &QatWorld,
     args: &[&str],
     env: &[(&str, OsString)],
     label: &str,
@@ -440,7 +440,7 @@ fn run_git_success(
     ensure_success(&output, label)
 }
 
-fn build_bitloops_command(world: &FtfWorld, args: &[&str]) -> Result<Command> {
+fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
     let run_dir = world.run_dir();
     let home_dir = run_dir.join("home");
     let xdg_config_home = home_dir.join("xdg");
@@ -455,7 +455,7 @@ fn build_bitloops_command(world: &FtfWorld, args: &[&str]) -> Result<Command> {
         .env("USERPROFILE", &home_dir)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
         .env("ACCESSIBLE", "1")
-        .env("BITLOOPS_FTF_ACTIVE", "1")
+        .env("BITLOOPS_QAT_ACTIVE", "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
@@ -473,7 +473,7 @@ fn build_git_command(repo_dir: &Path, args: &[&str], env: &[(&str, OsString)]) -
     command
 }
 
-fn run_command_capture(world: &FtfWorld, label: &str, mut command: Command) -> Result<Output> {
+fn run_command_capture(world: &QatWorld, label: &str, mut command: Command) -> Result<Output> {
     let command_debug = format!("{command:?}");
     let output = command
         .output()
@@ -495,7 +495,7 @@ fn ensure_success(output: &Output, label: &str) -> Result<()> {
     )
 }
 
-fn append_world_log(world: &FtfWorld, message: &str) -> Result<()> {
+fn append_world_log(world: &QatWorld, message: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -506,7 +506,7 @@ fn append_world_log(world: &FtfWorld, message: &str) -> Result<()> {
 }
 
 fn append_command_log(
-    world: &FtfWorld,
+    world: &QatWorld,
     label: &str,
     command_debug: &str,
     output: &Output,
@@ -525,7 +525,7 @@ fn append_command_log(
     Ok(())
 }
 
-fn write_run_metadata(world: &FtfWorld) -> Result<()> {
+fn write_run_metadata(world: &QatWorld) -> Result<()> {
     let metadata = RunMetadata {
         scenario_name: world
             .scenario_name
@@ -545,7 +545,7 @@ fn write_run_metadata(world: &FtfWorld) -> Result<()> {
         binary_path: world.run_config().binary_path.display().to_string(),
         created_at: now_rfc3339()?,
     };
-    let payload = serde_json::to_vec_pretty(&metadata).context("serializing ftf run metadata")?;
+    let payload = serde_json::to_vec_pretty(&metadata).context("serializing qat run metadata")?;
     fs::write(world.metadata_path(), payload)
         .with_context(|| format!("writing {}", world.metadata_path().display()))
 }

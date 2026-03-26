@@ -1,6 +1,6 @@
 use super::helpers::sanitize_name;
 use super::steps;
-use super::world::{FtfRunConfig, FtfWorld};
+use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use cucumber::{World as _, writer::Stats as _};
@@ -13,7 +13,7 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct FtfArgs {
+pub struct QatArgs {
     /// Run the lightweight foundation smoke suite instead of the default Claude Code suite.
     #[arg(long, default_value_t = false)]
     pub smoke: bool,
@@ -27,7 +27,7 @@ pub struct FtfArgs {
     pub runs_dir: Option<PathBuf>,
 }
 
-pub async fn run(args: FtfArgs) -> Result<()> {
+pub async fn run(args: QatArgs) -> Result<()> {
     let binary_path = env::current_exe().context("resolving current bitloops executable")?;
     let runs_root = resolve_runs_root(args.runs_dir.clone())?;
     let suite_root = create_suite_root(&runs_root)?;
@@ -37,21 +37,21 @@ pub async fn run(args: FtfArgs) -> Result<()> {
         runs_root.join(".last-run"),
         format!("{}\n", suite_root.display()),
     )
-    .with_context(|| format!("writing latest ftf pointer in {}", runs_root.display()))?;
+    .with_context(|| format!("writing latest qat pointer in {}", runs_root.display()))?;
 
     println!(
-        "Running Bitloops FTF features from {}",
+        "Running Bitloops QAT features from {}",
         feature_path.display()
     );
     println!("Artifacts will be written to {}", suite_root.display());
 
-    let config = Arc::new(FtfRunConfig {
+    let config = Arc::new(QatRunConfig {
         binary_path,
         suite_root: suite_root.clone(),
     });
 
     let before_config = Arc::clone(&config);
-    let result = FtfWorld::cucumber()
+    let result = QatWorld::cucumber()
         .steps(steps::collection())
         .before(move |_, _, scenario, world| {
             let config = Arc::clone(&before_config);
@@ -67,14 +67,14 @@ pub async fn run(args: FtfArgs) -> Result<()> {
 
     if result.execution_has_failed() || result.parsing_errors() != 0 {
         bail!(
-            "bitloops ftf reported failures (parsing_errors={}, skipped_steps={})\nartifacts: {}",
+            "bitloops qat reported failures (parsing_errors={}, skipped_steps={})\nartifacts: {}",
             result.parsing_errors(),
             result.skipped_steps(),
             suite_root.display()
         );
     }
 
-    println!("Bitloops FTF completed successfully.");
+    println!("Bitloops QAT completed successfully.");
     println!("Artifacts: {}", suite_root.display());
     Ok(())
 }
@@ -83,21 +83,21 @@ fn resolve_runs_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
     match explicit {
         Some(path) if path.is_absolute() => Ok(path),
         Some(path) => Ok(env::current_dir()
-            .context("resolving current directory for ftf runs dir")?
+            .context("resolving current directory for qat runs dir")?
             .join(path)),
         None => Ok(env::current_dir()
-            .context("resolving current directory for ftf runs dir")?
+            .context("resolving current directory for qat runs dir")?
             .join("target")
-            .join("ftf-runs")),
+            .join("qat-runs")),
     }
 }
 
 fn create_suite_root(runs_root: &Path) -> Result<PathBuf> {
     fs::create_dir_all(runs_root)
-        .with_context(|| format!("creating ftf runs root {}", runs_root.display()))?;
+        .with_context(|| format!("creating qat runs root {}", runs_root.display()))?;
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
-        .context("formatting ftf suite timestamp")?
+        .context("formatting qat suite timestamp")?
         .replace(':', "-");
     let suite_dir = runs_root.join(format!(
         "{}-{}",
@@ -105,17 +105,17 @@ fn create_suite_root(runs_root: &Path) -> Result<PathBuf> {
         &Uuid::new_v4().simple().to_string()[..8]
     ));
     fs::create_dir_all(&suite_dir)
-        .with_context(|| format!("creating ftf suite dir {}", suite_dir.display()))?;
+        .with_context(|| format!("creating qat suite dir {}", suite_dir.display()))?;
     Ok(suite_dir)
 }
 
-fn resolve_feature_path(args: &FtfArgs) -> Result<PathBuf> {
+fn resolve_feature_path(args: &QatArgs) -> Result<PathBuf> {
     if let Some(path) = args.feature.as_ref() {
         let resolved = if path.is_absolute() {
             path.clone()
         } else {
             env::current_dir()
-                .context("resolving current directory for ftf feature path")?
+                .context("resolving current directory for qat feature path")?
                 .join(path)
         };
         return Ok(resolved);
@@ -126,7 +126,7 @@ fn resolve_feature_path(args: &FtfArgs) -> Result<PathBuf> {
 
 fn feature_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("ftf")
+        .join("qat")
         .join("features")
 }
 
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn default_feature_path_defaults_to_claude_suite() {
-        let root = PathBuf::from("/tmp/ftf/features");
+        let root = PathBuf::from("/tmp/qat/features");
         assert_eq!(default_feature_path(&root, false), root.join("claude-code"));
         assert_eq!(default_feature_path(&root, true), root.join("smoke"));
     }

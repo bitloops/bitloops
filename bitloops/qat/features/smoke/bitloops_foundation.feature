@@ -1,7 +1,7 @@
-Feature: Bitloops FTF foundation
+Feature: Bitloops QAT foundation
   As a Bitloops maintainer
   I want the Bitloops-only BDD harness implemented in Rust
-  So that foundation scenarios can run from `bitloops ftf`
+  So that foundation scenarios can run from `bitloops qat`
 
   @smoke
   Scenario: Bootstrap a fresh repo and create Bitloops stores

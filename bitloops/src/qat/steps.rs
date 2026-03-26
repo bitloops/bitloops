@@ -1,5 +1,5 @@
 use super::helpers;
-use super::world::FtfWorld;
+use super::world::QatWorld;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
 
@@ -8,8 +8,8 @@ fn regex(pattern: &str) -> Regex {
 }
 
 fn step_fn(
-    f: for<'a> fn(&'a mut FtfWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()>,
-) -> for<'a> fn(&'a mut FtfWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()> {
+    f: for<'a> fn(&'a mut QatWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()>,
+) -> for<'a> fn(&'a mut QatWorld, cucumber::step::Context) -> LocalBoxFuture<'a, ()> {
     f
 }
 
@@ -19,7 +19,7 @@ fn run_step(step_name: &str, result: anyhow::Result<()>) {
     }
 }
 
-fn given_clean_start(world: &mut FtfWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
+fn given_clean_start(world: &mut QatWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let flow_name = ctx.matches[1].1.clone();
         run_step(
@@ -30,18 +30,18 @@ fn given_clean_start(world: &mut FtfWorld, ctx: cucumber::step::Context) -> Loca
 }
 
 fn given_default_clean_start(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     _ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         run_step(
             "I run CleanStart",
-            helpers::run_clean_start(world, "ftf-manual"),
+            helpers::run_clean_start(world, "qat-manual"),
         );
     })
 }
 
-fn given_init_commit(world: &mut FtfWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
+fn given_init_commit(world: &mut QatWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
@@ -52,7 +52,7 @@ fn given_init_commit(world: &mut FtfWorld, ctx: cucumber::step::Context) -> Loca
 }
 
 fn given_init_commit_yesterday(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -65,7 +65,7 @@ fn given_init_commit_yesterday(
 }
 
 fn given_create_vite_app(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -78,7 +78,7 @@ fn given_create_vite_app(
 }
 
 fn given_init_bitloops(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -90,7 +90,7 @@ fn given_init_bitloops(
     })
 }
 
-fn given_enable_cli(world: &mut FtfWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
+fn given_enable_cli(world: &mut QatWorld, ctx: cucumber::step::Context) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
@@ -101,7 +101,7 @@ fn given_enable_cli(world: &mut FtfWorld, ctx: cucumber::step::Context) -> Local
 }
 
 fn given_first_claude_change(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -114,7 +114,7 @@ fn given_first_claude_change(
 }
 
 fn given_second_claude_change(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -127,7 +127,7 @@ fn given_second_claude_change(
 }
 
 fn given_commit_yesterday(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -145,7 +145,7 @@ fn given_commit_yesterday(
 }
 
 fn given_commit_today(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -163,7 +163,7 @@ fn given_commit_today(
 }
 
 fn then_bitloops_stores_exist(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -176,7 +176,7 @@ fn then_bitloops_stores_exist(
 }
 
 fn then_commit_timeline_is_correct(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -191,7 +191,7 @@ fn then_commit_timeline_is_correct(
 }
 
 fn then_claude_session_exists(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -204,7 +204,7 @@ fn then_claude_session_exists(
 }
 
 fn then_checkpoint_mapping_exists(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -217,7 +217,7 @@ fn then_checkpoint_mapping_exists(
 }
 
 fn then_checkpoint_mapping_count_at_least(
-    world: &mut FtfWorld,
+    world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
@@ -235,7 +235,7 @@ fn then_checkpoint_mapping_count_at_least(
     })
 }
 
-pub fn collection() -> Collection<FtfWorld> {
+pub fn collection() -> Collection<QatWorld> {
     Collection::new()
         .given(
             None,

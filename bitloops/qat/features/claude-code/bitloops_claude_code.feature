@@ -1,7 +1,7 @@
 Feature: Bitloops Claude Code workflows
   As a Bitloops maintainer
-  I want `bitloops ftf` to exercise the main Claude Code integration path
-  So that the default FTF command validates real end-to-end Bitloops behavior
+  I want `bitloops qat` to exercise the main Claude Code integration path
+  So that the default QAT command validates real end-to-end Bitloops behavior
 
   Scenario: Bootstrap Bitloops and persist a Claude Code session
     Given I run CleanStart for flow "ClaudeCodeSession"

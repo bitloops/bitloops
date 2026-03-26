@@ -2,24 +2,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct FtfRunConfig {
+pub struct QatRunConfig {
     pub binary_path: PathBuf,
     pub suite_root: PathBuf,
 }
 
 #[derive(Debug, Default, cucumber::World)]
-pub struct FtfWorld {
+pub struct QatWorld {
     pub scenario_name: Option<String>,
     pub scenario_slug: Option<String>,
     pub flow_name: Option<String>,
-    pub run_config: Option<Arc<FtfRunConfig>>,
+    pub run_config: Option<Arc<QatRunConfig>>,
     pub run_dir: Option<PathBuf>,
     pub repo_dir: Option<PathBuf>,
     pub terminal_log_path: Option<PathBuf>,
     pub metadata_path: Option<PathBuf>,
 }
 
-impl FtfWorld {
+impl QatWorld {
     pub fn reset(&mut self) {
         self.flow_name = None;
         self.run_dir = None;
@@ -30,7 +30,7 @@ impl FtfWorld {
 
     pub fn prepare(
         &mut self,
-        config: Arc<FtfRunConfig>,
+        config: Arc<QatRunConfig>,
         scenario_name: &str,
         scenario_slug: String,
     ) {
@@ -40,33 +40,33 @@ impl FtfWorld {
         self.reset();
     }
 
-    pub fn run_config(&self) -> &Arc<FtfRunConfig> {
+    pub fn run_config(&self) -> &Arc<QatRunConfig> {
         self.run_config
             .as_ref()
-            .expect("ftf run config should be initialized before step execution")
+            .expect("qat run config should be initialized before step execution")
     }
 
     pub fn run_dir(&self) -> &Path {
         self.run_dir
             .as_deref()
-            .expect("ftf run directory should be initialized by CleanStart")
+            .expect("qat run directory should be initialized by CleanStart")
     }
 
     pub fn repo_dir(&self) -> &Path {
         self.repo_dir
             .as_deref()
-            .expect("ftf repo directory should be initialized by CleanStart")
+            .expect("qat repo directory should be initialized by CleanStart")
     }
 
     pub fn terminal_log_path(&self) -> &Path {
         self.terminal_log_path
             .as_deref()
-            .expect("ftf terminal log should be initialized by CleanStart")
+            .expect("qat terminal log should be initialized by CleanStart")
     }
 
     pub fn metadata_path(&self) -> &Path {
         self.metadata_path
             .as_deref()
-            .expect("ftf run metadata should be initialized by CleanStart")
+            .expect("qat run metadata should be initialized by CleanStart")
     }
 }
