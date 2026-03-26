@@ -12,9 +12,7 @@ use crate::capability_packs::test_harness::storage::{
     TestHarnessQueryRepository, TestHarnessRepository,
 };
 use crate::models::{
-    CommitRecord, CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, CurrentFileStateRecord,
-    CurrentProductionArtefactRecord, FileStateRecord, ProductionArtefactRecord,
-    ProductionIngestionBatch, RepositoryRecord, ScopeKind, TestArtefactCurrentRecord,
+    CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ScopeKind, TestArtefactCurrentRecord,
     TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
     TestRunRecord,
 };
@@ -31,10 +29,7 @@ const REPO_ID: &str = "repo-postgres-test-harness";
 const COMMIT_SHA: &str = "commit-postgres-test-harness";
 const FILE_USER: &str = "src/services/user_service.rs";
 const FILE_EMAIL: &str = "src/services/email.rs";
-const BLOB_USER: &str = "blob-user";
-const ARTEFACT_FILE_USER: &str = "artefact:file:user_service";
 const ARTEFACT_CREATE_USER: &str = "artefact:function:create_user";
-const SYMBOL_FILE_USER: &str = "symbol:file:user_service";
 const SYMBOL_CREATE_USER: &str = "symbol:function:create_user";
 const SUITE_ID: &str = "suite:user-service";
 const SCENARIO_ID: &str = "scenario:checks-email-domain";
@@ -140,14 +135,6 @@ fn postgres_repository_round_trips_test_harness_flow() -> Result<()> {
             .filter(|branch| branch.covered)
             .count(),
         1
-    );
-
-    let unsupported = repository
-        .replace_production_artefacts(&dummy_batch())
-        .expect_err("Postgres repository should reject production replacement");
-    assert!(
-        unsupported.to_string().contains("bitloops devql ingest"),
-        "unexpected unsupported error: {unsupported:#}"
     );
 
     Ok(())
@@ -609,83 +596,6 @@ fn coverage_hits() -> Vec<CoverageHitRecord> {
             hit_count: 0,
         },
     ]
-}
-
-fn dummy_batch() -> ProductionIngestionBatch {
-    ProductionIngestionBatch {
-        repository: RepositoryRecord {
-            repo_id: REPO_ID.to_string(),
-            provider: "local".to_string(),
-            organization: "local".to_string(),
-            name: "repo".to_string(),
-            default_branch: Some("main".to_string()),
-        },
-        commit: CommitRecord {
-            commit_sha: COMMIT_SHA.to_string(),
-            repo_id: REPO_ID.to_string(),
-            author_name: None,
-            author_email: None,
-            commit_message: None,
-            committed_at: Some("2026-03-19T12:00:00Z".to_string()),
-        },
-        file_states: vec![FileStateRecord {
-            repo_id: REPO_ID.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            path: FILE_USER.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-        }],
-        current_file_states: vec![CurrentFileStateRecord {
-            repo_id: REPO_ID.to_string(),
-            path: FILE_USER.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            committed_at: "2026-03-19T12:00:00Z".to_string(),
-        }],
-        artefacts: vec![ProductionArtefactRecord {
-            artefact_id: ARTEFACT_CREATE_USER.to_string(),
-            symbol_id: SYMBOL_CREATE_USER.to_string(),
-            repo_id: REPO_ID.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            path: FILE_USER.to_string(),
-            language: "rust".to_string(),
-            canonical_kind: "function".to_string(),
-            language_kind: Some("function_item".to_string()),
-            symbol_fqn: Some("src/services/user_service.rs::create_user".to_string()),
-            parent_artefact_id: Some(ARTEFACT_FILE_USER.to_string()),
-            start_line: 10,
-            end_line: 20,
-            start_byte: 100,
-            end_byte: 350,
-            signature: Some("pub fn create_user(name: &str) -> User".to_string()),
-            modifiers: "[]".to_string(),
-            docstring: None,
-            content_hash: Some("hash-create-user".to_string()),
-        }],
-        current_artefacts: vec![CurrentProductionArtefactRecord {
-            repo_id: REPO_ID.to_string(),
-            symbol_id: SYMBOL_CREATE_USER.to_string(),
-            artefact_id: ARTEFACT_CREATE_USER.to_string(),
-            commit_sha: COMMIT_SHA.to_string(),
-            blob_sha: BLOB_USER.to_string(),
-            path: FILE_USER.to_string(),
-            language: "rust".to_string(),
-            canonical_kind: "function".to_string(),
-            language_kind: Some("function_item".to_string()),
-            symbol_fqn: Some("src/services/user_service.rs::create_user".to_string()),
-            parent_symbol_id: Some(SYMBOL_FILE_USER.to_string()),
-            parent_artefact_id: Some(ARTEFACT_FILE_USER.to_string()),
-            start_line: 10,
-            end_line: 20,
-            start_byte: 100,
-            end_byte: 350,
-            signature: Some("pub fn create_user(name: &str) -> User".to_string()),
-            modifiers: "[]".to_string(),
-            docstring: None,
-            content_hash: Some("hash-create-user".to_string()),
-        }],
-        edges: Vec::new(),
-        current_edges: Vec::new(),
-    }
 }
 
 struct TempPostgres {

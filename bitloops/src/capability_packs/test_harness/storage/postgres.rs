@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::capability_packs::test_harness::storage::schema::postgres_test_domain_schema_sql;
 use crate::capability_packs::test_harness::storage::{
@@ -17,11 +17,10 @@ use crate::capability_packs::test_harness::storage::{
 use crate::models::{
     CoverageBranchRecord, CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
     CoveragePairStats, CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord,
-    ProductionIngestionBatch, ResolvedTestScenarioRecord, StageBranchCoverageRecord,
-    StageCoverageMetadataRecord, StageCoveringTestRecord, StageLineCoverageRecord,
-    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestClassificationRecord,
-    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
-    derive_test_classification,
+    ResolvedTestScenarioRecord, StageBranchCoverageRecord, StageCoverageMetadataRecord,
+    StageCoveringTestRecord, StageLineCoverageRecord, TestArtefactCurrentRecord,
+    TestArtefactEdgeCurrentRecord, TestClassificationRecord, TestDiscoveryDiagnosticRecord,
+    TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord, derive_test_classification,
 };
 use crate::storage::PostgresSyncConnection;
 
@@ -92,12 +91,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
                     .collect()
             })
         })
-    }
-
-    fn replace_production_artefacts(&mut self, _batch: &ProductionIngestionBatch) -> Result<()> {
-        bail!(
-            "production artefact replacement is not supported in the Bitloops-backed Postgres repository; use `bitloops devql ingest`"
-        )
     }
 
     fn replace_test_discovery(

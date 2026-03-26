@@ -32,10 +32,7 @@ use self::stage_serving::{
     load_stage_line_coverage as load_stage_line_coverage_conn,
 };
 use self::writes::{
-    clear_existing_production_data, clear_existing_test_discovery_data, table_exists,
-    upsert_commit, upsert_current_file_state, upsert_current_production_artefact,
-    upsert_current_production_edge, upsert_file_state, upsert_production_artefact,
-    upsert_production_edge, upsert_repository, upsert_test_artefact_current,
+    clear_existing_test_discovery_data, upsert_test_artefact_current,
     upsert_test_artefact_edge_current, upsert_test_classification,
     upsert_test_discovery_diagnostic, upsert_test_discovery_run, upsert_test_run,
 };
@@ -86,45 +83,6 @@ ORDER BY ts.path ASC, ts.start_line ASC
             scenarios.push(row.context("failed decoding test scenario row")?);
         }
         Ok(scenarios)
-    }
-
-    fn replace_production_artefacts(
-        &mut self,
-        batch: &crate::models::ProductionIngestionBatch,
-    ) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction()
-            .context("failed to start production artefact transaction")?;
-        let has_current_file_state = table_exists(&tx, "current_file_state")?;
-        clear_existing_production_data(&tx, &batch.commit.commit_sha)?;
-
-        upsert_repository(&tx, &batch.repository)?;
-        upsert_commit(&tx, &batch.commit)?;
-        for row in &batch.file_states {
-            upsert_file_state(&tx, row)?;
-        }
-        if has_current_file_state {
-            for row in &batch.current_file_states {
-                upsert_current_file_state(&tx, row)?;
-            }
-        }
-        for artefact in &batch.artefacts {
-            upsert_production_artefact(&tx, artefact)?;
-        }
-        for artefact in &batch.current_artefacts {
-            upsert_current_production_artefact(&tx, artefact)?;
-        }
-        for edge in &batch.edges {
-            upsert_production_edge(&tx, edge)?;
-        }
-        for edge in &batch.current_edges {
-            upsert_current_production_edge(&tx, edge)?;
-        }
-
-        tx.commit()
-            .context("failed to commit production artefact transaction")?;
-        Ok(())
     }
 
     fn replace_test_discovery(

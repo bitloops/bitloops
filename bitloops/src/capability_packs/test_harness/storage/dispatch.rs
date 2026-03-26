@@ -9,8 +9,7 @@ use super::{
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ProductionIngestionBatch,
-    ResolvedTestScenarioRecord,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
@@ -82,13 +81,6 @@ impl TestHarnessRepository for BitloopsTestHarnessRepository {
         match self {
             Self::Sqlite(repository) => repository.load_test_scenarios(commit_sha),
             Self::Postgres(repository) => repository.load_test_scenarios(commit_sha),
-        }
-    }
-
-    fn replace_production_artefacts(&mut self, batch: &ProductionIngestionBatch) -> Result<()> {
-        match self {
-            Self::Sqlite(repository) => repository.replace_production_artefacts(batch),
-            Self::Postgres(repository) => repository.replace_production_artefacts(batch),
         }
     }
 

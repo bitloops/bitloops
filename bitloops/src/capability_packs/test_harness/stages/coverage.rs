@@ -63,10 +63,9 @@ fn execute_coverage_stage<R: TestHarnessQueryRepository + ?Sized>(
         if artefact_id.is_empty() {
             continue;
         }
-        let production_symbol_id = row_obj
-            .get("symbol_id")
-            .and_then(Value::as_str)
-            .unwrap_or(artefact_id);
+        let Some(production_symbol_id) = row_obj.get("symbol_id").and_then(Value::as_str) else {
+            continue;
+        };
 
         let artefact = json!({
             "artefact_id": artefact_id,
@@ -503,7 +502,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn coverage_stage_falls_back_to_artefact_id_when_symbol_id_is_missing() {
+    async fn coverage_stage_requires_symbol_id_in_input_rows() {
         let repo = FakeRepo::default()
             .with_metadata(Some(StageCoverageMetadataRecord {
                 coverage_source: "llvm-json".into(),
@@ -538,19 +537,10 @@ mod tests {
         .await;
 
         let rows = resp.payload.as_array().expect("array");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["artefact"]["artefact_id"], "artefact-a");
-        let coverage = rows[0]["coverage"].as_object().expect("coverage object");
-        assert_eq!(coverage["coverage_source"], "llvm-json");
-        assert_eq!(coverage["branch_data_available"], true);
-        let branches = coverage["branches"].as_array().expect("branches array");
-        assert_eq!(branches.len(), 1);
-        assert_eq!(branches[0]["branch"], 7);
+        assert!(rows.is_empty());
         assert_eq!(repo.metadata_calls().len(), 1);
-        assert_eq!(repo.line_calls().len(), 1);
-        assert_eq!(repo.branch_calls().len(), 1);
-        assert_eq!(repo.line_calls()[0].1, "artefact-a");
-        assert_eq!(repo.branch_calls()[0].1, "artefact-a");
+        assert!(repo.line_calls().is_empty());
+        assert!(repo.branch_calls().is_empty());
     }
 
     #[tokio::test]

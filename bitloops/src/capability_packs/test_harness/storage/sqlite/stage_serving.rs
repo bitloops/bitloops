@@ -109,15 +109,7 @@ pub(super) fn load_stage_line_coverage(
          FROM coverage_hits ch \
          JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
          WHERE cc.repo_id = ?1 \
-           AND ( \
-             ch.production_symbol_id = ?2 \
-             OR EXISTS ( \
-               SELECT 1 FROM artefacts_current ac \
-               WHERE ac.repo_id = cc.repo_id \
-                 AND ac.artefact_id = ?2 \
-                 AND ac.symbol_id = ch.production_symbol_id \
-             ) \
-           ) \
+           AND ch.production_symbol_id = ?2 \
            AND ch.branch_id = -1",
     );
     if commit_sha.is_some() {
@@ -171,15 +163,7 @@ pub(super) fn load_stage_branch_coverage(
          FROM coverage_hits ch \
          JOIN coverage_captures cc ON cc.capture_id = ch.capture_id \
          WHERE cc.repo_id = ?1 \
-           AND ( \
-             ch.production_symbol_id = ?2 \
-             OR EXISTS ( \
-               SELECT 1 FROM artefacts_current ac \
-               WHERE ac.repo_id = cc.repo_id \
-                 AND ac.artefact_id = ?2 \
-                 AND ac.symbol_id = ch.production_symbol_id \
-             ) \
-           ) \
+           AND ch.production_symbol_id = ?2 \
            AND ch.branch_id != -1",
     );
     if commit_sha.is_some() {

@@ -10,8 +10,7 @@ use rusqlite::Connection;
 
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ProductionIngestionBatch,
-    ResolvedTestScenarioRecord,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
@@ -36,8 +35,6 @@ pub trait TestHarnessCoverageGateway: Send {
 
 pub trait TestHarnessRepository {
     fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>>;
-
-    fn replace_production_artefacts(&mut self, batch: &ProductionIngestionBatch) -> Result<()>;
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,

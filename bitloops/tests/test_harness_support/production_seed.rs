@@ -8,18 +8,16 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tree_sitter::{Node, Parser};
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 use walkdir::WalkDir;
 
-use bitloops::capability_packs::test_harness::storage::{
-    TestHarnessRepository, open_sqlite_repository,
-};
 use bitloops::models::{
     CommitRecord, CurrentFileStateRecord, CurrentProductionArtefactRecord, FileStateRecord,
-    ProductionArtefactRecord, ProductionIngestionBatch, RepositoryRecord,
+    ProductionArtefactRecord, RepositoryRecord,
 };
 
 use super::Workspace;
@@ -180,8 +178,7 @@ pub fn seed_production_artefacts_for_repo(
     repo_dir: &Path,
     commit_sha: &str,
 ) -> Result<()> {
-    let mut repository = open_sqlite_repository(db_path)?;
-    execute(&mut repository, repo_dir, commit_sha)?;
+    execute(db_path, repo_dir, commit_sha)?;
     Ok(())
 }
 
@@ -190,11 +187,7 @@ pub fn seed_production_artefacts(workspace: &Workspace, commit_sha: &str) {
         .expect("seed production artefacts");
 }
 
-pub fn execute(
-    repository: &mut impl TestHarnessRepository,
-    repo_dir: &Path,
-    commit_sha: &str,
-) -> Result<IngestProductionSummary> {
+pub fn execute(db_path: &Path, repo_dir: &Path, commit_sha: &str) -> Result<IngestProductionSummary> {
     let repo = resolve_repository_record(repo_dir)?;
     let production_files = find_production_files(repo_dir)?;
     let committed_at = chrono::Utc::now().to_rfc3339();
@@ -300,9 +293,10 @@ pub fn execute(
         .map(|group| group.len().saturating_sub(1))
         .sum::<usize>();
 
-    repository.replace_production_artefacts(&ProductionIngestionBatch {
-        repository: repo.clone(),
-        commit: CommitRecord {
+    persist_production_rows(
+        db_path,
+        &repo,
+        &CommitRecord {
             commit_sha: commit_sha.to_string(),
             repo_id: repo.repo_id.clone(),
             author_name: None,
@@ -310,13 +304,8 @@ pub fn execute(
             commit_message: None,
             committed_at: Some(committed_at),
         },
-        file_states: builder.file_states,
-        current_file_states: builder.current_file_states,
-        artefacts: builder.artefacts,
-        current_artefacts: builder.current_artefacts,
-        edges: Vec::new(),
-        current_edges: Vec::new(),
-    })?;
+        &builder,
+    )?;
 
     if normalized_duplicate_count > 0 && env::var_os("TESTLENS_DEBUG_DUPLICATE_ARTEFACTS").is_some()
     {
@@ -348,6 +337,274 @@ pub fn execute(
         artefacts: persisted_artefact_count,
         normalized_duplicates: normalized_duplicate_count,
     })
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table_name],
+            |row| row.get(0),
+        )
+        .with_context(|| format!("failed checking for sqlite table `{table_name}`"))?;
+    Ok(count > 0)
+}
+
+fn persist_production_rows(
+    db_path: &Path,
+    repository: &RepositoryRecord,
+    commit: &CommitRecord,
+    batch: &ProductionBatchBuilder,
+) -> Result<()> {
+    let mut conn = Connection::open(db_path)
+        .with_context(|| format!("failed opening sqlite database at {}", db_path.display()))?;
+    let tx = conn.transaction().context("failed to open sqlite transaction")?;
+
+    tx.execute(
+        "DELETE FROM test_artefact_edges_current WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing test_artefact_edges_current for commit")?;
+    tx.execute(
+        r#"DELETE FROM coverage_hits WHERE capture_id IN (
+            SELECT capture_id FROM coverage_captures WHERE commit_sha = ?1
+        )"#,
+        params![commit.commit_sha],
+    )
+    .context("failed clearing coverage_hits for commit")?;
+    tx.execute(
+        "DELETE FROM coverage_captures WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing coverage_captures for commit")?;
+    tx.execute(
+        "DELETE FROM test_classifications WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing test_classifications for commit")?;
+    tx.execute(
+        "DELETE FROM test_runs WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing test_runs for commit")?;
+    tx.execute(
+        "DELETE FROM artefact_edges_current WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing artefact_edges_current for commit")?;
+    tx.execute(
+        "DELETE FROM artefacts_current WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing artefacts_current for commit")?;
+    if table_exists(&tx, "current_file_state")? {
+        tx.execute(
+            "DELETE FROM current_file_state WHERE commit_sha = ?1",
+            params![commit.commit_sha],
+        )
+        .context("failed clearing current_file_state for commit")?;
+    }
+    tx.execute(
+        "DELETE FROM file_state WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing file_state for commit")?;
+    tx.execute(
+        "DELETE FROM commits WHERE commit_sha = ?1",
+        params![commit.commit_sha],
+    )
+    .context("failed clearing commits for commit")?;
+
+    tx.execute(
+        r#"
+INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT(repo_id) DO UPDATE SET
+  provider = excluded.provider,
+  organization = excluded.organization,
+  name = excluded.name,
+  default_branch = excluded.default_branch
+"#,
+        params![
+            repository.repo_id,
+            repository.provider,
+            repository.organization,
+            repository.name,
+            repository.default_branch
+        ],
+    )
+    .with_context(|| format!("failed upserting repository {}", repository.repo_id))?;
+
+    tx.execute(
+        r#"
+INSERT INTO commits (
+  commit_sha, repo_id, author_name, author_email, commit_message, committed_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+ON CONFLICT(commit_sha) DO UPDATE SET
+  repo_id = excluded.repo_id,
+  author_name = excluded.author_name,
+  author_email = excluded.author_email,
+  commit_message = excluded.commit_message,
+  committed_at = excluded.committed_at
+"#,
+        params![
+            commit.commit_sha,
+            commit.repo_id,
+            commit.author_name,
+            commit.author_email,
+            commit.commit_message,
+            commit.committed_at
+        ],
+    )
+    .with_context(|| format!("failed upserting commit {}", commit.commit_sha))?;
+
+    for row in &batch.file_states {
+        tx.execute(
+            r#"
+INSERT INTO file_state (repo_id, commit_sha, path, blob_sha)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(repo_id, commit_sha, path) DO UPDATE SET
+  blob_sha = excluded.blob_sha
+"#,
+            params![row.repo_id, row.commit_sha, row.path, row.blob_sha],
+        )
+        .with_context(|| format!("failed upserting file_state {} {}", row.commit_sha, row.path))?;
+    }
+
+    for row in &batch.current_file_states {
+        tx.execute(
+            r#"
+INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
+VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT(repo_id, path) DO UPDATE SET
+  commit_sha = excluded.commit_sha,
+  blob_sha = excluded.blob_sha,
+  committed_at = excluded.committed_at,
+  updated_at = datetime('now')
+"#,
+            params![
+                row.repo_id,
+                row.path,
+                row.commit_sha,
+                row.blob_sha,
+                row.committed_at
+            ],
+        )
+        .with_context(|| format!("failed upserting current_file_state {}", row.path))?;
+    }
+
+    for artefact in &batch.artefacts {
+        tx.execute(
+            r#"
+INSERT INTO artefacts (
+  artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+  language_kind, symbol_fqn, parent_artefact_id, start_line, end_line, start_byte,
+  end_byte, signature, modifiers, docstring, content_hash
+) VALUES (
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+)
+ON CONFLICT(artefact_id) DO UPDATE SET
+  symbol_id = excluded.symbol_id,
+  repo_id = excluded.repo_id,
+  blob_sha = excluded.blob_sha,
+  path = excluded.path,
+  language = excluded.language,
+  canonical_kind = excluded.canonical_kind,
+  language_kind = excluded.language_kind,
+  symbol_fqn = excluded.symbol_fqn,
+  parent_artefact_id = excluded.parent_artefact_id,
+  start_line = excluded.start_line,
+  end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
+  end_byte = excluded.end_byte,
+  signature = excluded.signature,
+  modifiers = excluded.modifiers,
+  docstring = excluded.docstring,
+  content_hash = excluded.content_hash
+"#,
+            params![
+                artefact.artefact_id,
+                artefact.symbol_id,
+                artefact.repo_id,
+                artefact.blob_sha,
+                artefact.path,
+                artefact.language,
+                artefact.canonical_kind,
+                artefact.language_kind,
+                artefact.symbol_fqn,
+                artefact.parent_artefact_id,
+                artefact.start_line,
+                artefact.end_line,
+                artefact.start_byte,
+                artefact.end_byte,
+                artefact.signature,
+                artefact.modifiers,
+                artefact.docstring,
+                artefact.content_hash
+            ],
+        )
+        .with_context(|| format!("failed upserting artefact {}", artefact.artefact_id))?;
+    }
+
+    for artefact in &batch.current_artefacts {
+        tx.execute(
+            r#"
+INSERT INTO artefacts_current (
+  repo_id, branch, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
+  language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
+  start_byte, end_byte, signature, modifiers, docstring, content_hash
+) VALUES (
+  ?1, 'main', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+)
+ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
+  artefact_id = excluded.artefact_id,
+  commit_sha = excluded.commit_sha,
+  blob_sha = excluded.blob_sha,
+  path = excluded.path,
+  language = excluded.language,
+  canonical_kind = excluded.canonical_kind,
+  language_kind = excluded.language_kind,
+  symbol_fqn = excluded.symbol_fqn,
+  parent_symbol_id = excluded.parent_symbol_id,
+  parent_artefact_id = excluded.parent_artefact_id,
+  start_line = excluded.start_line,
+  end_line = excluded.end_line,
+  start_byte = excluded.start_byte,
+  end_byte = excluded.end_byte,
+  signature = excluded.signature,
+  modifiers = excluded.modifiers,
+  docstring = excluded.docstring,
+  content_hash = excluded.content_hash,
+  updated_at = datetime('now')
+"#,
+            params![
+                artefact.repo_id,
+                artefact.symbol_id,
+                artefact.artefact_id,
+                artefact.commit_sha,
+                artefact.blob_sha,
+                artefact.path,
+                artefact.language,
+                artefact.canonical_kind,
+                artefact.language_kind,
+                artefact.symbol_fqn,
+                artefact.parent_symbol_id,
+                artefact.parent_artefact_id,
+                artefact.start_line,
+                artefact.end_line,
+                artefact.start_byte,
+                artefact.end_byte,
+                artefact.signature,
+                artefact.modifiers,
+                artefact.docstring,
+                artefact.content_hash
+            ],
+        )
+        .with_context(|| format!("failed upserting current artefact {}", artefact.symbol_id))?;
+    }
+
+    tx.commit().context("failed to commit production seed transaction")?;
+    Ok(())
 }
 
 fn resolve_repository_record(repo_dir: &Path) -> Result<RepositoryRecord> {
