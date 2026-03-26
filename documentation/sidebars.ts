@@ -46,6 +46,7 @@ const sidebars: SidebarsConfig = {
         'reference/cli-commands',
         'reference/configuration',
         'reference/environment-variables',
+        'reference/rust-code-standards',
       ],
     },
     {

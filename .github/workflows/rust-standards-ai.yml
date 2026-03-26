@@ -1,0 +1,46 @@
+name: Rust Standards AI Review
+
+on:
+  pull_request_target:
+    branches:
+      - develop
+    types:
+      - ready_for_review
+    paths:
+      - "**/*.rs"
+      - "documentation/docs/reference/rust-code-standards.md"
+      - ".github/workflows/rust-standards-ai.yml"
+      - ".github/scripts/rust-standards-ai-review.mjs"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: rust-standards-ai-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Rust standards AI review (informational)
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch content
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Review Rust PR diffs against standards
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR_REVIEW }}
+        run: node .github/scripts/rust-standards-ai-review.mjs
