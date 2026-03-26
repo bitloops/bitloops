@@ -21,7 +21,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tokio::net::TcpListener;
 
-pub(crate) use self::db::DashboardDbPools;
+pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 

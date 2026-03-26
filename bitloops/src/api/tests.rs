@@ -54,6 +54,21 @@ fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
     }
 }
 
+fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
+    let config_dir = repo_root.join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": "1.0",
+            "scope": "project",
+            "settings": settings
+        }))
+        .expect("serialise config"),
+    )
+    .expect("write config");
+}
+
 struct SeedCheckpointSession<'a> {
     session_index: i64,
     session_id: &'a str,
@@ -842,6 +857,81 @@ async fn devql_schema_builds_and_executes_in_process() {
 }
 
 #[tokio::test]
+async fn devql_health_query_reports_backend_and_blob_status_in_process() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ health { relational { backend status connected } events { backend status connected } blob { backend status connected } } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["health"]["relational"]["backend"], "sqlite");
+    assert_eq!(json["health"]["relational"]["status"], "SKIP");
+    assert_eq!(json["health"]["relational"]["connected"], false);
+    assert_eq!(json["health"]["events"]["backend"], "duckdb");
+    assert_eq!(json["health"]["events"]["status"], "SKIP");
+    assert_eq!(json["health"]["events"]["connected"], false);
+    assert_eq!(json["health"]["blob"]["backend"], "local");
+    assert_eq!(json["health"]["blob"]["status"], "OK");
+    assert_eq!(json["health"]["blob"]["connected"], true);
+}
+
+#[tokio::test]
+async fn devql_health_query_surfaces_blob_bootstrap_errors() {
+    let repo = seed_dashboard_repo();
+    write_envelope_config(
+        repo.path(),
+        json!({
+            "stores": {
+                "blob": {
+                    "s3_bucket": "bucket-a",
+                    "gcs_bucket": "bucket-b"
+                }
+            }
+        }),
+    );
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ health { blob { backend status connected detail } } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["health"]["blob"]["backend"], "invalid");
+    assert_eq!(json["health"]["blob"]["status"], "FAIL");
+    assert_eq!(json["health"]["blob"]["connected"], false);
+    assert!(
+        json["health"]["blob"]["detail"]
+            .as_str()
+            .expect("blob detail string")
+            .contains("both s3_bucket and gcs_bucket are set")
+    );
+}
+
+#[tokio::test]
 async fn devql_playground_route_serves_explorer() {
     let temp = TempDir::new().expect("temp dir");
     let app = build_dashboard_router(test_state(
@@ -869,6 +959,7 @@ async fn devql_sdl_route_returns_schema_text() {
     let (status, body) = request_text(app, "/devql/sdl").await;
 
     assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("type QueryRoot"));
     assert!(body.contains("repo(name: String!): Repository!"));
 }
@@ -887,13 +978,17 @@ async fn devql_post_route_executes_graphql_requests() {
         Method::POST,
         "/devql",
         "application/json",
-        Body::from(r#"{"query":"{ repo(name: \"demo\") { name provider } }"}"#),
+        Body::from(
+            r#"{"query":"{ repo(name: \"demo\") { name provider } health { blob { backend connected } } }"}"#,
+        ),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["data"]["repo"]["name"], "demo");
     assert_eq!(payload["data"]["repo"]["provider"], "local");
+    assert_eq!(payload["data"]["health"]["blob"]["backend"], "local");
+    assert_eq!(payload["data"]["health"]["blob"]["connected"], true);
 }
 
 #[tokio::test]

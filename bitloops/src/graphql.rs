@@ -1,4 +1,5 @@
 mod context;
+mod loaders;
 mod mutation_root;
 mod query_root;
 mod subscription_root;

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **DevQL GraphQL bootstrap** (`CLI-1513`): added `async-graphql` and `async-graphql-axum`, introduced the initial `src/graphql/` schema scaffold, and mounted `/devql`, `/devql/playground`, `/devql/ws`, and `/devql/sdl` on the existing Axum server. The minimal schema now builds and executes in-process with a stub `repo(name)` query while the current REST dashboard routes remain available during the migration.
+- **DevQL GraphQL shared context and health bootstrap** (`CLI-1514`): expanded the GraphQL foundation with a shared request context that resolves repository identity, backend configuration, blob storage, capability-host bootstrap state, and loader scaffolding. Added a `health` query that reports relational, events, and blob backend connectivity through the existing dashboard health probes, with smoke coverage for both in-process execution and the `/devql` HTTP endpoint.
+
 ### Changed
 
 ### Fixed
