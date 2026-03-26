@@ -33,7 +33,7 @@ pub(crate) const RUST_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescri
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
-pub(super) const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+pub(crate) const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
     id: "ts-js-language-pack",
     version: "1.0.0",
     api_version: 1,

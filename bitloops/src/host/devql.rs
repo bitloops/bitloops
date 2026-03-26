@@ -21,6 +21,7 @@ use crate::config::{
     resolve_store_backend_config_for_repo, resolve_store_embedding_config,
     resolve_store_semantic_config,
 };
+use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
     read_committed, read_session_content, run_git,
@@ -70,7 +71,9 @@ pub fn build_capability_host(
 ) -> anyhow::Result<crate::host::capability_host::DevqlCapabilityHost> {
     crate::host::capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
 }
+#[cfg(test)]
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
+#[cfg(test)]
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
@@ -88,6 +91,161 @@ fn core_extension_host() -> Result<&'static CoreExtensionHost> {
             "initialising Core extension host for DevQL runtime: {error_message}"
         )),
     }
+}
+
+fn language_adapter_registry() -> Result<&'static LanguageAdapterRegistry> {
+    static REGISTRY: OnceLock<Result<LanguageAdapterRegistry, String>> = OnceLock::new();
+    let registry_result = REGISTRY.get_or_init(|| {
+        let packs = crate::adapters::languages::builtin_language_adapter_packs();
+        LanguageAdapterRegistry::with_builtins(packs).map_err(|err| err.to_string())
+    });
+    match registry_result {
+        Ok(registry) => Ok(registry),
+        Err(error_message) => bail!(
+            "failed to initialize language adapter registry: {error_message}"
+        ),
+    }
+}
+
+struct LanguageAdapterLifecycleCollection {
+    summary: crate::host::capability_host::diagnostics::LanguageAdapterLifecycleSummary,
+    readiness_reports: Vec<crate::host::extension_host::ExtensionReadinessReport>,
+}
+
+fn extension_readiness_status_label(
+    status: crate::host::extension_host::ExtensionReadinessStatus,
+) -> String {
+    match status {
+        crate::host::extension_host::ExtensionReadinessStatus::Ready => "ready".to_string(),
+        crate::host::extension_host::ExtensionReadinessStatus::NotReady => "not_ready".to_string(),
+    }
+}
+
+fn extension_lifecycle_state_label(
+    state: crate::host::extension_host::ExtensionLifecycleState,
+) -> String {
+    match state {
+        crate::host::extension_host::ExtensionLifecycleState::Discovered => "discovered",
+        crate::host::extension_host::ExtensionLifecycleState::Validated => "validated",
+        crate::host::extension_host::ExtensionLifecycleState::Registered => "registered",
+        crate::host::extension_host::ExtensionLifecycleState::Migrated => "migrated",
+        crate::host::extension_host::ExtensionLifecycleState::Ready => "ready",
+        crate::host::extension_host::ExtensionLifecycleState::Failed => "failed",
+    }
+    .to_string()
+}
+
+fn collect_language_adapter_lifecycle(
+    cfg: &DevqlConfig,
+    runtime: &str,
+    apply_migrations: bool,
+    with_health: bool,
+) -> Result<LanguageAdapterLifecycleCollection> {
+    let registry = language_adapter_registry()?;
+    if apply_migrations {
+        let context = LanguageAdapterContext::new(cfg.repo_root.clone(), cfg.repo.repo_id.clone(), None);
+        let _ = registry.run_migrations(&context);
+    }
+
+    let readiness_reports = registry.readiness_reports(runtime, with_health);
+    let readiness = readiness_reports
+        .iter()
+        .map(|report| {
+            crate::host::capability_host::diagnostics::LanguageAdapterReadinessSummary {
+                family: report.family.clone(),
+                id: report.id.clone(),
+                registered: report.registered,
+                ready: report.ready,
+                status: extension_readiness_status_label(report.status),
+                lifecycle_state: extension_lifecycle_state_label(report.lifecycle_state),
+                failures: report
+                    .failures
+                    .iter()
+                    .map(|failure| {
+                        crate::host::capability_host::diagnostics::LanguageAdapterReadinessFailureSummary {
+                            code: failure.code.clone(),
+                            message: failure.message.clone(),
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    let packs = registry
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| registry.get(pack_id).map(|pack| (pack_id.to_string(), pack)))
+        .map(|(pack_id, pack)| {
+            let descriptor = pack.descriptor();
+            crate::host::capability_host::diagnostics::LanguageAdapterPackRegistryEntry {
+                id: pack_id,
+                display_name: descriptor.display_name.to_string(),
+                version: descriptor.version.to_string(),
+                api_version: descriptor.api_version,
+                supported_languages: descriptor
+                    .supported_languages
+                    .iter()
+                    .map(|language| (*language).to_string())
+                    .collect(),
+                migration_count: registry.migration_count_for(descriptor.id),
+                health_check_names: registry.health_check_names_for(descriptor.id),
+            }
+        })
+        .collect();
+
+    let migration_plan = registry
+        .migration_plan()
+        .into_iter()
+        .map(|step| {
+            crate::host::capability_host::diagnostics::LanguageAdapterMigrationStepSummary {
+                pack_id: step.pack_id,
+                migration_id: step.migration_id,
+                order: step.order,
+                description: step.description,
+            }
+        })
+        .collect();
+
+    let applied_migrations = registry
+        .applied_migrations()
+        .into_iter()
+        .map(|execution| {
+            crate::host::capability_host::diagnostics::LanguageAdapterMigrationExecutionSummary {
+                pack_id: execution.pack_id,
+                migration_id: execution.migration_id,
+                order: execution.order,
+            }
+        })
+        .collect();
+
+    let health = if with_health {
+        registry
+            .collect_health_outcomes(runtime)
+            .into_iter()
+            .map(|(check_id, result)| crate::host::capability_host::diagnostics::HealthOutcome {
+                check_id,
+                healthy: result.healthy,
+                message: result.message,
+                details: result.details,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(LanguageAdapterLifecycleCollection {
+        summary: crate::host::capability_host::diagnostics::LanguageAdapterLifecycleSummary {
+            runtime: runtime.to_string(),
+            packs,
+            migration_plan,
+            migrated_pack_ids: registry.migrated_pack_ids(),
+            applied_migrations,
+            readiness,
+            health,
+        },
+        readiness_reports,
+    })
 }
 
 fn normalise_optional_commit_sha(commit_sha: Option<&str>) -> Option<String> {
@@ -186,14 +344,31 @@ pub fn run_capability_packs_report(
     if apply_migrations {
         host.ensure_migrations_applied_sync()?;
     }
+    let runtime = core_extension_host()
+        .map(|host| host.compatibility_context().runtime.as_str().to_string())
+        .unwrap_or_else(|_| "local-cli".to_string());
+    let language_adapter_lifecycle =
+        collect_language_adapter_lifecycle(cfg, &runtime, apply_migrations, with_health)?;
     let mut devql_report = host.registry_report();
+    devql_report.language_adapters = language_adapter_lifecycle.summary.clone();
     if with_health {
         devql_report.health = crate::host::capability_host::collect_health_outcomes(&host);
     }
 
     let (core_extension_host, core_extension_host_error) = if with_extensions {
         match crate::host::extension_host::CoreExtensionHost::with_builtins() {
-            Ok(ext_host) => (Some(ext_host.registry_report()), None),
+            Ok(ext_host) => {
+                let snapshot = ext_host.readiness_snapshot().with_language_adapter_readiness(
+                    language_adapter_lifecycle
+                        .summary
+                        .packs
+                        .iter()
+                        .map(|pack| pack.id.clone())
+                        .collect(),
+                    language_adapter_lifecycle.readiness_reports.clone(),
+                );
+                (Some(ext_host.registry_report_with_snapshot(snapshot)), None)
+            }
             Err(err) => (None, Some(err.to_string())),
         }
     } else {
@@ -307,7 +482,6 @@ pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Re
     run_baseline_ingestion(cfg, &relational).await
 }
 
-mod canonical_mapping;
 mod core_contracts;
 mod vocab;
 // ingestion: shared types
@@ -351,34 +525,11 @@ mod ingestion_artefact_persistence_edges;
 mod ingestion_artefact_persistence;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
-// ingestion: JS/TS artefact extraction (tree-sitter)
-#[path = "devql/ingestion/extraction_js_ts.rs"]
-mod ingestion_extraction_js_ts;
-// ingestion: Rust artefact extraction (tree-sitter)
-#[path = "devql/ingestion/extraction_rust.rs"]
-mod ingestion_extraction_rust;
-// ingestion: shared edge-building utilities
-#[path = "devql/ingestion/edges_shared.rs"]
-mod ingestion_edges_shared;
-// ingestion: export edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_export.rs"]
-mod ingestion_edges_export;
-// ingestion: inheritance edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_inherits.rs"]
-mod ingestion_edges_inherits;
-// ingestion: reference edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_reference.rs"]
-mod ingestion_edges_reference;
-// ingestion: JS/TS dependency edge orchestration
-#[path = "devql/ingestion/edges_js_ts.rs"]
-mod ingestion_edges_js_ts;
 // ingestion: Rust dependency edge orchestration
 #[path = "devql/db_utils.rs"]
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
-#[path = "devql/ingestion/edges_rust.rs"]
-mod ingestion_edges_rust;
 #[path = "devql/query/executor.rs"]
 mod query_executor;
 #[path = "devql/query/parser.rs"]
@@ -386,7 +537,6 @@ mod query_parser;
 #[path = "devql/query/utils.rs"]
 mod query_utils;
 
-use self::canonical_mapping::*;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
@@ -403,14 +553,6 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
-use self::ingestion_edges_export::*;
-use self::ingestion_edges_inherits::*;
-use self::ingestion_edges_js_ts::*;
-use self::ingestion_edges_reference::*;
-use self::ingestion_edges_rust::*;
-use self::ingestion_edges_shared::*;
-use self::ingestion_extraction_js_ts::*;
-use self::ingestion_extraction_rust::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
@@ -432,9 +574,22 @@ pub(crate) use self::vocab::{
 
 #[cfg(test)]
 pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
+#[cfg(test)]
+use crate::adapters::languages::rust::edges::*;
+#[cfg(test)]
+use crate::adapters::languages::rust::extraction::*;
+#[cfg(test)]
+use crate::adapters::languages::ts_js::edges::*;
+#[cfg(test)]
+use crate::adapters::languages::ts_js::extraction::*;
+#[cfg(test)]
+use crate::host::language_adapter::edges_shared::*;
+#[cfg(test)]
+use crate::host::language_adapter::EdgeMetadata;
+use crate::host::language_adapter::{DependencyEdge, LanguageArtefact};
 
 #[cfg(test)]
-fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {
+fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
     structural_symbol_id_for_artefact(item, None)
 }
 

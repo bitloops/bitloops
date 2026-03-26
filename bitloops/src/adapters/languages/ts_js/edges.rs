@@ -1,12 +1,27 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use anyhow::Result;
+use regex::Regex;
+
+use crate::host::devql::{CallForm, CanonicalKindProjection, EdgeKind, ImportForm, Resolution};
+use crate::host::language_adapter::{
+    DependencyEdge, EdgeMetadata, LanguageArtefact,
+    edges_export::collect_js_ts_export_edges_recursive,
+    edges_inherits::collect_js_ts_extends_edges_recursive,
+    edges_reference::collect_js_ts_reference_edges_recursive,
+    edges_shared::{
+        EdgeCollector, ReferenceCtx, is_control_keyword, js_ts_reference_target_maps,
+        parse_import_clause_symbols, smallest_enclosing_callable, top_level_export_target_map,
+    },
+};
 
 // JS/TS dependency edge extraction (imports, calls, references, extends, exports).
 
-pub(super) fn extract_js_ts_dependency_edges(
+pub(crate) fn extract_js_ts_dependency_edges(
     content: &str,
     path: &str,
-    artefacts: &[JsTsArtefact],
-) -> Result<Vec<JsTsDependencyEdge>> {
+    artefacts: &[LanguageArtefact],
+) -> Result<Vec<DependencyEdge>> {
     let mut edges = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
     let import_re = Regex::new(r#"^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$"#)?;
@@ -21,32 +36,27 @@ pub(super) fn extract_js_ts_dependency_edges(
 
     let callables = artefacts
         .iter()
-        .filter(|a| {
-            artefact_has_core_kind(
-                a.canonical_kind.as_deref(),
-                CoreCanonicalArtefactKind::Callable,
-            )
-        })
+        .filter(|artefact| is_callable_artefact(artefact.canonical_kind.as_deref()))
         .cloned()
         .collect::<Vec<_>>();
     let mut callable_name_to_fqn: HashMap<String, String> = HashMap::new();
-    for c in &callables {
+    for callable in &callables {
         callable_name_to_fqn
-            .entry(c.name.clone())
-            .or_insert_with(|| c.symbol_fqn.clone());
+            .entry(callable.name.clone())
+            .or_insert_with(|| callable.symbol_fqn.clone());
     }
 
     let mut imported_symbol_refs: HashMap<String, String> = HashMap::new();
 
-    for (idx, line) in lines.iter().enumerate() {
-        let line_no = (idx + 1) as i32;
+    for (index, line) in lines.iter().enumerate() {
+        let line_no = (index + 1) as i32;
         let trimmed = line.trim();
 
         if let Some(caps) = import_re.captures(line) {
             let clause = caps.get(1).map(|m| m.as_str()).unwrap_or("").trim();
             let module_ref = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
-                edges.push(JsTsDependencyEdge {
+                edges.push(DependencyEdge {
                     edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
@@ -63,7 +73,7 @@ pub(super) fn extract_js_ts_dependency_edges(
         if let Some(caps) = side_effect_import_re.captures(line) {
             let module_ref = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             if !module_ref.is_empty() {
-                edges.push(JsTsDependencyEdge {
+                edges.push(DependencyEdge {
                     edge_kind: EdgeKind::Imports,
                     from_symbol_fqn: path.to_string(),
                     to_target_symbol_fqn: None,
@@ -84,22 +94,21 @@ pub(super) fn extract_js_ts_dependency_edges(
         }
 
         for caps in call_ident_re.captures_iter(line) {
-            let Some(name_m) = caps.get(1) else {
+            let Some(name_match) = caps.get(1) else {
                 continue;
             };
-            let name = name_m.as_str().to_string();
+            let name = name_match.as_str().to_string();
             if is_control_keyword(&name) {
                 continue;
             }
-            // Skip if the identifier is immediately preceded by '.' — it is a member access and
-            // call_member_re will emit the correct member-form edge for it.
-            if name_m.start() > 0 && line.as_bytes().get(name_m.start() - 1).copied() == Some(b'.')
+            if name_match.start() > 0
+                && line.as_bytes().get(name_match.start() - 1).copied() == Some(b'.')
             {
                 continue;
             }
 
             if let Some(target_fqn) = callable_name_to_fqn.get(&name) {
-                edges.push(JsTsDependencyEdge {
+                edges.push(DependencyEdge {
                     edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: Some(target_fqn.clone()),
@@ -109,7 +118,7 @@ pub(super) fn extract_js_ts_dependency_edges(
                     metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Local),
                 });
             } else if let Some(import_ref) = imported_symbol_refs.get(&name) {
-                edges.push(JsTsDependencyEdge {
+                edges.push(DependencyEdge {
                     edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
@@ -119,7 +128,7 @@ pub(super) fn extract_js_ts_dependency_edges(
                     metadata: EdgeMetadata::call(CallForm::Identifier, Resolution::Import),
                 });
             } else {
-                edges.push(JsTsDependencyEdge {
+                edges.push(DependencyEdge {
                     edge_kind: EdgeKind::Calls,
                     from_symbol_fqn: owner.symbol_fqn.clone(),
                     to_target_symbol_fqn: None,
@@ -132,11 +141,11 @@ pub(super) fn extract_js_ts_dependency_edges(
         }
 
         for caps in call_member_re.captures_iter(line) {
-            let Some(name_m) = caps.get(1) else {
+            let Some(name_match) = caps.get(1) else {
                 continue;
             };
-            let name = name_m.as_str().to_string();
-            edges.push(JsTsDependencyEdge {
+            let name = name_match.as_str().to_string();
+            edges.push(DependencyEdge {
                 edge_kind: EdgeKind::Calls,
                 from_symbol_fqn: owner.symbol_fqn.clone(),
                 to_target_symbol_fqn: None,
@@ -155,16 +164,6 @@ pub(super) fn extract_js_ts_dependency_edges(
     let mut parser = tree_sitter::Parser::new();
     let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
     let js_lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
-    let callables = artefacts
-        .iter()
-        .filter(|a| {
-            artefact_has_core_kind(
-                a.canonical_kind.as_deref(),
-                CoreCanonicalArtefactKind::Callable,
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
     let (type_targets, value_targets) = js_ts_reference_target_maps(artefacts);
     let export_targets = top_level_export_target_map(artefacts);
     let mut seen_references = HashSet::new();
@@ -217,4 +216,15 @@ pub(super) fn extract_js_ts_dependency_edges(
     }
 
     Ok(edges)
+}
+
+fn is_callable_artefact(canonical_kind: Option<&str>) -> bool {
+    canonical_kind
+        .and_then(CanonicalKindProjection::from_str)
+        .is_some_and(|kind| {
+            matches!(
+                kind,
+                CanonicalKindProjection::Function | CanonicalKindProjection::Method
+            )
+        })
 }

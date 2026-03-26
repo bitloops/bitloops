@@ -43,8 +43,3 @@ pub(super) struct FunctionArtefact {
     pub(super) end_byte: i32,
     pub(super) signature: String,
 }
-
-pub(super) type JsTsArtefact = crate::host::language_adapter::LanguageArtefact;
-pub(super) type EdgeMetadata = crate::host::language_adapter::EdgeMetadata;
-pub(super) type JsTsDependencyEdge = crate::host::language_adapter::DependencyEdge;
-pub(super) type RustUseExportEntry = crate::host::language_adapter::RustUseExportEntry;

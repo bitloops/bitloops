@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use super::{CanonicalMapping, DependencyEdge, LanguageArtefact};
+use super::{
+    CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck, LanguageAdapterMigrationDescriptor,
+    LanguageArtefact,
+};
 use crate::host::extension_host::LanguagePackDescriptor;
 
 pub(crate) trait LanguageAdapterPack: Send + Sync {
@@ -17,5 +20,13 @@ pub(crate) trait LanguageAdapterPack: Send + Sync {
     fn extract_file_docstring(&self, content: &str) -> Option<String> {
         let _ = content;
         None
+    }
+
+    fn migrations(&self) -> &'static [LanguageAdapterMigrationDescriptor] {
+        &[]
+    }
+
+    fn health_checks(&self) -> &'static [LanguageAdapterHealthCheck] {
+        &[]
     }
 }

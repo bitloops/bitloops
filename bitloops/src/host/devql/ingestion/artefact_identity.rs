@@ -25,7 +25,7 @@ pub(super) fn source_path_from_symbol_fqn(symbol_fqn: &str) -> &str {
     symbol_fqn.split("::").next().unwrap_or(symbol_fqn)
 }
 
-pub(super) fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
+pub(super) fn semantic_name_for_artefact(item: &LanguageArtefact) -> String {
     if has_positional_identity_name(&item.name) {
         normalize_identity_fragment(&identity_signature_for_artefact(item))
     } else {
@@ -33,7 +33,7 @@ pub(super) fn semantic_name_for_artefact(item: &JsTsArtefact) -> String {
     }
 }
 
-pub(super) fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
+pub(super) fn identity_signature_for_artefact(item: &LanguageArtefact) -> String {
     let mut signature = item.signature.clone();
     let mut modifiers = item
         .modifiers
@@ -53,7 +53,7 @@ pub(super) fn identity_signature_for_artefact(item: &JsTsArtefact) -> String {
 }
 
 pub(super) fn structural_symbol_id_for_artefact(
-    item: &JsTsArtefact,
+    item: &LanguageArtefact,
     parent_symbol_id: Option<&str>,
 ) -> String {
     deterministic_uuid(&format!(
