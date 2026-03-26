@@ -59,29 +59,6 @@ pub(crate) enum ArtefactKindFilter {
 }
 
 impl ArtefactKindFilter {
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            Self::File => "file",
-            Self::Namespace => "namespace",
-            Self::Module => "module",
-            Self::Import => "import",
-            Self::Type => "type",
-            Self::Interface => "interface",
-            Self::Enum => "enum",
-            Self::Callable => "callable",
-            Self::Function => "function",
-            Self::Method => "method",
-            Self::Value => "value",
-            Self::Variable => "variable",
-            Self::Constant => "constant",
-            Self::Member => "member",
-            Self::Parameter => "parameter",
-            Self::TypeParameter => "type_parameter",
-            Self::Alias => "alias",
-            Self::Raw(value) => value.as_str(),
-        }
-    }
-
     fn from_graphql(kind: CanonicalKind) -> Self {
         match kind {
             CanonicalKind::File => Self::File,

@@ -7,18 +7,16 @@ use self::sql::{
     build_current_artefacts_count_sql, build_current_artefacts_cursor_exists_sql,
     build_current_artefacts_sql, build_current_artefacts_window_sql,
     build_current_dependency_batch_sql, build_current_dependency_sql, build_file_context_list_sql,
-    build_file_context_lookup_sql, normalise_repo_relative_path, quote_devql_string,
+    build_file_context_lookup_sql, normalise_repo_relative_path,
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
-use crate::artefact_query_planner::{
-    ArtefactPagination, ArtefactQuerySpec, ArtefactTemporalScope, plan_graphql_artefact_query,
-};
+use crate::artefact_query_planner::{ArtefactPagination, plan_graphql_artefact_query};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
 };
-use crate::host::devql::{execute_query_json_with_composition, sqlite_query_rows_path};
+use crate::host::devql::sqlite_query_rows_path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -108,10 +106,6 @@ impl DevqlGraphqlContext {
             scope,
             None,
         );
-        if spec.activity_filter.is_some() {
-            return self.list_artefacts_via_devql(&spec, scope).await;
-        }
-
         let sql = build_current_artefacts_sql(&spec);
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
@@ -322,89 +316,6 @@ impl DevqlGraphqlContext {
         Ok(edges_by_artefact)
     }
 
-    async fn list_artefacts_via_devql(
-        &self,
-        spec: &ArtefactQuerySpec,
-        scope: &ResolverScope,
-    ) -> Result<Vec<Artefact>> {
-        let mut stages = Vec::new();
-        if let Some(temporal_stage) = devql_temporal_stage(&spec.temporal_scope)? {
-            stages.push(temporal_stage);
-        }
-        let scoped_path = spec
-            .scope
-            .path
-            .clone()
-            .or_else(|| spec.scope.files_path.clone())
-            .or_else(|| {
-                spec.scope
-                    .project_path
-                    .as_deref()
-                    .map(|project_path| format!("{project_path}/**"))
-            });
-
-        if let Some(path) = scoped_path.as_deref() {
-            if spec.scope.files_path.is_some() || path.contains('*') || path.contains('?') {
-                stages.push(format!("files(path:{})", quote_devql_string(path)));
-            } else {
-                stages.push(format!("file({})", quote_devql_string(path)));
-            }
-        }
-
-        let mut args = Vec::new();
-        if let Some(kind) = spec.structural_filter.kind.as_ref() {
-            args.push(format!("kind:{}", quote_devql_string(kind.as_str())));
-        }
-        if let Some(symbol_fqn) = spec.structural_filter.symbol_fqn.as_deref() {
-            args.push(format!("symbol_fqn:{}", quote_devql_string(symbol_fqn)));
-        }
-        if let Some(lines) = spec.structural_filter.lines.as_ref() {
-            args.push(format!("lines:{}..{}", lines.start, lines.end));
-        }
-        if let Some(agent) = spec
-            .activity_filter
-            .as_ref()
-            .and_then(|filter| filter.agent.as_deref())
-        {
-            args.push(format!("agent:{}", quote_devql_string(agent)));
-        }
-        if let Some(since) = spec
-            .activity_filter
-            .as_ref()
-            .and_then(|filter| filter.since.as_deref())
-        {
-            args.push(format!("since:{}", quote_devql_string(since)));
-        }
-
-        if args.is_empty() {
-            stages.push("artefacts()".to_string());
-        } else {
-            stages.push(format!("artefacts({})", args.join(",")));
-        }
-        stages.push(format!(
-            "limit({})",
-            spec.pagination
-                .as_ref()
-                .map_or(super::GRAPHQL_DEVQL_SCAN_LIMIT, |pagination| pagination
-                    .limit)
-        ));
-
-        let cfg = self.config.as_ref().with_context(|| {
-            self.config_error
-                .clone()
-                .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-        })?;
-        let result = execute_query_json_with_composition(cfg, &stages.join("->"), None).await?;
-        let rows = result
-            .as_array()
-            .cloned()
-            .with_context(|| "DevQL artefact query returned a non-array payload")?;
-        rows.into_iter()
-            .map(artefact_from_value)
-            .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
-            .collect()
-    }
-
     async fn query_sqlite_rows(&self, sql: &str) -> Result<Vec<Value>> {
         let sqlite_path = self.devql_sqlite_path()?;
         sqlite_query_rows_path(&sqlite_path, sql).await
@@ -421,19 +332,5 @@ impl DevqlGraphqlContext {
 
     fn current_branch_name(&self) -> String {
         git_default_branch_name(self.repo_root.as_path())
-    }
-}
-
-fn devql_temporal_stage(temporal_scope: &ArtefactTemporalScope) -> Result<Option<String>> {
-    match temporal_scope {
-        ArtefactTemporalScope::HistoricalCommit { commit_sha } => Ok(Some(format!(
-            "asOf(commit:{})",
-            quote_devql_string(commit_sha)
-        ))),
-        ArtefactTemporalScope::Current | ArtefactTemporalScope::SaveCurrent => Ok(None),
-        ArtefactTemporalScope::SaveRevision { revision_id } => anyhow::bail!(
-            "event-backed artefact filters do not support asOf(saveRevision:\"{}\") yet",
-            revision_id
-        ),
     }
 }

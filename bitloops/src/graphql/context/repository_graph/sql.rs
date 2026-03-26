@@ -540,10 +540,6 @@ pub(super) fn normalise_repo_relative_path(
     Ok(normalized)
 }
 
-pub(super) fn quote_devql_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DependencyScope<'a> {
     File(&'a str),
