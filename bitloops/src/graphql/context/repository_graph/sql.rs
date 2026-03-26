@@ -1,18 +1,8 @@
+use crate::artefact_query_planner::{ArtefactKindFilter, ArtefactQuerySpec};
 use crate::graphql::ResolvedTemporalScope;
-use crate::graphql::types::{ArtefactFilterInput, CanonicalKind, DepsDirection, DepsFilterInput};
+use crate::graphql::types::{DepsDirection, DepsFilterInput};
 use crate::host::devql::{esc_pg, escape_like_pattern, glob_to_sql_like, sql_like_with_escape};
 use std::path::{Component, Path};
-
-pub(super) struct CurrentArtefactsWindowSql<'a> {
-    pub repo_id: &'a str,
-    pub branch: &'a str,
-    pub path: Option<&'a str>,
-    pub project_path: Option<&'a str>,
-    pub filter: Option<&'a ArtefactFilterInput>,
-    pub temporal_scope: Option<&'a ResolvedTemporalScope>,
-    pub after: Option<&'a str>,
-    pub limit: usize,
-}
 
 pub(super) fn build_file_context_lookup_sql(
     repo_id: &str,
@@ -149,16 +139,9 @@ pub(super) fn build_file_context_list_sql(
     )
 }
 
-pub(super) fn build_current_artefacts_sql(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
-) -> String {
-    let (use_historical_tables, clauses) =
-        build_artefact_where_clauses(repo_id, branch, path, project_path, filter, temporal_scope);
+pub(super) fn build_current_artefacts_sql(spec: &ArtefactQuerySpec) -> String {
+    debug_assert!(spec.activity_filter.is_none());
+    let (use_historical_tables, clauses) = build_artefact_where_clauses(spec);
     format!(
         "SELECT {} \
            FROM {} a \
@@ -171,42 +154,16 @@ pub(super) fn build_current_artefacts_sql(
     )
 }
 
-pub(super) fn build_current_artefacts_count_sql(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
-) -> String {
-    let filtered_cte = build_filtered_artefacts_cte_sql(
-        repo_id,
-        branch,
-        path,
-        project_path,
-        filter,
-        temporal_scope,
-    );
+pub(super) fn build_current_artefacts_count_sql(spec: &ArtefactQuerySpec) -> String {
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
     format!("{filtered_cte} SELECT COUNT(*) AS total_count FROM filtered")
 }
 
 pub(super) fn build_current_artefacts_cursor_exists_sql(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
+    spec: &ArtefactQuerySpec,
     cursor: &str,
 ) -> String {
-    let filtered_cte = build_filtered_artefacts_cte_sql(
-        repo_id,
-        branch,
-        path,
-        project_path,
-        filter,
-        temporal_scope,
-    );
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
     format!(
         "{filtered_cte} \
          SELECT 1 AS cursor_match \
@@ -217,24 +174,25 @@ pub(super) fn build_current_artefacts_cursor_exists_sql(
     )
 }
 
-pub(super) fn build_current_artefacts_window_sql(params: CurrentArtefactsWindowSql<'_>) -> String {
-    let filtered_cte = build_filtered_artefacts_cte_sql(
-        params.repo_id,
-        params.branch,
-        params.path,
-        params.project_path,
-        params.filter,
-        params.temporal_scope,
-    );
-    let pagination_clause = params.after.map_or_else(String::new, |cursor| {
-        format!(
-            " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
+pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> String {
+    debug_assert!(spec.activity_filter.is_none());
+    let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let pagination = spec
+        .pagination
+        .as_ref()
+        .expect("artefact window queries require pagination in the shared spec");
+    let pagination_clause = pagination
+        .after
+        .as_deref()
+        .map_or_else(String::new, |cursor| {
+            format!(
+                " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
                     (SELECT path, kind_rank, start_line, end_line, artefact_id \
                        FROM filtered \
                       WHERE artefact_id = '{cursor}')",
-            cursor = esc_pg(cursor),
-        )
-    });
+                cursor = esc_pg(cursor),
+            )
+        });
 
     format!(
         "{filtered_cte} \
@@ -244,7 +202,7 @@ pub(super) fn build_current_artefacts_window_sql(params: CurrentArtefactsWindowS
           LIMIT {limit}",
         columns = filtered_artefact_columns_sql(),
         order = filtered_artefact_order_sql(),
-        limit = params.limit,
+        limit = pagination.limit,
     )
 }
 
@@ -600,24 +558,26 @@ pub(super) enum DependencyScope<'a> {
     Project(&'a str),
 }
 
-fn canonical_kind_clause(column: &str, kind: CanonicalKind) -> String {
+fn canonical_kind_clause(column: &str, kind: &ArtefactKindFilter) -> String {
     let values: &[&str] = match kind {
-        CanonicalKind::File => &["file"],
-        CanonicalKind::Namespace => &["namespace"],
-        CanonicalKind::Module => &["module"],
-        CanonicalKind::Import => &["import"],
-        CanonicalKind::Type => &["type", "interface", "enum"],
-        CanonicalKind::Interface => &["interface"],
-        CanonicalKind::Enum => &["enum"],
-        CanonicalKind::Callable => &["callable", "function", "method"],
-        CanonicalKind::Function => &["function"],
-        CanonicalKind::Method => &["method"],
-        CanonicalKind::Value => &["value", "variable", "constant"],
-        CanonicalKind::Variable => &["variable", "constant"],
-        CanonicalKind::Member => &["member"],
-        CanonicalKind::Parameter => &["parameter"],
-        CanonicalKind::TypeParameter => &["type_parameter"],
-        CanonicalKind::Alias => &["alias"],
+        ArtefactKindFilter::File => &["file"],
+        ArtefactKindFilter::Namespace => &["namespace"],
+        ArtefactKindFilter::Module => &["module"],
+        ArtefactKindFilter::Import => &["import"],
+        ArtefactKindFilter::Type => &["type", "interface", "enum"],
+        ArtefactKindFilter::Interface => &["interface"],
+        ArtefactKindFilter::Enum => &["enum"],
+        ArtefactKindFilter::Callable => &["callable", "function", "method"],
+        ArtefactKindFilter::Function => &["function"],
+        ArtefactKindFilter::Method => &["method"],
+        ArtefactKindFilter::Value => &["value", "variable", "constant"],
+        ArtefactKindFilter::Variable => &["variable", "constant"],
+        ArtefactKindFilter::Constant => &["constant"],
+        ArtefactKindFilter::Member => &["member"],
+        ArtefactKindFilter::Parameter => &["parameter"],
+        ArtefactKindFilter::TypeParameter => &["type_parameter"],
+        ArtefactKindFilter::Alias => &["alias"],
+        ArtefactKindFilter::Raw(value) => return format!("{column} = '{}'", esc_pg(value)),
     };
 
     if values.len() == 1 {
@@ -683,68 +643,54 @@ fn quoted_string_list(values: &[String]) -> String {
         .join(", ")
 }
 
-fn build_artefact_where_clauses(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
-) -> (bool, Vec<String>) {
-    let use_historical_tables =
-        temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables);
-    let mut clauses = vec![format!("a.repo_id = '{}'", esc_pg(repo_id))];
+fn build_artefact_where_clauses(spec: &ArtefactQuerySpec) -> (bool, Vec<String>) {
+    let use_historical_tables = spec.temporal_scope.use_historical_tables();
+    let mut clauses = vec![format!("a.repo_id = '{}'", esc_pg(spec.repo_id.as_str()))];
     if !use_historical_tables {
+        let branch = spec
+            .branch
+            .as_deref()
+            .expect("current/save artefact queries require a branch in the shared spec");
         clauses.push(format!("a.branch = '{}'", esc_pg(branch)));
     }
-    if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
+    if let Some(revision_id) = spec.temporal_scope.save_revision() {
         clauses.push("a.revision_kind = 'temporary'".to_string());
         clauses.push(format!("a.revision_id = '{}'", esc_pg(revision_id)));
     }
-    if let Some(scope) = temporal_scope.filter(|scope| scope.use_historical_tables()) {
+    if let Some(commit_sha) = spec.temporal_scope.resolved_commit() {
         clauses.push(file_state_exists_clause(
             "a.path",
             "a.blob_sha",
-            repo_id,
-            scope.resolved_commit(),
+            spec.repo_id.as_str(),
+            commit_sha,
         ));
     }
 
-    if let Some(path) = path {
+    if let Some(path) = spec.scope.path.as_deref() {
         clauses.push(format!("a.path = '{}'", esc_pg(path)));
     }
-    if let Some(project_path) = project_path {
+    if let Some(project_path) = spec.scope.project_path.as_deref() {
         clauses.push(repo_path_prefix_clause("a.path", project_path));
     }
 
-    if let Some(filter) = filter {
-        if let Some(kind) = filter.kind {
-            clauses.push(canonical_kind_clause("a.canonical_kind", kind));
-        }
-        if let Some(symbol_fqn) = filter.symbol_fqn.as_deref() {
-            clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
-        }
-        if let Some(lines) = filter.lines.as_ref() {
-            clauses.push(format!(
-                "a.start_line <= {} AND a.end_line >= {}",
-                lines.end, lines.start
-            ));
-        }
+    if let Some(kind) = spec.structural_filter.kind.as_ref() {
+        clauses.push(canonical_kind_clause("a.canonical_kind", kind));
+    }
+    if let Some(symbol_fqn) = spec.structural_filter.symbol_fqn.as_deref() {
+        clauses.push(format!("a.symbol_fqn = '{}'", esc_pg(symbol_fqn)));
+    }
+    if let Some(lines) = spec.structural_filter.lines.as_ref() {
+        clauses.push(format!(
+            "a.start_line <= {} AND a.end_line >= {}",
+            lines.end, lines.start
+        ));
     }
 
     (use_historical_tables, clauses)
 }
 
-fn build_filtered_artefacts_cte_sql(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
-) -> String {
-    let (use_historical_tables, clauses) =
-        build_artefact_where_clauses(repo_id, branch, path, project_path, filter, temporal_scope);
+fn build_filtered_artefacts_cte_sql(spec: &ArtefactQuerySpec) -> String {
+    let (use_historical_tables, clauses) = build_artefact_where_clauses(spec);
     format!(
         "WITH filtered AS ( \
              SELECT {}, {} AS kind_rank \

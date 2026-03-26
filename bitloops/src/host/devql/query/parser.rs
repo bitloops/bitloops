@@ -4,13 +4,13 @@ use anyhow::{anyhow, bail};
 // Query filter types (defined here; used by query_parser, query_executor, deps_query).
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct ParsedDevqlQuery {
-    pub(super) repo: Option<String>,
-    pub(super) project_path: Option<String>,
-    pub(super) as_of: Option<AsOfSelector>,
-    pub(super) file: Option<String>,
-    pub(super) files_path: Option<String>,
-    pub(super) artefacts: ArtefactFilter,
+pub(crate) struct ParsedDevqlQuery {
+    pub(crate) repo: Option<String>,
+    pub(crate) project_path: Option<String>,
+    pub(crate) as_of: Option<AsOfSelector>,
+    pub(crate) file: Option<String>,
+    pub(crate) files_path: Option<String>,
+    pub(crate) artefacts: ArtefactFilter,
     pub(super) clones: CloneFilter,
     pub(super) checkpoints: CheckpointFilter,
     pub(super) telemetry: TelemetryFilter,
@@ -22,7 +22,7 @@ pub(super) struct ParsedDevqlQuery {
     pub(super) has_telemetry_stage: bool,
     pub(super) has_chat_history_stage: bool,
     pub(super) registered_stages: Vec<RegisteredStageCall>,
-    pub(super) limit: usize,
+    pub(crate) limit: usize,
     pub(super) has_limit_stage: bool,
     pub(super) select_fields: Vec<String>,
 }
@@ -34,7 +34,7 @@ pub(super) struct RegisteredStageCall {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum AsOfSelector {
+pub(crate) enum AsOfSelector {
     Ref(String),
     Commit(String),
     SaveCurrent,
@@ -42,12 +42,12 @@ pub(super) enum AsOfSelector {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct ArtefactFilter {
-    pub(super) kind: Option<String>,
-    pub(super) symbol_fqn: Option<String>,
-    pub(super) lines: Option<(i32, i32)>,
-    pub(super) agent: Option<String>,
-    pub(super) since: Option<String>,
+pub(crate) struct ArtefactFilter {
+    pub(crate) kind: Option<String>,
+    pub(crate) symbol_fqn: Option<String>,
+    pub(crate) lines: Option<(i32, i32)>,
+    pub(crate) agent: Option<String>,
+    pub(crate) since: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,7 +86,7 @@ impl Default for DepsFilter {
     }
 }
 
-pub(super) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
+pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
     let mut parsed = ParsedDevqlQuery {
         limit: 100,
         ..Default::default()

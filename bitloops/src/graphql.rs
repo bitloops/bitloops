@@ -12,7 +12,12 @@ mod types;
 pub(crate) use context::DevqlGraphqlContext;
 pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
 pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode};
+pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
 
+#[cfg(test)]
+pub(crate) use types::DateTimeScalar;
+#[cfg(test)]
+pub(crate) use types::artefact::LineRangeInput;
 #[cfg(test)]
 pub(crate) use types::ingestion::IngestionPhase;
 #[cfg(test)]

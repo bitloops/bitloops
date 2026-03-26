@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod api;
+pub(crate) mod artefact_query_planner;
 pub mod capability_packs;
 pub mod cli;
 pub mod config;

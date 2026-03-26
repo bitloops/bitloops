@@ -663,7 +663,10 @@ pub(crate) use self::ingestion_types::{
     IngestionProgressUpdate,
 };
 use self::query_executor::*;
+#[cfg(test)]
+pub(crate) use self::query_parser::parse_devql_query;
 use self::query_parser::*;
+pub(crate) use self::query_parser::{AsOfSelector as DevqlAsOfSelector, ParsedDevqlQuery};
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;
 use self::vocab::*;
