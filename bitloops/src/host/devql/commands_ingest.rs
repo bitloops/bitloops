@@ -228,6 +228,15 @@ pub(crate) async fn execute_ingest_with_observer(
             counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
+        let _projected_rows = upsert_checkpoint_file_snapshot_rows(
+            cfg,
+            &relational,
+            &cp,
+            &commit_sha,
+            commit_info,
+        )
+        .await?;
+
         counters.checkpoints_processed += 1;
         checkpoints_processed += 1;
         emit_checkpoint_ingested(observer, checkpoint, commit_sha_option.clone());

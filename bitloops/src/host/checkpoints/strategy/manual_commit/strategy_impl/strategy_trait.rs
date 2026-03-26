@@ -344,6 +344,22 @@ impl Strategy for ManualCommitStrategy {
             );
         }
         if commit_has_checkpoint_mapping(&self.repo_root, &head)? {
+            if let Some(checkpoint_id) = read_commit_checkpoint_mappings(&self.repo_root)?
+                .get(&head)
+                .cloned()
+            {
+                let projection_result = run_devql_post_commit_checkpoint_projection_refresh(
+                    &self.repo_root,
+                    &head,
+                    &checkpoint_id,
+                );
+                if let Err(err) = projection_result {
+                    eprintln!(
+                        "[bitloops] Warning: DevQL checkpoint projection refresh failed for commit {} and checkpoint {}: {err:#}",
+                        head, checkpoint_id
+                    );
+                }
+            }
             return Ok(());
         }
 
@@ -415,6 +431,16 @@ impl Strategy for ManualCommitStrategy {
 
         if condensed_any_session {
             insert_commit_checkpoint_mapping(&self.repo_root, &head, &checkpoint_id)?;
+            if let Err(err) = run_devql_post_commit_checkpoint_projection_refresh(
+                &self.repo_root,
+                &head,
+                &checkpoint_id,
+            ) {
+                eprintln!(
+                    "[bitloops] Warning: DevQL checkpoint projection refresh failed for commit {} and checkpoint {}: {err:#}",
+                    head, checkpoint_id
+                );
+            }
         }
 
         Ok(())

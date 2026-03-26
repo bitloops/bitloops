@@ -1,5 +1,7 @@
 use super::*;
 
+use chrono::{TimeZone, Utc};
+
 use crate::host::checkpoints::strategy::manual_commit::resolve_default_branch_name;
 
 // Checkpoint and commit row persistence: mapping, event insertion, upserts.
@@ -294,14 +296,13 @@ pub(super) fn checkpoint_event_time_rfc3339(
         return created_at.to_string();
     }
 
-    if let Some(info) = commit_info {
-        return info.commit_unix.to_string();
+    if let Some(info) = commit_info
+        && let Some(timestamp) = Utc.timestamp_opt(info.commit_unix, 0).single()
+    {
+        return timestamp.to_rfc3339();
     }
 
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_string())
+    Utc::now().to_rfc3339()
 }
 
 pub(super) async fn fetch_existing_checkpoint_event_ids(
@@ -353,4 +354,123 @@ ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name =
     );
 
     relational.exec(&sql).await
+}
+
+fn build_select_file_state_blob_sha_sql(repo_id: &str, commit_sha: &str, path: &str) -> String {
+    format!(
+        "SELECT blob_sha FROM file_state WHERE repo_id = '{}' AND commit_sha = '{}' AND path = '{}' LIMIT 1",
+        esc_pg(repo_id),
+        esc_pg(commit_sha),
+        esc_pg(path),
+    )
+}
+
+struct CheckpointFileSnapshotUpsert<'a> {
+    repo_id: &'a str,
+    checkpoint_id: &'a str,
+    session_id: &'a str,
+    event_time: &'a str,
+    agent: &'a str,
+    branch: &'a str,
+    strategy: &'a str,
+    commit_sha: &'a str,
+    path: &'a str,
+    blob_sha: &'a str,
+}
+
+fn build_upsert_checkpoint_file_snapshot_sql(row: CheckpointFileSnapshotUpsert<'_>) -> String {
+    format!(
+        "INSERT INTO checkpoint_file_snapshots (
+            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha, path, blob_sha
+        ) VALUES (
+            '{repo_id}', '{checkpoint_id}', '{session_id}', '{event_time}', '{agent}', '{branch}', '{strategy}', '{commit_sha}', '{path}', '{blob_sha}'
+        )
+        ON CONFLICT (repo_id, checkpoint_id, path, blob_sha) DO UPDATE SET
+            session_id = EXCLUDED.session_id,
+            event_time = EXCLUDED.event_time,
+            agent = EXCLUDED.agent,
+            branch = EXCLUDED.branch,
+            strategy = EXCLUDED.strategy,
+            commit_sha = EXCLUDED.commit_sha",
+        repo_id = esc_pg(row.repo_id),
+        checkpoint_id = esc_pg(row.checkpoint_id),
+        session_id = esc_pg(row.session_id),
+        event_time = esc_pg(row.event_time),
+        agent = esc_pg(row.agent),
+        branch = esc_pg(row.branch),
+        strategy = esc_pg(row.strategy),
+        commit_sha = esc_pg(row.commit_sha),
+        path = esc_pg(row.path),
+        blob_sha = esc_pg(row.blob_sha),
+    )
+}
+
+async fn load_file_state_blob_sha(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    commit_sha: &str,
+    path: &str,
+) -> Result<Option<String>> {
+    let sql = build_select_file_state_blob_sha_sql(&cfg.repo.repo_id, commit_sha, path);
+    let rows = relational.query_rows(&sql).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("blob_sha"))
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+pub(super) async fn upsert_checkpoint_file_snapshot_rows(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    cp: &CommittedInfo,
+    commit_sha: &str,
+    commit_info: Option<&CheckpointCommitInfo>,
+) -> Result<usize> {
+    let commit_sha = commit_sha.trim();
+    if commit_sha.is_empty() {
+        return Ok(0);
+    }
+
+    let event_time = checkpoint_event_time_rfc3339(cp, commit_info);
+    let mut projected_paths = std::collections::BTreeSet::new();
+    let mut statements = Vec::new();
+
+    for raw_path in &cp.files_touched {
+        let path = normalize_repo_path(raw_path);
+        if path.is_empty() || !projected_paths.insert(path.clone()) {
+            continue;
+        }
+
+        let Some(blob_sha) = load_file_state_blob_sha(cfg, relational, commit_sha, &path).await?
+        else {
+            eprintln!(
+                "[bitloops] Warning: skipping checkpoint snapshot projection for checkpoint {} at commit {} because file_state has no row for `{}`",
+                cp.checkpoint_id, commit_sha, path
+            );
+            continue;
+        };
+
+        statements.push(build_upsert_checkpoint_file_snapshot_sql(
+            CheckpointFileSnapshotUpsert {
+                repo_id: &cfg.repo.repo_id,
+                checkpoint_id: &cp.checkpoint_id,
+                session_id: &cp.session_id,
+                event_time: &event_time,
+                agent: &cp.agent,
+                branch: &cp.branch,
+                strategy: &cp.strategy,
+                commit_sha,
+                path: &path,
+                blob_sha: &blob_sha,
+            },
+        ));
+    }
+
+    if statements.is_empty() {
+        return Ok(0);
+    }
+
+    relational.exec_batch_transactional(&statements).await?;
+    Ok(statements.len())
 }

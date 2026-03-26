@@ -19,7 +19,9 @@ pub(crate) use self::commit_checkpoint_mapping::{
     commit_has_checkpoint_mapping, insert_commit_checkpoint_mapping,
 };
 pub(super) use self::post_checkout_seed::run_devql_post_checkout_seed;
-pub(super) use self::post_commit_refresh::run_devql_post_commit_refresh;
+pub(super) use self::post_commit_refresh::{
+    run_devql_post_commit_checkpoint_projection_refresh, run_devql_post_commit_refresh,
+};
 pub(super) use self::post_merge_refresh::run_devql_post_merge_refresh;
 pub(super) use self::pre_push_sync::run_devql_pre_push_sync;
 pub(super) use self::reference_transaction_cleanup::{

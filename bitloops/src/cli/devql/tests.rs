@@ -94,6 +94,37 @@ fn devql_cli_parses_ingest_defaults() {
 }
 
 #[test]
+fn devql_cli_parses_checkpoint_file_snapshot_projection_command() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "projection",
+        "checkpoint-file-snapshots",
+        "--batch-size",
+        "25",
+        "--max-checkpoints",
+        "40",
+        "--resume-after",
+        "a1b2c3",
+        "--dry-run",
+    ])
+    .expect("projection command should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Projection(projection)) = args.command else {
+        panic!("expected devql projection command");
+    };
+    let DevqlProjectionCommand::CheckpointFileSnapshots(backfill) = projection.command;
+
+    assert_eq!(backfill.batch_size, 25);
+    assert_eq!(backfill.max_checkpoints, Some(40));
+    assert_eq!(backfill.resume_after.as_deref(), Some("a1b2c3"));
+    assert!(backfill.dry_run);
+}
+
+#[test]
 fn devql_cli_parses_packs_flags() {
     let parsed = Cli::try_parse_from([
         "bitloops",
@@ -390,6 +421,37 @@ fn devql_run_ingest_executes_graphql_mutation_and_persists_repository_row() {
         .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
         .expect("count repositories");
     assert_eq!(repository_count, 1, "expected one repository row");
+}
+
+#[test]
+fn devql_run_projection_checkpoint_file_snapshots_succeeds_for_empty_repo() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+
+    test_runtime()
+        .block_on(run(DevqlArgs {
+            command: Some(DevqlCommand::Projection(DevqlProjectionArgs {
+                command: DevqlProjectionCommand::CheckpointFileSnapshots(
+                    DevqlCheckpointFileSnapshotsArgs {
+                        batch_size: 10,
+                        max_checkpoints: Some(5),
+                        resume_after: None,
+                        dry_run: true,
+                    },
+                ),
+            })),
+        }))
+        .expect("projection backfill should succeed for repo without checkpoints");
+
+    let conn = Connection::open(sqlite_path_for_repo(repo.path())).expect("open sqlite");
+    let projection_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count checkpoint_file_snapshots rows");
+    assert_eq!(projection_count, 0);
 }
 
 #[test]

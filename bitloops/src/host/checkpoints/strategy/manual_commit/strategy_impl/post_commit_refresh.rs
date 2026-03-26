@@ -8,7 +8,7 @@ pub(crate) fn run_devql_post_commit_refresh(
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
     changed_files.sort();
 
-    let refresh_future = async {
+    run_post_commit_future(repo_root, async {
         let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repository identity for post-commit DevQL refresh")?;
         let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
@@ -29,8 +29,35 @@ pub(crate) fn run_devql_post_commit_refresh(
             );
         }
         Ok::<(), anyhow::Error>(())
-    };
+    })
+}
 
+pub(crate) fn run_devql_post_commit_checkpoint_projection_refresh(
+    repo_root: &Path,
+    commit_sha: &str,
+    checkpoint_id: &str,
+) -> Result<()> {
+    run_post_commit_future(repo_root, async {
+        let repo = crate::host::devql::resolve_repo_identity(repo_root).context(
+            "resolving repository identity for post-commit checkpoint projection refresh",
+        )?;
+        let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
+            .context("building DevQL config for post-commit checkpoint projection refresh")?;
+        crate::host::devql::run_post_commit_checkpoint_projection_refresh(
+            &cfg,
+            commit_sha,
+            checkpoint_id,
+        )
+        .await
+        .context("refreshing DevQL checkpoint projection after post-commit")?;
+        Ok::<(), anyhow::Error>(())
+    })
+}
+
+fn run_post_commit_future<F>(_repo_root: &Path, refresh_future: F) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         return tokio::task::block_in_place(|| handle.block_on(refresh_future));
     }
@@ -38,6 +65,6 @@ pub(crate) fn run_devql_post_commit_refresh(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("building tokio runtime for post-commit DevQL refresh")?;
+        .context("building tokio runtime for post-commit DevQL work")?;
     runtime.block_on(refresh_future)
 }

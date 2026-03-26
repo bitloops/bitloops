@@ -117,6 +117,141 @@ async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
 }
 
 #[tokio::test]
+async fn checkpoint_file_snapshot_projection_is_idempotent_and_skips_unresolved_paths() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let mut cfg = test_cfg();
+    cfg.repo.repo_id = deterministic_uuid("repo://checkpoint-file-snapshot-projection");
+
+    upsert_file_state_row(
+        &cfg.repo.repo_id,
+        &relational,
+        "commit-1",
+        "src/one.ts",
+        "blob-1",
+    )
+    .await
+    .expect("upsert file_state for first file");
+    upsert_file_state_row(
+        &cfg.repo.repo_id,
+        &relational,
+        "commit-1",
+        "src/two.ts",
+        "blob-2",
+    )
+    .await
+    .expect("upsert file_state for second file");
+
+    let checkpoint = CommittedInfo {
+        checkpoint_id: "checkpoint-1".to_string(),
+        strategy: "manual-commit".to_string(),
+        branch: "main".to_string(),
+        files_touched: vec![
+            "src/one.ts".to_string(),
+            "src/two.ts".to_string(),
+            "src/missing.ts".to_string(),
+            "src/two.ts".to_string(),
+        ],
+        session_id: "session-1".to_string(),
+        agent: "claude-code".to_string(),
+        created_at: "2026-03-27T10:15:00Z".to_string(),
+        ..Default::default()
+    };
+    let commit_info = CheckpointCommitInfo {
+        commit_sha: "commit-1".to_string(),
+        commit_unix: 1_742_972_900,
+        author_name: "Bitloops Test".to_string(),
+        author_email: "bitloops-test@example.com".to_string(),
+        subject: "checkpoint".to_string(),
+    };
+
+    let projected_first = upsert_checkpoint_file_snapshot_rows(
+        &cfg,
+        &relational,
+        &checkpoint,
+        &commit_info.commit_sha,
+        Some(&commit_info),
+    )
+    .await
+    .expect("project checkpoint snapshot rows");
+    let projected_second = upsert_checkpoint_file_snapshot_rows(
+        &cfg,
+        &relational,
+        &checkpoint,
+        &commit_info.commit_sha,
+        Some(&commit_info),
+    )
+    .await
+    .expect("reproject checkpoint snapshot rows");
+    assert_eq!(
+        projected_first, 2,
+        "expected two resolved file snapshot rows"
+    );
+    assert_eq!(
+        projected_second, 2,
+        "replaying the same checkpoint should target the same two rows"
+    );
+
+    let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+    let mut stmt = sqlite
+        .prepare(
+            "SELECT path, blob_sha, session_id, agent, branch, strategy, commit_sha, event_time
+             FROM checkpoint_file_snapshots
+             WHERE repo_id = ?1 AND checkpoint_id = ?2
+             ORDER BY path ASC",
+        )
+        .expect("prepare checkpoint_file_snapshots query");
+    let rows = stmt
+        .query_map(
+            rusqlite::params![cfg.repo.repo_id.as_str(), checkpoint.checkpoint_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            },
+        )
+        .expect("query checkpoint_file_snapshots rows")
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .expect("collect checkpoint_file_snapshots rows");
+
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "src/one.ts".to_string(),
+                "blob-1".to_string(),
+                "session-1".to_string(),
+                "claude-code".to_string(),
+                "main".to_string(),
+                "manual-commit".to_string(),
+                "commit-1".to_string(),
+                "2026-03-27T10:15:00Z".to_string(),
+            ),
+            (
+                "src/two.ts".to_string(),
+                "blob-2".to_string(),
+                "session-1".to_string(),
+                "claude-code".to_string(),
+                "main".to_string(),
+                "manual-commit".to_string(),
+                "commit-1".to_string(),
+                "2026-03-27T10:15:00Z".to_string(),
+            ),
+        ],
+        "projection should upsert only the resolved file snapshots"
+    );
+}
+
+#[tokio::test]
 async fn init_duckdb_schema_creates_checkpoint_events_table() {
     let temp = tempdir().expect("temp dir");
     let path = temp.path().join("events.duckdb");
@@ -287,6 +422,8 @@ mod extraction_rust;
 mod identity_and_schema;
 #[path = "devql_tests/postgres_integration.rs"]
 mod postgres_integration;
+#[path = "devql_tests/projection_backfill.rs"]
+mod projection_backfill;
 #[path = "devql_tests/query_executor.rs"]
 mod query_executor;
 #[path = "devql_tests/query_pipeline.rs"]

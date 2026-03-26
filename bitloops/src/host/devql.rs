@@ -34,8 +34,12 @@ use crate::host::extension_host::{
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::utils::terminal::print_db_status_table;
 
+#[path = "devql/checkpoint_file_snapshots.rs"]
+pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
+#[path = "devql/commands_projection.rs"]
+mod commands_projection;
 #[path = "devql/commands_query.rs"]
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
@@ -46,13 +50,20 @@ mod types;
 
 pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
+#[cfg(test)]
+pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
+pub use self::commands_projection::{
+    CheckpointFileSnapshotBackfillOptions, CheckpointFileSnapshotBackfillSummary,
+    run_checkpoint_file_snapshot_backfill,
+};
 pub(crate) use self::commands_query::{
     RegisteredStageCompositionContext, execute_query_json_with_composition,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
     PostCommitArtefactRefreshStats, run_post_checkout_branch_seed,
-    run_post_commit_artefact_refresh, run_post_merge_artefact_refresh,
+    run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
+    run_post_merge_artefact_refresh,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
@@ -112,6 +123,24 @@ pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
         summary.symbol_embedding_rows_skipped,
         summary.symbol_clone_edges_upserted,
         summary.symbol_clone_sources_scored
+    )
+}
+
+pub(crate) fn format_checkpoint_file_snapshot_backfill_summary(
+    summary: &CheckpointFileSnapshotBackfillSummary,
+) -> String {
+    format!(
+        "Checkpoint file snapshot backfill complete: dry_run={}, checkpoints_scanned={}, checkpoints_processed={}, checkpoints_without_commit={}, rows_projected={}, rows_already_present={}, stale_rows_deleted={}, stale_rows_detected={}, unresolved_files={}, last_checkpoint_id={}",
+        summary.dry_run,
+        summary.checkpoints_scanned,
+        summary.checkpoints_processed,
+        summary.checkpoints_without_commit,
+        summary.rows_projected,
+        summary.rows_already_present,
+        summary.stale_rows_deleted,
+        summary.stale_rows_detected,
+        summary.unresolved_files,
+        summary.last_checkpoint_id.as_deref().unwrap_or("-"),
     )
 }
 
