@@ -54,6 +54,7 @@ pub use self::commands_refresh::{
     run_post_commit_artefact_refresh, run_post_merge_artefact_refresh,
 };
 pub use self::connection_status::run_connection_status;
+pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
@@ -432,6 +433,8 @@ mod db_utils;
 mod deps_query;
 #[path = "devql/ingestion/edges_rust.rs"]
 mod ingestion_edges_rust;
+#[path = "devql/query/dsl_compiler.rs"]
+mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]
 mod query_executor;
 #[path = "devql/query/parser.rs"]

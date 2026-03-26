@@ -6,6 +6,7 @@ use anyhow::{anyhow, bail};
 #[derive(Debug, Clone, Default)]
 pub(super) struct ParsedDevqlQuery {
     pub(super) repo: Option<String>,
+    pub(super) project_path: Option<String>,
     pub(super) as_of: Option<AsOfSelector>,
     pub(super) file: Option<String>,
     pub(super) files_path: Option<String>,
@@ -22,6 +23,7 @@ pub(super) struct ParsedDevqlQuery {
     pub(super) has_chat_history_stage: bool,
     pub(super) registered_stages: Vec<RegisteredStageCall>,
     pub(super) limit: usize,
+    pub(super) has_limit_stage: bool,
     pub(super) select_fields: Vec<String>,
 }
 
@@ -106,6 +108,14 @@ pub(super) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             .and_then(|s| s.strip_suffix(')'))
         {
             parsed.repo = Some(parse_single_quoted_or_double(inner)?);
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("project(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            parsed.project_path = Some(parse_single_quoted_or_double(inner)?);
             continue;
         }
 
@@ -287,6 +297,7 @@ pub(super) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
                 .trim()
                 .parse::<usize>()
                 .map_err(|_| anyhow!("invalid limit value: {inner}"))?;
+            parsed.has_limit_stage = true;
             continue;
         }
 
