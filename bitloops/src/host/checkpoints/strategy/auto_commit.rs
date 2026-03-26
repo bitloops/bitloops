@@ -525,8 +525,26 @@ impl Strategy for AutoCommitStrategy {
         self.inner.post_commit()
     }
 
-    fn pre_push(&self, remote: &str) -> Result<()> {
-        self.inner.pre_push(remote)
+    fn pre_push(&self, remote: &str, stdin_lines: &[String]) -> Result<()> {
+        self.inner.pre_push(remote, stdin_lines)
+    }
+
+    fn post_merge(&self, is_squash: bool) -> Result<()> {
+        self.inner.post_merge(is_squash)
+    }
+
+    fn post_checkout(
+        &self,
+        previous_head: &str,
+        new_head: &str,
+        is_branch_checkout: bool,
+    ) -> Result<()> {
+        self.inner
+            .post_checkout(previous_head, new_head, is_branch_checkout)
+    }
+
+    fn reference_transaction(&self, state: &str, stdin_lines: &[String]) -> Result<()> {
+        self.inner.reference_transaction(state, stdin_lines)
     }
 }
 

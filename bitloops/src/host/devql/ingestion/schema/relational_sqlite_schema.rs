@@ -68,6 +68,7 @@ ON artefacts (repo_id, symbol_id);
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     docstring TEXT,
     content_hash TEXT,
     updated_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, symbol_id)
+    PRIMARY KEY (repo_id, branch, symbol_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
@@ -154,8 +155,9 @@ ON artefact_edges (
 );
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
-    edge_id TEXT PRIMARY KEY,
+    edge_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     commit_sha TEXT NOT NULL,
     revision_kind TEXT NOT NULL DEFAULT 'commit',
     revision_id TEXT NOT NULL DEFAULT '',
@@ -177,7 +179,8 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
     CHECK (
         (start_line IS NULL AND end_line IS NULL)
         OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
-    )
+    ),
+    PRIMARY KEY (repo_id, branch, edge_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
@@ -219,6 +222,17 @@ ON workspace_revisions (repo_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
 ON workspace_revisions (repo_id, tree_hash);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    repo_id TEXT NOT NULL,
+    state_key TEXT NOT NULL,
+    state_value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, state_key)
+);
+
+CREATE INDEX IF NOT EXISTS sync_state_repo_idx
+ON sync_state (repo_id);
 "#
 }
 

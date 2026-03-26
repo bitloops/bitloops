@@ -1083,9 +1083,7 @@ async fn execute_registered_stage_query(
     };
 
     let parsed = parse_devql_query(&query).context("parse query")?;
-    let relational = RelationalStorage::Sqlite {
-        path: sqlite_path.clone(),
-    };
+    let relational = RelationalStorage::local_only(sqlite_path.clone());
     let events_cfg = crate::config::EventsBackendConfig {
         duckdb_path: None,
         clickhouse_url: None,

@@ -74,7 +74,7 @@ async fn sqlite_relational_with_sql(sql: &str) -> RelationalStorage {
         .await
         .expect("create sqlite database");
     std::mem::forget(temp);
-    RelationalStorage::Sqlite { path: db_path }
+    RelationalStorage::local_only(db_path)
 }
 
 async fn duckdb_path_with_sql(sql: &str) -> PathBuf {

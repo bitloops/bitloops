@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+if [[ "${DUCKDB_USE_BUNDLED:-}" == "1" ]]; then
+  unset DUCKDB_DOWNLOAD_LIB || true
+  duckdb_no_bundle_flags=()
+else
+  export DUCKDB_DOWNLOAD_LIB="${DUCKDB_DOWNLOAD_LIB:-1}"
+  duckdb_no_bundle_flags=(--no-default-features)
+fi
+
 usage() {
   cat <<'EOF'
 Usage: ./scripts/test-coverage.sh [baseline|report]
@@ -33,7 +41,7 @@ generate_reports() {
 
 run_baseline() {
   cargo llvm-cov clean --workspace
-  cargo llvm-cov --workspace --all-features --all-targets --html --output-dir target/llvm-cov-html
+  cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --html --output-dir target/llvm-cov-html
   cargo llvm-cov report --lcov --output-path target/llvm-cov.info
   echo "Coverage reports generated:"
   echo "  HTML: ${PROJECT_ROOT}/target/llvm-cov-html/index.html"

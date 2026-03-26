@@ -1,7 +1,8 @@
 //! Git hook installation / uninstallation for the manual-commit strategy.
 //!
-//! Installs 4 shell scripts into `.git/hooks/` (or `core.hooksPath`):
-//!   prepare-commit-msg, commit-msg, post-commit, pre-push
+//! Installs 6-7 shell scripts into `.git/hooks/` (or `core.hooksPath`):
+//!   prepare-commit-msg, commit-msg, post-commit, post-merge, post-checkout, pre-push,
+//!   reference-transaction (Git >= 2.28)
 //!
 //! Each script calls `bitloops hooks git <verb>` and can chain to a
 //! pre-existing hook backed up with the `.pre-bitloops` suffix.
@@ -24,12 +25,28 @@ const HOOK_MARKER: &str = "# Bitloops git hooks";
 /// Suffix appended to pre-existing hooks when backing them up.
 const BACKUP_SUFFIX: &str = ".pre-bitloops";
 
-/// The 4 git hooks managed by Bitloops CLI.
+const REFERENCE_TRANSACTION_HOOK: &str = "reference-transaction";
+const MIN_REFERENCE_TRANSACTION_GIT_VERSION: (u32, u32) = (2, 28);
+
+/// Hook set that is always installed regardless of git version.
+static BASE_HOOK_NAMES: &[&str] = &[
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "post-merge",
+    "post-checkout",
+    "pre-push",
+];
+
+/// All managed git hooks (reference-transaction is version-gated at install time).
 static HOOK_NAMES: &[&str] = &[
     "prepare-commit-msg",
     "commit-msg",
     "post-commit",
+    "post-merge",
+    "post-checkout",
     "pre-push",
+    REFERENCE_TRANSACTION_HOOK,
 ];
 
 /// External hook-manager metadata detected in the repo.
@@ -120,13 +137,55 @@ struct HookSpec {
     content: String,
 }
 
-/// Builds the content of all 4 hook scripts.
+/// Builds a small shell snippet that lets hook-invoked `bitloops` locate
+/// dynamically linked DuckDB runtimes in development test builds.
+fn duckdb_runtime_linker_bootstrap(cmd_prefix: &str) -> String {
+    format!(
+        "# Resolve DuckDB runtime library when using dynamic (non-bundled) builds.\n\
+         _bitloops_add_lib_path() {{\n\
+             _candidate=\"$1\"\n\
+             if [ ! -d \"$_candidate\" ]; then\n\
+                 return 1\n\
+             fi\n\
+             if [ -f \"$_candidate/libduckdb.dylib\" ]; then\n\
+                 case \":${{DYLD_LIBRARY_PATH:-}}:\" in\n\
+                     *\":$_candidate:\"*) ;;\n\
+                     *) export DYLD_LIBRARY_PATH=\"$_candidate${{DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}}\" ;;\n\
+                 esac\n\
+                 return 0\n\
+             fi\n\
+             if [ -f \"$_candidate/libduckdb.so\" ]; then\n\
+                 case \":${{LD_LIBRARY_PATH:-}}:\" in\n\
+                     *\":$_candidate:\"*) ;;\n\
+                     *) export LD_LIBRARY_PATH=\"$_candidate${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\" ;;\n\
+                 esac\n\
+                 return 0\n\
+             fi\n\
+             return 1\n\
+         }}\n\
+         _bitloops_bin=\"$(command -v \"{cmd_prefix}\" 2>/dev/null || true)\"\n\
+         if [ -n \"$_bitloops_bin\" ]; then\n\
+             _bitloops_bin_dir=\"$(cd \"$(dirname \"$_bitloops_bin\")\" && pwd)\"\n\
+             if ! _bitloops_add_lib_path \"$_bitloops_bin_dir/deps\"; then\n\
+                 if ! _bitloops_add_lib_path \"$_bitloops_bin_dir/../deps\"; then\n\
+                     for _candidate in \"$_bitloops_bin_dir\"/../duckdb-download/*/*; do\n\
+                         _bitloops_add_lib_path \"$_candidate\" && break\n\
+                     done\n\
+                 fi\n\
+             fi\n\
+         fi\n"
+    )
+}
+
+/// Builds the content of all managed hook scripts.
 fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
+    let runtime_bootstrap = duckdb_runtime_linker_bootstrap(cmd_prefix);
     vec![
         HookSpec {
             name: "prepare-commit-msg",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  {cmd_prefix} hooks git prepare-commit-msg \"$1\" \"$2\" 2>/dev/null || true\n"
             ),
         },
@@ -134,6 +193,7 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "commit-msg",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Commit-msg: `bitloops hooks git commit-msg` (default manual-commit: no-op)\n\
                  {cmd_prefix} hooks git commit-msg \"$1\" || exit 1\n"
             ),
@@ -142,20 +202,93 @@ fn build_hook_specs(cmd_prefix: &str) -> Vec<HookSpec> {
             name: "post-commit",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Post-commit: session/checkpoint bookkeeping; failures must not block git\n\
                  {cmd_prefix} hooks git post-commit 2>/dev/null || true\n"
+            ),
+        },
+        HookSpec {
+            name: "post-checkout",
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Post-checkout: branch seeding and bookkeeping; failures must not block git\n\
+                 {cmd_prefix} hooks git post-checkout \"$@\" 2>/dev/null || true\n"
+            ),
+        },
+        HookSpec {
+            name: "post-merge",
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Post-merge: refresh DevQL after pull/merge; failures must not block git\n\
+                 {cmd_prefix} hooks git post-merge \"$@\" 2>/dev/null || true\n"
             ),
         },
         HookSpec {
             name: "pre-push",
             content: format!(
                 "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
                  # Pre-push: `bitloops hooks git pre-push` (default manual-commit: no-op)\n\
                  # $1 is the remote name (e.g., \"origin\")\n\
                  {cmd_prefix} hooks git pre-push \"$1\" || true\n"
             ),
         },
+        HookSpec {
+            name: REFERENCE_TRANSACTION_HOOK,
+            content: format!(
+                "#!/bin/sh\n{HOOK_MARKER}\n\
+                 {runtime_bootstrap}\
+                 # Reference-transaction: branch deletion cleanup; failures must not block git\n\
+                 {cmd_prefix} hooks git reference-transaction \"$@\" 2>/dev/null || true\n"
+            ),
+        },
     ]
+}
+
+fn parse_git_version(version_output: &str) -> Option<(u32, u32, u32)> {
+    let token = version_output
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|ch| ch.is_ascii_digit()))?;
+    let mut components = token.split('.');
+    let major = components.next()?.parse().ok()?;
+    let minor = components.next()?.parse().ok()?;
+    let patch = components.next().and_then(|raw| {
+        let digits: String = raw.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            Some(0)
+        } else {
+            digits.parse().ok()
+        }
+    })?;
+    Some((major, minor, patch))
+}
+
+fn git_supports_reference_transaction(repo_root: &Path) -> bool {
+    let output = new_git_command()
+        .args(["version"])
+        .current_dir(repo_root)
+        .output();
+    let Ok(output) = output else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let Some((major, minor, _patch)) = parse_git_version(raw.trim()) else {
+        return true;
+    };
+    (major, minor) >= MIN_REFERENCE_TRANSACTION_GIT_VERSION
+}
+
+fn expected_hooks_for_repo(repo_root: &Path) -> Vec<&'static str> {
+    if git_supports_reference_transaction(repo_root) {
+        HOOK_NAMES.to_vec()
+    } else {
+        BASE_HOOK_NAMES.to_vec()
+    }
 }
 
 /// Detects known third-party hook managers by config file/directory presence.
@@ -204,6 +337,16 @@ fn detect_hook_managers(repo_root: &Path) -> Vec<HookManager> {
 
 /// Returns the first non-comment/non-shebang command line from hook content.
 fn extract_command_line(hook_content: &str) -> String {
+    for line in hook_content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.contains(" hooks git ") {
+            return trimmed.to_string();
+        }
+    }
+
     for line in hook_content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -319,7 +462,7 @@ fn write_hook_file(path: &Path, content: &str) -> Result<bool> {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-/// Installs the 4 git hook scripts into `.git/hooks/`.
+/// Installs the managed git hook scripts into `.git/hooks/`.
 ///
 /// Pre-existing hooks that don't contain the marker are backed up to
 /// `<hook-name>.pre-bitloops` and chained at the end of the new script.
@@ -331,7 +474,16 @@ pub fn install_git_hooks(repo_root: &Path, local_dev: bool) -> Result<usize> {
     fs::create_dir_all(&hooks_dir).context("creating git hooks directory")?;
 
     let cmd_prefix = hook_cmd_prefix(local_dev);
-    let specs = build_hook_specs(cmd_prefix);
+    let supports_reference_transaction = git_supports_reference_transaction(repo_root);
+    if !supports_reference_transaction {
+        eprintln!(
+            "[bitloops] Warning: git reference-transaction hook requires Git 2.28+; skipping installation."
+        );
+    }
+    let specs = build_hook_specs(cmd_prefix)
+        .into_iter()
+        .filter(|spec| supports_reference_transaction || spec.name != REFERENCE_TRANSACTION_HOOK)
+        .collect::<Vec<_>>();
     let mut installed_count = 0;
 
     for spec in &specs {
@@ -415,13 +567,13 @@ pub fn uninstall_git_hooks(repo_root: &Path) -> Result<usize> {
     Ok(removed)
 }
 
-/// Returns `true` if all 4 Bitloops git hook scripts are installed.
+/// Returns `true` if all Bitloops git hook scripts are installed.
 pub fn is_git_hook_installed(repo_root: &Path) -> bool {
     let hooks_dir = match get_hooks_dir(repo_root) {
         Ok(d) => d,
         Err(_) => return false,
     };
-    HOOK_NAMES.iter().all(|name| {
+    expected_hooks_for_repo(repo_root).iter().all(|name| {
         fs::read_to_string(hooks_dir.join(name))
             .map(|c| c.contains(HOOK_MARKER))
             .unwrap_or(false)

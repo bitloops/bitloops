@@ -122,9 +122,37 @@ pub trait Strategy: Send + Sync {
     fn post_commit(&self) -> Result<()>;
 
     /// Called by the `pre-push` git hook.
+    /// Receives raw stdin lines from git containing ref updates in the format:
+    /// `<local_ref> <local_sha> <remote_ref> <remote_sha>`.
     /// Default implementation is a no-op.
     ///
-    fn pre_push(&self, _remote: &str) -> Result<()> {
+    fn pre_push(&self, _remote: &str, _stdin_lines: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called by the `post-merge` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn post_merge(&self, _is_squash: bool) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called by the `post-checkout` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn post_checkout(
+        &self,
+        _previous_head: &str,
+        _new_head: &str,
+        _is_branch_checkout: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called by the `reference-transaction` git hook.
+    /// Default implementation is a no-op.
+    ///
+    fn reference_transaction(&self, _state: &str, _stdin_lines: &[String]) -> Result<()> {
         Ok(())
     }
 }

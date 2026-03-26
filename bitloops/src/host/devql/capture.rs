@@ -110,7 +110,7 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     })?;
 
     let revision_unix = current_unix_timestamp();
-    let relational = crate::host::devql::RelationalStorage::Sqlite { path: sqlite_path };
+    let relational = crate::host::devql::RelationalStorage::local_only(sqlite_path);
     handle.block_on(apply_current_state_updates(
         cfg,
         &relational,

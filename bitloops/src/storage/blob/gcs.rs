@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::path::Path as ObjectStorePath;
 

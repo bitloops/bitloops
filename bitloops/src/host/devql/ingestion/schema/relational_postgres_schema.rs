@@ -82,6 +82,7 @@ WHERE symbol_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
@@ -105,7 +106,7 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     docstring TEXT,
     content_hash TEXT,
     updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (repo_id, symbol_id)
+    PRIMARY KEY (repo_id, branch, symbol_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
@@ -171,8 +172,9 @@ ON artefact_edges (
 );
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
-    edge_id TEXT PRIMARY KEY,
+    edge_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
     commit_sha TEXT NOT NULL,
     revision_kind TEXT NOT NULL DEFAULT 'commit',
     revision_id TEXT NOT NULL DEFAULT '',
@@ -196,7 +198,8 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
         CHECK (
             (start_line IS NULL AND end_line IS NULL)
             OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
-        )
+        ),
+    PRIMARY KEY (repo_id, branch, edge_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx

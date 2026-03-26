@@ -2,6 +2,22 @@ use super::*;
 
 // File state row, file artefact upsert, and revision comparison/management.
 
+pub(super) fn build_upsert_file_state_sql(
+    repo_id: &str,
+    commit_sha: &str,
+    path: &str,
+    blob_sha: &str,
+) -> String {
+    format!(
+        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}', '{}', '{}', '{}') \
+ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha",
+        esc_pg(repo_id),
+        esc_pg(commit_sha),
+        esc_pg(path),
+        esc_pg(blob_sha),
+    )
+}
+
 pub(super) async fn upsert_file_state_row(
     repo_id: &str,
     relational: &RelationalStorage,
@@ -9,14 +25,7 @@ pub(super) async fn upsert_file_state_row(
     path: &str,
     blob_sha: &str,
 ) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('{}', '{}', '{}', '{}') \
-ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha",
-        esc_pg(repo_id),
-        esc_pg(commit_sha),
-        esc_pg(path),
-        esc_pg(blob_sha),
-    );
+    let sql = build_upsert_file_state_sql(repo_id, commit_sha, path, blob_sha);
 
     relational.exec(&sql).await
 }
@@ -121,14 +130,16 @@ pub(super) fn build_file_current_record(
 pub(super) async fn load_current_file_revision(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     path: &str,
 ) -> Result<Option<CurrentFileRevisionRecord>> {
     let updated_at_unix_expr = updated_at_unix_expr(relational);
     let sql = format!(
         "SELECT revision_kind, revision_id, blob_sha, {} AS updated_at_unix \
-FROM artefacts_current WHERE repo_id = '{}' AND symbol_id = '{}' LIMIT 1",
+FROM artefacts_current WHERE repo_id = '{}' AND branch = '{}' AND symbol_id = '{}' LIMIT 1",
         updated_at_unix_expr,
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(&file_symbol_id(path)),
     );
     let rows = relational.query_rows(&sql).await?;
@@ -206,6 +217,7 @@ pub(super) fn revision_id_is_newer(incoming: &str, existing: &str) -> bool {
 pub(super) async fn overwrite_current_revision_metadata_for_path(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+    branch: &str,
     rev: &FileRevision<'_>,
 ) -> Result<()> {
     let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
@@ -218,7 +230,7 @@ pub(super) async fn overwrite_current_revision_metadata_for_path(
     let artefacts_sql = format!(
         "UPDATE artefacts_current \
 SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}'",
+WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
         esc_pg(rev.commit_sha),
         esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
@@ -226,6 +238,7 @@ WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(rev.blob_sha),
         updated_at_sql,
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(rev.path),
     );
     relational.exec(&artefacts_sql).await?;
@@ -233,7 +246,7 @@ WHERE repo_id = '{}' AND path = '{}'",
     let edges_sql = format!(
         "UPDATE artefact_edges_current \
 SET commit_sha = '{}', revision_kind = '{}', revision_id = '{}', temp_checkpoint_id = {}, blob_sha = '{}', updated_at = {} \
-WHERE repo_id = '{}' AND path = '{}'",
+WHERE repo_id = '{}' AND branch = '{}' AND path = '{}'",
         esc_pg(rev.commit_sha),
         esc_pg(rev.revision.kind.as_str()),
         esc_pg(rev.revision.id),
@@ -241,9 +254,32 @@ WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(rev.blob_sha),
         updated_at_sql,
         esc_pg(&cfg.repo.repo_id),
+        esc_pg(branch),
         esc_pg(rev.path),
     );
     relational.exec(&edges_sql).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_upsert_file_state_sql_escapes_and_targets_expected_table() {
+        let sql = build_upsert_file_state_sql("repo'id", "commit'sha", "src/path.rs", "blob'sha");
+        assert!(
+            sql.contains("INSERT INTO file_state"),
+            "builder should target file_state upsert"
+        );
+        assert!(
+            sql.contains("repo''id"),
+            "builder should escape single quotes in repo_id"
+        );
+        assert!(
+            sql.contains("ON CONFLICT (repo_id, commit_sha, path)"),
+            "builder should preserve conflict target"
+        );
+    }
 }

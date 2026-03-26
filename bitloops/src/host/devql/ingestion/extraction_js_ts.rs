@@ -280,6 +280,9 @@ pub(super) fn collect_js_ts_wrapper_modifiers(
     modifiers: &mut Vec<String>,
 ) {
     for index in 0..wrapper.child_count() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
         let Some(candidate) = wrapper.child(index) else {
             continue;
         };
@@ -305,6 +308,9 @@ pub(super) fn collect_js_ts_inline_modifiers(
         .unwrap_or_else(|| node.end_byte());
 
     for index in 0..node.child_count() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
         let Some(child) = node.child(index) else {
             continue;
         };
@@ -414,6 +420,9 @@ pub(super) fn js_ts_doc_anchor_line(node: tree_sitter::Node) -> i32 {
     }
 
     for index in 0..node.child_count() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
         let Some(child) = node.child(index) else {
             continue;
         };

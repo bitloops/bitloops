@@ -463,7 +463,7 @@ pub fn write_rust_hybrid_fixture(workspace: &Workspace) {
         r#"
 [package]
 name = "rust_detection_fixture"
-version = "0.1.0"
+version = "0.0.11"
 edition = "2021"
 
 [dev-dependencies]
