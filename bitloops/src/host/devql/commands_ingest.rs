@@ -245,7 +245,7 @@ pub(crate) async fn execute_ingest_with_observer(
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let clone_ingest = capability_host
         .invoke_ingester_with_relational(
             SEMANTIC_CLONES_CAPABILITY_ID,

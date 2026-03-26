@@ -309,10 +309,9 @@ impl MutationRoot {
     }
 
     async fn apply_migrations(&self, ctx: &Context<'_>) -> Result<ApplyMigrationsMutationResult> {
-        let mut host = ctx
+        let host = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .capability_host_handle()
-            .await
+            .capability_host_arc()
             .map_err(|err| {
                 operation_error("BACKEND_ERROR", "configuration", "applyMigrations", err)
             })?;
@@ -351,10 +350,9 @@ async fn execute_knowledge_ingester<T: for<'de> Deserialize<'de>>(
     ingester_name: &'static str,
     payload: serde_json::Value,
 ) -> Result<T> {
-    let mut host = ctx
+    let host = ctx
         .data_unchecked::<DevqlGraphqlContext>()
-        .capability_host_handle()
-        .await
+        .capability_host_arc()
         .map_err(|err| operation_error("BACKEND_ERROR", "configuration", operation, err))?;
     let result = host
         .invoke_ingester("knowledge", ingester_name, payload)

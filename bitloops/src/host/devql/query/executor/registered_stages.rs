@@ -119,7 +119,7 @@ pub(crate) async fn execute_registered_stages_with_composition(
         return Ok(rows);
     }
 
-    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let resolved_commit_sha = resolve_commit_selector(cfg, parsed)?;
     for stage in &parsed.registered_stages {
         let capability_id = resolve_registered_stage_owner(&host, &stage.stage_name)?;

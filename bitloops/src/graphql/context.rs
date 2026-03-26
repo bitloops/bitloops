@@ -16,7 +16,6 @@ use anyhow::{Result, anyhow};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard};
 
 use super::loaders::LoaderMetrics;
 use super::subscriptions::SubscriptionHub;
@@ -39,7 +38,7 @@ pub(crate) struct DevqlGraphqlContext {
     blob_store: Option<Arc<dyn BlobStore>>,
     blob_backend: String,
     blob_bootstrap_error: Option<String>,
-    capability_host: Option<Arc<Mutex<DevqlCapabilityHost>>>,
+    capability_host: Option<Arc<DevqlCapabilityHost>>,
     capability_host_bootstrap_error: Option<String>,
     loader_metrics: LoaderMetrics,
     subscriptions: Arc<SubscriptionHub>,
@@ -87,9 +86,7 @@ impl DevqlGraphqlContext {
         self.repo_identity.repo_id.as_str()
     }
 
-    pub(crate) async fn capability_host_handle(
-        &self,
-    ) -> Result<MutexGuard<'_, DevqlCapabilityHost>> {
+    pub(crate) fn capability_host_arc(&self) -> Result<Arc<DevqlCapabilityHost>> {
         let Some(capability_host) = self.capability_host.as_ref() else {
             return Err(anyhow!(
                 "{}",
@@ -98,7 +95,7 @@ impl DevqlGraphqlContext {
                     .unwrap_or_else(|| "capability host unavailable".to_string())
             ));
         };
-        Ok(capability_host.lock().await)
+        Ok(Arc::clone(capability_host))
     }
 
     pub(crate) fn repo_name(&self) -> &str {

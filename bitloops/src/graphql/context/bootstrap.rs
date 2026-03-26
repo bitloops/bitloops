@@ -9,7 +9,6 @@ use crate::host::devql::{
 use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::graphql::subscriptions::SubscriptionHub;
 
@@ -43,7 +42,7 @@ impl DevqlGraphqlContext {
         };
         let (capability_host, capability_host_bootstrap_error) =
             match build_capability_host(&repo_root, repo_identity.clone()) {
-                Ok(host) => (Some(Arc::new(Mutex::new(host))), None),
+                Ok(host) => (Some(Arc::new(host)), None),
                 Err(err) => (None, Some(format!("{err:#}"))),
             };
 

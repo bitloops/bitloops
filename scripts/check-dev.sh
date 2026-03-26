@@ -8,7 +8,7 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/check-dev.sh [--test] [--full]
 
-  Default: Rust file-size check, cargo fmt --check, cargo clippy.
+  Default: Rust file-size check, cargo fmt, cargo clippy.
   --test   Also run the full suite via bitloops/scripts/test-summary.sh (cargo test --no-fail-fast + combined summaries).
   --full   Run coverage baseline check only (llvm-cov runs the full test suite once; no duplicate plain test run).
 

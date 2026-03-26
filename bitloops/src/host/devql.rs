@@ -383,7 +383,7 @@ pub fn run_capability_packs_report(
     with_health: bool,
     with_extensions: bool,
 ) -> Result<()> {
-    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     if apply_migrations {
         host.ensure_migrations_applied_sync()?;
     }
@@ -450,7 +450,7 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
         init_postgres_schema(cfg, &remote.client).await?;
     }
 
-    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     capability_host
         .ensure_migrations_applied_sync()
         .context("running built-in DevQL capability pack migrations")?;

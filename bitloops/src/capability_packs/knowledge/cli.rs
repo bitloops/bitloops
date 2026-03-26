@@ -10,7 +10,7 @@ pub async fn run_knowledge_versions_via_host(
     repo: &RepoIdentity,
     knowledge_ref: &str,
 ) -> Result<()> {
-    let mut host = DevqlCapabilityHost::builtin(repo_root, repo.clone())?;
+    let host = DevqlCapabilityHost::builtin(repo_root, repo.clone())?;
     let result = host
         .invoke_ingester(
             "knowledge",

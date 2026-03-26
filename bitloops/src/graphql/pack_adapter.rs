@@ -25,7 +25,7 @@ impl StageResolverAdapter {
         limit: usize,
     ) -> Result<Vec<Value>> {
         let args = normalise_stage_args(args)?;
-        let mut host = self.context.capability_host_handle().await?;
+        let host = self.context.capability_host_arc()?;
         let capability_id = resolve_stage_owner(&host, &self.stage_name)?.to_string();
         let query_context = build_query_context(scope, self.context.repo_id());
         let response = host
