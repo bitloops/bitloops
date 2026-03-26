@@ -3,7 +3,9 @@ mod bundle_types;
 mod db;
 mod dto;
 mod handlers;
+mod hosts;
 mod router;
+pub mod tls;
 
 use crate::config::dashboard_use_bitloops_local;
 use crate::host::checkpoints::strategy::manual_commit::{
@@ -15,10 +17,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
+use std::io::IsTerminal;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
@@ -113,6 +118,12 @@ pub(super) enum ServeMode {
     Bundle(PathBuf),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardTransport {
+    Http,
+    Https,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct DashboardState {
     pub(super) repo_root: PathBuf,
@@ -134,10 +145,26 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         );
     }
 
-    let selected_host = select_host_with_dashboard_preference(
-        config.host.as_deref(),
-        dashboard_use_bitloops_local(),
-    );
+    let mut startup_warnings: Vec<String> = Vec::new();
+
+    let selected_host = if let Some(explicit_host) = config.host.as_deref().and_then(normalized_host) {
+        explicit_host.to_string()
+    } else if dashboard_use_bitloops_local() {
+        match hosts::ensure_default_dashboard_host_mapping()? {
+            hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
+                PREFERRED_LOCAL_HOST.to_string()
+            }
+            hosts::HostMappingOutcome::NeedsFallback { reason } => {
+                startup_warnings.push(format!(
+                    "Warning: could not map {PREFERRED_LOCAL_HOST} in the hosts file: {reason}\n\
+                     Falling back to localhost for this run."
+                ));
+                FALLBACK_LOCAL_HOST.to_string()
+            }
+        }
+    } else {
+        FALLBACK_LOCAL_HOST.to_string()
+    };
     let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
 
     let listener = TcpListener::bind(bind_addr).await.with_context(|| {
@@ -149,6 +176,36 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     let local_addr = listener
         .local_addr()
         .context("Reading dashboard listener address")?;
+    let browser_host = browser_host_for_url(&selected_host, local_addr);
+    let (transport, tls_acceptor) = if !tls::mkcert_on_path() {
+        startup_warnings.push(format!(
+            "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
+             See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+        ));
+        (DashboardTransport::Http, None)
+    } else {
+        match tls::ensure_dashboard_tls_material(&browser_host) {
+            Ok(tls_material) => {
+                log::debug!(
+                    "Dashboard TLS: cert={} key={}",
+                    tls_material.cert_path.display(),
+                    tls_material.key_path.display()
+                );
+                (
+                    DashboardTransport::Https,
+                    Some(TlsAcceptor::from(tls_material.server_config.clone())),
+                )
+            }
+            Err(err) => {
+                startup_warnings.push(format!(
+                    "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
+                     Falling back to local HTTP.\n\
+                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                ));
+                (DashboardTransport::Http, None)
+            }
+        }
+    };
 
     let bundle_dir = resolve_bundle_dir(config.bundle_dir.as_deref());
     let serve_mode = if has_bundle_index(&bundle_dir) {
@@ -160,8 +217,7 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    let browser_host = browser_host_for_url(&selected_host, local_addr);
-    let url = format_dashboard_url(&browser_host, local_addr.port());
+    let url = format_dashboard_url(transport, &browser_host, local_addr.port());
 
     println!();
     println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
@@ -170,6 +226,12 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     print!("{}", color_hex("ready ", "#22c55e"));
     print!("at ");
     println!("{}", color_hex(&clickable_url(&url), BITLOOPS_PURPLE_HEX));
+    if !startup_warnings.is_empty() {
+        eprintln!();
+    }
+    for warning in &startup_warnings {
+        print_warning_message(warning);
+    }
     match &serve_mode {
         ServeMode::HelloWorld => {
             println!(
@@ -190,37 +252,157 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     if !config.no_open
         && let Err(err) = open_in_default_browser(&url)
     {
-        eprintln!("Warning: failed to open default browser: {err:#}");
+        print_warning_message(&format!("Warning: failed to open default browser: {err:#}"));
     }
 
-    serve_until_ctrl_c(
-        listener,
-        DashboardState {
-            repo_root,
-            mode: serve_mode,
-            db: db_init.pools,
-            bundle_dir,
-        },
-    )
+    let state = DashboardState {
+        repo_root,
+        mode: serve_mode,
+        db: db_init.pools,
+        bundle_dir,
+    };
+
+    match (transport, tls_acceptor) {
+        (DashboardTransport::Https, Some(acceptor)) => {
+            serve_until_ctrl_c_tls(listener, acceptor, state).await
+        }
+        (DashboardTransport::Http, _) => serve_until_ctrl_c_http(listener, state).await,
+        (DashboardTransport::Https, None) => {
+            Err(anyhow!("dashboard HTTPS selected without a TLS acceptor"))
+        }
+    }
+}
+
+async fn serve_until_ctrl_c_tls(
+    listener: TcpListener,
+    tls_acceptor: TlsAcceptor,
+    state: DashboardState,
+) -> Result<()> {
+    use hyper::server::conn::http1::Builder as Http1Builder;
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+
+    let app = router::build_dashboard_router(state);
+    serve_until_ctrl_c_with_handler(listener, move |stream| {
+        let tls_acceptor = tls_acceptor.clone();
+        let app = app.clone();
+        async move {
+            let tls_stream = match tls_acceptor.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let detail = e.to_string();
+                    if detail.contains("CertificateUnknown")
+                        || detail.contains("UnknownIssuer")
+                    {
+                        log::warn!(
+                            "TLS handshake failed: {e} \
+                             (the client rejected the certificate — run `mkcert -install` once, quit Chrome fully, retry)"
+                        );
+                    } else {
+                        log::warn!("TLS handshake failed: {e}");
+                    }
+                    return;
+                }
+            };
+            let io = TokioIo::new(tls_stream);
+            let service = TowerToHyperService::new(app);
+            if let Err(e) = Http1Builder::new().serve_connection(io, service).await {
+                log::warn!("HTTP connection error: {e}");
+            }
+        }
+    })
     .await
 }
 
-async fn serve_until_ctrl_c(listener: TcpListener, state: DashboardState) -> Result<()> {
+async fn serve_until_ctrl_c_http(listener: TcpListener, state: DashboardState) -> Result<()> {
+    use hyper::server::conn::http1::Builder as Http1Builder;
+    use hyper_util::rt::TokioIo;
+    use hyper_util::service::TowerToHyperService;
+
     let app = router::build_dashboard_router(state);
+    serve_until_ctrl_c_with_handler(listener, move |stream| {
+        let app = app.clone();
+        async move {
+            let io = TokioIo::new(stream);
+            let service = TowerToHyperService::new(app);
+            if let Err(e) = Http1Builder::new().serve_connection(io, service).await {
+                log::warn!("HTTP connection error: {e}");
+            }
+        }
+    })
+    .await
+}
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("Serving dashboard requests")?;
+async fn serve_until_ctrl_c_with_handler<F, Fut>(listener: TcpListener, mut on_stream: F) -> Result<()>
+where
+    F: FnMut(tokio::net::TcpStream) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
+            accept = listener.accept() => {
+                let (stream, _) = accept.context("accepting dashboard TCP connection")?;
+                tokio::spawn(on_stream(stream));
+            }
+        }
+    }
 
+    drop(listener);
+    tokio::time::sleep(Duration::from_secs(5)).await;
     println!("Dashboard server stopped.");
     Ok(())
 }
 
 fn clickable_url(url: &str) -> String {
     format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
+}
+
+fn terminal_supports_color() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+fn warning_block_lines(warning: &str, use_color: bool) -> Vec<String> {
+    let lines: Vec<&str> = warning.lines().collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    // Brown background close to terminal selection tone in user screenshot.
+    const WARN_STYLE: &str = "30;48;2;107;79;59";
+    let max_content_width = lines.iter().map(|line| line.len()).max().unwrap_or(0);
+    let total_width = max_content_width + 4; // two spaces left + two spaces right
+    let blank = " ".repeat(total_width);
+
+    if use_color {
+        let mut out = Vec::with_capacity(lines.len() + 3);
+        out.push(format!("\x1b[{WARN_STYLE}m{blank}\x1b[K\x1b[0m"));
+        let icon_line = format!("  \x1b[33m⚠\x1b[{WARN_STYLE}m  ");
+        out.push(format!("\x1b[{WARN_STYLE}m{icon_line}\x1b[K\x1b[0m"));
+        for line in &lines {
+            let content = format!("  {line:<width$}  ", width = max_content_width);
+            out.push(format!("\x1b[{WARN_STYLE}m{content}\x1b[K\x1b[0m"));
+        }
+        out.push(format!("\x1b[{WARN_STYLE}m{blank}\x1b[K\x1b[0m"));
+        return out;
+    }
+
+    let mut out = Vec::with_capacity(lines.len() + 3);
+    out.push(String::new());
+    out.push("  ⚠".to_string());
+    for line in &lines {
+        out.push(format!("  {line}"));
+    }
+    out.push(String::new());
+    out
+}
+
+fn print_warning_message(warning: &str) {
+    for line in warning_block_lines(warning, terminal_supports_color()) {
+        eprintln!("{line}");
+    }
 }
 
 fn canonical_user_key(name: &str, email: &str) -> String {
@@ -675,6 +857,7 @@ pub(super) fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBu
     path.to_path_buf()
 }
 
+#[cfg(test)]
 pub(super) fn select_host_with_dashboard_preference(
     explicit_host: Option<&str>,
     use_bitloops_local: bool,
@@ -731,11 +914,19 @@ pub(super) fn browser_host_for_url(bind_host: &str, local_addr: SocketAddr) -> S
     }
 }
 
-pub(super) fn format_dashboard_url(host: &str, port: u16) -> String {
+fn dashboard_scheme(transport: DashboardTransport) -> &'static str {
+    match transport {
+        DashboardTransport::Http => "http",
+        DashboardTransport::Https => "https",
+    }
+}
+
+fn format_dashboard_url(transport: DashboardTransport, host: &str, port: u16) -> String {
+    let scheme = dashboard_scheme(transport);
     if host.contains(':') && !host.starts_with('[') {
-        format!("http://[{host}]:{port}")
+        format!("{scheme}://[{host}]:{port}")
     } else {
-        format!("http://{host}:{port}")
+        format!("{scheme}://{host}:{port}")
     }
 }
 

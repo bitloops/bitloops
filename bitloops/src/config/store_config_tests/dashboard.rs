@@ -23,7 +23,7 @@ fn dashboard_file_config_load_defaults_when_repo_config_missing() {
     let _guard = enter_process_state(Some(temp.path()), &[]);
 
     assert_eq!(DashboardFileConfig::load(), DashboardFileConfig::default());
-    assert!(!dashboard_use_bitloops_local());
+    assert!(dashboard_use_bitloops_local());
 }
 
 #[test]
