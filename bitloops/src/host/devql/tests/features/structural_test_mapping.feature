@@ -67,7 +67,46 @@ Feature: Structural Test Mapping
       }
       """
     When linkage resolution runs and tests() query executes for "create_user"
-    Then the response has covering_tests with:
+    Then the response artefact has artefact_id "current:src/user/service.rs:create_user"
+    And the response has covering_tests with:
+      | test_name        | confidence |
+      | test_create_user | 0.6        |
+
+  @S3_COMMIT
+  Scenario: S3_COMMIT DevQL tests() query respects historical asOf(commit) artefact rows
+    Given a Rust test file at "src/user/service_tests.rs":
+      """
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+          #[test]
+          fn test_create_user() {
+              create_user("Alice");
+          }
+      }
+      """
+    When linkage resolution runs and asOf(commit) tests() query executes for "create_user"
+    Then the response artefact has artefact_id "historical:src/user/service.rs:create_user"
+    And the response has covering_tests with:
+      | test_name        | confidence |
+      | test_create_user | 0.6        |
+
+  @S3_REF
+  Scenario: S3_REF DevQL tests() query respects historical asOf(ref) artefact rows
+    Given a Rust test file at "src/user/service_tests.rs":
+      """
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+          #[test]
+          fn test_create_user() {
+              create_user("Alice");
+          }
+      }
+      """
+    When linkage resolution runs and asOf(ref) tests() query executes for "create_user"
+    Then the response artefact has artefact_id "historical:src/user/service.rs:create_user"
+    And the response has covering_tests with:
       | test_name        | confidence |
       | test_create_user | 0.6        |
 
@@ -329,4 +368,39 @@ Feature: Structural Test Mapping
       }
       """
     When coverage is ingested and coverage() query executes for "create_user"
-    Then the response has coverage with line_coverage_pct
+    Then the response artefact has artefact_id "current:src/user/service.rs:create_user"
+    And the response has coverage with line_coverage_pct
+
+  @S_COV_COMMIT
+  Scenario: S_COV_COMMIT DevQL coverage() query respects historical asOf(commit) artefact rows
+    Given a Rust test file at "src/user/service_tests.rs":
+      """
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+          #[test]
+          fn test_create_user() {
+              create_user("Alice");
+          }
+      }
+      """
+    When coverage is ingested and asOf(commit) coverage() query executes for "create_user"
+    Then the response artefact has artefact_id "historical:src/user/service.rs:create_user"
+    And the response has coverage with line_coverage_pct
+
+  @S_COV_REF
+  Scenario: S_COV_REF DevQL coverage() query respects historical asOf(ref) artefact rows
+    Given a Rust test file at "src/user/service_tests.rs":
+      """
+      #[cfg(test)]
+      mod tests {
+          use super::*;
+          #[test]
+          fn test_create_user() {
+              create_user("Alice");
+          }
+      }
+      """
+    When coverage is ingested and asOf(ref) coverage() query executes for "create_user"
+    Then the response artefact has artefact_id "historical:src/user/service.rs:create_user"
+    And the response has coverage with line_coverage_pct

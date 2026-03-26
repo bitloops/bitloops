@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **DevQL test-harness stage boundary cleanup:** `coverage()` now requires `symbol_id` from upstream core artefact rows and no longer resolves coverage by falling back through `artefacts_current`. The direct `replace_production_artefacts` test-harness repository path and the dead `ProductionIngestionBatch` model were removed, with test-only production seeding moved to direct SQLite setup helpers.
+
 ### Fixed
 
 ## [0.0.11] - 2026-03-25

@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use tokio_postgres::{GenericClient, Row, types::FromSqlOwned};
 
 use crate::models::{
-    ListedArtefactRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
-    TestClassificationRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestClassificationRecord,
+    TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
 };
 
 pub(super) async fn clear_existing_test_discovery_data(
@@ -328,136 +328,6 @@ ON CONFLICT(diagnostic_id) DO UPDATE SET
     .await
     .with_context(|| format!("failed upserting diagnostic {}", diagnostic.diagnostic_id))?;
     Ok(())
-}
-
-pub(super) async fn load_listed_production_artefacts(
-    conn: &impl GenericClient,
-    commit_sha: &str,
-    kind: Option<&str>,
-) -> Result<Vec<ListedArtefactRecord>> {
-    let rows = if let Some(kind) = kind {
-        conn.query(
-            r#"
-SELECT DISTINCT
-  a.artefact_id,
-  a.symbol_fqn,
-  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
-  a.path,
-  a.start_line,
-  a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = $1
-  AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) = LOWER($2)
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-            &[&commit_sha, &kind],
-        )
-        .await
-        .context("failed querying production artefacts")?
-    } else {
-        conn.query(
-            r#"
-SELECT DISTINCT
-  a.artefact_id,
-  a.symbol_fqn,
-  LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'unknown'))) AS kind,
-  a.path,
-  a.start_line,
-  a.end_line
-FROM file_state fs
-JOIN artefacts a
-  ON a.repo_id = fs.repo_id
- AND a.blob_sha = fs.blob_sha
- AND a.path = fs.path
-WHERE fs.commit_sha = $1
-ORDER BY a.path ASC, a.start_line ASC
-"#,
-            &[&commit_sha],
-        )
-        .await
-        .context("failed querying production artefacts")?
-    };
-
-    rows.into_iter()
-        .map(|row| {
-            Ok(ListedArtefactRecord {
-                artefact_id: get(&row, 0, "artefact_id")?,
-                symbol_fqn: get(&row, 1, "symbol_fqn")?,
-                kind: get(&row, 2, "kind")?,
-                file_path: get(&row, 3, "file_path")?,
-                start_line: get_i64(&row, 4, "start_line")?,
-                end_line: get_i64(&row, 5, "end_line")?,
-            })
-        })
-        .collect()
-}
-
-pub(super) async fn load_listed_test_suites(
-    conn: &impl GenericClient,
-    commit_sha: &str,
-) -> Result<Vec<ListedArtefactRecord>> {
-    let rows = conn
-        .query(
-            r#"
-SELECT artefact_id, symbol_fqn, path, start_line, end_line
-FROM test_artefacts_current
-WHERE commit_sha = $1
-  AND canonical_kind = 'test_suite'
-ORDER BY path ASC, start_line ASC
-"#,
-            &[&commit_sha],
-        )
-        .await
-        .context("failed querying test suites")?;
-
-    rows.into_iter()
-        .map(|row| {
-            Ok(ListedArtefactRecord {
-                artefact_id: get(&row, 0, "artefact_id")?,
-                symbol_fqn: get(&row, 1, "symbol_fqn")?,
-                kind: "test_suite".to_string(),
-                file_path: get(&row, 2, "path")?,
-                start_line: get_i64(&row, 3, "start_line")?,
-                end_line: get_i64(&row, 4, "end_line")?,
-            })
-        })
-        .collect()
-}
-
-pub(super) async fn load_listed_test_scenarios(
-    conn: &impl GenericClient,
-    commit_sha: &str,
-) -> Result<Vec<ListedArtefactRecord>> {
-    let rows = conn
-        .query(
-            r#"
-SELECT artefact_id, symbol_fqn, path, start_line, end_line
-FROM test_artefacts_current
-WHERE commit_sha = $1
-  AND canonical_kind = 'test_scenario'
-ORDER BY path ASC, start_line ASC
-"#,
-            &[&commit_sha],
-        )
-        .await
-        .context("failed querying test scenarios")?;
-
-    rows.into_iter()
-        .map(|row| {
-            Ok(ListedArtefactRecord {
-                artefact_id: get(&row, 0, "artefact_id")?,
-                symbol_fqn: get(&row, 1, "symbol_fqn")?,
-                kind: "test_scenario".to_string(),
-                file_path: get(&row, 2, "path")?,
-                start_line: get_i64(&row, 3, "start_line")?,
-                end_line: get_i64(&row, 4, "end_line")?,
-            })
-        })
-        .collect()
 }
 
 pub(super) fn get<T>(row: &Row, index: usize, field: &str) -> Result<T>

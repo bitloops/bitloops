@@ -156,9 +156,8 @@ mod tests {
     use crate::host::capability_host::gateways::RelationalGateway;
     use crate::models::{
         CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord,
-        ProductionIngestionBatch, ResolvedTestScenarioRecord, TestArtefactCurrentRecord,
-        TestArtefactEdgeCurrentRecord, TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord,
-        TestRunRecord,
+        ResolvedTestScenarioRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
+        TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestRunRecord,
     };
 
     #[derive(Default)]
@@ -174,13 +173,6 @@ mod tests {
             _commit_sha: &str,
         ) -> Result<Vec<ResolvedTestScenarioRecord>> {
             Ok(self.scenarios.clone())
-        }
-
-        fn replace_production_artefacts(
-            &mut self,
-            _batch: &ProductionIngestionBatch,
-        ) -> Result<()> {
-            unreachable!("unused in results tests")
         }
 
         fn replace_test_discovery(

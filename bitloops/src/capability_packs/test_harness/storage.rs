@@ -10,8 +10,7 @@ use rusqlite::Connection;
 
 use crate::models::{
     CoverageCaptureRecord, CoverageDiagnosticRecord, CoverageHitRecord, CoveragePairStats,
-    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ListedArtefactRecord,
-    ProductionIngestionBatch, QueriedArtefactRecord, ResolvedTestScenarioRecord,
+    CoverageSummaryRecord, CoveringTestRecord, LatestTestRunRecord, ResolvedTestScenarioRecord,
     StageBranchCoverageRecord, StageCoverageMetadataRecord, StageCoveringTestRecord,
     StageLineCoverageRecord, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord,
     TestDiscoveryDiagnosticRecord, TestDiscoveryRunRecord, TestHarnessCommitCounts, TestRunRecord,
@@ -36,8 +35,6 @@ pub trait TestHarnessCoverageGateway: Send {
 
 pub trait TestHarnessRepository {
     fn load_test_scenarios(&self, commit_sha: &str) -> Result<Vec<ResolvedTestScenarioRecord>>;
-
-    fn replace_production_artefacts(&mut self, batch: &ProductionIngestionBatch) -> Result<()>;
     fn replace_test_discovery(
         &mut self,
         commit_sha: &str,
@@ -57,16 +54,6 @@ pub trait TestHarnessRepository {
 }
 
 pub trait TestHarnessQueryRepository {
-    fn find_artefact(
-        &self,
-        commit_sha: &str,
-        artefact_query: &str,
-    ) -> Result<QueriedArtefactRecord>;
-    fn list_artefacts(
-        &self,
-        commit_sha: &str,
-        kind: Option<&str>,
-    ) -> Result<Vec<ListedArtefactRecord>>;
     fn load_covering_tests(
         &self,
         commit_sha: &str,
@@ -97,6 +84,7 @@ pub trait TestHarnessQueryRepository {
         &self,
         repo_id: &str,
         production_symbol_id: &str,
+        commit_sha: Option<&str>,
         min_confidence: Option<f64>,
         linkage_source: Option<&str>,
         limit: usize,

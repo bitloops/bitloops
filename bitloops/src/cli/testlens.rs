@@ -4,18 +4,16 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::capability_packs::test_harness::ingest::{coverage_batch, results};
-use crate::capability_packs::test_harness::query as query_test_harness;
 use crate::capability_packs::test_harness::storage as test_harness_engine;
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_COVERAGE_INGESTER_ID, TEST_HARNESS_LINKAGE_INGESTER_ID,
 };
-use crate::cli::testlens_types::{DEFAULT_QUERY_VIEW, QueryViewArg};
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::resolve_repo_identity;
 use crate::models::{CoverageFormat, ScopeKind};
 use crate::utils::paths;
 
-const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens init`, `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`, `bitloops testlens query`, `bitloops testlens list`";
+const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops testlens init`, `bitloops testlens ingest-tests`, `bitloops testlens ingest-coverage`, `bitloops testlens ingest-coverage-batch`, `bitloops testlens ingest-results`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct TestLensArgs {
@@ -35,10 +33,6 @@ pub enum TestLensCommand {
     IngestCoverageBatch(TestLensIngestCoverageBatchArgs),
     /// Ingest Jest JSON test results.
     IngestResults(TestLensIngestResultsArgs),
-    /// Query the test harness for an artefact.
-    Query(TestLensQueryArgs),
-    /// List known artefacts.
-    List(TestLensListArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -84,28 +78,6 @@ pub struct TestLensIngestResultsArgs {
     pub commit: String,
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct TestLensQueryArgs {
-    #[arg(long)]
-    pub artefact: String,
-    #[arg(long)]
-    pub commit: String,
-    #[arg(long)]
-    pub classification: Option<String>,
-    #[arg(long, value_enum, default_value_t = DEFAULT_QUERY_VIEW)]
-    pub view: QueryViewArg,
-    #[arg(long)]
-    pub min_strength: Option<f64>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TestLensListArgs {
-    #[arg(long)]
-    pub commit: String,
-    #[arg(long)]
-    pub kind: Option<String>,
-}
-
 pub async fn run(args: TestLensArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(MISSING_SUBCOMMAND_MESSAGE);
@@ -121,8 +93,6 @@ pub async fn run(args: TestLensArgs) -> Result<()> {
             run_ingest_coverage_batch(&repo_root, &args).await
         }
         TestLensCommand::IngestResults(args) => run_ingest_results(&repo_root, &args),
-        TestLensCommand::Query(args) => run_query(&repo_root, &args),
-        TestLensCommand::List(args) => run_list(&repo_root, &args),
     }
 }
 
@@ -249,28 +219,6 @@ fn run_ingest_results(repo_root: &Path, args: &TestLensIngestResultsArgs) -> Res
     let mut repository = test_harness_engine::open_repository_for_repo(repo_root)?;
     let summary = results::execute(&mut repository, &relational, &args.jest_json, &args.commit)?;
     results::print_summary(&args.commit, &summary);
-    Ok(())
-}
-
-fn run_query(repo_root: &Path, args: &TestLensQueryArgs) -> Result<()> {
-    let repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let json = query_test_harness::render_query_artefact_harness(
-        &repository,
-        &args.artefact,
-        &args.commit,
-        args.classification.as_deref(),
-        args.view,
-        args.min_strength,
-    )?;
-    println!("{json}");
-    Ok(())
-}
-
-fn run_list(repo_root: &Path, args: &TestLensListArgs) -> Result<()> {
-    let repository = test_harness_engine::open_repository_for_repo(repo_root)?;
-    let json =
-        query_test_harness::render_list_artefacts(&repository, &args.commit, args.kind.as_deref())?;
-    println!("{json}");
     Ok(())
 }
 
