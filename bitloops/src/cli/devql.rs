@@ -70,7 +70,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         DevqlCommand::Ingest(args) => {
             graphql::run_ingest_via_graphql(&cfg.repo_root, args.init, args.max_checkpoints).await
         }
-        DevqlCommand::Query(args) => run_query(&cfg, &args.query, args.compact).await,
+        DevqlCommand::Query(args) => run_query(&cfg, &args.query, args.compact, args.graphql).await,
         DevqlCommand::Packs(args) => run_capability_packs_report(
             &cfg,
             args.json,

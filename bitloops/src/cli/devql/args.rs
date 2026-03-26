@@ -38,7 +38,11 @@ pub struct DevqlIngestArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlQueryArgs {
-    /// DevQL pipeline query string.
+    /// Force the input to be treated as a raw GraphQL document.
+    #[arg(long, default_value_t = false)]
+    pub graphql: bool,
+
+    /// GraphQL document or DevQL DSL pipeline.
     pub query: String,
 
     /// Print compact JSON.

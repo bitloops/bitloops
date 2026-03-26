@@ -142,6 +142,29 @@ fn devql_cli_parses_query_compact_flag() {
 }
 
 #[test]
+fn devql_cli_parses_query_graphql_flag() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "query",
+        "--graphql",
+        "{ repo(name: \"bitloops-cli\") { name } }",
+    ])
+    .expect("devql raw graphql query should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Query(query)) = args.command else {
+        panic!("expected devql query command");
+    };
+
+    assert_eq!(query.query, "{ repo(name: \"bitloops-cli\") { name } }");
+    assert!(query.graphql);
+    assert!(!query.compact);
+}
+
+#[test]
 fn devql_cli_parses_knowledge_add_command() {
     let parsed = Cli::try_parse_from([
         "bitloops",
