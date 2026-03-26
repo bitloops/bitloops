@@ -2,7 +2,7 @@ use async_graphql::{Result, SimpleObject};
 
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
-use super::{Checkpoint, Commit};
+use super::{Artefact, Checkpoint, Commit, DependencyEdge};
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct PageInfo {
@@ -42,6 +42,36 @@ impl CommitConnection {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct ArtefactEdge {
+    pub node: Artefact,
+    pub cursor: String,
+}
+
+impl ArtefactEdge {
+    pub fn new(node: Artefact) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct ArtefactConnection {
+    pub edges: Vec<ArtefactEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl ArtefactConnection {
+    pub fn new(edges: Vec<ArtefactEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct CheckpointEdge {
     pub node: Checkpoint,
@@ -64,6 +94,40 @@ pub struct CheckpointConnection {
 
 impl CheckpointConnection {
     pub fn new(edges: Vec<CheckpointEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct DependencyConnectionEdge {
+    pub node: DependencyEdge,
+    pub cursor: String,
+}
+
+impl DependencyConnectionEdge {
+    pub fn new(node: DependencyEdge) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct DependencyEdgeConnection {
+    pub edges: Vec<DependencyConnectionEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl DependencyEdgeConnection {
+    pub fn new(
+        edges: Vec<DependencyConnectionEdge>,
+        page_info: PageInfo,
+        total_count: usize,
+    ) -> Self {
         Self {
             edges,
             page_info,

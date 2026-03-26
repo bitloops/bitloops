@@ -2,7 +2,10 @@ use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_user_input_error};
 
-use super::{CommitConnection, CommitEdge, DateTimeScalar, paginate_items};
+use super::{
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, CommitConnection, CommitEdge,
+    DateTimeScalar, FileContext, paginate_items,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 #[graphql(complex)]
@@ -119,5 +122,59 @@ impl Repository {
             .list_agents()
             .await
             .map_err(|err| backend_error(format!("failed to query repository agents: {err:#}")))
+    }
+
+    async fn file(&self, ctx: &Context<'_>, path: String) -> Result<FileContext> {
+        let normalized = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .validate_repo_relative_path(&path, false)
+            .map_err(bad_user_input_error)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .resolve_file_context(&normalized)
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to resolve file `{normalized}`: {err:#}"))
+            })?
+            .ok_or_else(|| bad_user_input_error(format!("unknown path `{normalized}`")))
+    }
+
+    async fn files(&self, ctx: &Context<'_>, path: String) -> Result<Vec<FileContext>> {
+        let normalized = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .validate_repo_relative_path(&path, true)
+            .map_err(bad_user_input_error)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_file_contexts(&normalized)
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to resolve files `{normalized}`: {err:#}"))
+            })
+    }
+
+    async fn artefacts(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArtefactFilterInput>,
+        #[graphql(default = 100)] first: i32,
+        after: Option<String>,
+    ) -> Result<ArtefactConnection> {
+        if let Some(filter) = filter.as_ref() {
+            filter.validate()?;
+        }
+        let artefacts = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_artefacts(None, filter.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query repository artefacts: {err:#}"))
+            })?;
+        let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
+            artefact.cursor()
+        })?;
+        Ok(ArtefactConnection::new(
+            page.items.into_iter().map(ArtefactEdge::new).collect(),
+            page.page_info,
+            page.total_count,
+        ))
     }
 }

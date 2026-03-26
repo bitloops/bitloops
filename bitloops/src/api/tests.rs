@@ -332,6 +332,333 @@ fn seed_dashboard_repo() -> TempDir {
     dir
 }
 
+fn seed_graphql_devql_repo() -> TempDir {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path();
+
+    init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+    fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    fs::write(
+        repo_root.join("src/caller.ts"),
+        "export function caller() {\n  return target();\n}\nexport function helper() {\n  return missing();\n}\n",
+    )
+    .expect("write caller.ts");
+    fs::write(
+        repo_root.join("src/target.ts"),
+        "export function target() {\n  return 42;\n}\n",
+    )
+    .expect("write target.ts");
+    fs::write(
+        repo_root.join("src/orphan.ts"),
+        "export function orphan() {\n  return 'orphan';\n}\n",
+    )
+    .expect("write orphan.ts");
+    git_ok(repo_root, &["add", "."]);
+    git_ok(repo_root, &["commit", "-m", "Seed GraphQL DevQL repo"]);
+    let commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+
+    let sqlite_path = repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("graphql.sqlite");
+    crate::storage::init::init_database(&sqlite_path, false, &commit_sha)
+        .expect("initialise GraphQL sqlite store");
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            }
+        }),
+    );
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL sqlite store");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES (?1, 'local', 'local', 'graphql-devql', 'main')",
+        rusqlite::params![repo_id.as_str()],
+    )
+    .expect("insert repository row");
+    conn.execute(
+        "INSERT INTO commits (commit_sha, repo_id, author_name, author_email, commit_message, committed_at)
+         VALUES (?1, ?2, 'Alice', 'alice@example.com', 'Seed GraphQL DevQL repo', '2026-03-26T09:00:00Z')",
+        rusqlite::params![commit_sha.as_str(), repo_id.as_str()],
+    )
+    .expect("insert commit row");
+
+    for (path, blob_sha) in [
+        ("src/caller.ts", "blob-caller"),
+        ("src/target.ts", "blob-target"),
+        ("src/orphan.ts", "blob-orphan"),
+    ] {
+        conn.execute(
+            "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![repo_id.as_str(), commit_sha.as_str(), path, blob_sha],
+        )
+        .expect("insert file_state row");
+        conn.execute(
+            "INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
+             VALUES (?1, ?2, ?3, ?4, '2026-03-26T09:00:00Z')",
+            rusqlite::params![repo_id.as_str(), path, commit_sha.as_str(), blob_sha],
+        )
+        .expect("insert current_file_state row");
+    }
+
+    let artefacts = [
+        (
+            "file::caller",
+            "artefact::file-caller",
+            "blob-caller",
+            "src/caller.ts",
+            "file",
+            "source_file",
+            "src/caller.ts",
+            Option::<&str>::None,
+            1_i64,
+            6_i64,
+        ),
+        (
+            "sym::caller",
+            "artefact::caller",
+            "blob-caller",
+            "src/caller.ts",
+            "function",
+            "function_declaration",
+            "src/caller.ts::caller",
+            Some("artefact::file-caller"),
+            1_i64,
+            3_i64,
+        ),
+        (
+            "sym::helper",
+            "artefact::helper",
+            "blob-caller",
+            "src/caller.ts",
+            "function",
+            "function_declaration",
+            "src/caller.ts::helper",
+            Some("artefact::file-caller"),
+            4_i64,
+            6_i64,
+        ),
+        (
+            "file::target",
+            "artefact::file-target",
+            "blob-target",
+            "src/target.ts",
+            "file",
+            "source_file",
+            "src/target.ts",
+            Option::<&str>::None,
+            1_i64,
+            3_i64,
+        ),
+        (
+            "sym::target",
+            "artefact::target",
+            "blob-target",
+            "src/target.ts",
+            "function",
+            "function_declaration",
+            "src/target.ts::target",
+            Some("artefact::file-target"),
+            1_i64,
+            3_i64,
+        ),
+        (
+            "file::orphan",
+            "artefact::file-orphan",
+            "blob-orphan",
+            "src/orphan.ts",
+            "file",
+            "source_file",
+            "src/orphan.ts",
+            Option::<&str>::None,
+            1_i64,
+            3_i64,
+        ),
+        (
+            "sym::orphan",
+            "artefact::orphan",
+            "blob-orphan",
+            "src/orphan.ts",
+            "function",
+            "function_declaration",
+            "src/orphan.ts::orphan",
+            Some("artefact::file-orphan"),
+            1_i64,
+            3_i64,
+        ),
+    ];
+
+    for (
+        symbol_id,
+        artefact_id,
+        blob_sha,
+        path,
+        canonical_kind,
+        language_kind,
+        symbol_fqn,
+        parent_artefact_id,
+        start_line,
+        end_line,
+    ) in artefacts
+    {
+        let parent_symbol_id = match parent_artefact_id {
+            Some("artefact::file-caller") => Some("file::caller"),
+            Some("artefact::file-target") => Some("file::target"),
+            Some("artefact::file-orphan") => Some("file::orphan"),
+            _ => None,
+        };
+        conn.execute(
+            "INSERT INTO artefacts (
+                artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+                language_kind, symbol_fqn, parent_artefact_id, start_line, end_line,
+                start_byte, end_byte, signature, modifiers, docstring, content_hash, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, 'typescript', ?6,
+                ?7, ?8, ?9, ?10, ?11, 0, ?12, NULL, ?13, ?14, ?15, '2026-03-26T09:00:00Z'
+            )",
+            rusqlite::params![
+                artefact_id,
+                symbol_id,
+                repo_id.as_str(),
+                blob_sha,
+                path,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"export\"]"
+                },
+                if canonical_kind == "file" {
+                    Option::<&str>::None
+                } else {
+                    Some("Example docstring")
+                },
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact row");
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id,
+                temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind,
+                symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
+                start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at
+            ) VALUES (
+                ?1, 'main', ?2, ?3, ?4, 'commit', ?4,
+                NULL, ?5, ?6, 'typescript', ?7, ?8,
+                ?9, ?10, ?11, ?12, ?13,
+                0, ?14, NULL, ?15, ?16, ?17, '2026-03-26T09:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                symbol_id,
+                artefact_id,
+                commit_sha.as_str(),
+                blob_sha,
+                path,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if canonical_kind == "file" {
+                    "[]"
+                } else {
+                    "[\"export\"]"
+                },
+                if canonical_kind == "file" {
+                    Option::<&str>::None
+                } else {
+                    Some("Example docstring")
+                },
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert artefact current row");
+    }
+
+    for (
+        edge_id,
+        path,
+        from_symbol_id,
+        from_artefact_id,
+        to_symbol_id,
+        to_artefact_id,
+        to_symbol_ref,
+        line,
+        metadata,
+    ) in [
+        (
+            "edge-resolved",
+            "src/caller.ts",
+            "sym::caller",
+            "artefact::caller",
+            Some("sym::target"),
+            Some("artefact::target"),
+            Some("src/target.ts::target"),
+            2_i64,
+            "{\"resolution\":\"local\"}",
+        ),
+        (
+            "edge-unresolved",
+            "src/caller.ts",
+            "sym::helper",
+            "artefact::helper",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            Some("src/missing.ts::missing"),
+            5_i64,
+            "{\"resolution\":\"unresolved\"}",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefact_edges_current (
+                edge_id, repo_id, branch, commit_sha, revision_kind, revision_id,
+                temp_checkpoint_id, blob_sha, path, from_symbol_id, from_artefact_id,
+                to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+                start_line, end_line, metadata, updated_at
+            ) VALUES (
+                ?1, ?2, 'main', ?3, 'commit', ?3,
+                NULL, 'blob-caller', ?4, ?5, ?6,
+                ?7, ?8, ?9, 'calls', 'typescript',
+                ?10, ?10, ?11, '2026-03-26T09:00:00Z'
+            )",
+            rusqlite::params![
+                edge_id,
+                repo_id.as_str(),
+                commit_sha.as_str(),
+                path,
+                from_symbol_id,
+                from_artefact_id,
+                to_symbol_id,
+                to_artefact_id,
+                to_symbol_ref,
+                line,
+                metadata,
+            ],
+        )
+        .expect("insert edge current row");
+    }
+
+    dir
+}
+
 fn seed_dashboard_repo_without_commit_mapping() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
@@ -1303,6 +1630,425 @@ async fn devql_repository_queries_handle_repos_without_checkpoint_storage() {
     assert_eq!(
         json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],
         0
+    );
+}
+
+#[tokio::test]
+async fn devql_repository_file_and_artefact_queries_resolve_current_devql_graph() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                files(path: "src/*.ts") {
+                  path
+                  language
+                  blobSha
+                }
+                artefacts(filter: { kind: FUNCTION }, first: 10) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      symbolId
+                      path
+                      canonicalKind
+                      symbolFqn
+                      docstring
+                    }
+                  }
+                }
+                file(path: "src/caller.ts") {
+                  path
+                  language
+                  blobSha
+                  artefacts(first: 10) {
+                    totalCount
+                    edges {
+                      node {
+                        id
+                        canonicalKind
+                        symbolFqn
+                        parentArtefactId
+                        parent {
+                          id
+                          canonicalKind
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        json["repo"]["files"],
+        json!([
+            {
+                "path": "src/caller.ts",
+                "language": "typescript",
+                "blobSha": "blob-caller"
+            },
+            {
+                "path": "src/orphan.ts",
+                "language": "typescript",
+                "blobSha": "blob-orphan"
+            },
+            {
+                "path": "src/target.ts",
+                "language": "typescript",
+                "blobSha": "blob-target"
+            }
+        ])
+    );
+    assert_eq!(json["repo"]["artefacts"]["totalCount"], 4);
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["symbolId"],
+        "sym::caller"
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["canonicalKind"],
+        "FUNCTION"
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["docstring"],
+        "Example docstring"
+    );
+    assert_eq!(json["repo"]["file"]["path"], "src/caller.ts");
+    assert_eq!(json["repo"]["file"]["language"], "typescript");
+    assert_eq!(json["repo"]["file"]["blobSha"], "blob-caller");
+    assert_eq!(json["repo"]["file"]["artefacts"]["totalCount"], 3);
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["canonicalKind"],
+        "FILE"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["symbolFqn"],
+        "src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["parentArtefactId"],
+        "artefact::file-caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["parent"]["id"],
+        "artefact::file-caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["parent"]["canonicalKind"],
+        "FILE"
+    );
+}
+
+#[tokio::test]
+async fn devql_artefact_connection_supports_cursor_pagination_for_graphql_artefacts() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let first_page = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                artefacts(filter: { kind: FUNCTION }, first: 1) {
+                  totalCount
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    endCursor
+                  }
+                  edges {
+                    node {
+                      symbolId
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        first_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        first_page.errors
+    );
+
+    let first_json = first_page.data.into_json().expect("graphql data to json");
+    let cursor = first_json["repo"]["artefacts"]["pageInfo"]["endCursor"]
+        .as_str()
+        .expect("first artefact page cursor")
+        .to_string();
+    assert_eq!(first_json["repo"]["artefacts"]["totalCount"], 4);
+    assert_eq!(
+        first_json["repo"]["artefacts"]["pageInfo"]["hasNextPage"],
+        true
+    );
+    assert_eq!(
+        first_json["repo"]["artefacts"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(
+        first_json["repo"]["artefacts"]["edges"][0]["node"]["symbolId"],
+        "sym::caller"
+    );
+
+    let second_page = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                artefacts(filter: {{ kind: FUNCTION }}, first: 1, after: "{cursor}") {{
+                  totalCount
+                  pageInfo {{
+                    hasNextPage
+                    hasPreviousPage
+                  }}
+                  edges {{
+                    node {{
+                      symbolId
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        second_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_page.errors
+    );
+
+    let second_json = second_page.data.into_json().expect("graphql data to json");
+    assert_eq!(second_json["repo"]["artefacts"]["totalCount"], 4);
+    assert_eq!(
+        second_json["repo"]["artefacts"]["pageInfo"]["hasPreviousPage"],
+        true
+    );
+    assert_eq!(
+        second_json["repo"]["artefacts"]["edges"][0]["node"]["symbolId"],
+        "sym::helper"
+    );
+}
+
+#[tokio::test]
+async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "src/caller.ts") {
+                  deps(filter: { direction: BOTH, includeUnresolved: true }) {
+                    totalCount
+                    edges {
+                      node {
+                        id
+                        edgeKind
+                        toArtefactId
+                        toSymbolRef
+                        fromArtefact {
+                          symbolFqn
+                        }
+                        toArtefact {
+                          symbolFqn
+                        }
+                      }
+                    }
+                  }
+                  artefacts(filter: { kind: FUNCTION }) {
+                    edges {
+                      node {
+                        symbolFqn
+                        outgoingDeps(filter: { includeUnresolved: true }) {
+                          totalCount
+                          edges {
+                            node {
+                              id
+                              toArtefactId
+                              toSymbolRef
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                artefacts(filter: { symbolFqn: "src/target.ts::target" }) {
+                  edges {
+                    node {
+                      incomingDeps {
+                        totalCount
+                        edges {
+                          node {
+                            id
+                            fromArtefact {
+                              symbolFqn
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["file"]["deps"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["file"]["deps"]["edges"][0]["node"]["edgeKind"],
+        "CALLS"
+    );
+    assert_eq!(
+        json["repo"]["file"]["deps"]["edges"][0]["node"]["fromArtefact"]["symbolFqn"],
+        "src/caller.ts::caller"
+    );
+    assert_eq!(
+        json["repo"]["file"]["deps"]["edges"][0]["node"]["toArtefact"]["symbolFqn"],
+        "src/target.ts::target"
+    );
+    assert_eq!(
+        json["repo"]["file"]["deps"]["edges"][1]["node"]["toArtefactId"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        json["repo"]["file"]["deps"]["edges"][1]["node"]["toSymbolRef"],
+        "src/missing.ts::missing"
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["outgoingDeps"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDeps"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDeps"]["edges"][0]["node"]["fromArtefact"]
+            ["symbolFqn"],
+        "src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn devql_graphql_artefact_resolvers_validate_paths_and_line_ranges() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let invalid_path = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "../src/caller.ts") {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(invalid_path.errors.len(), 1, "expected invalid path error");
+    assert_eq!(
+        invalid_path.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+
+    let missing_path = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                file(path: "src/missing.ts") {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(missing_path.errors.len(), 1, "expected missing path error");
+    assert_eq!(
+        missing_path.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+
+    let invalid_lines = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                artefacts(filter: { lines: { start: 10, end: 2 } }) {
+                  totalCount
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        invalid_lines.errors.len(),
+        1,
+        "expected invalid lines error"
+    );
+    assert_eq!(
+        invalid_lines.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
     );
 }
 
