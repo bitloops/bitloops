@@ -3,11 +3,12 @@ mod sql;
 
 use self::parsing::{artefact_from_value, dependency_edge_from_value, file_context_from_value};
 use self::sql::{
-    DependencyScope, build_artefacts_by_ids_sql, build_child_artefacts_sql,
-    build_current_artefacts_count_sql, build_current_artefacts_cursor_exists_sql,
-    build_current_artefacts_sql, build_current_artefacts_window_sql,
-    build_current_dependency_batch_sql, build_current_dependency_sql, build_file_context_list_sql,
-    build_file_context_lookup_sql, normalise_repo_relative_path, quote_devql_string,
+    CurrentArtefactsWindowSql, DependencyScope, build_artefacts_by_ids_sql,
+    build_child_artefacts_sql, build_current_artefacts_count_sql,
+    build_current_artefacts_cursor_exists_sql, build_current_artefacts_sql,
+    build_current_artefacts_window_sql, build_current_dependency_batch_sql,
+    build_current_dependency_sql, build_file_context_list_sql, build_file_context_lookup_sql,
+    normalise_repo_relative_path, quote_devql_string,
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
@@ -170,16 +171,16 @@ impl DevqlGraphqlContext {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Artefact>> {
-        let sql = build_current_artefacts_window_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+        let sql = build_current_artefacts_window_sql(CurrentArtefactsWindowSql {
+            repo_id: self.repo_identity.repo_id.as_str(),
+            branch: &self.current_branch_name(),
             path,
-            scope.project_path(),
+            project_path: scope.project_path(),
             filter,
-            scope.temporal_scope(),
+            temporal_scope: scope.temporal_scope(),
             after,
             limit,
-        );
+        });
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)

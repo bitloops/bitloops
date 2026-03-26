@@ -3,6 +3,17 @@ use crate::graphql::types::{ArtefactFilterInput, CanonicalKind, DepsDirection, D
 use crate::host::devql::{esc_pg, escape_like_pattern, glob_to_sql_like, sql_like_with_escape};
 use std::path::{Component, Path};
 
+pub(super) struct CurrentArtefactsWindowSql<'a> {
+    pub repo_id: &'a str,
+    pub branch: &'a str,
+    pub path: Option<&'a str>,
+    pub project_path: Option<&'a str>,
+    pub filter: Option<&'a ArtefactFilterInput>,
+    pub temporal_scope: Option<&'a ResolvedTemporalScope>,
+    pub after: Option<&'a str>,
+    pub limit: usize,
+}
+
 pub(super) fn build_file_context_lookup_sql(
     repo_id: &str,
     branch: &str,
@@ -206,25 +217,16 @@ pub(super) fn build_current_artefacts_cursor_exists_sql(
     )
 }
 
-pub(super) fn build_current_artefacts_window_sql(
-    repo_id: &str,
-    branch: &str,
-    path: Option<&str>,
-    project_path: Option<&str>,
-    filter: Option<&ArtefactFilterInput>,
-    temporal_scope: Option<&ResolvedTemporalScope>,
-    after: Option<&str>,
-    limit: usize,
-) -> String {
+pub(super) fn build_current_artefacts_window_sql(params: CurrentArtefactsWindowSql<'_>) -> String {
     let filtered_cte = build_filtered_artefacts_cte_sql(
-        repo_id,
-        branch,
-        path,
-        project_path,
-        filter,
-        temporal_scope,
+        params.repo_id,
+        params.branch,
+        params.path,
+        params.project_path,
+        params.filter,
+        params.temporal_scope,
     );
-    let pagination_clause = after.map_or_else(String::new, |cursor| {
+    let pagination_clause = params.after.map_or_else(String::new, |cursor| {
         format!(
             " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
                     (SELECT path, kind_rank, start_line, end_line, artefact_id \
@@ -242,7 +244,7 @@ pub(super) fn build_current_artefacts_window_sql(
           LIMIT {limit}",
         columns = filtered_artefact_columns_sql(),
         order = filtered_artefact_order_sql(),
-        limit = limit,
+        limit = params.limit,
     )
 }
 
