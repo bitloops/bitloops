@@ -11,6 +11,7 @@ pub use bitloops::models;
 pub use bitloops::storage;
 pub use bitloops::telemetry;
 pub use bitloops::utils;
+pub use bitloops::ftf;
 
 #[cfg(test)]
 #[allow(dead_code)]
