@@ -1,5 +1,6 @@
 mod canonical;
 mod context;
+pub(crate) mod edges_shared;
 mod errors;
 mod pack;
 mod registry;

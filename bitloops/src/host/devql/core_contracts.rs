@@ -66,7 +66,7 @@ pub(crate) enum CanonicalKindProjection {
 }
 
 impl CanonicalKindProjection {
-    pub(super) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
             Self::Module => "module",
@@ -80,7 +80,7 @@ impl CanonicalKindProjection {
         }
     }
 
-    pub(super) fn from_str(value: &str) -> Option<Self> {
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Some(Self::File),
             "module" => Some(Self::Module),
