@@ -2,72 +2,18 @@ use super::*;
 
 // Top-level orchestration: refresh/upsert/delete current state and persist language artefacts.
 
-pub(super) type LanguagePackArtefactExtractor = fn(&str, &str) -> Result<Vec<JsTsArtefact>>;
-pub(super) type LanguagePackDependencyEdgeExtractor =
-    fn(&str, &str, &[JsTsArtefact]) -> Result<Vec<JsTsDependencyEdge>>;
-pub(super) type LanguagePackFileDocstringExtractor = fn(&str) -> Option<String>;
 pub(super) type LanguagePackExtraction =
-    (Vec<JsTsArtefact>, Vec<JsTsDependencyEdge>, Option<String>);
-
-// First-party runtime adapter for built-in language packs.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct BuiltInLanguagePackRuntime {
-    pub(super) extract_artefacts: LanguagePackArtefactExtractor,
-    pub(super) extract_dependency_edges: LanguagePackDependencyEdgeExtractor,
-    pub(super) extract_file_docstring: LanguagePackFileDocstringExtractor,
-}
-
-pub(super) fn no_file_docstring(_: &str) -> Option<String> {
-    None
-}
-
-// Runtime registry keyed by the host-registered language-pack descriptor id.
-pub(super) fn built_in_language_pack_registry()
--> &'static HashMap<&'static str, BuiltInLanguagePackRuntime> {
-    static BUILT_IN_LANGUAGE_PACKS: OnceLock<HashMap<&'static str, BuiltInLanguagePackRuntime>> =
-        OnceLock::new();
-    BUILT_IN_LANGUAGE_PACKS.get_or_init(|| {
-        HashMap::from([
-            (
-                RUST_LANGUAGE_PACK_ID,
-                BuiltInLanguagePackRuntime {
-                    extract_artefacts: extract_rust_artefacts,
-                    extract_dependency_edges: extract_rust_dependency_edges,
-                    extract_file_docstring: extract_rust_file_docstring,
-                },
-            ),
-            (
-                TS_JS_LANGUAGE_PACK_ID,
-                BuiltInLanguagePackRuntime {
-                    extract_artefacts: extract_js_ts_artefacts,
-                    extract_dependency_edges: extract_js_ts_dependency_edges,
-                    extract_file_docstring: no_file_docstring,
-                },
-            ),
-        ])
-    })
-}
-
-pub(super) fn resolve_built_in_language_pack(pack_id: &str) -> Option<BuiltInLanguagePackRuntime> {
-    built_in_language_pack_registry().get(pack_id).copied()
-}
-
-pub(super) fn resolve_built_in_language_pack_for_source(
-    path: &str,
-    language: &str,
-) -> Option<BuiltInLanguagePackRuntime> {
-    resolve_language_pack_owner_for_input(language, Some(path))
-        .or_else(|| resolve_language_pack_owner(language))
-        .and_then(resolve_built_in_language_pack)
-}
+    (Vec<LanguageArtefact>, Vec<DependencyEdge>, Option<String>);
 
 pub(super) fn extract_file_docstring_for_language_pack(
     path: &str,
     language: &str,
     content: &str,
 ) -> Option<String> {
-    resolve_built_in_language_pack_for_source(path, language)
-        .and_then(|pack| (pack.extract_file_docstring)(content))
+    let pack_id = resolve_language_pack_owner_for_input(language, Some(path))
+        .or_else(|| resolve_language_pack_owner(language))?;
+    let registry = language_adapter_registry().ok()?;
+    registry.extract_file_docstring(pack_id, content)
 }
 
 pub(super) fn extract_language_pack_artefacts_and_edges(
@@ -83,13 +29,10 @@ pub(super) fn extract_language_pack_artefacts_and_edges(
         return Ok(None);
     };
 
-    let Some(pack) = resolve_built_in_language_pack(pack_id) else {
-        bail!("language `{language}` resolved to unsupported language pack `{pack_id}`");
-    };
-
-    let items = (pack.extract_artefacts)(content, rev.path)?;
-    let edges = (pack.extract_dependency_edges)(content, rev.path, &items)?;
-    let file_docstring = (pack.extract_file_docstring)(content);
+    let registry = language_adapter_registry()?;
+    let items = registry.extract_artefacts(pack_id, content, rev.path)?;
+    let edges = registry.extract_dependency_edges(pack_id, content, rev.path, &items)?;
+    let file_docstring = registry.extract_file_docstring(pack_id, content);
     Ok(Some((items, edges, file_docstring)))
 }
 
@@ -100,7 +43,7 @@ pub(super) async fn refresh_current_state_for_path(
     file_artefact: &FileArtefactRow,
     file_docstring: Option<String>,
     symbol_records: &[PersistedArtefactRecord],
-    edges: Vec<JsTsDependencyEdge>,
+    edges: Vec<DependencyEdge>,
 ) -> Result<()> {
     let branch = active_branch_name(&cfg.repo_root);
     let existing = load_current_file_revision(cfg, relational, &branch, rev.path).await?;

@@ -1,8 +1,13 @@
-use super::*;
+use super::edges_shared::{
+    EdgeCollector, ReferenceCtx, SymbolLookup, js_ts_identifier_is_value_reference,
+    js_ts_node_is_in_extends_clause, push_reference_edge, rust_identifier_is_value_reference,
+    smallest_enclosing_callable,
+};
+use crate::host::devql::RefKind;
 
 // Reference edge extraction for JS/TS and Rust.
 
-pub(super) fn collect_js_ts_reference_edges_recursive(
+pub(crate) fn collect_js_ts_reference_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     ctx: &ReferenceCtx,
@@ -54,7 +59,7 @@ pub(super) fn collect_js_ts_reference_edges_recursive(
     }
 }
 
-pub(super) fn collect_rust_reference_edges_recursive(
+pub(crate) fn collect_rust_reference_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     ctx: &ReferenceCtx,

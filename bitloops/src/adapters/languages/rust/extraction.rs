@@ -1,8 +1,16 @@
-use super::*;
+use std::collections::HashSet;
+
+use anyhow::{Context, Result};
+use regex::Regex;
+
+use super::canonical::{RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS};
+use crate::host::language_adapter::{
+    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+};
 
 // Rust artefact extraction via tree-sitter.
 
-pub(super) fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<JsTsArtefact>> {
+pub(crate) fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<LanguageArtefact>> {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser
@@ -27,15 +35,15 @@ pub(super) fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<Js
     Ok(out)
 }
 
-pub(super) fn extract_rust_file_docstring(content: &str) -> Option<String> {
+pub(crate) fn extract_rust_file_docstring(content: &str) -> Option<String> {
     extract_rust_inner_docstring_from_lines(content.lines().collect::<Vec<_>>().as_slice(), 0)
 }
 
-pub(super) fn collect_rust_nodes_recursive(
+pub(crate) fn collect_rust_nodes_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
-    out: &mut Vec<JsTsArtefact>,
+    out: &mut Vec<LanguageArtefact>,
     seen: &mut HashSet<(String, String, i32)>,
     current_impl_fqn: Option<String>,
 ) {
@@ -52,7 +60,7 @@ pub(super) fn collect_rust_nodes_recursive(
         .trim()
         .to_string();
 
-    let push = |out: &mut Vec<JsTsArtefact>,
+    let push = |out: &mut Vec<LanguageArtefact>,
                 seen: &mut HashSet<(String, String, i32)>,
                 language_kind: &str,
                 name: String,
@@ -63,14 +71,19 @@ pub(super) fn collect_rust_nodes_recursive(
         if name.is_empty() {
             return;
         }
-        if !rust_supports_language_kind(language_kind) {
+        if !is_supported_language_kind(RUST_SUPPORTED_LANGUAGE_KINDS, language_kind) {
             return;
         }
         if !seen.insert((language_kind.to_string(), name.clone(), start_line)) {
             return;
         }
-        out.push(JsTsArtefact {
-            canonical_kind: rust_canonical_kind(language_kind, inside_impl).map(str::to_string),
+        out.push(LanguageArtefact {
+            canonical_kind: resolve_canonical_kind(
+                RUST_CANONICAL_MAPPINGS,
+                language_kind,
+                inside_impl,
+            )
+            .map(|p| p.as_str().to_string()),
             language_kind: language_kind.to_string(),
             name,
             symbol_fqn,
@@ -266,7 +279,7 @@ pub(super) fn collect_rust_nodes_recursive(
     }
 }
 
-pub(super) fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
+pub(crate) fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> Vec<String> {
     let prefix_end = node
         .child_by_field_name("name")
         .map(|child| child.start_byte())
@@ -310,7 +323,7 @@ pub(super) fn extract_rust_modifiers(node: tree_sitter::Node, content: &str) -> 
     modifiers
 }
 
-pub(super) fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(crate) fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> Option<String> {
     let outer = extract_rust_outer_docstring(node, content);
     if node.kind() != "mod_item" {
         return outer;
@@ -326,7 +339,7 @@ pub(super) fn extract_rust_docstring(node: tree_sitter::Node, content: &str) -> 
     combine_docstrings(outer, inner)
 }
 
-pub(super) fn extract_rust_outer_docstring(
+pub(crate) fn extract_rust_outer_docstring(
     node: tree_sitter::Node,
     content: &str,
 ) -> Option<String> {
@@ -383,7 +396,7 @@ pub(super) fn extract_rust_outer_docstring(
     }
 }
 
-pub(super) fn extract_rust_inner_docstring_from_lines(
+pub(crate) fn extract_rust_inner_docstring_from_lines(
     lines: &[&str],
     start_line_idx: usize,
 ) -> Option<String> {
@@ -428,7 +441,7 @@ pub(super) fn extract_rust_inner_docstring_from_lines(
     }
 }
 
-pub(super) fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> String {
+pub(crate) fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> String {
     lines
         .iter()
         .map(|line| line.trim().trim_start_matches(prefix).trim())
@@ -438,7 +451,7 @@ pub(super) fn normalize_rust_line_doc_block(lines: &[&str], prefix: &str) -> Str
         .to_string()
 }
 
-pub(super) fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> String {
+pub(crate) fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> String {
     let mut normalized = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let mut text = line.trim().to_string();
@@ -458,7 +471,7 @@ pub(super) fn normalize_rust_block_doc_block(lines: &[&str], prefix: &str) -> St
     normalized.join("\n").trim().to_string()
 }
 
-pub(super) fn combine_docstrings(first: Option<String>, second: Option<String>) -> Option<String> {
+pub(crate) fn combine_docstrings(first: Option<String>, second: Option<String>) -> Option<String> {
     match (first, second) {
         (Some(first), Some(second)) if !first.is_empty() && !second.is_empty() => {
             Some(format!("{first}\n\n{second}"))

@@ -1,8 +1,15 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use super::edges_shared::{
+    EdgeCollector, EdgeTarget, strip_string_delimiters, symbol_lookup_name_from_text,
+    syntax_node_trimmed_text,
+};
+use super::{DependencyEdge, EdgeMetadata, RustUseExportEntry};
+use crate::host::devql::{EdgeKind, ExportForm, Resolution};
 
 // Export edge extraction for JS/TS and Rust.
 
-pub(super) fn push_export_edge(
+pub(crate) fn push_export_edge(
     col: &mut EdgeCollector,
     from_symbol_fqn: &str,
     target: EdgeTarget,
@@ -27,7 +34,7 @@ pub(super) fn push_export_edge(
         return;
     }
 
-    col.out.push(JsTsDependencyEdge {
+    col.out.push(DependencyEdge {
         edge_kind: EdgeKind::Exports,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: target.to_target_symbol_fqn,
@@ -38,7 +45,7 @@ pub(super) fn push_export_edge(
     });
 }
 
-pub(super) fn resolve_js_ts_export_target(
+pub(crate) fn resolve_js_ts_export_target(
     original_name: &str,
     source_ref: Option<&str>,
     local_targets: &HashMap<String, String>,
@@ -82,7 +89,7 @@ pub(super) fn resolve_js_ts_export_target(
     None
 }
 
-pub(super) fn js_ts_exported_declaration_names(
+pub(crate) fn js_ts_exported_declaration_names(
     declaration: tree_sitter::Node,
     content: &str,
 ) -> Vec<String> {
@@ -115,14 +122,14 @@ pub(super) fn js_ts_exported_declaration_names(
     }
 }
 
-pub(super) fn collect_js_ts_export_edges_recursive(
+pub(crate) fn collect_js_ts_export_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
     local_targets: &HashMap<String, String>,
     imported_symbol_refs: &HashMap<String, String>,
     seen: &mut HashSet<String>,
-    out: &mut Vec<JsTsDependencyEdge>,
+    out: &mut Vec<DependencyEdge>,
 ) {
     if node.kind() == "export_statement" {
         let source_ref = node
@@ -282,7 +289,7 @@ pub(super) fn collect_js_ts_export_edges_recursive(
     }
 }
 
-pub(super) fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String {
+pub(crate) fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String {
     let segment = segment.trim();
     if segment.is_empty() {
         return prefix.unwrap_or_default().to_string();
@@ -302,7 +309,7 @@ pub(super) fn join_rust_use_path(prefix: Option<&str>, segment: &str) -> String 
     }
 }
 
-pub(super) fn rust_use_default_export_name(path: &str) -> Option<String> {
+pub(crate) fn rust_use_default_export_name(path: &str) -> Option<String> {
     let path = path.trim();
     if path.is_empty() {
         return None;
@@ -317,7 +324,7 @@ pub(super) fn rust_use_default_export_name(path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(super) fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool {
+pub(crate) fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).any(|child| {
         child.kind() == "visibility_modifier"
@@ -327,7 +334,7 @@ pub(super) fn rust_use_is_public(node: tree_sitter::Node, content: &str) -> bool
     })
 }
 
-pub(super) fn collect_rust_use_export_entries(
+pub(crate) fn collect_rust_use_export_entries(
     node: tree_sitter::Node,
     content: &str,
     prefix: Option<&str>,
@@ -394,7 +401,7 @@ pub(super) fn collect_rust_use_export_entries(
     }
 }
 
-pub(super) fn resolve_rust_export_target(
+pub(crate) fn resolve_rust_export_target(
     export_path: &str,
     local_targets: &HashMap<String, String>,
 ) -> Option<(EdgeTarget, Resolution)> {
@@ -439,13 +446,13 @@ pub(super) fn resolve_rust_export_target(
     ))
 }
 
-pub(super) fn collect_rust_export_edges_recursive(
+pub(crate) fn collect_rust_export_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
     local_targets: &HashMap<String, String>,
     seen: &mut HashSet<String>,
-    out: &mut Vec<JsTsDependencyEdge>,
+    out: &mut Vec<DependencyEdge>,
 ) {
     if node.kind() == "use_declaration"
         && rust_use_is_public(node, content)

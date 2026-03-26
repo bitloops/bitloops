@@ -1,12 +1,27 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use anyhow::{Context, Result};
+use regex::Regex;
+
+use crate::host::devql::{CallForm, EdgeKind, ImportForm, Resolution};
+use crate::host::language_adapter::{
+    DependencyEdge, EdgeMetadata, LanguageArtefact,
+    edges_export::{collect_rust_export_edges_recursive, collect_rust_use_export_entries},
+    edges_inherits::collect_rust_extends_edges_recursive,
+    edges_reference::collect_rust_reference_edges_recursive,
+    edges_shared::{
+        CallCtx, EdgeCollector, ReferenceCtx, rust_reference_target_maps,
+        smallest_enclosing_callable, top_level_export_target_map,
+    },
+};
 
 // Rust dependency edge extraction (use imports, calls, macros, impl trait).
 
-pub(super) fn extract_rust_dependency_edges(
+pub(crate) fn extract_rust_dependency_edges(
     content: &str,
     path: &str,
-    artefacts: &[JsTsArtefact],
-) -> Result<Vec<JsTsDependencyEdge>> {
+    artefacts: &[LanguageArtefact],
+) -> Result<Vec<DependencyEdge>> {
     let mut parser = tree_sitter::Parser::new();
     let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
     parser
@@ -20,12 +35,7 @@ pub(super) fn extract_rust_dependency_edges(
     let mut edges = Vec::new();
     let rust_callables = artefacts
         .iter()
-        .filter(|a| {
-            artefact_has_core_kind(
-                a.canonical_kind.as_deref(),
-                CoreCanonicalArtefactKind::Callable,
-            )
-        })
+        .filter(|a| is_callable_artefact(a.canonical_kind.as_deref()))
         .cloned()
         .collect::<Vec<_>>();
     let mut name_to_fqn = HashMap::new();
@@ -90,7 +100,7 @@ pub(super) fn extract_rust_dependency_edges(
     Ok(edges)
 }
 
-pub(super) fn collect_rust_edges_recursive(
+pub(crate) fn collect_rust_edges_recursive(
     node: tree_sitter::Node,
     content: &str,
     path: &str,
@@ -111,7 +121,7 @@ pub(super) fn collect_rust_edges_recursive(
             .trim()
             .to_string();
         if !cleaned.is_empty() {
-            ec.out.push(JsTsDependencyEdge {
+            ec.out.push(DependencyEdge {
                 edge_kind: EdgeKind::Imports,
                 from_symbol_fqn: path.to_string(),
                 to_target_symbol_fqn: None,
@@ -162,7 +172,7 @@ pub(super) fn collect_rust_edges_recursive(
         {
             let trait_name = cap.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             if !trait_name.is_empty() {
-                ec.out.push(JsTsDependencyEdge {
+                ec.out.push(DependencyEdge {
                     edge_kind: EdgeKind::Implements,
                     from_symbol_fqn: format!("{path}::impl@{start_line}"),
                     to_target_symbol_fqn: None,
@@ -181,7 +191,7 @@ pub(super) fn collect_rust_edges_recursive(
     }
 }
 
-pub(super) fn collect_rust_imported_symbol_refs(
+pub(crate) fn collect_rust_imported_symbol_refs(
     node: tree_sitter::Node,
     content: &str,
     imported_symbol_refs: &mut HashMap<String, String>,
@@ -204,7 +214,7 @@ pub(super) fn collect_rust_imported_symbol_refs(
     }
 }
 
-pub(super) fn rust_call_target(
+pub(crate) fn rust_call_target(
     node: tree_sitter::Node,
     content: &str,
 ) -> Option<(String, CallForm)> {
@@ -236,7 +246,7 @@ pub(super) fn rust_call_target(
     }
 }
 
-pub(super) fn rust_macro_target(
+pub(crate) fn rust_macro_target(
     node: tree_sitter::Node,
     content: &str,
 ) -> Option<(String, CallForm)> {
@@ -251,7 +261,7 @@ pub(super) fn rust_macro_target(
     Some((target_name, CallForm::Macro))
 }
 
-pub(super) fn rust_callable_name_from_text(text: &str) -> Option<String> {
+pub(crate) fn rust_callable_name_from_text(text: &str) -> Option<String> {
     let mut candidate = text.trim();
     if candidate.is_empty() {
         return None;
@@ -307,7 +317,7 @@ pub(super) fn rust_callable_name_from_text(text: &str) -> Option<String> {
     Some(tail.to_string())
 }
 
-pub(super) fn push_rust_call_edge(
+pub(crate) fn push_rust_call_edge(
     ec: &mut EdgeCollector<'_>,
     from_symbol_fqn: &str,
     target_name: &str,
@@ -325,7 +335,7 @@ pub(super) fn push_rust_call_edge(
         if !ec.seen.insert(key) {
             return;
         }
-        ec.out.push(JsTsDependencyEdge {
+        ec.out.push(DependencyEdge {
             edge_kind: EdgeKind::Calls,
             from_symbol_fqn: from_symbol_fqn.to_string(),
             to_target_symbol_fqn: Some(target_fqn.clone()),
@@ -358,7 +368,7 @@ pub(super) fn push_rust_call_edge(
     if !ec.seen.insert(key) {
         return;
     }
-    ec.out.push(JsTsDependencyEdge {
+    ec.out.push(DependencyEdge {
         edge_kind: EdgeKind::Calls,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn: None,
@@ -367,4 +377,9 @@ pub(super) fn push_rust_call_edge(
         end_line: Some(line_no),
         metadata: EdgeMetadata::call(call_form, resolution),
     });
+}
+
+/// Returns true when the artefact's canonical kind is a callable (function or method).
+fn is_callable_artefact(canonical_kind: Option<&str>) -> bool {
+    matches!(canonical_kind, Some("function" | "method"))
 }

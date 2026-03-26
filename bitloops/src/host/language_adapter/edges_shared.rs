@@ -1,39 +1,42 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use super::{DependencyEdge, EdgeMetadata, LanguageArtefact};
+use crate::host::devql::{CanonicalKindProjection, EdgeKind, RefKind, Resolution};
 
 // Shared edge-building utilities used by all language edge extractors.
 
-pub(super) struct EdgeCollector<'a> {
-    pub(super) out: &'a mut Vec<JsTsDependencyEdge>,
-    pub(super) seen: &'a mut HashSet<String>,
+pub(crate) struct EdgeCollector<'a> {
+    pub(crate) out: &'a mut Vec<DependencyEdge>,
+    pub(crate) seen: &'a mut HashSet<String>,
 }
 
-pub(super) struct SymbolLookup<'a> {
-    pub(super) local_targets: &'a HashMap<String, String>,
-    pub(super) imported_symbol_refs: Option<&'a HashMap<String, String>>,
+pub(crate) struct SymbolLookup<'a> {
+    pub(crate) local_targets: &'a HashMap<String, String>,
+    pub(crate) imported_symbol_refs: Option<&'a HashMap<String, String>>,
 }
 
-pub(super) struct EdgeTarget {
-    pub(super) to_target_symbol_fqn: Option<String>,
-    pub(super) to_symbol_ref: Option<String>,
+pub(crate) struct EdgeTarget {
+    pub(crate) to_target_symbol_fqn: Option<String>,
+    pub(crate) to_symbol_ref: Option<String>,
 }
 
-pub(super) struct ReferenceCtx<'a> {
-    pub(super) callables: &'a [JsTsArtefact],
-    pub(super) type_targets: &'a HashMap<String, String>,
-    pub(super) value_targets: &'a HashMap<String, String>,
-    pub(super) imported_symbol_refs: &'a HashMap<String, String>,
+pub(crate) struct ReferenceCtx<'a> {
+    pub(crate) callables: &'a [LanguageArtefact],
+    pub(crate) type_targets: &'a HashMap<String, String>,
+    pub(crate) value_targets: &'a HashMap<String, String>,
+    pub(crate) imported_symbol_refs: &'a HashMap<String, String>,
 }
 
-pub(super) struct CallCtx<'a> {
-    pub(super) callables: &'a [JsTsArtefact],
-    pub(super) callable_name_to_fqn: &'a HashMap<String, String>,
-    pub(super) imported_symbol_refs: &'a HashMap<String, String>,
+pub(crate) struct CallCtx<'a> {
+    pub(crate) callables: &'a [LanguageArtefact],
+    pub(crate) callable_name_to_fqn: &'a HashMap<String, String>,
+    pub(crate) imported_symbol_refs: &'a HashMap<String, String>,
 }
 
-pub(super) fn smallest_enclosing_callable(
+pub(crate) fn smallest_enclosing_callable(
     line_no: i32,
-    callables: &[JsTsArtefact],
-) -> Option<JsTsArtefact> {
+    callables: &[LanguageArtefact],
+) -> Option<LanguageArtefact> {
     callables
         .iter()
         .filter(|c| c.start_line <= line_no && c.end_line >= line_no)
@@ -41,14 +44,14 @@ pub(super) fn smallest_enclosing_callable(
         .cloned()
 }
 
-pub(super) fn is_control_keyword(name: &str) -> bool {
+pub(crate) fn is_control_keyword(name: &str) -> bool {
     matches!(
         name,
         "if" | "for" | "while" | "switch" | "catch" | "return" | "new" | "typeof"
     )
 }
 
-pub(super) fn parse_import_clause_symbols(
+pub(crate) fn parse_import_clause_symbols(
     clause: &str,
     module_ref: &str,
     imported_symbol_refs: &mut HashMap<String, String>,
@@ -99,8 +102,8 @@ pub(super) fn parse_import_clause_symbols(
     imported_symbol_refs.insert(trimmed.to_string(), format!("{module_ref}::default"));
 }
 
-pub(super) fn js_ts_reference_target_maps(
-    artefacts: &[JsTsArtefact],
+pub(crate) fn js_ts_reference_target_maps(
+    artefacts: &[LanguageArtefact],
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut type_targets = HashMap::new();
     let mut value_targets = HashMap::new();
@@ -139,8 +142,8 @@ pub(super) fn js_ts_reference_target_maps(
     (type_targets, value_targets)
 }
 
-pub(super) fn rust_reference_target_maps(
-    artefacts: &[JsTsArtefact],
+pub(crate) fn rust_reference_target_maps(
+    artefacts: &[LanguageArtefact],
 ) -> (HashMap<String, String>, HashMap<String, String>) {
     let mut type_targets = HashMap::new();
     let mut value_targets = HashMap::new();
@@ -167,7 +170,9 @@ pub(super) fn rust_reference_target_maps(
     (type_targets, value_targets)
 }
 
-pub(super) fn top_level_export_target_map(artefacts: &[JsTsArtefact]) -> HashMap<String, String> {
+pub(crate) fn top_level_export_target_map(
+    artefacts: &[LanguageArtefact],
+) -> HashMap<String, String> {
     let mut targets = HashMap::new();
 
     for artefact in artefacts {
@@ -190,7 +195,7 @@ pub(super) fn top_level_export_target_map(artefacts: &[JsTsArtefact]) -> HashMap
     targets
 }
 
-pub(super) fn syntax_node_trimmed_text(node: tree_sitter::Node, content: &str) -> Option<String> {
+pub(crate) fn syntax_node_trimmed_text(node: tree_sitter::Node, content: &str) -> Option<String> {
     node.utf8_text(content.as_bytes())
         .ok()
         .map(str::trim)
@@ -198,13 +203,13 @@ pub(super) fn syntax_node_trimmed_text(node: tree_sitter::Node, content: &str) -
         .filter(|text| !text.is_empty())
 }
 
-pub(super) fn strip_string_delimiters(text: &str) -> String {
+pub(crate) fn strip_string_delimiters(text: &str) -> String {
     text.trim()
         .trim_matches(|ch| matches!(ch, '"' | '\'' | '`'))
         .to_string()
 }
 
-pub(super) fn push_reference_edge(
+pub(crate) fn push_reference_edge(
     col: &mut EdgeCollector,
     from_symbol_fqn: &str,
     name: &str,
@@ -239,7 +244,7 @@ pub(super) fn push_reference_edge(
         return;
     }
 
-    col.out.push(JsTsDependencyEdge {
+    col.out.push(DependencyEdge {
         edge_kind: EdgeKind::References,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
@@ -250,7 +255,7 @@ pub(super) fn push_reference_edge(
     });
 }
 
-pub(super) fn push_extends_edge(
+pub(crate) fn push_extends_edge(
     col: &mut EdgeCollector,
     from_symbol_fqn: &str,
     name: &str,
@@ -283,7 +288,7 @@ pub(super) fn push_extends_edge(
         return;
     }
 
-    col.out.push(JsTsDependencyEdge {
+    col.out.push(DependencyEdge {
         edge_kind: EdgeKind::Extends,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
@@ -294,7 +299,7 @@ pub(super) fn push_extends_edge(
     });
 }
 
-pub(super) fn symbol_lookup_name_from_node(
+pub(crate) fn symbol_lookup_name_from_node(
     node: tree_sitter::Node,
     content: &str,
 ) -> Option<String> {
@@ -302,7 +307,7 @@ pub(super) fn symbol_lookup_name_from_node(
     symbol_lookup_name_from_text(text)
 }
 
-pub(super) fn symbol_lookup_name_from_text(text: &str) -> Option<String> {
+pub(crate) fn symbol_lookup_name_from_text(text: &str) -> Option<String> {
     let mut candidate = text.trim();
     if candidate.is_empty() {
         return None;
@@ -336,7 +341,7 @@ pub(super) fn symbol_lookup_name_from_text(text: &str) -> Option<String> {
 /// Returns true when `node` sits inside an `extends_clause` or `extends_type_clause` in the
 /// JS/TS AST. Used to suppress spurious `references` edges for types that are already captured
 /// by an `extends` edge.
-pub(super) fn js_ts_node_is_in_extends_clause(mut node: tree_sitter::Node) -> bool {
+pub(crate) fn js_ts_node_is_in_extends_clause(mut node: tree_sitter::Node) -> bool {
     loop {
         let Some(parent) = node.parent() else {
             return false;
@@ -355,7 +360,7 @@ pub(super) fn js_ts_node_is_in_extends_clause(mut node: tree_sitter::Node) -> bo
     }
 }
 
-pub(super) fn js_ts_identifier_is_value_reference(node: tree_sitter::Node) -> bool {
+pub(crate) fn js_ts_identifier_is_value_reference(node: tree_sitter::Node) -> bool {
     let Some(parent) = node.parent() else {
         return true;
     };
@@ -383,7 +388,7 @@ pub(super) fn js_ts_identifier_is_value_reference(node: tree_sitter::Node) -> bo
     }
 }
 
-pub(super) fn rust_identifier_is_value_reference(node: tree_sitter::Node) -> bool {
+pub(crate) fn rust_identifier_is_value_reference(node: tree_sitter::Node) -> bool {
     let Some(parent) = node.parent() else {
         return true;
     };
@@ -409,7 +414,7 @@ pub(super) fn rust_identifier_is_value_reference(node: tree_sitter::Node) -> boo
     }
 }
 
-pub(super) fn node_matches_parent_field(
+pub(crate) fn node_matches_parent_field(
     node: tree_sitter::Node,
     parent: tree_sitter::Node,
     field: &str,
@@ -420,14 +425,14 @@ pub(super) fn node_matches_parent_field(
         .unwrap_or(false)
 }
 
-pub(super) fn same_syntax_node(left: tree_sitter::Node, right: tree_sitter::Node) -> bool {
+pub(crate) fn same_syntax_node(left: tree_sitter::Node, right: tree_sitter::Node) -> bool {
     left.kind() == right.kind()
         && left.start_byte() == right.start_byte()
         && left.end_byte() == right.end_byte()
 }
 
 #[cfg(test)]
-pub(super) fn line_byte_spans(content: &str) -> Vec<(i32, i32)> {
+pub(crate) fn line_byte_spans(content: &str) -> Vec<(i32, i32)> {
     if content.is_empty() {
         return Vec::new();
     }
@@ -444,7 +449,7 @@ pub(super) fn line_byte_spans(content: &str) -> Vec<(i32, i32)> {
 }
 
 #[cfg(test)]
-pub(super) fn line_start_byte(spans: &[(i32, i32)], line: i32) -> i32 {
+pub(crate) fn line_start_byte(spans: &[(i32, i32)], line: i32) -> i32 {
     if line <= 0 {
         return 0;
     }
@@ -455,7 +460,7 @@ pub(super) fn line_start_byte(spans: &[(i32, i32)], line: i32) -> i32 {
 }
 
 #[cfg(test)]
-pub(super) fn line_end_byte(spans: &[(i32, i32)], line: i32) -> i32 {
+pub(crate) fn line_end_byte(spans: &[(i32, i32)], line: i32) -> i32 {
     if line <= 0 {
         return 0;
     }
@@ -466,7 +471,7 @@ pub(super) fn line_end_byte(spans: &[(i32, i32)], line: i32) -> i32 {
 }
 
 #[cfg(test)]
-pub(super) fn find_block_end_line(lines: &[&str], start_index: usize) -> Option<i32> {
+pub(crate) fn find_block_end_line(lines: &[&str], start_index: usize) -> Option<i32> {
     let mut found_open = false;
     let mut depth = 0i32;
 

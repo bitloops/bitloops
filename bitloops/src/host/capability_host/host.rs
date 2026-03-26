@@ -178,6 +178,7 @@ impl DevqlCapabilityHost {
             cross_pack_grants,
             migration_plan,
             packs,
+            language_adapters: super::diagnostics::LanguageAdapterLifecycleSummary::default(),
             health: Vec::new(),
         }
     }

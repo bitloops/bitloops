@@ -18,6 +18,8 @@ pub struct HostRegistryReport {
     /// All registered migrations in host execution order (may include multiple packs).
     pub migration_plan: Vec<MigrationStepSummary>,
     pub packs: Vec<PackRegistryEntry>,
+    #[serde(default)]
+    pub language_adapters: LanguageAdapterLifecycleSummary,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub health: Vec<HealthOutcome>,
 }
@@ -84,6 +86,62 @@ pub struct HealthOutcome {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct LanguageAdapterLifecycleSummary {
+    pub runtime: String,
+    pub packs: Vec<LanguageAdapterPackRegistryEntry>,
+    pub migration_plan: Vec<LanguageAdapterMigrationStepSummary>,
+    pub migrated_pack_ids: Vec<String>,
+    pub applied_migrations: Vec<LanguageAdapterMigrationExecutionSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub readiness: Vec<LanguageAdapterReadinessSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health: Vec<HealthOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageAdapterPackRegistryEntry {
+    pub id: String,
+    pub display_name: String,
+    pub version: String,
+    pub api_version: u32,
+    pub supported_languages: Vec<String>,
+    pub migration_count: usize,
+    pub health_check_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageAdapterMigrationStepSummary {
+    pub pack_id: String,
+    pub migration_id: String,
+    pub order: u32,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageAdapterMigrationExecutionSummary {
+    pub pack_id: String,
+    pub migration_id: String,
+    pub order: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageAdapterReadinessSummary {
+    pub family: String,
+    pub id: String,
+    pub registered: bool,
+    pub ready: bool,
+    pub status: String,
+    pub lifecycle_state: String,
+    pub failures: Vec<LanguageAdapterReadinessFailureSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageAdapterReadinessFailureSummary {
+    pub code: String,
+    pub message: String,
 }
 
 impl From<&HostInvocationPolicy> for InvocationSummary {
@@ -267,6 +325,92 @@ pub fn format_registry_report_human(report: &HostRegistryReport) -> String {
         )
         .ok();
         writeln!(s, "      query_examples: {}", pack.query_example_count).ok();
+    }
+
+    if !report.language_adapters.packs.is_empty() {
+        writeln!(s).ok();
+        writeln!(
+            s,
+            "  language_adapters (runtime={}): {} packs",
+            report.language_adapters.runtime,
+            report.language_adapters.packs.len()
+        )
+        .ok();
+        for pack in &report.language_adapters.packs {
+            writeln!(
+                s,
+                "    [{}] {} v{} (api {}, migrations: {})",
+                pack.id, pack.display_name, pack.version, pack.api_version, pack.migration_count
+            )
+            .ok();
+            writeln!(
+                s,
+                "       languages: {}",
+                if pack.supported_languages.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    pack.supported_languages.join(", ")
+                }
+            )
+            .ok();
+            writeln!(
+                s,
+                "       health_checks ({}): {}",
+                pack.health_check_names.len(),
+                if pack.health_check_names.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    pack.health_check_names.join(", ")
+                }
+            )
+            .ok();
+        }
+
+        writeln!(
+            s,
+            "    migration_plan ({} steps)",
+            report.language_adapters.migration_plan.len()
+        )
+        .ok();
+        for step in &report.language_adapters.migration_plan {
+            writeln!(
+                s,
+                "      - [{}] order={} id={} — {}",
+                step.pack_id, step.order, step.migration_id, step.description
+            )
+            .ok();
+        }
+        writeln!(
+            s,
+            "    migrated_pack_ids: [{}]",
+            report.language_adapters.migrated_pack_ids.join(", ")
+        )
+        .ok();
+        writeln!(
+            s,
+            "    applied_migrations: {}",
+            report.language_adapters.applied_migrations.len()
+        )
+        .ok();
+
+        if !report.language_adapters.readiness.is_empty() {
+            writeln!(s, "    readiness:").ok();
+            for readiness in &report.language_adapters.readiness {
+                writeln!(
+                    s,
+                    "      [{}] {} — status={} lifecycle={} ready={}",
+                    readiness.family,
+                    readiness.id,
+                    readiness.status,
+                    readiness.lifecycle_state,
+                    readiness.ready
+                )
+                .ok();
+                for failure in &readiness.failures {
+                    writeln!(s, "        ! {}: {}", failure.code, failure.message).ok();
+                }
+            }
+        }
     }
 
     if !report.health.is_empty() {

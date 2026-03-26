@@ -17,6 +17,8 @@ pub struct CoreExtensionHostRegistryReport {
     pub subsystem: &'static str,
     pub compatibility: ExtensionHostCompatibilityJson,
     pub language_packs: Vec<ExtensionLanguagePackJson>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub language_adapter_pack_ids: Vec<String>,
     pub capability_packs: Vec<ExtensionCapabilityPackJson>,
     pub capability_migration_plan: Vec<ExtensionCapabilityMigrationStepJson>,
     pub migrated_capability_pack_ids: Vec<String>,
@@ -124,7 +126,10 @@ pub struct ExtensionDiagnosticJson {
     pub message: String,
 }
 
-pub fn build(host: &CoreExtensionHost) -> CoreExtensionHostRegistryReport {
+pub fn build_with_snapshot(
+    host: &CoreExtensionHost,
+    snapshot: super::CoreExtensionHostReadinessSnapshot,
+) -> CoreExtensionHostRegistryReport {
     let ctx = host.compatibility_context();
     let compatibility = ExtensionHostCompatibilityJson {
         contract_version: ctx.contract_version,
@@ -241,7 +246,6 @@ pub fn build(host: &CoreExtensionHost) -> CoreExtensionHostRegistryReport {
             .then_with(|| a.migration_id.cmp(&b.migration_id))
     });
 
-    let snapshot = host.readiness_snapshot();
     let readiness: Vec<ExtensionReadinessJson> = snapshot
         .readiness_reports
         .iter()
@@ -301,6 +305,7 @@ pub fn build(host: &CoreExtensionHost) -> CoreExtensionHostRegistryReport {
         subsystem: "core_extension_host",
         compatibility,
         language_packs,
+        language_adapter_pack_ids: snapshot.language_adapter_pack_ids,
         capability_packs,
         capability_migration_plan,
         migrated_capability_pack_ids,
@@ -309,6 +314,10 @@ pub fn build(host: &CoreExtensionHost) -> CoreExtensionHostRegistryReport {
         registration_observations,
         diagnostics,
     }
+}
+
+pub fn build(host: &CoreExtensionHost) -> CoreExtensionHostRegistryReport {
+    build_with_snapshot(host, host.readiness_snapshot())
 }
 
 pub fn format_core_extension_host_registry_human(
@@ -343,6 +352,16 @@ pub fn format_core_extension_host_registry_human(
     for lp in &report.language_packs {
         writeln!(s, "    [{}] {} v{}", lp.id, lp.display_name, lp.version).ok();
         writeln!(s, "        profiles: {}", lp.profile_ids.join(", ")).ok();
+    }
+
+    if !report.language_adapter_pack_ids.is_empty() {
+        writeln!(
+            s,
+            "  language_adapter_packs ({}): {}",
+            report.language_adapter_pack_ids.len(),
+            report.language_adapter_pack_ids.join(", ")
+        )
+        .ok();
     }
 
     writeln!(
