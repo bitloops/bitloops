@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 
 fn executor_test_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -87,6 +88,60 @@ async fn duckdb_path_with_sql(sql: &str) -> PathBuf {
     db_path
 }
 
+fn checkpoint_file_snapshot_projection_table_sql() -> &'static str {
+    "CREATE TABLE checkpoint_file_snapshots (
+        repo_id TEXT NOT NULL,
+        checkpoint_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        event_time TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        commit_sha TEXT NOT NULL,
+        path TEXT NOT NULL,
+        blob_sha TEXT NOT NULL
+    );"
+}
+
+fn test_write_committed_options(
+    checkpoint_id: &str,
+    session_id: &str,
+    agent: &str,
+    files_touched: &[&str],
+    transcript: &str,
+) -> WriteCommittedOptions {
+    WriteCommittedOptions {
+        checkpoint_id: checkpoint_id.to_string(),
+        session_id: session_id.to_string(),
+        strategy: "manual-commit".to_string(),
+        agent: agent.to_string(),
+        transcript: transcript.as_bytes().to_vec(),
+        prompts: None,
+        context: None,
+        checkpoints_count: 1,
+        files_touched: files_touched
+            .iter()
+            .map(|path| (*path).to_string())
+            .collect(),
+        token_usage_input: None,
+        token_usage_output: None,
+        token_usage_api_call_count: None,
+        turn_id: String::new(),
+        transcript_identifier_at_start: String::new(),
+        checkpoint_transcript_start: 0,
+        token_usage: None,
+        initial_attribution: None,
+        author_name: "Bitloops Test".to_string(),
+        author_email: "bitloops-test@example.com".to_string(),
+        summary: None,
+        is_task: false,
+        tool_use_id: String::new(),
+        agent_id: String::new(),
+        transcript_path: String::new(),
+        subagent_transcript_path: String::new(),
+    }
+}
+
 #[test]
 fn normalise_duckdb_event_row_parses_json_payload_columns() {
     let row = json!({
@@ -169,83 +224,28 @@ async fn execute_duckdb_pipeline_reads_telemetry_rows() {
 }
 
 #[tokio::test]
-async fn commit_shas_for_artefact_blob_reads_sqlite_rows() {
+async fn checkpoint_matches_for_artefact_snapshot_reads_projection_rows() {
     let relational = sqlite_relational_with_sql(
-        "CREATE TABLE file_state (
-            repo_id TEXT,
-            path TEXT,
-            blob_sha TEXT,
-            commit_sha TEXT
-        );
-        INSERT INTO file_state VALUES
-            ('repo-1', 'src/lib.rs', 'blob-1', 'commit-1'),
-            ('repo-1', 'src/lib.rs', 'blob-1', 'commit-2');",
+        &format!(
+            "{}\
+             INSERT INTO checkpoint_file_snapshots VALUES \
+                ('repo-1', 'checkpoint-1', 'session-1', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'src/lib.rs', 'blob-1'), \
+                ('repo-1', 'checkpoint-2', 'session-2', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual', 'commit-2', 'src/lib.rs', 'blob-1'), \
+                ('repo-1', 'checkpoint-3', 'session-3', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual', 'commit-3', 'src/other.rs', 'blob-1');",
+            checkpoint_file_snapshot_projection_table_sql()
+        ),
     )
     .await;
 
-    let commit_shas = commit_shas_for_artefact_blob(&relational, "repo-1", "src/lib.rs", "blob-1")
-        .await
-        .expect("load commit shas");
+    let matches =
+        checkpoint_matches_for_artefact_snapshot(&relational, "repo-1", "./src/lib.rs", "blob-1")
+            .await
+            .expect("load checkpoint matches");
 
-    assert_eq!(
-        commit_shas,
-        vec!["commit-1".to_string(), "commit-2".to_string()]
-    );
-}
-
-#[tokio::test]
-async fn checkpoint_events_for_commits_reads_duckdb_rows() {
-    let duckdb_path = duckdb_path_with_sql(
-        "CREATE TABLE checkpoint_events (
-            repo_id TEXT,
-            event_type TEXT,
-            event_time TEXT,
-            checkpoint_id TEXT,
-            session_id TEXT,
-            agent TEXT,
-            commit_sha TEXT,
-            branch TEXT,
-            strategy TEXT,
-            files_touched TEXT,
-            payload TEXT
-        );
-        INSERT INTO checkpoint_events VALUES (
-            'repo-1',
-            'checkpoint_committed',
-            '2026-03-17T12:00:00Z',
-            'checkpoint-1',
-            'session-1',
-            'codex',
-            'commit-1',
-            'main',
-            'manual',
-            '[\"src/lib.rs\"]',
-            '{\"step\":1}'
-        );",
-    )
-    .await;
-    let cfg = executor_test_cfg();
-    let events_cfg = EventsBackendConfig {
-        duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
-        clickhouse_url: None,
-        clickhouse_user: None,
-        clickhouse_password: None,
-        clickhouse_database: None,
-    };
-
-    let rows = checkpoint_events_for_commits(
-        &cfg,
-        &events_cfg,
-        "repo-1",
-        "src/lib.rs",
-        &["commit-1".to_string()],
-    )
-    .await
-    .expect("checkpoint events");
-
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get("checkpoint_id"), Some(&json!("checkpoint-1")));
-    assert_eq!(rows[0].get("payload"), Some(&json!({"step": 1})));
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].checkpoint_id, "checkpoint-2");
+    assert_eq!(matches[1].checkpoint_id, "checkpoint-1");
+    assert!(matches.iter().all(|row| row.path == "src/lib.rs"));
 }
 
 #[tokio::test]
@@ -333,6 +333,108 @@ async fn attach_chat_history_to_artefacts_uses_empty_history_when_blob_is_missin
     .expect("attach empty chat history");
 
     assert_eq!(rows[0].get("chat_history"), Some(&json!([])));
+}
+
+#[tokio::test]
+async fn attach_chat_history_to_artefacts_uses_projection_without_file_state() {
+    let repo = seed_git_repo();
+    configure_executor_sqlite_backend(repo.path());
+    let cfg = executor_test_cfg_for_repo_root(repo.path().to_path_buf());
+
+    write_committed(
+        repo.path(),
+        test_write_committed_options(
+            "a1b2c3d4e5f6",
+            "session-older",
+            "codex",
+            &["src/lib.rs"],
+            r#"{"role":"user","content":"Explain older()"}
+{"role":"assistant","content":"older() was superseded."}"#,
+        ),
+    )
+    .expect("write older checkpoint");
+    write_committed(
+        repo.path(),
+        test_write_committed_options(
+            "b1c2d3e4f5a6",
+            "session-newer",
+            "codex",
+            &["src/lib.rs"],
+            r#"{"role":"user","content":"Explain newer()"}
+{"role":"assistant","content":"newer() is current."}"#,
+        ),
+    )
+    .expect("write newer checkpoint");
+    write_committed(
+        repo.path(),
+        test_write_committed_options(
+            "c1d2e3f4a5b6",
+            "session-other",
+            "codex",
+            &["src/other.rs"],
+            r#"{"role":"user","content":"Explain other()"}
+{"role":"assistant","content":"other() reuses the blob."}"#,
+        ),
+    )
+    .expect("write other-path checkpoint");
+
+    let relational = sqlite_relational_with_sql(
+        &format!(
+            "{}\
+             INSERT INTO checkpoint_file_snapshots VALUES \
+                ('repo-1', 'a1b2c3d4e5f6', 'session-older', '2026-03-17T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-1', 'src/lib.rs', 'blob-1'), \
+                ('repo-1', 'b1c2d3e4f5a6', 'session-newer', '2026-03-18T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-2', 'src/lib.rs', 'blob-1'), \
+                ('repo-1', 'c1d2e3f4a5b6', 'session-other', '2026-03-19T12:00:00Z', 'codex', 'main', 'manual-commit', 'commit-3', 'src/other.rs', 'blob-1');",
+            checkpoint_file_snapshot_projection_table_sql()
+        ),
+    )
+    .await;
+
+    let rows = attach_chat_history_to_artefacts(
+        &cfg,
+        &executor_events_cfg(),
+        &relational,
+        "repo-1",
+        vec![json!({
+            "artefact_id": "artefact-1",
+            "path": "src/lib.rs",
+            "blob_sha": "blob-1"
+        })],
+    )
+    .await
+    .expect("attach projection-backed chat history");
+
+    let history = rows[0]
+        .get("chat_history")
+        .and_then(Value::as_array)
+        .expect("chat history array");
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0].get("checkpoint_id"),
+        Some(&json!("b1c2d3e4f5a6"))
+    );
+    assert_eq!(
+        history[1].get("checkpoint_id"),
+        Some(&json!("a1b2c3d4e5f6"))
+    );
+    assert_eq!(
+        history[0]
+            .get("chat")
+            .and_then(|value| value.get("messages"))
+            .and_then(Value::as_array)
+            .and_then(|messages| messages[0].get("text"))
+            .and_then(Value::as_str),
+        Some("Explain newer()")
+    );
+    assert_eq!(
+        history[1]
+            .get("chat")
+            .and_then(|value| value.get("messages"))
+            .and_then(Value::as_array)
+            .and_then(|messages| messages[1].get("text"))
+            .and_then(Value::as_str),
+        Some("older() was superseded.")
+    );
 }
 
 #[tokio::test]

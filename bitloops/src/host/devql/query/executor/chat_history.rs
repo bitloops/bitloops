@@ -1,4 +1,10 @@
 use super::*;
+use crate::host::devql::checkpoint_file_snapshots::{
+    CheckpointFileSnapshotActivityFilter, CheckpointFileSnapshotGateway,
+    CheckpointFileSnapshotMatch,
+};
+
+const CHAT_HISTORY_CHECKPOINT_LIMIT: usize = 200;
 
 pub(crate) async fn blob_shas_changed_in_events(
     cfg: &DevqlConfig,
@@ -94,7 +100,7 @@ pub(crate) async fn blob_shas_changed_in_events(
 
 pub(crate) async fn attach_chat_history_to_artefacts(
     cfg: &DevqlConfig,
-    events_cfg: &EventsBackendConfig,
+    _events_cfg: &EventsBackendConfig,
     relational: &RelationalStorage,
     repo_id: &str,
     rows: Vec<Value>,
@@ -127,32 +133,18 @@ pub(crate) async fn attach_chat_history_to_artefacts(
         } else if let Some(cached) = artefact_history_cache.get(&(path.clone(), blob_sha.clone())) {
             cached.clone()
         } else {
-            let commit_shas =
-                commit_shas_for_artefact_blob(relational, repo_id, &path, &blob_sha).await?;
-            let events =
-                checkpoint_events_for_commits(cfg, events_cfg, repo_id, &path, &commit_shas)
+            let checkpoint_matches =
+                checkpoint_matches_for_artefact_snapshot(relational, repo_id, &path, &blob_sha)
                     .await?;
-            let mut history_entries = Vec::with_capacity(events.len());
+            let mut history_entries = Vec::with_capacity(checkpoint_matches.len());
 
-            for event in events {
-                let mut event_obj = event.as_object().cloned().unwrap_or_default();
-                let checkpoint_id = event_obj
-                    .get("checkpoint_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let session_id = event_obj
-                    .get("session_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+            for checkpoint_match in checkpoint_matches {
+                let checkpoint_id = checkpoint_match.checkpoint_id.clone();
+                let session_id = checkpoint_match.session_id.clone();
+                let mut event_obj = checkpoint_event_from_snapshot_match(checkpoint_match);
 
-                if !checkpoint_id.is_empty()
-                    && !session_id.is_empty()
-                    && let Some(chat) = session_chat_payload(
-                        cfg,
-                        checkpoint_id,
-                        session_id,
-                        &mut session_chat_cache,
-                    )
+                if let Some(chat) =
+                    session_chat_payload(cfg, &checkpoint_id, &session_id, &mut session_chat_cache)
                 {
                     event_obj.insert("chat".to_string(), chat);
                 }
@@ -173,111 +165,50 @@ pub(crate) async fn attach_chat_history_to_artefacts(
     Ok(out)
 }
 
-pub(crate) async fn commit_shas_for_artefact_blob(
+pub(crate) async fn checkpoint_matches_for_artefact_snapshot(
     relational: &RelationalStorage,
     repo_id: &str,
     path: &str,
     blob_sha: &str,
-) -> Result<Vec<String>> {
-    let path_candidates = build_path_candidates(path);
-    let path_clause = sql_path_candidates_clause("fs.path", &path_candidates);
-    let sql = format!(
-        "SELECT DISTINCT fs.commit_sha FROM file_state fs WHERE fs.repo_id = '{}' AND fs.blob_sha = '{}' AND ({}) LIMIT 2000",
-        esc_pg(repo_id),
-        esc_pg(blob_sha),
-        path_clause
-    );
-    let rows = relational.query_rows(&sql).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            row.get("commit_sha")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .collect())
+) -> Result<Vec<CheckpointFileSnapshotMatch>> {
+    CheckpointFileSnapshotGateway::new(relational)
+        .list_matching_checkpoints(
+            repo_id,
+            path,
+            blob_sha,
+            CheckpointFileSnapshotActivityFilter::default(),
+            CHAT_HISTORY_CHECKPOINT_LIMIT,
+        )
+        .await
 }
 
-pub(crate) async fn checkpoint_events_for_commits(
-    cfg: &DevqlConfig,
-    events_cfg: &EventsBackendConfig,
-    repo_id: &str,
-    path: &str,
-    commit_shas: &[String],
-) -> Result<Vec<Value>> {
-    if commit_shas.is_empty() {
-        return Ok(vec![]);
-    }
-
-    if events_cfg.has_clickhouse() {
-        let path_candidates = build_path_candidates(path);
-        let path_has_clause = if path_candidates.is_empty() {
-            None
-        } else {
-            Some(
-                path_candidates
-                    .iter()
-                    .map(|candidate| format!("has(files_touched, '{}')", esc_ch(candidate)))
-                    .collect::<Vec<_>>()
-                    .join(" OR "),
-            )
-        };
-
-        let mut conditions = vec![
-            format!("repo_id = '{}'", esc_ch(repo_id)),
-            "event_type = 'checkpoint_committed'".to_string(),
-            format!("commit_sha IN ({})", sql_string_list_ch(commit_shas)),
-        ];
-        if let Some(path_has_clause) = path_has_clause {
-            conditions.push(format!("({path_has_clause})"));
-        }
-
-        let sql = format!(
-            "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200 FORMAT JSON",
-            conditions.join(" AND ")
-        );
-        let data = clickhouse_query_data(cfg, &sql).await?;
-        Ok(data.as_array().cloned().unwrap_or_default())
-    } else {
-        let path_candidates = build_path_candidates(path);
-        let path_has_clause = if path_candidates.is_empty() {
-            None
-        } else {
-            Some(
-                path_candidates
-                    .iter()
-                    .map(|candidate| {
-                        format!(
-                            "files_touched LIKE '%\"{}\"%'",
-                            esc_pg(candidate).replace('%', "\\%")
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" OR "),
-            )
-        };
-
-        let mut conditions = vec![
-            format!("repo_id = '{}'", esc_pg(repo_id)),
-            "event_type = 'checkpoint_committed'".to_string(),
-            format!("commit_sha IN ({})", sql_string_list_pg(commit_shas)),
-        ];
-        if let Some(path_has_clause) = path_has_clause {
-            conditions.push(format!("({path_has_clause})"));
-        }
-
-        let sql = format!(
-            "SELECT event_time, checkpoint_id, session_id, agent, commit_sha, branch, strategy, files_touched, payload FROM checkpoint_events WHERE {} ORDER BY event_time DESC LIMIT 200",
-            conditions.join(" AND ")
-        );
-        let rows = duckdb_query_rows_path(&events_cfg.duckdb_path_or_default(), &sql).await?;
-        Ok(rows
-            .into_iter()
-            .map(normalise_duckdb_event_row)
-            .collect::<Vec<_>>())
-    }
+fn checkpoint_event_from_snapshot_match(
+    checkpoint_match: CheckpointFileSnapshotMatch,
+) -> Map<String, Value> {
+    let mut event = Map::new();
+    event.insert(
+        "event_time".to_string(),
+        Value::String(checkpoint_match.event_time),
+    );
+    event.insert(
+        "checkpoint_id".to_string(),
+        Value::String(checkpoint_match.checkpoint_id),
+    );
+    event.insert(
+        "session_id".to_string(),
+        Value::String(checkpoint_match.session_id),
+    );
+    event.insert("agent".to_string(), Value::String(checkpoint_match.agent));
+    event.insert(
+        "commit_sha".to_string(),
+        Value::String(checkpoint_match.commit_sha),
+    );
+    event.insert("branch".to_string(), Value::String(checkpoint_match.branch));
+    event.insert(
+        "strategy".to_string(),
+        Value::String(checkpoint_match.strategy),
+    );
+    event
 }
 
 pub(crate) fn session_chat_payload(
