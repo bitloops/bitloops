@@ -29,8 +29,7 @@ permissions:
 # `duckdb-bundled` is off. Do not set DUCKDB_DOWNLOAD_LIB for linux-musl cross builds (no prebuilt archive).
 
 env:
-  DUCKDB_LIB_DIR: /usr/lib
-# DUCKDB_DOWNLOAD_LIB: "1"
+  DUCKDB_DOWNLOAD_LIB: "1"
 
 jobs:
   rust-file-size:
@@ -83,7 +82,7 @@ jobs:
           workspaces: bitloops
           shared-key: dev-ci
       - name: Install mold (optional; Ubuntu 22.04+ — speeds / stabilizes huge C++ links)
-        run: sudo apt-get update && sudo apt-get install -y mold duckdb libduckdb-dev || true
+        run: sudo apt-get update && sudo apt-get install -y mold || true
       - name: coverage-baseline-check
         working-directory: bitloops
         env:
