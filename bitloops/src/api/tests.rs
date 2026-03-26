@@ -932,6 +932,381 @@ async fn devql_health_query_surfaces_blob_bootstrap_errors() {
 }
 
 #[tokio::test]
+async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_checkpoint_data() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                defaultBranch
+                commits(first: 2) {
+                  totalCount
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                  }
+                  edges {
+                    cursor
+                    node {
+                      sha
+                      authorName
+                      authorEmail
+                      commitMessage
+                      branch
+                      filesChanged
+                      checkpoints(first: 5) {
+                        totalCount
+                        pageInfo {
+                          hasNextPage
+                          hasPreviousPage
+                          startCursor
+                          endCursor
+                        }
+                        edges {
+                          cursor
+                          node {
+                            id
+                            sessionId
+                            commitSha
+                            branch
+                            agent
+                            strategy
+                            filesTouched
+                            eventTime
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                branches {
+                  name
+                  checkpointCount
+                  latestCheckpointAt
+                }
+                users
+                agents
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["defaultBranch"], "main");
+    assert_eq!(json["repo"]["commits"]["totalCount"], 2);
+    assert_eq!(json["repo"]["commits"]["pageInfo"]["hasNextPage"], false);
+    assert_eq!(
+        json["repo"]["commits"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Checkpoint commit"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["filesChanged"],
+        json!(["app.rs"])
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["id"],
+        "aabbccddeeff"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["commitSha"],
+        json["repo"]["commits"]["edges"][0]["node"]["sha"]
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["agent"],
+        "claude-code"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["strategy"],
+        "manual-commit"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["filesTouched"],
+        json!(["app.rs"])
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["edges"][0]["node"]["eventTime"],
+        "2026-02-27T12:00:00+00:00"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][1]["node"]["commitMessage"],
+        "Initial commit"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][1]["node"]["checkpoints"]["totalCount"],
+        0
+    );
+    assert_eq!(
+        json["repo"]["branches"],
+        json!([{
+            "name": "main",
+            "checkpointCount": 1,
+            "latestCheckpointAt": "2026-02-27T12:00:00+00:00"
+        }])
+    );
+    assert_eq!(json["repo"]["users"], json!(["alice@example.com"]));
+    assert_eq!(json["repo"]["agents"], json!(["claude-code"]));
+}
+
+#[tokio::test]
+async fn devql_commit_connection_supports_cursor_pagination() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let first_page = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(first: 1) {
+                  totalCount
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                  }
+                  edges {
+                    cursor
+                    node {
+                      commitMessage
+                      checkpoints(first: 1) {
+                        totalCount
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        first_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        first_page.errors
+    );
+
+    let first_json = first_page.data.into_json().expect("graphql data to json");
+    let cursor = first_json["repo"]["commits"]["pageInfo"]["endCursor"]
+        .as_str()
+        .expect("first page end cursor")
+        .to_string();
+    assert_eq!(first_json["repo"]["commits"]["totalCount"], 2);
+    assert_eq!(
+        first_json["repo"]["commits"]["pageInfo"]["hasNextPage"],
+        true
+    );
+    assert_eq!(
+        first_json["repo"]["commits"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(
+        first_json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Checkpoint commit"
+    );
+    assert_eq!(
+        first_json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],
+        1
+    );
+
+    let second_page = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                commits(first: 1, after: "{cursor}") {{
+                  totalCount
+                  pageInfo {{
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                  }}
+                  edges {{
+                    cursor
+                    node {{
+                      commitMessage
+                      checkpoints(first: 1) {{
+                        totalCount
+                      }}
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        second_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_page.errors
+    );
+
+    let second_json = second_page.data.into_json().expect("graphql data to json");
+    assert_eq!(second_json["repo"]["commits"]["totalCount"], 2);
+    assert_eq!(
+        second_json["repo"]["commits"]["pageInfo"]["hasNextPage"],
+        false
+    );
+    assert_eq!(
+        second_json["repo"]["commits"]["pageInfo"]["hasPreviousPage"],
+        true
+    );
+    assert_eq!(
+        second_json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Initial commit"
+    );
+    assert_eq!(
+        second_json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],
+        0
+    );
+}
+
+#[tokio::test]
+async fn devql_commit_connection_surfaces_structured_cursor_errors() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(first: 1, after: "missing-cursor") {
+                  edges {
+                    cursor
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_CURSOR"))
+    );
+}
+
+#[tokio::test]
+async fn devql_repository_queries_handle_repos_without_checkpoint_storage() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    fs::write(repo.path().join("app.rs"), "fn main() {}\n").expect("write app.rs");
+    git_ok(repo.path(), &["add", "app.rs"]);
+    git_ok(repo.path(), &["commit", "-m", "Initial commit"]);
+    fs::write(
+        repo.path().join("app.rs"),
+        "fn main() { println!(\"ok\"); }\n",
+    )
+    .expect("update app.rs");
+    git_ok(repo.path(), &["add", "app.rs"]);
+    git_ok(repo.path(), &["commit", "-m", "Second commit"]);
+
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                branches {
+                  name
+                }
+                users
+                agents
+                commits(first: 2) {
+                  totalCount
+                  edges {
+                    node {
+                      commitMessage
+                      checkpoints(first: 1) {
+                        totalCount
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["branches"], json!([]));
+    assert_eq!(json["repo"]["users"], json!([]));
+    assert_eq!(json["repo"]["agents"], json!([]));
+    assert_eq!(json["repo"]["commits"]["totalCount"], 2);
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Second commit"
+    );
+    assert_eq!(
+        json["repo"]["commits"]["edges"][0]["node"]["checkpoints"]["totalCount"],
+        0
+    );
+}
+
+#[tokio::test]
 async fn devql_playground_route_serves_explorer() {
     let temp = TempDir::new().expect("temp dir");
     let app = build_dashboard_router(test_state(

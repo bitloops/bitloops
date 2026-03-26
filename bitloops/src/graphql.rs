@@ -1,4 +1,5 @@
 mod context;
+mod error;
 mod loaders;
 mod mutation_root;
 mod query_root;
@@ -6,6 +7,7 @@ mod subscription_root;
 mod types;
 
 pub(crate) use context::DevqlGraphqlContext;
+pub(crate) use error::{backend_error, bad_cursor_error, bad_user_input_error};
 
 use self::mutation_root::MutationRoot;
 use self::query_root::QueryRoot;
