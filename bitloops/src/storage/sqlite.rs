@@ -531,6 +531,67 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_connection_pool_initialises_checkpoint_file_snapshots_projection() -> Result<()> {
+        let temp = TempDir::new().context("creating temp dir")?;
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+        sqlite.initialise_devql_schema()?;
+
+        let exists = sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count == 1)
+        })?;
+        assert!(
+            exists,
+            "checkpoint_file_snapshots should exist after initialise_devql_schema"
+        );
+
+        let pk_columns = sqlite
+            .with_connection(|conn| sqlite_table_pk_columns(conn, "checkpoint_file_snapshots"))?;
+        assert_eq!(
+            pk_columns,
+            vec![
+                "repo_id".to_string(),
+                "checkpoint_id".to_string(),
+                "path".to_string(),
+                "blob_sha".to_string(),
+            ],
+            "checkpoint_file_snapshots should use the composite projection key"
+        );
+
+        let index_names: Vec<String> = sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name
+                 FROM sqlite_master
+                 WHERE type = 'index'
+                   AND tbl_name = 'checkpoint_file_snapshots'
+                   AND name NOT LIKE 'sqlite_autoindex_%'
+                 ORDER BY name",
+            )?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)
+        })?;
+        assert_eq!(
+            index_names,
+            vec![
+                "checkpoint_file_snapshots_agent_time_idx".to_string(),
+                "checkpoint_file_snapshots_checkpoint_idx".to_string(),
+                "checkpoint_file_snapshots_commit_idx".to_string(),
+                "checkpoint_file_snapshots_event_time_idx".to_string(),
+                "checkpoint_file_snapshots_lookup_idx".to_string(),
+            ],
+            "checkpoint_file_snapshots should create the expected lookup indexes"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn workspace_revisions_table_supports_insert_and_dedup_query() -> Result<()> {
         let temp = TempDir::new().context("creating temp dir")?;
         let sqlite_path = temp.path().join("devql.sqlite");
@@ -649,6 +710,19 @@ mod tests {
         assert!(
             exists,
             "workspace_revisions should still exist after double init"
+        );
+
+        let projection_exists = sqlite.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'checkpoint_file_snapshots'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(count == 1)
+        })?;
+        assert!(
+            projection_exists,
+            "checkpoint_file_snapshots should still exist after double init"
         );
         Ok(())
     }
