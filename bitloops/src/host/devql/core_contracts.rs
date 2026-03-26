@@ -95,6 +95,7 @@ impl CanonicalKindProjection {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn core_kind(self) -> CoreCanonicalArtefactKind {
         match self {
             Self::File => CoreCanonicalArtefactKind::File,
@@ -107,6 +108,7 @@ impl CanonicalKindProjection {
     }
 }
 
+#[cfg(test)]
 pub(super) fn artefact_core_kind(
     canonical_kind: Option<&str>,
 ) -> Option<CoreCanonicalArtefactKind> {
@@ -115,6 +117,7 @@ pub(super) fn artefact_core_kind(
         .map(CanonicalKindProjection::core_kind)
 }
 
+#[cfg(test)]
 pub(super) fn artefact_has_core_kind(
     canonical_kind: Option<&str>,
     expected: CoreCanonicalArtefactKind,

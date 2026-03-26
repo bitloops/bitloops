@@ -12,6 +12,7 @@ pub(crate) struct LanguageAdapterHealthResult {
 }
 
 impl LanguageAdapterHealthResult {
+    #[cfg(test)]
     pub(crate) fn ok(message: impl Into<String>) -> Self {
         Self {
             healthy: true,
@@ -20,6 +21,7 @@ impl LanguageAdapterHealthResult {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn failed(message: impl Into<String>, details: impl Into<String>) -> Self {
         Self {
             healthy: false,
@@ -59,6 +61,7 @@ impl LanguageAdapterHealthContext {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn has_pending_migrations(&self) -> bool {
         self.pending_migration_count > 0 && !self.migrated
     }

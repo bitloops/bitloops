@@ -30,13 +30,9 @@ pub(super) fn extract_language_pack_artefacts_and_edges(
     };
 
     let registry = language_adapter_registry()?;
-    let Some(pack) = registry.get(pack_id) else {
-        bail!("language `{language}` resolved to unsupported language pack `{pack_id}`");
-    };
-
-    let items = pack.extract_artefacts(content, rev.path)?;
-    let edges = pack.extract_dependency_edges(content, rev.path, &items)?;
-    let file_docstring = pack.extract_file_docstring(content);
+    let items = registry.extract_artefacts(pack_id, content, rev.path)?;
+    let edges = registry.extract_dependency_edges(pack_id, content, rev.path, &items)?;
+    let file_docstring = registry.extract_file_docstring(pack_id, content);
     Ok(Some((items, edges, file_docstring)))
 }
 

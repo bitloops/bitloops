@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::edges_shared::{
-    EdgeCollector, EdgeTarget, SymbolLookup, strip_string_delimiters, symbol_lookup_name_from_text,
+    EdgeCollector, EdgeTarget, strip_string_delimiters, symbol_lookup_name_from_text,
     syntax_node_trimmed_text,
 };
 use super::{DependencyEdge, EdgeMetadata, RustUseExportEntry};

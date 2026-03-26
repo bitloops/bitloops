@@ -10,12 +10,12 @@ use crate::host::extension_host::{
 };
 
 use super::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterContext, LanguageAdapterError,
-    LanguageAdapterHealthCheck, LanguageAdapterHealthContext, LanguageAdapterHealthResult,
-    LanguageAdapterMigrationContext, LanguageAdapterMigrationDescriptor,
-    LanguageAdapterMigrationExecution, LanguageAdapterMigrationFailure,
-    LanguageAdapterMigrationRunReport, LanguageAdapterMigrationStatus,
-    LanguageAdapterMigrationStep, LanguageAdapterPack, LanguageArtefact,
+    DependencyEdge, LanguageAdapterContext, LanguageAdapterError, LanguageAdapterHealthCheck,
+    LanguageAdapterHealthContext, LanguageAdapterHealthResult, LanguageAdapterMigrationContext,
+    LanguageAdapterMigrationDescriptor, LanguageAdapterMigrationExecution,
+    LanguageAdapterMigrationFailure, LanguageAdapterMigrationRunReport,
+    LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep, LanguageAdapterPack,
+    LanguageArtefact,
 };
 
 #[derive(Debug, Default)]
@@ -78,15 +78,6 @@ impl LanguageAdapterRegistry {
 
     pub(crate) fn get(&self, pack_id: &str) -> Option<Arc<dyn LanguageAdapterPack>> {
         self.packs.get(pack_id).cloned()
-    }
-
-    pub(crate) fn canonical_mappings_for(
-        &self,
-        pack_id: &str,
-    ) -> Option<&'static [CanonicalMapping]> {
-        self.packs
-            .get(pack_id)
-            .map(|pack| pack.canonical_mappings())
     }
 
     pub(crate) fn extract_artefacts(
