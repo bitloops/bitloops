@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::host::checkpoints::strategy::manual_commit::resolve_default_branch_name;
+
 // Checkpoint and commit row persistence: mapping, event insertion, upserts.
 
 pub(super) async fn ensure_repository_row(
@@ -19,8 +21,7 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
 }
 
 pub(super) fn default_branch_name(repo_root: &Path) -> String {
-    run_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .unwrap_or_else(|_| "main".to_string())
+    resolve_default_branch_name(repo_root)
 }
 
 pub(super) fn active_branch_name(repo_root: &Path) -> String {

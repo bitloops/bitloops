@@ -32,8 +32,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Dashboard REST compatibility wrappers now execute GraphQL internally** (`CLI-1523`): `/api/kpis`, `/api/commits`, `/api/branches`, `/api/users`, and `/api/agents` now execute the in-process DevQL GraphQL schema instead of duplicating direct SQL-style handler logic. This keeps the existing dashboard contract intact while routing branch, commit, checkpoint, and user aggregation through the new GraphQL surface, and the API regression tests now cover the wrapper behaviour end to end.
 - **DevQL CLI write-command migration cleanup** (`CLI-1526`): the remaining DevQL write-command wrapper coverage now explicitly pins `bitloops devql init` and `bitloops devql ingest` to the in-process GraphQL mutation path, and the obsolete host-backed knowledge write shims were removed now that `knowledge add`, `associate`, and `refresh` no longer bypass GraphQL.
 - **DevQL query CLI now executes through the in-process GraphQL schema** (`CLI-1528`): `bitloops devql query` now treats GraphQL as the default input, automatically compiles DevQL pipeline syntax when the query contains `->`, executes against the shared in-process schema, renders DSL results as CLI tables by default, and emits compact JSON with `--compact`. Added `bitloops devql query --graphql ...` as an explicit raw-GraphQL escape hatch when a query must bypass the DSL auto-detection.
+- **GraphQL health:** Blob-store reachability is probed with `spawn_blocking` so synchronous object-store I/O does not block the async executor; failure messages distinguish store errors from join failures.
+- **GraphQL relational scan cap:** `GRAPHQL_DEVQL_SCAN_LIMIT` now matches `GRAPHQL_GIT_SCAN_LIMIT` (5000 rows) instead of an unbounded upper bound.
+- **GraphQL branch list ordering:** Branches are sorted by latest checkpoint time (then name) while grouping results, instead of sorting the mapped `Branch` vector afterward.
 
 ### Fixed
+
+- **SHA256 hex encoding (sha2 0.11):** Digest output no longer implements `LowerHex` for `format!`; added the `hex` dependency and encode SHA256 digests with `hex::encode` across bundle checksum verification, DevQL watcher restart token, deterministic UUID helpers, rewind shadow-branch hashing, knowledge `content_hash`, and tests.
+- **SQL `LIKE` safety for DevQL and GraphQL path filters:** Introduced `escape_like_pattern`, `sql_like_with_escape`, and a stricter `glob_to_sql_like` so literal `%`, `_`, and `!` in repository paths and glob inputs are escaped and matched with `LIKE … ESCAPE '!'` in relational GraphQL SQL, enrichment project-prefix clauses, and DevQL relational artefact, clone, and dependency queries. Added unit tests in `db_utils`.
+- **Default branch when `HEAD` is detached:** Added `resolve_default_branch_name` (current branch, then `origin/HEAD`, then existing `main`/`master` refs, else `"main"`) and wired it into GraphQL git history and DevQL checkpoint ingestion so `git log` and repository metadata no longer assume `rev-parse HEAD` is a real branch name.
 
 ## [0.0.11] - 2026-03-25
 

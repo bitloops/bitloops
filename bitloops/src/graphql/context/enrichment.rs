@@ -8,7 +8,8 @@ use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, read_session_content_by_id,
 };
 use crate::host::devql::{
-    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, sqlite_query_rows_path,
+    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, escape_like_pattern,
+    sql_like_with_escape, sqlite_query_rows_path,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
@@ -654,11 +655,12 @@ fn normalise_repo_path(path: &str) -> String {
 }
 
 fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
+    let prefix = format!("{}/%", escape_like_pattern(project_path));
     format!(
-        "({column} = '{path}' OR {column} LIKE '{prefix}')",
+        "({column} = '{path}' OR {like_clause})",
         column = column,
         path = esc_pg(project_path),
-        prefix = esc_pg(&format!("{project_path}/%")),
+        like_clause = sql_like_with_escape(column, &prefix),
     )
 }
 

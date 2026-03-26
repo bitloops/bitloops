@@ -25,7 +25,7 @@ const BLOB_HEALTHCHECK_KEY: &str = "__bitloops/graphql/healthcheck";
 const GIT_FIELD_SEPARATOR: char = '\u{1f}';
 const GIT_RECORD_SEPARATOR: char = '\u{1e}';
 const GRAPHQL_GIT_SCAN_LIMIT: usize = 5_000;
-const GRAPHQL_DEVQL_SCAN_LIMIT: usize = i32::MAX as usize;
+const GRAPHQL_DEVQL_SCAN_LIMIT: usize = GRAPHQL_GIT_SCAN_LIMIT;
 
 #[allow(dead_code)]
 #[derive(Clone)]

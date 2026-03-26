@@ -66,10 +66,35 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn health_status(&self) -> HealthStatus {
         let health = self.db.health_check().await;
+        let blob = if let Some(store) = self.blob_store.as_ref() {
+            let store = Arc::clone(store);
+            let backend = self.blob_backend.clone();
+            match tokio::task::spawn_blocking(move || store.exists(BLOB_HEALTHCHECK_KEY)).await {
+                Ok(Ok(_)) => HealthBackendStatus::new(true, backend, "OK", "blob store reachable"),
+                Ok(Err(err)) => {
+                    HealthBackendStatus::new(false, backend, "FAIL", format!("{err:#}"))
+                }
+                Err(join_err) => HealthBackendStatus::new(
+                    false,
+                    backend,
+                    "FAIL",
+                    format!("blob health probe task failed: {join_err}"),
+                ),
+            }
+        } else {
+            HealthBackendStatus::new(
+                false,
+                self.blob_backend.clone(),
+                "FAIL",
+                self.blob_bootstrap_error
+                    .clone()
+                    .unwrap_or_else(|| "blob store unavailable".to_string()),
+            )
+        };
         HealthStatus {
             relational: map_backend_health(self.relational_backend_name(), health.relational),
             events: map_backend_health(self.events_backend_name(), health.events),
-            blob: self.blob_health_status(),
+            blob,
         }
     }
 
@@ -102,34 +127,6 @@ impl DevqlGraphqlContext {
             Some(_) => "duckdb",
             None => "unknown",
         }
-    }
-
-    fn blob_health_status(&self) -> HealthBackendStatus {
-        if let Some(store) = self.blob_store.as_ref() {
-            return match store.exists(BLOB_HEALTHCHECK_KEY) {
-                Ok(_) => HealthBackendStatus::new(
-                    true,
-                    self.blob_backend.clone(),
-                    "OK",
-                    "blob store reachable",
-                ),
-                Err(err) => HealthBackendStatus::new(
-                    false,
-                    self.blob_backend.clone(),
-                    "FAIL",
-                    format!("{err:#}"),
-                ),
-            };
-        }
-
-        HealthBackendStatus::new(
-            false,
-            self.blob_backend.clone(),
-            "FAIL",
-            self.blob_bootstrap_error
-                .clone()
-                .unwrap_or_else(|| "blob store unavailable".to_string()),
-        )
     }
 }
 

@@ -6,7 +6,9 @@ use super::{
 };
 use crate::adapters::agents::canonical_agent_key;
 use crate::graphql::types::{Branch, Commit, DateTimeScalar};
-use crate::host::checkpoints::strategy::manual_commit::{list_committed, run_git};
+use crate::host::checkpoints::strategy::manual_commit::{
+    list_committed, resolve_default_branch_name, run_git,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -105,22 +107,24 @@ impl DevqlGraphqlContext {
                 }
             }
 
-            let mut branches = grouped
+            let mut grouped_vec = grouped.into_iter().collect::<Vec<_>>();
+            grouped_vec.sort_by(
+                |(name_left, (_, latest_dt_left, _)), (name_right, (_, latest_dt_right, _))| {
+                    latest_dt_right
+                        .cmp(latest_dt_left)
+                        .then_with(|| name_left.cmp(name_right))
+                },
+            );
+            let branches = grouped_vec
                 .into_iter()
                 .map(
-                    |(name, (checkpoint_count, _, latest_checkpoint_at))| Branch {
+                    |(name, (checkpoint_count, _latest_dt, latest_checkpoint_at))| Branch {
                         name,
                         checkpoint_count: checkpoint_count.try_into().unwrap_or(i32::MAX),
                         latest_checkpoint_at,
                     },
                 )
                 .collect::<Vec<_>>();
-            branches.sort_by(|left, right| {
-                right
-                    .latest_checkpoint_at
-                    .cmp(&left.latest_checkpoint_at)
-                    .then_with(|| left.name.cmp(&right.name))
-            });
             Ok(branches)
         })
         .await
@@ -273,11 +277,7 @@ impl DevqlGraphqlContext {
 }
 
 pub(super) fn git_default_branch_name(repo_root: &Path) -> String {
-    run_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "main".to_string())
+    resolve_default_branch_name(repo_root)
 }
 
 fn build_git_log_args(

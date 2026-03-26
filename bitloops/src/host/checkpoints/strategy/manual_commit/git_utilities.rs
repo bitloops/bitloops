@@ -52,6 +52,56 @@ pub fn run_git_env(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Res
     Ok(stdout.trim().to_string())
 }
 
+/// Best-effort name for the repository default branch when the caller does not pass one explicitly.
+///
+/// `git rev-parse --abbrev-ref HEAD` returns the literal `"HEAD"` when the checkout is detached;
+/// that is not a valid branch name for `git log` and similar. In that case we resolve the remote
+/// default via `origin/HEAD`, then fall back to `main` / `master` when those refs exist locally or
+/// on `origin`, otherwise `"main"`.
+pub(crate) fn resolve_default_branch_name(repo_root: &Path) -> String {
+    if let Ok(head) = run_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+        let head = head.trim();
+        if !head.is_empty() && head != "HEAD" {
+            return head.to_string();
+        }
+    }
+
+    if let Ok(remote) = run_git(repo_root, &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        let target = remote.trim();
+        if let Some(stripped) = target.strip_prefix("refs/remotes/origin/")
+            && !stripped.is_empty()
+        {
+            return stripped.to_string();
+        }
+    }
+
+    for candidate in ["main", "master"] {
+        let remote_ref = format!("refs/remotes/origin/{candidate}");
+        if run_git(
+            repo_root,
+            &["show-ref", "--verify", "--quiet", remote_ref.as_str()],
+        )
+        .is_ok()
+        {
+            return candidate.to_string();
+        }
+    }
+
+    for candidate in ["main", "master"] {
+        let local_ref = format!("refs/heads/{candidate}");
+        if run_git(
+            repo_root,
+            &["show-ref", "--verify", "--quiet", local_ref.as_str()],
+        )
+        .is_ok()
+        {
+            return candidate.to_string();
+        }
+    }
+
+    "main".to_string()
+}
+
 pub(crate) fn should_preserve_stdout(args: &[&str]) -> bool {
     if args.first() != Some(&"show") {
         return false;
@@ -383,8 +433,7 @@ pub(crate) fn is_leap_year(year: i32) -> bool {
 /// Computes a lowercase hex SHA256 digest of `data`.
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(data);
-    format!("{hash:x}")
+    hex::encode(Sha256::digest(data))
 }
 
 /// Returns a 12-char lowercase hex checkpoint ID derived from a UUID v4.

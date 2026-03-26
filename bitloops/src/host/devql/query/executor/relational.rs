@@ -99,7 +99,7 @@ pub(crate) async fn build_relational_artefacts_query(
 
     if let Some(glob) = parsed.files_path.as_deref() {
         let like = glob_to_sql_like(glob);
-        where_clauses.push(format!("a.path LIKE '{}'", esc_pg(&like)));
+        where_clauses.push(sql_like_with_escape("a.path", &like));
     }
 
     if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
@@ -184,7 +184,7 @@ pub(crate) async fn build_relational_clones_query(
     }
     if let Some(glob) = parsed.files_path.as_deref() {
         let like = glob_to_sql_like(glob);
-        source_filters.push(format!("src.path LIKE '{}'", esc_pg(&like)));
+        source_filters.push(sql_like_with_escape("src.path", &like));
     }
     if parsed.artefacts.agent.is_some() || parsed.artefacts.since.is_some() {
         let blob_shas = blob_shas_changed_in_events(

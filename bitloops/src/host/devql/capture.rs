@@ -244,7 +244,7 @@ mod tests {
     fn deterministic_uuid(input: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(input.as_bytes());
-        let digest = format!("{:x}", hasher.finalize());
+        let digest = hex::encode(hasher.finalize());
         let hex = &digest[..32];
         format!(
             "{}-{}-{}-{}-{}",

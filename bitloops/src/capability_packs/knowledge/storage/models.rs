@@ -106,8 +106,7 @@ pub fn serialize_payload(payload: &Value) -> Result<Vec<u8>> {
 }
 
 pub fn content_hash(bytes: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(bytes);
-    format!("{digest:x}")
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 pub fn ensure_parent_dir(path: &Path) -> Result<()> {

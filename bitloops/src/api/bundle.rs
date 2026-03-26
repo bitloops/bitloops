@@ -340,7 +340,7 @@ fn verify_sha256(archive_bytes: &[u8], checksum_payload: &str) -> Result<(), Bun
 
     let mut hasher = Sha256::new();
     hasher.update(archive_bytes);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
 
     if actual == expected {
         Ok(())

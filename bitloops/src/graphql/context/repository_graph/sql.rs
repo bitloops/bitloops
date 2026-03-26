@@ -1,6 +1,6 @@
 use crate::graphql::ResolvedTemporalScope;
 use crate::graphql::types::{ArtefactFilterInput, CanonicalKind, DepsDirection, DepsFilterInput};
-use crate::host::devql::esc_pg;
+use crate::host::devql::{esc_pg, escape_like_pattern, glob_to_sql_like, sql_like_with_escape};
 use std::path::{Component, Path};
 
 pub(super) fn build_file_context_lookup_sql(
@@ -74,7 +74,10 @@ pub(super) fn build_file_context_list_sql(
     glob: &str,
     temporal_scope: Option<&ResolvedTemporalScope>,
 ) -> String {
-    let like = glob_to_like(glob);
+    let like = glob_to_sql_like(glob);
+    let like_fs = sql_like_with_escape("fs.path", &like);
+    let like_c = sql_like_with_escape("c.path", &like);
+    let like_a = sql_like_with_escape("a.path", &like);
     if temporal_scope.is_some_and(ResolvedTemporalScope::use_historical_tables) {
         let commit_sha = temporal_scope
             .expect("historical temporal scope must exist")
@@ -85,11 +88,11 @@ pub(super) fn build_file_context_list_sql(
                       WHERE a.repo_id = fs.repo_id AND a.path = fs.path AND a.blob_sha = fs.blob_sha \
                       ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                FROM file_state fs \
-              WHERE fs.repo_id = '{repo_id}' AND fs.commit_sha = '{commit_sha}' AND fs.path LIKE '{like}' \
+              WHERE fs.repo_id = '{repo_id}' AND fs.commit_sha = '{commit_sha}' AND {like_fs} \
               ORDER BY fs.path",
             repo_id = esc_pg(repo_id),
             commit_sha = esc_pg(commit_sha),
-            like = esc_pg(&like),
+            like_fs = like_fs,
         );
     }
 
@@ -102,13 +105,13 @@ pub(super) fn build_file_context_list_sql(
                 AND a.canonical_kind = 'file' \
                 AND a.revision_kind = 'temporary' \
                 AND a.revision_id = '{revision_id}' \
-                AND a.path LIKE '{like}' \
+                AND {like_a} \
            GROUP BY a.path, a.blob_sha \
            ORDER BY a.path",
             repo_id = esc_pg(repo_id),
             branch = esc_pg(branch),
             revision_id = esc_pg(revision_id),
-            like = esc_pg(&like),
+            like_a = like_a,
         );
     }
 
@@ -120,17 +123,18 @@ pub(super) fn build_file_context_list_sql(
                         WHERE a.repo_id = c.repo_id AND a.branch = '{branch}' AND a.path = c.path \
                         ORDER BY a.start_line, a.artefact_id LIMIT 1) AS language \
                   FROM current_file_state c \
-                 WHERE c.repo_id = '{repo_id}' AND c.path LIKE '{like}' \
+                 WHERE c.repo_id = '{repo_id}' AND {like_c} \
                 UNION ALL \
                 SELECT a.path AS path, a.blob_sha AS blob_sha, a.language AS language \
                   FROM artefacts_current a \
-                 WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND a.path LIKE '{like}' \
+                 WHERE a.repo_id = '{repo_id}' AND a.branch = '{branch}' AND {like_a} \
            ) files \
        GROUP BY path, blob_sha \
        ORDER BY path",
         branch = esc_pg(branch),
         repo_id = esc_pg(repo_id),
-        like = esc_pg(&like),
+        like_c = like_c,
+        like_a = like_a,
     )
 }
 
@@ -598,10 +602,6 @@ fn canonical_kind_clause(column: &str, kind: CanonicalKind) -> String {
     )
 }
 
-fn glob_to_like(glob: &str) -> String {
-    glob.replace("**", "%").replace('*', "%").replace('?', "_")
-}
-
 fn current_revision_clause(alias: &str, revision_id: &str) -> String {
     format!(
         "{alias}.revision_kind = 'temporary' AND {alias}.revision_id = '{}'",
@@ -626,11 +626,12 @@ fn file_state_exists_clause(
 }
 
 fn repo_path_prefix_clause(column: &str, project_path: &str) -> String {
+    let prefix = format!("{}/%", escape_like_pattern(project_path));
     format!(
-        "({column} = '{path}' OR {column} LIKE '{prefix}')",
+        "({column} = '{path}' OR {like_clause})",
         column = column,
         path = esc_pg(project_path),
-        prefix = esc_pg(&format!("{project_path}/%")),
+        like_clause = sql_like_with_escape(column, &prefix),
     )
 }
 
