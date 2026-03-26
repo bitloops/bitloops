@@ -1,0 +1,9 @@
+[alias]
+# Aliases apply only when Cargo loads this file: run from `bitloops/` (or a subdir), not `cargo <alias> --manifest-path bitloops/Cargo.toml` from the repo root (Cargo walks config upward from cwd, not from the manifest path).
+# Shorthand for full crate: same as `cargo test --no-fail-fast`.
+test-all = "test --no-fail-fast"
+test-core = "test --lib --no-fail-fast"
+test-cli = "test --bin bitloops --no-fail-fast"
+test-integration = "test --tests --no-fail-fast"
+test-coverage = "llvm-cov --workspace --no-default-features --all-targets --html --output-dir target/llvm-cov-html"
+test-coverage-lcov = "llvm-cov --workspace --no-default-features --all-targets --lcov --output-path target/llvm-cov.info"

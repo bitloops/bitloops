@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Usage: ./scripts/release.sh
 #
-# Reads the version from bitloops_cli/Cargo.toml on main,
+# Reads the version from bitloops/Cargo.toml on main,
 # creates tag vX.Y.Z, and pushes the tag only.
 # Version bump must already be merged via PR.
 
-CARGO="bitloops_cli/Cargo.toml"
+CARGO="bitloops/Cargo.toml"
 
 # Read version from Cargo.toml
 BARE=$(grep '^version' "$CARGO" | head -1 | sed 's/version = "\(.*\)"/\1/')
