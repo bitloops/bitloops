@@ -1,8 +1,10 @@
 use tree_sitter::Parser;
+use tree_sitter_python::LANGUAGE as LANGUAGE_PYTHON;
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
 use super::file_discovery::rust_source_contains_doctest_markers;
+use super::languages::python::{collect_python_suites, resolve_python_import_to_repo_path};
 use super::languages::rust::enumeration::parse_enumerated_doctests;
 use super::languages::rust::imports::{
     collect_rust_import_paths_for, collect_rust_scoped_call_import_paths_for,
@@ -39,6 +41,67 @@ fn unquote_handles_string_literals() {
     assert_eq!(unquote("'hello'"), Some("hello".to_string()));
     assert_eq!(unquote("\"hello\""), Some("hello".to_string()));
     assert_eq!(unquote("`hello`"), Some("hello".to_string()));
+}
+
+#[test]
+fn resolves_python_import_to_repo_path() {
+    let resolved = resolve_python_import_to_repo_path("tests/test_api.py", ".helpers")
+        .expect("should resolve relative python import");
+    assert_eq!(resolved, "tests/helpers.py");
+
+    let absolute = resolve_python_import_to_repo_path("tests/test_api.py", "app.services.user")
+        .expect("should resolve absolute python import");
+    assert_eq!(absolute, "app/services/user.py");
+}
+
+#[test]
+fn python_suites_detect_pytest_functions_and_unittest_methods() {
+    let source = r#"
+from app.services.user import create_user
+
+def test_creates_user():
+    create_user()
+
+class UserFlowTests:
+    def test_updates_user(self):
+        client.execute()
+"#;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE_PYTHON.into())
+        .expect("failed setting python parser language");
+
+    let tree = parser
+        .parse(source, None)
+        .expect("failed parsing python source");
+
+    let suites = collect_python_suites(tree.root_node(), source.as_bytes(), "tests/test_user.py");
+    assert_eq!(suites.len(), 2, "expected module and class suites");
+
+    let module_suite = suites
+        .iter()
+        .find(|suite| suite.name == "test_user")
+        .expect("missing module suite");
+    assert_eq!(module_suite.scenarios.len(), 1);
+    assert_eq!(module_suite.scenarios[0].name, "test_creates_user");
+    assert!(
+        module_suite.scenarios[0]
+            .reference_candidates
+            .contains(&ReferenceCandidate::SymbolName("create_user".to_string()))
+    );
+
+    let class_suite = suites
+        .iter()
+        .find(|suite| suite.name == "UserFlowTests")
+        .expect("missing class suite");
+    assert_eq!(class_suite.scenarios.len(), 1);
+    assert_eq!(class_suite.scenarios[0].name, "test_updates_user");
+    assert!(
+        class_suite.scenarios[0]
+            .reference_candidates
+            .contains(&ReferenceCandidate::SymbolName("execute".to_string()))
+    );
 }
 
 #[test]
