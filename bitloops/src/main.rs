@@ -41,8 +41,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::config::{
-        ProviderConfig, dashboard_use_bitloops_local, resolve_provider_config,
-        resolve_store_backend_config,
+        DashboardLocalDashboardConfig, ProviderConfig, resolve_dashboard_config,
+        resolve_provider_config, resolve_store_backend_config,
     };
     use crate::test_support::process_state::enter_process_state;
     use std::fs;
@@ -86,20 +86,29 @@ mod tests {
     }
 
     #[test]
-    fn main_target_dashboard_use_bitloops_local_reads_repo_config() {
+    fn main_target_dashboard_local_dashboard_reads_repo_config() {
         let temp = tempfile::tempdir().expect("temp dir");
         write_envelope_config(
             temp.path(),
             serde_json::json!({
                 "dashboard": {
-                    "use_bitloops_local": true
+                    "local_dashboard": {
+                        "tls": true,
+                        "bitloops_local": true
+                    }
                 }
             }),
         );
 
         let _guard = enter_process_state(Some(temp.path()), &[]);
 
-        assert!(dashboard_use_bitloops_local());
+        assert_eq!(
+            resolve_dashboard_config().local_dashboard,
+            Some(DashboardLocalDashboardConfig {
+                tls: Some(true),
+                bitloops_local: Some(true),
+            })
+        );
     }
 
     #[test]

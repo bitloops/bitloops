@@ -38,6 +38,7 @@ const sidebars: SidebarsConfig = {
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',
         'guides/using-the-dashboard',
+        'guides/dashboard-local-https-setup',
       ],
     },
     {
@@ -47,6 +48,7 @@ const sidebars: SidebarsConfig = {
         'reference/cli-commands',
         'reference/configuration',
         'reference/environment-variables',
+        'reference/rust-code-standards',
       ],
     },
     {

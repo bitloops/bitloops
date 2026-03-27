@@ -11,17 +11,18 @@ pub mod unified_config;
 
 pub use constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 pub use resolve::{
-    dashboard_use_bitloops_local, resolve_blob_local_path, resolve_blob_local_path_for_repo,
-    resolve_duckdb_db_path_for_repo, resolve_provider_config, resolve_provider_config_for_repo,
-    resolve_sqlite_db_path, resolve_sqlite_db_path_for_repo, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo, resolve_store_embedding_config,
-    resolve_store_semantic_config, resolve_watch_runtime_config_for_repo,
+    resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,
+    resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo, resolve_provider_config,
+    resolve_provider_config_for_repo, resolve_sqlite_db_path, resolve_sqlite_db_path_for_repo,
+    resolve_store_backend_config, resolve_store_backend_config_for_repo,
+    resolve_store_embedding_config, resolve_store_semantic_config,
+    resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
-    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
-    WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, DashboardLocalDashboardConfig,
+    EventsBackendConfig, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
+    StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig,
+    WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]
