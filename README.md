@@ -18,37 +18,11 @@
     ·
     <a href="#faqs">FAQs</a>
   </p>
-  <p style="margin:4px 0;">
-<p style="margin:4px 0;">
-  <a href="https://github.com/bitloops/bitloops/network/">
-    <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork" alt="GitHub forks" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/stargazers/">
-    <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star" alt="GitHub stars" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/commit/">
-    <img src="https://badgen.net/github/commits/bitloops/bitloops?color=6b7280" alt="GitHub Commits" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/tags/">
-    <img src="https://badgen.net/github/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/releases">
-    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg?color=6b7280" alt="Downloads" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/bitloops/bitloops?color=111827" alt="License" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?color=6b7280" alt="Contributors" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4" alt="Local first" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" alt="Agent agnostic" />
-  </a>
-</p>
-  </div>
+
+[![Fork](https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork)](https://github.com/bitloops/bitloops/network/) [![Star](https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star)](https://github.com/bitloops/bitloops/stargazers/) [![Commits](https://badgen.net/github/commits/bitloops/bitloops?color=6b7280)](https://github.com/bitloops/bitloops/commits/) [![Version](https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4)](https://github.com/bitloops/bitloops/tags/) [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/releases) [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE) [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/graphs/contributors) [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops) [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
+</div>
+
+<br>
 
 ## About Bitloops
 
@@ -110,23 +84,8 @@ to AI-assisted development.
 - **Local observability:** A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
 
-### Manual external knowledge
-
-Bitloops can also ingest repository-scoped external knowledge by URL:
-
-```bash
-bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
-bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
-```
-
-Supported sources:
-
-- GitHub issues
-- GitHub pull requests
-- Jira issues
-- Confluence pages
-
-For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
+- **External knowledge integration:** Connect GitHub issues, pull requests, Jira tickets, and Confluence pages
+  directly to your repository context.
 
 ## Installation
 
@@ -196,10 +155,27 @@ bitloops dashboard
 
 ## What is DevQL?
 
-DevQL is a query language created to offer you and your AI agents valuable and
-targeted insights regarding your codebases within milliseconds.
+DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
 
 [Read more here](./DevQL-Getting_Started.md)
+
+## External Knowledge
+
+Bitloops can ingest repository-scoped external knowledge by URL:
+
+```bash
+bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
+bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
+```
+
+Supported sources:
+
+- GitHub issues
+- GitHub pull requests
+- Jira issues
+- Confluence pages
+
+For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
 
 ## FAQs
 
