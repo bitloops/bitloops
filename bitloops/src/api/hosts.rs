@@ -3,8 +3,10 @@
 use anyhow::Result;
 use std::fs;
 use std::io;
+use std::io::Write as _;
 use std::net::ToSocketAddrs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const BITLOOPS_HOST: &str = "bitloops.local";
 
@@ -41,7 +43,7 @@ fn bitloops_resolves_to_loopback() -> bool {
 }
 
 fn hosts_line_for_bitloops() -> String {
-    format!("127.0.0.1\t{BITLOOPS_HOST}\n")
+    format!("127.0.0.1\t{BITLOOPS_HOST}\n::1\t{BITLOOPS_HOST}\n")
 }
 
 /// Remove non-comment lines that mention `bitloops.local`, then append a managed mapping line.
@@ -68,6 +70,47 @@ fn merge_hosts_content(existing: &str) -> String {
     out
 }
 
+fn write_hosts_file_atomic(path: &Path, content: &str) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("hosts file has no parent directory: {}", path.display()),
+        )
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("hosts file has no file name: {}", path.display()),
+        )
+    })?;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temp_name = format!(
+        ".{}.bitloops.tmp.{}.{}",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        nanos
+    );
+    let temp_path = parent.join(temp_name);
+
+    let mut temp_file = fs::File::create(&temp_path)?;
+    temp_file.write_all(content.as_bytes())?;
+    temp_file.sync_all()?;
+
+    if let Ok(metadata) = fs::metadata(path) {
+        let _ = fs::set_permissions(&temp_path, metadata.permissions());
+    }
+
+    let rename_result = fs::rename(&temp_path, path);
+    if rename_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    rename_result
+}
+
 /// Run **before** host probing for `bitloops.local` when using the default dashboard (no explicit `--host`).
 pub fn ensure_default_dashboard_host_mapping() -> Result<HostMappingOutcome> {
     if bitloops_resolves_to_loopback() {
@@ -86,7 +129,7 @@ pub fn ensure_default_dashboard_host_mapping() -> Result<HostMappingOutcome> {
 
     let merged = merge_hosts_content(&existing);
 
-    match fs::write(&path, merged.as_bytes()) {
+    match write_hosts_file_atomic(&path, &merged) {
         Ok(()) => {
             if bitloops_resolves_to_loopback() {
                 Ok(HostMappingOutcome::Updated)
@@ -110,5 +153,34 @@ pub fn ensure_default_dashboard_host_mapping() -> Result<HostMappingOutcome> {
         Err(e) => Ok(HostMappingOutcome::NeedsFallback {
             reason: format!("cannot write hosts file {}: {e}", path.display()),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_hosts_content;
+
+    #[test]
+    fn merge_hosts_content_appends_dual_loopback_entries() {
+        let merged = merge_hosts_content("127.0.0.1 localhost\n");
+        assert!(merged.contains("# bitloops dashboard (managed)\n"));
+        assert!(merged.contains("127.0.0.1\tbitloops.local\n"));
+        assert!(merged.contains("::1\tbitloops.local\n"));
+    }
+
+    #[test]
+    fn merge_hosts_content_replaces_existing_bitloops_lines() {
+        let existing = "\
+127.0.0.1 localhost
+127.0.0.1 bitloops.local
+::1 BITLOOPS.LOCAL
+# bitloops.local in comment should remain
+";
+        let merged = merge_hosts_content(existing);
+
+        assert!(merged.contains("127.0.0.1 localhost\n"));
+        assert!(merged.contains("# bitloops.local in comment should remain\n"));
+        assert_eq!(merged.matches("127.0.0.1\tbitloops.local\n").count(), 1);
+        assert_eq!(merged.matches("::1\tbitloops.local\n").count(), 1);
     }
 }
