@@ -959,6 +959,7 @@ not valid json
         let got = extract_spawned_agent_ids(&transcript);
         let mut expected = HashMap::new();
         expected.insert("abc1234".to_string(), "toolu_xyz".to_string());
+        //test commit
         assert_eq!(got, expected);
     }
 }
