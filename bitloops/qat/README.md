@@ -2,18 +2,21 @@
 
 This document explains how to run Bitloops QAT (Cucumber) journeys and how to inspect artifacts.
 
+QAT is behind a non-default Cargo feature. This means default `cargo test` or `cargo run`
+does not include the `qat` command unless you explicitly enable `--features qat`.
+
 ## Where to run from
 
 Run commands from the repository root:
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml -- qat
+cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
 ```
 
 If you are already in `bitloops/` (the Rust crate directory), you can run:
 
 ```bash
-cargo run -- qat
+cargo run --features qat -- qat
 ```
 
 ## Test suites
@@ -23,25 +26,25 @@ QAT supports three main entry points:
 1. Default Claude Code suite (2 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml -- qat
+cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
 ```
 
 2. Smoke suite (2 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml -- qat --smoke
+cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --smoke
 ```
 
 3. DevQL suite (23 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml -- qat --devql
+cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --devql
 ```
 
 You can also run a single feature file:
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml -- qat --feature bitloops/qat/features/devql/blast_radius_temporal.feature
+cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --feature bitloops/qat/features/devql/blast_radius_temporal.feature
 ```
 
 ## Claude auth behavior
@@ -117,7 +120,7 @@ Environment variables:
 Example:
 
 ```bash
-BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS=600 cargo run --manifest-path bitloops/Cargo.toml -- qat
+BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS=600 cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
 ```
 
 ## Troubleshooting
