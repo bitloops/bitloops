@@ -32,7 +32,7 @@ pub fn dashboard_use_bitloops_local() -> bool {
     let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
     resolve_dashboard_from_unified(&settings)
         .use_bitloops_local
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {

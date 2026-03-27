@@ -2,11 +2,12 @@
 
 use super::router::build_dashboard_router;
 use super::{
-    ApiPage, DashboardState, GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR, ServeMode,
-    branch_is_excluded, browser_host_for_url, build_branch_commit_log_args, canonical_agent_key,
-    dashboard_user, default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url,
-    has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
-    select_host_with_dashboard_preference,
+    ApiPage, DashboardState, DashboardTransport, GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR,
+    ServeMode, branch_is_excluded, browser_host_for_url, build_branch_commit_log_args,
+    canonical_agent_key, dashboard_user, default_bundle_dir_from_home, expand_tilde_with_home,
+    format_dashboard_url, has_bundle_index, paginate, parse_branch_commit_log,
+    parse_numstat_output, resolve_bundle_file, select_host_with_dashboard_preference,
+    warning_block_lines,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};
@@ -7444,7 +7445,38 @@ fn browser_host_uses_localhost_for_unspecified_ipv6_bind() {
 
 #[test]
 fn format_dashboard_url_wraps_ipv6_hosts() {
-    assert_eq!(format_dashboard_url("::1", 5667), "http://[::1]:5667");
+    assert_eq!(
+        format_dashboard_url(DashboardTransport::Https, "::1", 5667),
+        "https://[::1]:5667"
+    );
+    assert_eq!(
+        format_dashboard_url(DashboardTransport::Http, "::1", 5667),
+        "http://[::1]:5667"
+    );
+}
+
+#[test]
+fn warning_block_lines_plain_keeps_multiline_text_and_icon() {
+    let rendered = warning_block_lines("Warning: first line\nsecond line", false);
+    assert_eq!(rendered.first(), Some(&String::new()));
+    assert_eq!(rendered.get(1).map(String::as_str), Some("  ⚠"));
+    assert_eq!(
+        rendered.get(2).map(String::as_str),
+        Some("  Warning: first line")
+    );
+    assert_eq!(rendered.get(3).map(String::as_str), Some("  second line"));
+    assert_eq!(rendered.last(), Some(&String::new()));
+}
+
+#[test]
+fn warning_block_lines_colored_renders_padded_block_rows() {
+    let rendered = warning_block_lines("abc\nde", true);
+    assert_eq!(rendered.len(), 5, "top + icon + 2 text lines + bottom");
+    assert!(rendered[0].contains("\x1b[30;48;2;107;79;59m"));
+    assert!(rendered[1].contains("\x1b[33m⚠"));
+    assert!(rendered[2].contains("  abc  "));
+    assert!(rendered[3].contains("  de   "));
+    assert!(rendered.iter().all(|line| line.contains("\x1b[K")));
 }
 
 #[test]
