@@ -821,7 +821,7 @@ mod tests {
         registry.register(RUST_PACK).expect("register rust pack");
 
         let missing_language = registry
-            .resolve(LanguagePackResolutionInput::for_language("python"))
+            .resolve(LanguagePackResolutionInput::for_language("elixir"))
             .expect_err("unsupported language should fail");
         assert!(matches!(
             missing_language,
@@ -829,7 +829,7 @@ mod tests {
         ));
 
         let missing_extension = registry
-            .resolve(LanguagePackResolutionInput::for_file_path("src/main.py"))
+            .resolve(LanguagePackResolutionInput::for_file_path("src/main.ex"))
             .expect_err("unsupported extension should fail");
         assert!(matches!(
             missing_extension,

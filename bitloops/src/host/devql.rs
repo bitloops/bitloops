@@ -90,6 +90,8 @@ pub fn build_capability_host(
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 #[cfg(test)]
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
+#[cfg(test)]
+const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";

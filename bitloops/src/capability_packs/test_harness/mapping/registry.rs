@@ -3,7 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::capability_packs::test_harness::mapping::languages::{
-    rust::RustLanguageProvider, typescript::TypeScriptLanguageProvider,
+    python::PythonLanguageProvider, rust::RustLanguageProvider,
+    typescript::TypeScriptLanguageProvider,
 };
 use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, EnumerationResult, ReconciledDiscovery,
@@ -44,6 +45,7 @@ impl StructuralMappingRegistry {
             providers: vec![
                 Box::new(RustLanguageProvider::new()?),
                 Box::new(TypeScriptLanguageProvider::new()?),
+                Box::new(PythonLanguageProvider::new()?),
             ],
         })
     }
