@@ -282,13 +282,17 @@ bitloops devql knowledge versions <knowledge-ref>
 Start the local web dashboard.
 
 ```bash
-bitloops dashboard [--port <number>] [--host <hostname>]
+bitloops dashboard [--port <number>] [--host <hostname>] [--http] [--recheck-local-dashboard-net] [--no-open] [--bundle-dir <path>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `5667` | Port for the server |
-| `--host` | `localhost` | Hostname to bind to |
+| `--port` | `5667` | Port for the dashboard server |
+| `--host` | auto (`bitloops.local` / fallback loopback) | Hostname to bind to |
+| `--http` | `false` | Force HTTP fast-path (requires `--host 127.0.0.1`) |
+| `--recheck-local-dashboard-net` | `false` | Force full local dashboard network/TLS recheck |
+| `--no-open` | `false` | Do not open the URL in the default browser |
+| `--bundle-dir` / `--bundle` | `~/.bitloops/dashboard/bundle` | Bundle directory to serve |
 
 ---
 

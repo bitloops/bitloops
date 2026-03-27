@@ -52,6 +52,12 @@ fastembed = { version = "5.12.1", default-features = false, features = ["hf-hub-
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
 time = { version = "0.3", features = ["formatting", "macros"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+x509-parser = "0.18.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 
 [dev-dependencies]
 cucumber = "0.22.1"

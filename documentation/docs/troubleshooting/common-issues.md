@@ -66,7 +66,9 @@ This clears the shadow state without deleting checkpoint data.
 
 2. **Stores not initialized** — run `bitloops devql init` first
 
-3. **Check for errors** in the terminal output when starting the dashboard
+3. **Local HTTPS/hostname not configured** — follow [Dashboard Local HTTPS Setup](/guides/dashboard-local-https-setup)
+
+4. **Check for errors** in the terminal output when starting the dashboard
 
 ## No Checkpoints After Committing
 
