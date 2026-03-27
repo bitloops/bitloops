@@ -1,7 +1,60 @@
+# PREVIOUS CONFIG (COMMENTED OUT)
+# name: Rust Standards AI Review
+#
+# on:
+#   pull_request:
+#     branches:
+#       - develop
+#     types:
+#       - ready_for_review
+#       - synchronize
+#     paths:
+#       - "**/*.rs"
+#       - "documentation/docs/reference/rust-code-standards.md"
+#       - ".github/workflows/rust-standards-ai.yml"
+#       - ".github/scripts/rust-standards-ai-review.mjs"
+#   workflow_dispatch:
+#     inputs:
+#       pr_number:
+#         description: "Pull request number to review (used for manual runs)"
+#         required: true
+#         type: string
+#
+# permissions:
+#   contents: read
+#   pull-requests: write
+#
+# concurrency:
+#   group: rust-standards-ai-${{ github.event.pull_request.number || github.run_id }}
+#   cancel-in-progress: true
+#
+# jobs:
+#   review:
+#     name: Rust standards AI review (informational)
+#     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout current ref (temporary test mode)
+#         uses: actions/checkout@v4
+#
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: "20"
+#
+#       - name: Review Rust PR diffs against standards
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#           GITHUB_API_URL: ${{ github.api_url }}
+#           GITHUB_REPOSITORY: ${{ github.repository }}
+#           PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
+#           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR_REVIEW }}
+#         run: node .github/scripts/rust-standards-ai-review.mjs
+
 name: Rust Standards AI Review
 
 on:
-  pull_request_target:
+  pull_request:
     branches:
       - develop
     types:
@@ -12,25 +65,29 @@ on:
       - "documentation/docs/reference/rust-code-standards.md"
       - ".github/workflows/rust-standards-ai.yml"
       - ".github/scripts/rust-standards-ai-review.mjs"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (used for manual runs)"
+        required: true
+        type: string
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: rust-standards-ai-${{ github.event.pull_request.number }}
+  group: rust-standards-ai-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   review:
     name: Rust standards AI review (informational)
-    if: ${{ github.event.pull_request.draft == false }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout base branch content
+      - name: Checkout current ref
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,6 +99,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_API_URL: ${{ github.api_url }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_PR_REVIEW }}
         run: node .github/scripts/rust-standards-ai-review.mjs
