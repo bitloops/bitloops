@@ -9,6 +9,7 @@ use crate::host::devql::{DevqlAsOfSelector, DevqlConfig, ParsedDevqlQuery};
 pub(crate) struct ArtefactQuerySpec {
     pub repo_id: String,
     pub branch: Option<String>,
+    pub historical_path_blob_sha: Option<String>,
     pub scope: ArtefactScope,
     pub temporal_scope: ArtefactTemporalScope,
     pub structural_filter: ArtefactStructuralFilter,
@@ -193,6 +194,7 @@ pub(crate) fn plan_graphql_artefact_query(
     ArtefactQuerySpec {
         repo_id: repo_id.to_string(),
         branch: (!temporal_scope.use_historical_tables()).then(|| branch.to_string()),
+        historical_path_blob_sha: None,
         scope: ArtefactScope {
             project_path: scope.project_path().map(str::to_string),
             path: normalise_optional_text(path),
@@ -216,10 +218,18 @@ pub(crate) fn plan_devql_artefact_query(
     parsed: &ParsedDevqlQuery,
 ) -> Result<ArtefactQuerySpec> {
     let temporal_scope = plan_devql_temporal_scope(cfg, parsed.as_of.as_ref())?;
+    let historical_path_blob_sha = temporal_scope.resolved_commit().and_then(|commit_sha| {
+        resolve_historical_path_blob_sha(
+            cfg.repo_root.as_path(),
+            commit_sha,
+            parsed.file.as_deref(),
+        )
+    });
     Ok(ArtefactQuerySpec {
         repo_id: repo_id.to_string(),
         branch: (!temporal_scope.use_historical_tables())
             .then(|| resolve_active_branch_name(cfg.repo_root.as_path())),
+        historical_path_blob_sha,
         scope: ArtefactScope {
             project_path: normalise_optional_text(parsed.project_path.as_deref()),
             path: normalise_optional_text(parsed.file.as_deref()),
@@ -279,6 +289,47 @@ fn resolve_active_branch_name(repo_root: &Path) -> String {
 
 fn resolve_git_revision(repo_root: &Path, revision: &str) -> Result<String> {
     run_git(repo_root, &["rev-parse", revision]).map(|value| value.trim().to_string())
+}
+
+fn resolve_historical_path_blob_sha(
+    repo_root: &Path,
+    commit_sha: &str,
+    path: Option<&str>,
+) -> Option<String> {
+    let path = path?;
+    build_historical_path_candidates(path)
+        .into_iter()
+        .find_map(|candidate| resolve_git_blob_sha(repo_root, commit_sha, &candidate))
+}
+
+fn build_historical_path_candidates(path: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let raw = path.trim();
+    if !raw.is_empty() {
+        candidates.push(raw.to_string());
+    }
+
+    let normalized = raw
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .trim()
+        .to_string();
+    if !normalized.is_empty() {
+        candidates.push(normalized.clone());
+        candidates.push(format!("./{normalized}"));
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn resolve_git_blob_sha(repo_root: &Path, commit_sha: &str, path: &str) -> Option<String> {
+    let spec = format!("{commit_sha}:{path}");
+    run_git(repo_root, &["rev-parse", &spec])
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn build_activity_filter(

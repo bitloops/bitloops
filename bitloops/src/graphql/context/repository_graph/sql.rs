@@ -641,6 +641,7 @@ mod tests {
         ArtefactQuerySpec {
             repo_id: "repo-1".to_string(),
             branch: Some("main".to_string()),
+            historical_path_blob_sha: None,
             scope: ArtefactScope {
                 project_path: Some("packages/api".to_string()),
                 path: Some("packages/api/src/lib.rs".to_string()),

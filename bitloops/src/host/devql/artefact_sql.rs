@@ -62,12 +62,16 @@ fn build_artefact_where_clauses(alias: &str, spec: &ArtefactQuerySpec) -> Vec<St
         clauses.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
     }
     if let Some(commit_sha) = spec.temporal_scope.resolved_commit() {
-        clauses.push(file_state_exists_clause(
-            &format!("{alias}.path"),
-            &format!("{alias}.blob_sha"),
-            spec.repo_id.as_str(),
-            commit_sha,
-        ));
+        if let Some(blob_sha) = spec.historical_path_blob_sha.as_deref() {
+            clauses.push(format!("{alias}.blob_sha = '{}'", esc_pg(blob_sha)));
+        } else {
+            clauses.push(file_state_exists_clause(
+                &format!("{alias}.path"),
+                &format!("{alias}.blob_sha"),
+                spec.repo_id.as_str(),
+                commit_sha,
+            ));
+        }
     }
     if let Some(kind) = spec.structural_filter.kind.as_ref() {
         clauses.push(canonical_kind_clause(
@@ -232,6 +236,7 @@ mod tests {
         ArtefactQuerySpec {
             repo_id: "repo-1".to_string(),
             branch: Some("main".to_string()),
+            historical_path_blob_sha: None,
             scope: ArtefactScope {
                 project_path: Some("packages/api".to_string()),
                 path: Some("./packages/api/src/lib.rs".to_string()),
@@ -276,5 +281,30 @@ mod tests {
         assert!(sql.contains("FROM filtered"));
         assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
         assert!(!sql.contains("blob_sha IN"));
+    }
+
+    #[test]
+    fn filtered_artefacts_cte_uses_resolved_historical_blob_for_file_scopes() {
+        let sql = build_filtered_artefacts_cte_sql(&ArtefactQuerySpec {
+            repo_id: "repo-1".to_string(),
+            branch: None,
+            historical_path_blob_sha: Some("blob-123".to_string()),
+            scope: ArtefactScope {
+                project_path: None,
+                path: Some("src/main.rs".to_string()),
+                files_path: None,
+            },
+            temporal_scope: ArtefactTemporalScope::HistoricalCommit {
+                commit_sha: "commit-123".to_string(),
+            },
+            structural_filter: ArtefactStructuralFilter::default(),
+            activity_filter: None,
+            pagination: None,
+        });
+
+        assert!(sql.contains("FROM artefacts a"));
+        assert!(sql.contains("a.path = 'src/main.rs'"));
+        assert!(sql.contains("a.blob_sha = 'blob-123'"));
+        assert!(!sql.contains("FROM file_state fs"));
     }
 }
