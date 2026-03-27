@@ -345,6 +345,36 @@ pub struct DashboardTlsMaterial {
     pub key_path: PathBuf,
 }
 
+/// Load existing TLS material without running trust probes or mkcert generation.
+///
+/// This is the fast-path loader used when local dashboard config explicitly
+/// declares that TLS is already provisioned.
+pub fn load_existing_dashboard_tls_material(browser_host: &str) -> Result<DashboardTlsMaterial> {
+    let (cert_path, key_path) = resolve_tls_paths_for_host(browser_host);
+    if !cert_path.is_file() || !key_path.is_file() {
+        bail!(
+            "dashboard TLS fast path requested for host {browser_host}, but certificate files are missing at {} and {}",
+            cert_path.display(),
+            key_path.display()
+        );
+    }
+
+    let leaf_cert = load_leaf_certificate(&cert_path)?;
+    browser_host_has_matching_san(&cert_path, &leaf_cert, browser_host).with_context(|| {
+        format!(
+            "dashboard TLS fast path validation failed for host {browser_host}; \
+             run `bitloops dashboard --recheck-local-dashboard-net` once to refresh local dashboard network hints"
+        )
+    })?;
+    let server_config = load_server_config(&cert_path, &key_path)?;
+
+    Ok(DashboardTlsMaterial {
+        server_config,
+        cert_path,
+        key_path,
+    })
+}
+
 /// Ensure PEMs exist and are valid for `browser_host`, then build [`ServerConfig`] once.
 pub fn ensure_dashboard_tls_material(browser_host: &str) -> Result<DashboardTlsMaterial> {
     let mkcert = require_mkcert_binary()?;

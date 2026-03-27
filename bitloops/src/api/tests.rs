@@ -2,12 +2,12 @@
 
 use super::router::build_dashboard_router;
 use super::{
-    ApiPage, DashboardState, DashboardTransport, GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR,
-    ServeMode, branch_is_excluded, browser_host_for_url, build_branch_commit_log_args,
-    canonical_agent_key, dashboard_user, default_bundle_dir_from_home, expand_tilde_with_home,
-    format_dashboard_url, has_bundle_index, paginate, parse_branch_commit_log,
-    parse_numstat_output, resolve_bundle_file, select_host_with_dashboard_preference,
-    warning_block_lines,
+    ApiPage, DashboardServerConfig, DashboardStartupMode, DashboardState, DashboardTransport,
+    GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR, ServeMode, branch_is_excluded, browser_host_for_url,
+    build_branch_commit_log_args, canonical_agent_key, dashboard_user,
+    default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url, has_bundle_index,
+    paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
+    select_host_with_dashboard_preference, select_startup_mode, warning_block_lines,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};
@@ -7346,6 +7346,76 @@ fn select_host_falls_back_to_localhost_when_config_disabled() {
 fn select_host_respects_explicit_host() {
     let selected = select_host_with_dashboard_preference(Some("localhost"), true);
     assert_eq!(selected, "localhost");
+}
+
+#[test]
+fn startup_mode_fast_http_requires_loopback_host() {
+    let config = DashboardServerConfig {
+        host: None,
+        port: 5667,
+        no_open: true,
+        force_http: true,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+
+    let err = select_startup_mode(&config, None, None).expect_err("must require loopback host");
+    assert!(format!("{err:#}").contains("`--http`"));
+    assert!(format!("{err:#}").contains("--host 127.0.0.1"));
+}
+
+#[test]
+fn startup_mode_fast_http_accepts_explicit_loopback_host() {
+    let config = DashboardServerConfig {
+        host: Some("127.0.0.1".to_string()),
+        port: 5667,
+        no_open: true,
+        force_http: true,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+
+    let mode = select_startup_mode(&config, None, Some("127.0.0.1")).expect("fast HTTP mode");
+    assert_eq!(mode, DashboardStartupMode::FastHttpLoopback);
+}
+
+#[test]
+fn startup_mode_uses_configured_https_fast_path() {
+    let config = DashboardServerConfig {
+        host: None,
+        port: 5667,
+        no_open: true,
+        force_http: false,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
+        tls: Some(true),
+        bitloops_local: Some(true),
+    };
+
+    let mode =
+        select_startup_mode(&config, Some(&local_dashboard), None).expect("configured https mode");
+    assert_eq!(mode, DashboardStartupMode::FastConfiguredHttps);
+}
+
+#[test]
+fn startup_mode_recheck_flag_forces_slow_probe() {
+    let config = DashboardServerConfig {
+        host: None,
+        port: 5667,
+        no_open: true,
+        force_http: false,
+        recheck_local_dashboard_net: true,
+        bundle_dir: None,
+    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
+        tls: Some(true),
+        bitloops_local: Some(true),
+    };
+
+    let mode = select_startup_mode(&config, Some(&local_dashboard), None).expect("slow probe");
+    assert_eq!(mode, DashboardStartupMode::SlowProbe);
 }
 
 #[test]

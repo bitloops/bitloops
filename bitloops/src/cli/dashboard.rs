@@ -18,6 +18,14 @@ pub struct DashboardArgs {
     #[arg(long, default_value_t = false)]
     pub no_open: bool,
 
+    /// Force fast local HTTP mode. Requires `--host 127.0.0.1`.
+    #[arg(long, default_value_t = false)]
+    pub http: bool,
+
+    /// Force a full local dashboard network recheck and refresh discovery hints.
+    #[arg(long = "recheck-local-dashboard-net", default_value_t = false)]
+    pub recheck_local_dashboard_net: bool,
+
     /// Path to the dashboard bundle directory (contains index.html).
     #[arg(long = "bundle-dir", alias = "bundle", value_name = "PATH")]
     pub bundle_dir: Option<PathBuf>,
@@ -28,6 +36,8 @@ fn build_server_config(args: DashboardArgs) -> crate::api::DashboardServerConfig
         host: args.host,
         port: args.port,
         no_open: args.no_open,
+        force_http: args.http,
+        recheck_local_dashboard_net: args.recheck_local_dashboard_net,
         bundle_dir: args.bundle_dir,
     }
 }
@@ -52,6 +62,8 @@ mod tests {
             "--port",
             "6100",
             "--no-open",
+            "--http",
+            "--recheck-local-dashboard-net",
             "--bundle",
             "/tmp/custom-bundle",
         ])
@@ -65,6 +77,8 @@ mod tests {
         assert_eq!(config.host.as_deref(), Some("0.0.0.0"));
         assert_eq!(config.port, 6100);
         assert!(config.no_open);
+        assert!(config.force_http);
+        assert!(config.recheck_local_dashboard_net);
         assert_eq!(config.bundle_dir, Some(PathBuf::from("/tmp/custom-bundle")));
     }
 
@@ -82,5 +96,7 @@ mod tests {
         assert!(args.host.is_none());
         assert!(args.bundle_dir.is_none());
         assert!(!args.no_open);
+        assert!(!args.http);
+        assert!(!args.recheck_local_dashboard_net);
     }
 }

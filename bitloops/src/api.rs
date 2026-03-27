@@ -7,7 +7,7 @@ mod hosts;
 mod router;
 pub mod tls;
 
-use crate::config::dashboard_use_bitloops_local;
+use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config};
 use crate::graphql::{self, DevqlGraphqlContext};
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, read_commit_checkpoint_mappings, read_committed_info, run_git,
@@ -18,10 +18,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::io::IsTerminal;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -46,6 +47,8 @@ pub struct DashboardServerConfig {
     pub host: Option<String>,
     pub port: u16,
     pub no_open: bool,
+    pub force_http: bool,
+    pub recheck_local_dashboard_net: bool,
     pub bundle_dir: Option<PathBuf>,
 }
 
@@ -120,6 +123,19 @@ enum DashboardTransport {
     Https,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardStartupMode {
+    FastHttpLoopback,
+    FastConfiguredHttps,
+    SlowProbe,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LocalDashboardDiscovery {
+    tls: bool,
+    bitloops_local: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct DashboardState {
     pub(super) repo_root: PathBuf,
@@ -141,6 +157,16 @@ fn is_dev_mode() -> bool {
 }
 
 pub async fn run(config: DashboardServerConfig) -> Result<()> {
+    let mut startup_warnings: Vec<String> = Vec::new();
+    let mut discovery = LocalDashboardDiscovery::default();
+    let dashboard_cfg = resolve_dashboard_config();
+    let local_dashboard_cfg = dashboard_cfg.local_dashboard.as_ref();
+    let explicit_host = config
+        .host
+        .as_deref()
+        .and_then(normalized_host)
+        .map(str::to_string);
+    let startup_mode = select_startup_mode(&config, local_dashboard_cfg, explicit_host.as_deref())?;
     let db_init = db::init_dashboard_db().await;
     if db_init.startup_health.has_failures() {
         bail!(
@@ -148,27 +174,38 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         );
     }
 
-    let mut startup_warnings: Vec<String> = Vec::new();
+    let mut selected_host = match startup_mode {
+        DashboardStartupMode::FastHttpLoopback => FALLBACK_LOCAL_HOST.to_string(),
+        DashboardStartupMode::FastConfiguredHttps => explicit_host.clone().unwrap_or_else(|| {
+            if local_dashboard_cfg.and_then(|cfg| cfg.bitloops_local) == Some(false) {
+                FALLBACK_LOCAL_HOST.to_string()
+            } else {
+                PREFERRED_LOCAL_HOST.to_string()
+            }
+        }),
+        DashboardStartupMode::SlowProbe => explicit_host
+            .clone()
+            .unwrap_or_else(|| PREFERRED_LOCAL_HOST.to_string()),
+    };
 
-    let selected_host =
-        if let Some(explicit_host) = config.host.as_deref().and_then(normalized_host) {
-            explicit_host.to_string()
-        } else if dashboard_use_bitloops_local() {
-            match hosts::ensure_default_dashboard_host_mapping()? {
-                hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
-                    PREFERRED_LOCAL_HOST.to_string()
-                }
-                hosts::HostMappingOutcome::NeedsFallback { reason } => {
-                    startup_warnings.push(format!(
+    if matches!(startup_mode, DashboardStartupMode::SlowProbe)
+        && explicit_host.is_none()
+        && selected_host == PREFERRED_LOCAL_HOST
+    {
+        match hosts::ensure_default_dashboard_host_mapping()? {
+            hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
+                discovery.bitloops_local = true;
+            }
+            hosts::HostMappingOutcome::NeedsFallback { reason } => {
+                startup_warnings.push(format!(
                     "Warning: could not map {PREFERRED_LOCAL_HOST} in the hosts file: {reason}\n\
                      Falling back to localhost for this run."
                 ));
-                    FALLBACK_LOCAL_HOST.to_string()
-                }
+                selected_host = FALLBACK_LOCAL_HOST.to_string();
             }
-        } else {
-            FALLBACK_LOCAL_HOST.to_string()
-        };
+        }
+    }
+
     let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
 
     let listener = TcpListener::bind(bind_addr).await.with_context(|| {
@@ -181,32 +218,56 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
         .local_addr()
         .context("Reading dashboard listener address")?;
     let browser_host = browser_host_for_url(&selected_host, local_addr);
-    let (transport, tls_acceptor) = if !tls::mkcert_on_path() {
-        startup_warnings.push(format!(
-            "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
-             See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
-        ));
-        (DashboardTransport::Http, None)
-    } else {
-        match tls::ensure_dashboard_tls_material(&browser_host) {
-            Ok(tls_material) => {
-                log::debug!(
-                    "Dashboard TLS: cert={} key={}",
-                    tls_material.cert_path.display(),
-                    tls_material.key_path.display()
-                );
-                (
-                    DashboardTransport::Https,
-                    Some(TlsAcceptor::from(tls_material.server_config.clone())),
-                )
-            }
-            Err(err) => {
+    let (transport, tls_acceptor) = match startup_mode {
+        DashboardStartupMode::FastHttpLoopback => (DashboardTransport::Http, None),
+        DashboardStartupMode::FastConfiguredHttps => {
+            let tls_material = tls::load_existing_dashboard_tls_material(&browser_host)
+                .with_context(|| {
+                    format!(
+                        "dashboard fast TLS path failed for host {browser_host}; \
+                         run `bitloops dashboard --recheck-local-dashboard-net` once"
+                    )
+                })?;
+            log::debug!(
+                "Dashboard TLS (fast path): cert={} key={}",
+                tls_material.cert_path.display(),
+                tls_material.key_path.display()
+            );
+            (
+                DashboardTransport::Https,
+                Some(TlsAcceptor::from(tls_material.server_config.clone())),
+            )
+        }
+        DashboardStartupMode::SlowProbe => {
+            if !tls::mkcert_on_path() {
                 startup_warnings.push(format!(
-                    "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
-                     Falling back to local HTTP.\n\
+                    "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
                      See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
                 ));
                 (DashboardTransport::Http, None)
+            } else {
+                match tls::ensure_dashboard_tls_material(&browser_host) {
+                    Ok(tls_material) => {
+                        discovery.tls = true;
+                        log::debug!(
+                            "Dashboard TLS: cert={} key={}",
+                            tls_material.cert_path.display(),
+                            tls_material.key_path.display()
+                        );
+                        (
+                            DashboardTransport::Https,
+                            Some(TlsAcceptor::from(tls_material.server_config.clone())),
+                        )
+                    }
+                    Err(err) => {
+                        startup_warnings.push(format!(
+                            "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
+                             Falling back to local HTTP.\n\
+                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                        ));
+                        (DashboardTransport::Http, None)
+                    }
+                }
             }
         }
     };
@@ -220,6 +281,15 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
     let repo_root = paths::repo_root()
         .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
         .unwrap_or_else(|_| PathBuf::from("."));
+
+    if matches!(startup_mode, DashboardStartupMode::SlowProbe)
+        && (discovery.tls || discovery.bitloops_local)
+        && let Err(err) = persist_local_dashboard_discovery(&repo_root, discovery)
+    {
+        startup_warnings.push(format!(
+            "Warning: failed to persist local dashboard network hints: {err:#}"
+        ));
+    }
 
     let url = format_dashboard_url(transport, &browser_host, local_addr.port());
     let devql_schema = graphql::build_schema(DevqlGraphqlContext::new(
@@ -280,6 +350,109 @@ pub async fn run(config: DashboardServerConfig) -> Result<()> {
             Err(anyhow!("dashboard HTTPS selected without a TLS acceptor"))
         }
     }
+}
+
+fn select_startup_mode(
+    config: &DashboardServerConfig,
+    local_dashboard_cfg: Option<&crate::config::DashboardLocalDashboardConfig>,
+    explicit_host: Option<&str>,
+) -> Result<DashboardStartupMode> {
+    if config.force_http {
+        if explicit_host != Some(FALLBACK_LOCAL_HOST) {
+            bail!("fast HTTP mode requires both `--http` and `--host {FALLBACK_LOCAL_HOST}`");
+        }
+        return Ok(DashboardStartupMode::FastHttpLoopback);
+    }
+
+    if !config.recheck_local_dashboard_net
+        && local_dashboard_cfg.and_then(|cfg| cfg.tls) == Some(true)
+    {
+        return Ok(DashboardStartupMode::FastConfiguredHttps);
+    }
+
+    Ok(DashboardStartupMode::SlowProbe)
+}
+
+fn persist_local_dashboard_discovery(
+    repo_root: &Path,
+    discovery: LocalDashboardDiscovery,
+) -> Result<()> {
+    if !discovery.tls && !discovery.bitloops_local {
+        return Ok(());
+    }
+
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating config directory {}", parent.display()))?;
+    }
+
+    let mut root = if config_path.is_file() {
+        let data = fs::read(&config_path)
+            .with_context(|| format!("reading config file {}", config_path.display()))?;
+        serde_json::from_slice::<serde_json::Value>(&data)
+            .with_context(|| format!("parsing config file {}", config_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let Some(root_obj) = root.as_object_mut() else {
+        bail!(
+            "config file {} must be a JSON object",
+            config_path.display()
+        );
+    };
+    root_obj.insert(
+        "version".to_string(),
+        serde_json::Value::String("1.0".to_string()),
+    );
+    root_obj.insert(
+        "scope".to_string(),
+        serde_json::Value::String("project".to_string()),
+    );
+
+    let settings = root_obj
+        .entry("settings".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(settings_obj) = settings.as_object_mut() else {
+        bail!(
+            "config file {} has non-object `settings` field",
+            config_path.display()
+        );
+    };
+    let dashboard = settings_obj
+        .entry("dashboard".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(dashboard_obj) = dashboard.as_object_mut() else {
+        bail!(
+            "config file {} has non-object `settings.dashboard` field",
+            config_path.display()
+        );
+    };
+    let local_dashboard = dashboard_obj
+        .entry("local_dashboard".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(local_dashboard_obj) = local_dashboard.as_object_mut() else {
+        bail!(
+            "config file {} has non-object `settings.dashboard.local_dashboard` field",
+            config_path.display()
+        );
+    };
+
+    if discovery.tls {
+        local_dashboard_obj.insert("tls".to_string(), serde_json::Value::Bool(true));
+    }
+    if discovery.bitloops_local {
+        local_dashboard_obj.insert("bitloops_local".to_string(), serde_json::Value::Bool(true));
+    }
+
+    let mut serialized =
+        serde_json::to_string_pretty(&root).context("serialising dashboard discovery config")?;
+    serialized.push('\n');
+    fs::write(&config_path, serialized)
+        .with_context(|| format!("writing config file {}", config_path.display()))?;
+
+    Ok(())
 }
 
 async fn serve_until_ctrl_c_tls(
@@ -867,14 +1040,16 @@ fn open_in_default_browser(url: &str) -> Result<()> {
         ));
     }
 
-    let status = command
-        .status()
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .with_context(|| format!("Running browser opener for {url}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("Browser opener exited with status {status}"))
-    }
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[cfg(test)]

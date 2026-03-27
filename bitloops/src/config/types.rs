@@ -170,7 +170,13 @@ pub struct StoreFileConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DashboardFileConfig {
-    pub use_bitloops_local: Option<bool>,
+    pub local_dashboard: Option<DashboardLocalDashboardConfig>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DashboardLocalDashboardConfig {
+    pub tls: Option<bool>,
+    pub bitloops_local: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
