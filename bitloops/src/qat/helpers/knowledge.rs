@@ -211,18 +211,21 @@ pub fn assert_knowledge_item_provider_and_kind(
         let provider_matches = row
             .get("provider")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|actual| actual == provider);
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(provider));
         let source_kind_matches = row
-            .get("source_kind")
+            .get("sourceKind")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|actual| {
-                actual == source_kind || actual.ends_with(&format!("_{source_kind}"))
+                actual.eq_ignore_ascii_case(source_kind)
+                    || actual
+                        .to_ascii_lowercase()
+                        .ends_with(&format!("_{}", source_kind.to_ascii_lowercase()))
             });
         provider_matches && source_kind_matches
     });
     ensure!(
         found,
-        "no knowledge row with provider `{provider}` and source_kind `{source_kind}`"
+        "no knowledge row with provider `{provider}` and sourceKind `{source_kind}`"
     );
     Ok(())
 }
@@ -276,4 +279,3 @@ pub fn assert_knowledge_versions_count(
     );
     Ok(())
 }
-

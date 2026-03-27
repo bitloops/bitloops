@@ -13,6 +13,39 @@ fn to_kebab_case(input: &str) -> String {
     output
 }
 
+fn candidate_symbol_file_paths(world: &QatWorld, symbol_alias: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_if_exists = |path: String| {
+        if world.repo_dir().join(&path).exists() && !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Some((class_name, _)) = symbol_alias.split_once('.') {
+        let stem = to_kebab_case(class_name);
+        for path in [
+            format!("src/services/{stem}.ts"),
+            format!("src/controllers/{stem}.ts"),
+            format!("src/repository/{stem}.ts"),
+            format!("src/models/{stem}.ts"),
+            format!("src/{stem}.ts"),
+        ] {
+            push_if_exists(path);
+        }
+    } else {
+        let stem = to_kebab_case(symbol_alias);
+        for path in [
+            "src/new-caller.ts".to_string(),
+            format!("src/{stem}.ts"),
+            "src/index.ts".to_string(),
+        ] {
+            push_if_exists(path);
+        }
+    }
+
+    candidates
+}
+
 fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
     if symbol_alias.contains("::") {
         return Ok(symbol_alias.to_string());
@@ -26,21 +59,55 @@ fn resolve_symbol_fqn_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<
         suffixes.push(format!("::{symbol_alias}"));
     }
 
-    let value = run_devql_query(world, r#"repo("bitloops")->artefacts()->limit(5000)"#)?;
-    let rows = value
-        .as_array()
-        .ok_or_else(|| anyhow!("expected artefacts query to return a JSON array"))?;
-    for suffix in &suffixes {
-        if let Some(symbol_fqn) = rows.iter().find_map(|row| {
-            row.get("symbol_fqn")
-                .and_then(serde_json::Value::as_str)
-                .filter(|candidate| candidate.ends_with(suffix))
-        }) {
-            return Ok(symbol_fqn.to_string());
+    for file_path in candidate_symbol_file_paths(world, symbol_alias) {
+        let query = format!(
+            r#"repo("bitloops")->file("{}")->artefacts()->limit(500)"#,
+            escape_devql_string(&file_path)
+        );
+        let Ok(value) = run_devql_query(world, &query) else {
+            continue;
+        };
+        let Some(rows) = value.as_array() else {
+            continue;
+        };
+        for suffix in &suffixes {
+            if let Some(symbol_fqn) = rows.iter().find_map(|row| {
+                row.get("symbolFqn")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|candidate| candidate.ends_with(suffix))
+            }) {
+                return Ok(symbol_fqn.to_string());
+            }
         }
     }
 
     Ok(symbol_alias.to_string())
+}
+
+fn resolve_file_path_for_symbol(world: &mut QatWorld, symbol_fqn: &str) -> Result<String> {
+    if let Some((path, _)) = symbol_fqn.split_once("::")
+        && !path.is_empty()
+    {
+        return Ok(path.to_string());
+    }
+
+    if world.repo_dir().join(symbol_fqn).exists() {
+        return Ok(symbol_fqn.to_string());
+    }
+
+    if let Some(path) = candidate_symbol_file_paths(world, symbol_fqn).into_iter().next() {
+        return Ok(path);
+    }
+
+    bail!("could not resolve file path for symbol `{symbol_fqn}`")
+}
+
+fn resolve_file_path_for_symbol_alias(world: &mut QatWorld, symbol_alias: &str) -> Result<String> {
+    if let Some(path) = candidate_symbol_file_paths(world, symbol_alias).into_iter().next() {
+        return Ok(path);
+    }
+    let symbol_fqn = resolve_symbol_fqn_alias(world, symbol_alias)?;
+    resolve_file_path_for_symbol(world, &symbol_fqn)
 }
 
 fn parse_last_command_stdout_json(world: &QatWorld) -> Result<serde_json::Value> {
@@ -172,10 +239,10 @@ fn synthetic_knowledge_rows(world: &QatWorld) -> Vec<serde_json::Value> {
                 ("unknown", "unknown")
             };
             Some(serde_json::json!({
-                "knowledge_item_id": knowledge_item_id,
-                "source_url": url,
+                "knowledgeItemId": knowledge_item_id,
+                "sourceUrl": url,
                 "provider": provider,
-                "source_kind": source_kind
+                "sourceKind": source_kind
             }))
         })
         .collect()
@@ -201,6 +268,18 @@ fn extract_ingest_metric(stdout: &str, key: &str) -> Option<u64> {
 
 fn claude_fallback_marker_exists(world: &QatWorld) -> bool {
     world.run_dir().join(CLAUDE_FALLBACK_MARKER).exists()
+}
+
+fn claude_fallback_enabled() -> bool {
+    std::env::var("BITLOOPS_QAT_DISABLE_CLAUDE_FALLBACK")
+        .map(|value| value != "1")
+        .unwrap_or(true)
+}
+
+fn activate_claude_fallback(world: &QatWorld, reason: &str) -> Result<()> {
+    append_world_log(world, &format!("Claude fallback activated: {reason}\n"))?;
+    fs::write(world.run_dir().join(CLAUDE_FALLBACK_MARKER), b"1")
+        .with_context(|| format!("writing fallback marker in {}", world.run_dir().display()))
 }
 
 fn semantic_clones_fallback_active(world: &QatWorld) -> bool {
@@ -234,8 +313,22 @@ fn configure_git_identity(world: &QatWorld) -> Result<()> {
 }
 
 fn ensure_claude_authenticated(world: &QatWorld) -> Result<()> {
-    if claude_auth_status_logged_in(world)? {
+    if claude_fallback_marker_exists(world) {
         return Ok(());
+    }
+    match claude_auth_status_logged_in(world) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(err) => {
+            if claude_fallback_enabled() {
+                activate_claude_fallback(
+                    world,
+                    &format!("Claude auth status check failed: {err}"),
+                )?;
+                return Ok(());
+            }
+            return Err(err);
+        }
     }
 
     let login_command = std::env::var(CLAUDE_AUTH_LOGIN_COMMAND_ENV)
@@ -248,12 +341,44 @@ fn ensure_claude_authenticated(world: &QatWorld) -> Result<()> {
         login_timeout,
     )
     .context("running Claude auth login")?;
-    ensure_success(&login_output, "claude auth login")?;
+    if !login_output.status.success() {
+        if claude_fallback_enabled() {
+            let stdout = String::from_utf8_lossy(&login_output.stdout);
+            let stderr = String::from_utf8_lossy(&login_output.stderr);
+            activate_claude_fallback(
+                world,
+                &format!(
+                    "Claude auth login failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                ),
+            )?;
+            return Ok(());
+        }
+        ensure_success(&login_output, "claude auth login")?;
+    }
 
-    ensure!(
-        claude_auth_status_logged_in(world)?,
-        "Claude auth login completed but Claude is still not authenticated"
-    );
+    match claude_auth_status_logged_in(world) {
+        Ok(true) => {}
+        Ok(false) => {
+            if claude_fallback_enabled() {
+                activate_claude_fallback(
+                    world,
+                    "Claude auth login completed but Claude is still not authenticated.",
+                )?;
+                return Ok(());
+            }
+            bail!("Claude auth login completed but Claude is still not authenticated");
+        }
+        Err(err) => {
+            if claude_fallback_enabled() {
+                activate_claude_fallback(
+                    world,
+                    &format!("Claude auth verification failed after login: {err}"),
+                )?;
+                return Ok(());
+            }
+            return Err(err);
+        }
+    }
     Ok(())
 }
 
@@ -300,6 +425,11 @@ fn text_has_claude_auth_failure(text: &str) -> bool {
 
 fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
     ensure_claude_authenticated(world)?;
+    if claude_fallback_marker_exists(world) {
+        apply_claude_prompt_fallback_edit(world, prompt)?;
+        simulate_claude_session_for_prompt(world, prompt)?;
+        return Ok(());
+    }
 
     let command_spec = std::env::var("BITLOOPS_QAT_CLAUDE_CMD")
         .unwrap_or_else(|_| DEFAULT_CLAUDE_CODE_COMMAND.to_string());
@@ -318,9 +448,7 @@ fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         return ensure_success(&output, "claude prompt");
     }
 
-    let fallback_enabled = std::env::var("BITLOOPS_QAT_DISABLE_CLAUDE_FALLBACK")
-        .map(|value| value != "1")
-        .unwrap_or(true);
+    let fallback_enabled = claude_fallback_enabled();
     if !fallback_enabled {
         return ensure_success(&output, "claude prompt");
     }

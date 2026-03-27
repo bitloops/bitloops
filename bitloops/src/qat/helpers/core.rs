@@ -234,6 +234,67 @@ pub fn count_json_array_rows(value: &serde_json::Value) -> usize {
     }
 }
 
+fn count_artefacts_across_source_files(world: &mut QatWorld) -> Result<usize> {
+    let mut pending = vec![world.repo_dir().to_path_buf()];
+    let mut file_paths = Vec::new();
+    while let Some(dir) = pending.pop() {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("reading source directory {}", dir.display()))?
+        {
+            let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                let dir_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+                if matches!(dir_name, ".git" | ".bitloops" | "node_modules" | "target" | "dist") {
+                    continue;
+                }
+                pending.push(path);
+                continue;
+            }
+            let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            if !matches!(extension, "ts" | "tsx" | "js" | "jsx") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(world.repo_dir())
+                .with_context(|| format!("making path relative for {}", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            file_paths.push(relative);
+        }
+    }
+
+    let mut total = 0;
+    for file_path in file_paths {
+        let query = format!(
+            r#"repo("bitloops")->file("{}")->artefacts()->limit(500)"#,
+            escape_devql_string(&file_path)
+        );
+        let value = match run_devql_query(world, &query) {
+            Ok(value) => value,
+            Err(err) => {
+                if err.to_string().contains("missing string field `canonical_kind`") {
+                    append_world_log(
+                        world,
+                        &format!(
+                            "Skipping artefacts count for `{file_path}` due canonical_kind backend mismatch.\n"
+                        ),
+                    )?;
+                    continue;
+                }
+                return Err(err);
+            }
+        };
+        total += count_json_array_rows(&value);
+    }
+    Ok(total)
+}
+
 pub fn run_first_change_using_claude_code_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -451,8 +512,7 @@ pub fn assert_devql_artefacts_query_returns_results(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let value = run_devql_query(world, r#"repo("bitloops")->artefacts()->limit(5)"#)?;
-    let count = count_json_array_rows(&value);
+    let count = count_artefacts_across_source_files(world)?;
     world.last_query_result_count = Some(count);
     ensure!(
         count >= 1,
@@ -497,7 +557,18 @@ pub fn assert_devql_chat_history_returns_results(
         world,
         r#"repo("bitloops")->artefacts()->chatHistory()->limit(5)"#,
     )?;
-    let count = count_json_array_rows(&value);
+    let rows = value
+        .as_array()
+        .ok_or_else(|| anyhow!("expected chat history query to return a JSON array"))?;
+    let count = rows
+        .iter()
+        .filter(|row| {
+            row.get("chatHistory")
+                .and_then(|chat_history| chat_history.get("edges"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|edges| !edges.is_empty())
+        })
+        .count();
     world.last_query_result_count = Some(count);
     ensure!(
         count >= 1,

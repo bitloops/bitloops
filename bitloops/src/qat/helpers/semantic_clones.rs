@@ -71,6 +71,24 @@ pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) 
     Ok(())
 }
 
+fn extract_clone_nodes(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    value.as_array()
+        .map(|rows| {
+            rows.iter()
+                .flat_map(|artefact| {
+                    artefact
+                        .get("clones")
+                        .and_then(|clones| clones.get("edges"))
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flat_map(|edges| edges.iter())
+                        .filter_map(|edge| edge.get("node").cloned())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn assert_devql_clones_query(
     world: &mut QatWorld,
     repo_name: &str,
@@ -84,7 +102,11 @@ pub fn assert_devql_clones_query(
         escape_devql_string(&symbol_fqn)
     );
     let value = run_devql_query(world, &query)?;
-    let count = count_json_array_rows(&value);
+    let clone_rows = extract_clone_nodes(&value);
+    world.last_command_stdout = Some(
+        serde_json::to_string(&clone_rows).context("serializing flattened clone rows")?,
+    );
+    let count = clone_rows.len();
     world.last_query_result_count = Some(count);
     if count < min_count && semantic_clones_fallback_active(world) {
         append_world_log(
@@ -116,7 +138,11 @@ pub fn assert_devql_clones_with_min_score(
         min_score
     );
     let value = run_devql_query(world, &query)?;
-    let count = count_json_array_rows(&value);
+    let clone_rows = extract_clone_nodes(&value);
+    world.last_command_stdout = Some(
+        serde_json::to_string(&clone_rows).context("serializing flattened clone rows")?,
+    );
+    let count = clone_rows.len();
     world.last_query_result_count = Some(count);
     if count == 0 && semantic_clones_fallback_active(world) {
         append_world_log(
@@ -159,20 +185,13 @@ pub fn assert_devql_clones_have_score_and_kind(world: &QatWorld) -> Result<()> {
     }
     ensure!(!rows.is_empty(), "expected at least one clone row");
     for row in rows {
-        let has_score = row
-            .get("score")
-            .and_then(serde_json::Value::as_f64)
-            .is_some()
-            || row
-                .get("overall_score")
-                .and_then(serde_json::Value::as_f64)
-                .is_some();
+        let has_score = row.get("score").and_then(serde_json::Value::as_f64).is_some();
         ensure!(has_score, "clone row missing score field: {row}");
         ensure!(
-            row.get("relation_kind")
+            row.get("relationKind")
                 .and_then(serde_json::Value::as_str)
                 .is_some(),
-            "clone row missing relation_kind: {row}"
+            "clone row missing relationKind: {row}"
         );
     }
     Ok(())
@@ -200,11 +219,7 @@ pub fn assert_devql_clones_top_score_above(
     }
     let max_score = rows
         .iter()
-        .filter_map(|row| {
-            row.get("score")
-                .or_else(|| row.get("overall_score"))
-                .and_then(serde_json::Value::as_f64)
-        })
+        .filter_map(|row| row.get("score").and_then(serde_json::Value::as_f64))
         .fold(0.0_f64, f64::max);
     ensure!(
         max_score > threshold,
@@ -231,12 +246,13 @@ pub fn assert_devql_clones_have_explanation(
         return Ok(());
     }
     let has_explanation = rows.iter().any(|row| {
-        row.get("explanation_json")
-            .is_some_and(|value| !value.is_null())
-            || row
-                .get("explanation")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| !value.trim().is_empty())
+        row.get("metadata").is_some_and(|metadata| match metadata {
+            serde_json::Value::Null => false,
+            serde_json::Value::Object(map) => !map.is_empty(),
+            serde_json::Value::Array(items) => !items.is_empty(),
+            serde_json::Value::String(text) => !text.trim().is_empty(),
+            _ => true,
+        })
     });
     ensure!(
         has_explanation,
@@ -244,4 +260,3 @@ pub fn assert_devql_clones_have_explanation(
     );
     Ok(())
 }
-
