@@ -81,6 +81,39 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     .expect("write config");
 }
 
+fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str) {
+    let config_path = repo_root.join(".bitloops").join("config.json");
+    let raw = fs::read(&config_path).expect("read config");
+    let mut config: Value = serde_json::from_slice(&raw).expect("parse config");
+
+    let settings = config
+        .get_mut("settings")
+        .and_then(Value::as_object_mut)
+        .expect("settings object");
+    let knowledge = settings
+        .entry("knowledge")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("knowledge object");
+    let providers = knowledge
+        .entry("providers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("providers object");
+    let jira = providers
+        .entry("jira")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("jira object");
+    jira.insert("site_url".to_string(), json!(jira_site_url));
+
+    fs::write(
+        config_path,
+        serde_json::to_vec_pretty(&config).expect("serialise config"),
+    )
+    .expect("write config");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn insert_historical_function_artefact(
     conn: &rusqlite::Connection,
@@ -266,7 +299,9 @@ impl MockSequentialHttpServer {
         let url = format!("http://{}", addr);
 
         let handle = thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            // CI can delay tests while process-global state locks are contended.
+            // Give this mock server enough time before treating a missing request as a timeout.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             let mut responses = std::collections::VecDeque::from(responses);
 
             while let Some(response) = responses.pop_front() {

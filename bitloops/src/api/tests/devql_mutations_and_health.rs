@@ -204,6 +204,8 @@ async fn devql_mutations_report_validation_and_backend_errors() {
 
 #[tokio::test]
 async fn devql_mutations_manage_knowledge_and_apply_migrations() {
+    let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
     let server = MockSequentialHttpServer::start(vec![
         MockHttpResponse::json(
             200,
@@ -246,8 +248,7 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
             }),
         ),
     ]);
-    let repo = seed_graphql_knowledge_mutation_repo(server.url.as_str());
-    let _guard = enter_process_state(Some(repo.path()), &[]);
+    update_seeded_jira_site_url(repo.path(), server.url.as_str());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let duckdb_path = knowledge_duckdb_path(repo.path());
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
@@ -456,12 +457,13 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
 
 #[tokio::test]
 async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows() {
+    let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
     let server = MockSequentialHttpServer::start(vec![MockHttpResponse::json(
         500,
         json!({ "errorMessages": ["provider boom"] }),
     )]);
-    let repo = seed_graphql_knowledge_mutation_repo(server.url.as_str());
-    let _guard = enter_process_state(Some(repo.path()), &[]);
+    update_seeded_jira_site_url(repo.path(), server.url.as_str());
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
         repo.path().to_path_buf(),
         super::super::db::DashboardDbPools::default(),
