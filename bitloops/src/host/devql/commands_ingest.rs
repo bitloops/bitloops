@@ -1,6 +1,42 @@
 use super::*;
 
 pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
+    let summary = execute_ingest(cfg, init, max_checkpoints).await?;
+    println!("{}", format_ingestion_summary(&summary));
+    Ok(())
+}
+
+pub(crate) async fn execute_ingest(
+    cfg: &DevqlConfig,
+    init: bool,
+    max_checkpoints: usize,
+) -> Result<IngestionCounters> {
+    execute_ingest_with_observer(cfg, init, max_checkpoints, None).await
+}
+
+pub(crate) async fn execute_ingest_with_observer(
+    cfg: &DevqlConfig,
+    init: bool,
+    max_checkpoints: usize,
+    observer: Option<&dyn IngestionObserver>,
+) -> Result<IngestionCounters> {
+    let mut counters = IngestionCounters {
+        init_requested: init,
+        ..IngestionCounters::default()
+    };
+    let mut checkpoints_total = 0usize;
+    let mut checkpoints_processed = 0usize;
+    emit_progress(
+        observer,
+        IngestionProgressPhase::Initializing,
+        checkpoints_total,
+        checkpoints_processed,
+        None,
+        None,
+        &counters,
+    );
+
+    let result: Result<()> = async {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
     let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
@@ -30,17 +66,36 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     if max_checkpoints > 0 && checkpoints.len() > max_checkpoints {
         checkpoints.truncate(max_checkpoints);
     }
+    checkpoints_total = checkpoints.len();
+    emit_progress(
+        observer,
+        IngestionProgressPhase::Initializing,
+        checkpoints_total,
+        checkpoints_processed,
+        None,
+        None,
+        &counters,
+    );
 
     let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
     let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
 
-    let mut counters = IngestionCounters::default();
-
     for cp in checkpoints {
+        let checkpoint = cp.clone();
         let commit_info = commit_map.get(&cp.checkpoint_id);
         let commit_sha = commit_info
             .map(|info| info.commit_sha.clone())
             .unwrap_or_default();
+        let commit_sha_option = (!commit_sha.is_empty()).then_some(commit_sha.clone());
+        emit_progress(
+            observer,
+            IngestionProgressPhase::Extracting,
+            checkpoints_total,
+            checkpoints_processed,
+            Some(cp.checkpoint_id.clone()),
+            commit_sha_option.clone(),
+            &counters,
+        );
         let event_id = deterministic_uuid(&format!(
             "{}|{}|{}|checkpoint_committed",
             cfg.repo.repo_id, cp.checkpoint_id, cp.session_id
@@ -54,6 +109,17 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
 
         if commit_sha.is_empty() {
             counters.checkpoints_without_commit += 1;
+            checkpoints_processed += 1;
+            emit_checkpoint_ingested(observer, checkpoint, None);
+            emit_progress(
+                observer,
+                IngestionProgressPhase::Persisting,
+                checkpoints_total,
+                checkpoints_processed,
+                Some(cp.checkpoint_id.clone()),
+                None,
+                &counters,
+            );
             continue;
         }
 
@@ -162,13 +228,33 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
             counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
         }
 
+        let _projected_rows = upsert_checkpoint_file_snapshot_rows(
+            cfg,
+            &relational,
+            &cp,
+            &commit_sha,
+            commit_info,
+        )
+        .await?;
+
         counters.checkpoints_processed += 1;
+        checkpoints_processed += 1;
+        emit_checkpoint_ingested(observer, checkpoint, commit_sha_option.clone());
+        emit_progress(
+            observer,
+            IngestionProgressPhase::Persisting,
+            checkpoints_total,
+            checkpoints_processed,
+            Some(cp.checkpoint_id.clone()),
+            commit_sha_option,
+            &counters,
+        );
     }
 
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let clone_ingest = capability_host
         .invoke_ingester_with_relational(
             SEMANTIC_CLONES_CAPABILITY_ID,
@@ -188,22 +274,71 @@ pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -
     counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
         .as_u64()
         .unwrap_or_default() as usize;
-
-    println!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
-        counters.checkpoints_processed,
-        counters.events_inserted,
-        counters.artefacts_upserted,
-        counters.checkpoints_without_commit,
-        counters.temporary_rows_promoted,
-        counters.semantic_feature_rows_upserted,
-        counters.semantic_feature_rows_skipped,
-        counters.symbol_embedding_rows_upserted,
-        counters.symbol_embedding_rows_skipped,
-        counters.symbol_clone_edges_upserted,
-        counters.symbol_clone_sources_scored
+    counters.success = true;
+    emit_progress(
+        observer,
+        IngestionProgressPhase::Complete,
+        checkpoints_total,
+        checkpoints_processed,
+        None,
+        None,
+        &counters,
     );
-    Ok(())
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(counters),
+        Err(err) => {
+            emit_progress(
+                observer,
+                IngestionProgressPhase::Failed,
+                checkpoints_total,
+                checkpoints_processed,
+                None,
+                None,
+                &counters,
+            );
+            Err(err)
+        }
+    }
+}
+
+fn emit_progress(
+    observer: Option<&dyn IngestionObserver>,
+    phase: IngestionProgressPhase,
+    checkpoints_total: usize,
+    checkpoints_processed: usize,
+    current_checkpoint_id: Option<String>,
+    current_commit_sha: Option<String>,
+    counters: &IngestionCounters,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+    observer.on_progress(IngestionProgressUpdate {
+        phase,
+        checkpoints_total,
+        checkpoints_processed,
+        current_checkpoint_id,
+        current_commit_sha,
+        counters: counters.clone(),
+    });
+}
+
+fn emit_checkpoint_ingested(
+    observer: Option<&dyn IngestionObserver>,
+    checkpoint: crate::host::checkpoints::strategy::manual_commit::CommittedInfo,
+    commit_sha: Option<String>,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+    observer.on_checkpoint_ingested(IngestedCheckpointNotification {
+        checkpoint,
+        commit_sha,
+    });
 }
 
 pub(crate) async fn promote_temporary_current_rows_for_head_commit(

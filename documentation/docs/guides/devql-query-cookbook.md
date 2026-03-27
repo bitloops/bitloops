@@ -5,144 +5,224 @@ title: DevQL Query Cookbook
 
 # DevQL Query Cookbook
 
-Practical query examples for the DevQL knowledge graph. All examples assume you've run `bitloops devql init` and `bitloops devql ingest`.
+Practical examples for the current DevQL GraphQL surface. All examples assume you have already run `bitloops devql init` and `bitloops devql ingest`.
 
-## Finding Artefacts
+`bitloops devql query` accepts both DevQL DSL and raw GraphQL:
 
-### List all artefacts for a language
+- DSL when the query contains `->`
+- Raw GraphQL otherwise
 
-```bash
-bitloops devql query "artefacts(language:'rust')"
-```
+## List Repository Artefacts
 
-```
-┌──────────────────────────┬──────────┬─────────────────────────────┐
-│ name                     │ type     │ file                        │
-├──────────────────────────┼──────────┼─────────────────────────────┤
-│ main                     │ function │ src/main.rs                 │
-│ Config                   │ struct   │ src/config.rs               │
-│ run_cli                  │ function │ src/cli.rs                  │
-│ StorageBackend           │ trait    │ src/storage/mod.rs          │
-│ ...                      │          │                             │
-└──────────────────────────┴──────────┴─────────────────────────────┘
-```
-
-### Filter by artefact kind
+### DSL
 
 ```bash
-# Only functions
-bitloops devql query "artefacts(kind:'function', language:'typescript')"
-
-# Only interfaces
-bitloops devql query "artefacts(kind:'interface', language:'typescript')"
-
-# Only structs
-bitloops devql query "artefacts(kind:'struct', language:'rust')"
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->select(path,symbol_fqn,canonical_kind,start_line,end_line)->limit(10)'
 ```
 
-### Find a specific symbol
+### Raw GraphQL
 
 ```bash
-bitloops devql query "artefacts(symbol_fqn:'auth::validate_token')"
+bitloops devql query '{ repo(name: "bitloops") { artefacts(first: 10, filter: { kind: FUNCTION }) { edges { node { path symbolFqn canonicalKind startLine endLine } } } } }'
 ```
 
-## Dependency Queries
+## Scope To A Project In A Monorepo
 
-### What does a symbol depend on? (outgoing)
+```graphql
+{
+  repo(name: "bitloops") {
+    project(path: "bitloops/src/graphql") {
+      artefacts(first: 10) {
+        edges {
+          node {
+            path
+            symbolFqn
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Run it from the CLI with:
 
 ```bash
-bitloops devql query "artefacts(symbol_fqn:'auth::validate_token') → deps(direction:'out')"
+bitloops devql query --compact '{ repo(name: "bitloops") { project(path: "bitloops/src/graphql") { artefacts(first: 10) { edges { node { path symbolFqn } } } } } }'
 ```
 
-Returns every symbol that `validate_token` imports, calls, or references.
+## Query A Historical Snapshot
 
-### What depends on a symbol? (incoming / reverse dependencies)
+### DSL
 
 ```bash
-bitloops devql query "artefacts(symbol_fqn:'auth::validate_token') → deps(direction:'in')"
+bitloops devql query 'repo("bitloops")->asOf(ref:"main")->artefacts(kind:"function")->select(path,symbol_fqn)->limit(5)'
 ```
 
-Returns every symbol that imports, calls, or references `validate_token`.
+### Raw GraphQL
 
-### Filter by edge kind
+```graphql
+{
+  repo(name: "bitloops") {
+    asOf(input: { ref: "main" }) {
+      artefacts(first: 5, filter: { kind: FUNCTION }) {
+        edges {
+          node {
+            path
+            symbolFqn
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Browse Commits And Checkpoints
+
+```graphql
+{
+  repo(name: "bitloops") {
+    commits(first: 10) {
+      edges {
+        node {
+          sha
+          commitMessage
+          committedAt
+          checkpoints(first: 1) {
+            edges {
+              node {
+                id
+                agent
+                filesTouched
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Find Knowledge Linked To The Repository
+
+```graphql
+{
+  repo(name: "bitloops") {
+    knowledge(first: 10, provider: JIRA) {
+      edges {
+        node {
+          title
+          externalUrl
+          latestVersion {
+            title
+            bodyPreview
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Inspect Chat History For Artefacts
+
+```graphql
+{
+  repo(name: "bitloops") {
+    file(path: "bitloops/src/graphql.rs") {
+      artefacts(first: 5) {
+        edges {
+          node {
+            path
+            symbolFqn
+            chatHistory(first: 3) {
+              edges {
+                node {
+                  agent
+                  role
+                  timestamp
+                  content
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Test Harness And Coverage
+
+```graphql
+{
+  repo(name: "bitloops") {
+    project(path: "bitloops/src") {
+      tests(first: 10, filter: { kind: FUNCTION }, minConfidence: 0.8) {
+        artefact {
+          filePath
+          name
+        }
+        summary {
+          totalCoveringTests
+        }
+      }
+      coverage(first: 10, filter: { kind: FUNCTION }) {
+        artefact {
+          filePath
+          name
+        }
+        summary {
+          uncoveredLineCount
+          uncoveredBranchCount
+        }
+      }
+    }
+  }
+}
+```
+
+## Semantic Clones
+
+### DSL
 
 ```bash
-# Only call relationships
-bitloops devql query "artefacts(symbol_fqn:'db::connect') → deps(direction:'in', kind:'calls')"
-
-# Only import relationships
-bitloops devql query "artefacts(symbol_fqn:'utils::format') → deps(direction:'in', kind:'imports')"
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->clones(min_score:0.8)->limit(10)'
 ```
 
-## Blast Radius — Impact Analysis
+### Raw GraphQL
 
-### "What will break if I change this function?"
-
-```bash
-bitloops devql query "artefacts(symbol_fqn:'auth::validate_token') → deps(direction:'in', kind:'calls')"
-```
-
-Returns every function that directly or transitively calls `validate_token`. If you change its signature, these are the artefacts that break.
-
-### "What does this module's public API affect?"
-
-```bash
-bitloops devql query "artefacts(kind:'function', symbol_fqn:'api::handlers') → deps(direction:'in')"
-```
-
-## Historical Queries
-
-### Query at a specific commit
-
-```bash
-bitloops devql query "asOf(commit:'a1b2c3d') → artefacts(kind:'function', language:'rust')"
-```
-
-### Query at a branch ref
-
-```bash
-bitloops devql query "asOf(ref:'main') → artefacts(kind:'struct')"
-```
-
-### Compare current vs historical
-
-Run the same query with and without `asOf` to see what changed:
-
-```bash
-# Current state
-bitloops devql query "artefacts(symbol_fqn:'auth')"
-
-# State at last release
-bitloops devql query "asOf(ref:'v1.0.0') → artefacts(symbol_fqn:'auth')"
-```
-
-## Checkpoint & Session Queries
-
-### View all checkpoints
-
-```bash
-bitloops devql query "checkpoints"
-```
-
-```
-┌──────────┬─────────────────────────────────────────┬──────────────┬────────┐
-│ commit   │ message                                 │ agent        │ files  │
-├──────────┼─────────────────────────────────────────┼──────────────┼────────┤
-│ f4e5d6c  │ feat: add rate limiting middleware       │ claude-code  │ 3      │
-│ a1b2c3d  │ refactor: switch auth to JWT             │ claude-code  │ 3      │
-│ b9c8d7e  │ fix: handle null user in profile handler │ cursor       │ 1      │
-└──────────┴─────────────────────────────────────────┴──────────────┴────────┘
-```
-
-### Browse AI conversation history
-
-```bash
-bitloops devql query "chat_history"
+```graphql
+{
+  repo(name: "bitloops") {
+    project(path: "bitloops/src") {
+      clones(first: 10, filter: { minScore: 0.8 }) {
+        edges {
+          node {
+            relationKind
+            score
+            sourceArtefact {
+              path
+              symbolFqn
+            }
+            targetArtefact {
+              path
+              symbolFqn
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Tips
 
-- **Re-ingest after significant changes** — `bitloops devql ingest` updates the knowledge graph
-- **Use `asOf` for safe exploration** — historical queries never affect current state
-- **Combine with the dashboard** — `bitloops dashboard` provides a visual interface to the same graph
-- **Check connectivity** — if queries fail, run `bitloops --connection-status`
+- Re-ingest after significant changes so relational, events, and blob-backed enrichments stay in sync
+- Use `asOf(...)` when you need reproducible answers against a commit or save state
+- Use `/devql/playground` to inspect the live schema before writing a client
+- Export `bitloops/schema.graphql` when you need client code generation or schema review

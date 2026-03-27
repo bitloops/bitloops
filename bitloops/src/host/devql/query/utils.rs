@@ -103,14 +103,6 @@ pub(super) fn resolve_repo_id_for_query(cfg: &DevqlConfig, requested_repo: Optio
     deterministic_uuid(&format!("repo://{normalized}"))
 }
 
-pub(super) fn sql_string_list_ch(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| format!("'{}'", esc_ch(value)))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 pub(crate) fn sql_string_list_pg(values: &[String]) -> String {
     values
         .iter()

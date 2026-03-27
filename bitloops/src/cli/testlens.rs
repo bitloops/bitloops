@@ -98,7 +98,7 @@ pub async fn run(args: TestLensArgs) -> Result<()> {
 
 async fn run_ingest_tests(repo_root: &Path, args: &TestLensIngestTestsArgs) -> Result<()> {
     let repo = resolve_repo_identity(repo_root)?;
-    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
 
     let payload = serde_json::json!({ "commit_sha": args.commit });
@@ -135,7 +135,7 @@ async fn run_ingest_coverage(repo_root: &Path, args: &TestLensIngestCoverageArgs
     }
 
     let repo = resolve_repo_identity(repo_root)?;
-    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
 
     let payload = serde_json::json!({
@@ -165,7 +165,7 @@ async fn run_ingest_coverage_batch(
         .unwrap_or_else(|| std::path::Path::new("."));
 
     let repo = resolve_repo_identity(repo_root)?;
-    let mut host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
+    let host = DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)?;
     host.ensure_migrations_applied_sync()?;
 
     for (index, entry) in entries.iter().enumerate() {

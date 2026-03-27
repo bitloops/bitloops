@@ -246,7 +246,7 @@ pub(super) fn build_deps_source_filters(
     }
     if let Some(glob) = parsed.files_path.as_deref() {
         let like = glob_to_sql_like(glob);
-        source_filters.push(format!("{alias}.path LIKE '{}'", esc_pg(&like)));
+        source_filters.push(sql_like_with_escape(&format!("{alias}.path"), &like));
     }
     if parsed.file.is_none()
         && let Some(commit_sha) = historical_commit_selector

@@ -11,6 +11,10 @@ async fn devql_bdd_features_pass() {
 
     let result = DevqlBddWorld::cucumber()
         .steps(cucumber_steps::collection())
+        // Steps use `process_state_lock()` (see `with_cwd` / `enter_process_state`) and some
+        // async steps hold that guard across `.await`. Default cucumber concurrency (64) lets
+        // scenarios block each other on that mutex indefinitely.
+        .max_concurrent_scenarios(1)
         .before(|_, _, scenario, world| {
             Box::pin(async move {
                 world.reset();

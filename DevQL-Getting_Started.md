@@ -216,11 +216,25 @@ cargo run -- devql query 'repo("bitloops-cli")->file("index.ts")->artefacts(line
 
 What this does:
 
-- Parses the DevQL pipeline.
+- Executes the shared GraphQL schema in-process.
+- Treats inputs containing `->` as DevQL DSL and compiles them to GraphQL before execution.
+- Treats other inputs as raw GraphQL by default.
 - Routes checkpoint/telemetry stages to the configured event backend (DuckDB or ClickHouse).
 - Routes artefact stages to the configured relational backend (SQLite or Postgres).
 - `chatHistory()` enriches artefact rows with related checkpoint/session chat context.
-- Prints JSON output.
+- Prints table output for DSL-friendly result shapes and JSON for raw GraphQL.
+
+Raw GraphQL examples:
+
+```bash
+cargo run -- devql query '{ repo(name: "bitloops-cli") { artefacts(first: 5) { edges { node { path symbolFqn canonicalKind } } } } }'
+cargo run -- devql query --graphql --compact '{ health { relational { backend connected } events { backend connected } } }'
+```
+
+Helpful flags:
+
+- `--graphql`: force raw GraphQL execution explicitly
+- `--compact`: emit compact JSON instead of formatted output
 
 ### Knowledge association ref semantics
 
@@ -237,7 +251,32 @@ bitloops devql knowledge associate "knowledge:<source_item_id>:<source_version_i
 bitloops devql knowledge associate "knowledge:<source_item_id>" --to "knowledge:<target_item_id>:<target_version_id>"
 ```
 
-## 7) (Optional) Use dashboard with DB startup health
+## 7) (Optional) Explore the HTTP and SDL surfaces
+
+Start the dashboard server:
+
+```bash
+cargo run -- dashboard --no-open
+```
+
+GraphQL routes:
+
+```text
+http://127.0.0.1:5667/devql
+http://127.0.0.1:5667/devql/playground
+http://127.0.0.1:5667/devql/sdl
+ws://127.0.0.1:5667/devql/ws
+```
+
+Export the checked-in SDL snapshot from the `bitloops/` crate directory:
+
+```bash
+cargo run --example export-schema > schema.graphql
+```
+
+The exported file is versioned in-repo and checked by tests against the runtime schema.
+
+## 8) (Optional) Use dashboard with DB startup health
 
 ```bash
 cargo run -- dashboard --no-open
@@ -264,5 +303,6 @@ bitloops init --agent claude-code
 bitloops devql init
 bitloops devql ingest
 bitloops devql query 'repo("bitloops-cli")->checkpoints()->limit(20)'
+bitloops devql query '{ health { relational { backend connected } } }'
 bitloops dashboard --no-open
 ```

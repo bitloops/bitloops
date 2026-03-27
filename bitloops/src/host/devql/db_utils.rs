@@ -138,7 +138,7 @@ pub(super) async fn clickhouse_exec(cfg: &DevqlConfig, sql: &str) -> Result<Stri
     .await
 }
 
-pub(super) async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
+pub(crate) async fn clickhouse_query_data(cfg: &DevqlConfig, sql: &str) -> Result<Value> {
     let mut query = sql.trim().to_string();
     if !query.to_ascii_uppercase().contains("FORMAT JSON") {
         query.push_str(" FORMAT JSON");
@@ -352,7 +352,7 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
     .context("joining SQLite transactional batch task")?
 }
 
-pub(super) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
+pub(crate) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -524,7 +524,7 @@ pub(crate) fn esc_pg(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-pub(super) fn esc_ch(value: &str) -> String {
+pub(crate) fn esc_ch(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -582,8 +582,34 @@ pub(super) fn format_ch_array(values: &[String]) -> String {
     format!("[{}]", parts.join(","))
 }
 
-pub(super) fn glob_to_sql_like(glob: &str) -> String {
-    glob.replace("**", "%").replace('*', "%")
+/// Escapes `%`, `_`, and `!` so they are treated literally in `LIKE` when paired with
+/// `ESCAPE '!'`.
+pub(crate) fn escape_like_pattern(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for ch in s.chars() {
+        match ch {
+            '!' => out.push_str("!!"),
+            '%' => out.push_str("!%"),
+            '_' => out.push_str("!_"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// `column LIKE 'pattern' ESCAPE '!'` with SQL string quoting for `pattern`.
+pub(crate) fn sql_like_with_escape(column: &str, pattern: &str) -> String {
+    format!("{} LIKE '{}' ESCAPE '!'", column, esc_pg(pattern))
+}
+
+/// Converts glob-style path patterns to a SQLite `LIKE` pattern for use with [`sql_like_with_escape`].
+/// Literal `%` and `_` in the input are escaped first; then `**`, `*`, and `?` become LIKE wildcards.
+pub(crate) fn glob_to_sql_like(glob: &str) -> String {
+    let escaped = escape_like_pattern(glob);
+    escaped
+        .replace("**", "%")
+        .replace('*', "%")
+        .replace('?', "_")
 }
 
 #[cfg(test)]
@@ -658,5 +684,21 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn escape_like_pattern_escapes_metacharacters() {
+        assert_eq!(escape_like_pattern("a%b_c!d"), "a!%b!_c!!d");
+    }
+
+    #[test]
+    fn glob_to_sql_like_escapes_percent_before_star() {
+        assert_eq!(glob_to_sql_like("a%b"), "a!%b");
+        assert_eq!(glob_to_sql_like("*.ts"), "%.ts");
+    }
+
+    #[test]
+    fn sql_like_with_escape_quotes_apostrophes() {
+        assert_eq!(sql_like_with_escape("p", "a'b"), "p LIKE 'a''b' ESCAPE '!'");
     }
 }

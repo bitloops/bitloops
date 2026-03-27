@@ -25,6 +25,19 @@ bitloops dashboard --port 8080
 bitloops dashboard --host 0.0.0.0 --port 3000
 ```
 
+## DevQL GraphQL Endpoints
+
+When the dashboard server is running, it also serves the DevQL GraphQL surface:
+
+| Route | Purpose |
+|---|---|
+| `/devql` | GraphQL queries and mutations |
+| `/devql/playground` | DevQL Explorer UI |
+| `/devql/sdl` | Generated schema SDL |
+| `/devql/ws` | Subscription transport |
+
+This is the same schema the CLI executes in-process for `bitloops devql query`, `bitloops devql init`, `bitloops devql ingest`, and the DevQL knowledge commands.
+
 ## Dashboard Views
 
 ### Checkpoints

@@ -1,0 +1,32 @@
+use async_graphql::SimpleObject;
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct HealthBackendStatus {
+    pub connected: bool,
+    pub backend: String,
+    pub status: String,
+    pub detail: String,
+}
+
+impl HealthBackendStatus {
+    pub fn new(
+        connected: bool,
+        backend: impl Into<String>,
+        status: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            connected,
+            backend: backend.into(),
+            status: status.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct HealthStatus {
+    pub relational: HealthBackendStatus,
+    pub events: HealthBackendStatus,
+    pub blob: HealthBackendStatus,
+}

@@ -416,7 +416,7 @@ fn current_watcher_restart_token() -> Result<String> {
         std::env::current_exe().context("resolving current executable for watcher")?;
     let bytes = fs::read(&current_exe)
         .with_context(|| format!("reading watcher executable {}", current_exe.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 async fn wait_for_shutdown_signal() {

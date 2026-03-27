@@ -6,6 +6,7 @@ pub use bitloops::capability_packs;
 pub use bitloops::cli;
 pub use bitloops::config;
 pub use bitloops::git;
+pub use bitloops::graphql;
 pub use bitloops::host;
 pub use bitloops::models;
 pub use bitloops::storage;
