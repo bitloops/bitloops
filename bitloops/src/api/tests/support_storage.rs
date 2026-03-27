@@ -256,6 +256,7 @@ impl MockHttpResponse {
 pub(super) struct MockSequentialHttpServer {
     pub(super) url: String,
     pub(super) handle: Option<thread::JoinHandle<()>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MockSequentialHttpServer {
@@ -266,6 +267,8 @@ impl MockSequentialHttpServer {
             .expect("set nonblocking mock server");
         let addr = listener.local_addr().expect("mock server addr");
         let url = format!("http://{}", addr);
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_for_thread = std::sync::Arc::clone(&shutdown);
 
         let handle = thread::spawn(move || {
             // CI can delay tests while process-global state locks are contended.
@@ -274,6 +277,9 @@ impl MockSequentialHttpServer {
             let mut responses = std::collections::VecDeque::from(responses);
 
             while let Some(response) = responses.pop_front() {
+                if shutdown_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let mut buffer = [0_u8; 8192];
@@ -295,6 +301,9 @@ impl MockSequentialHttpServer {
                         let _ = stream.write_all(response_text.as_bytes());
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if shutdown_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         if std::time::Instant::now() >= deadline {
                             break;
                         }
@@ -309,12 +318,15 @@ impl MockSequentialHttpServer {
         Self {
             url,
             handle: Some(handle),
+            shutdown,
         }
     }
 }
 
 impl Drop for MockSequentialHttpServer {
     fn drop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
