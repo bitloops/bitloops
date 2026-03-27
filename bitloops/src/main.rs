@@ -17,6 +17,12 @@ pub use bitloops::utils;
 #[allow(dead_code)]
 pub(crate) mod test_support;
 
+// temporary, will fix later
+#[allow(non_snake_case)]
+fn ToBeDeleted() {
+    // ...
+}
+
 #[tokio::main]
 async fn main() {
     // To be deleted comment 3
