@@ -18,18 +18,35 @@
     ·
     <a href="#faqs">FAQs</a>
   </p>
-  <p style="margin:8px 0;">
-  [![Stars](https://img.shields.io/github/stars/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/stargazers)
-  [![Forks](https://img.shields.io/github/forks/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/network)
-  [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/graphs/contributors)
-  [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat&color=181717)](LICENSE)
-  </p>
-  <p style="margin:8px 0;">
-  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat&color=6b7280)](https://github.com/bitloops/bitloops/releases)
-  [![Last Commit](https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=flat&color=6b7280)](https://github.com/bitloops/bitloops/commits)
-  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat)](https://github.com/bitloops/bitloops)
-  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat)](https://github.com/bitloops/bitloops)
-  </p>
+  <p style="margin:4px 0;">
+  <a href="https://github.com/bitloops/bitloops/network/">
+    <img src="https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork" alt="GitHub forks" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/stargazers/">
+    <img src="https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star" alt="GitHub stars" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/commit/">
+    <img src="https://img.shields.io/github/last-commit/bitloops/bitloops/main?color=6b7280" alt="Last Commit" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/tags/">
+    <img src="https://img.shields.io/github/v/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/releases">
+    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total?color=6b7280" alt="Downloads" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/bitloops/bitloops?color=111827" alt="License" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?color=6b7280" alt="Contributors" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops">
+    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square" alt="Local first" />
+  </a>
+  <a href="https://github.com/bitloops/bitloops">
+    <img src="https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square" alt="Agent agnostic" />
+  </a>
+</p>
 </div>
 
 <br>
