@@ -18,37 +18,20 @@
     ·
     <a href="#faqs">FAQs</a>
   </p>
-  <p style="margin:4px 0;">
-<p style="margin:4px 0;">
-  <a href="https://github.com/bitloops/bitloops/network/">
-    <img src="https://img.shields.io/github/forks/bitloops/bitloops.svg?style=social&label=Fork" alt="GitHub forks" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/stargazers/">
-    <img src="https://img.shields.io/github/stars/bitloops/bitloops.svg?style=social&label=Star" alt="GitHub stars" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/commit/">
-    <img src="https://badgen.net/github/commits/bitloops/bitloops?color=6b7280" alt="GitHub Commits" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/tags/">
-    <img src="https://badgen.net/github/tag/bitloops/bitloops?color=7404e4" alt="GitHub tag" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/releases">
-    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total.svg?color=6b7280" alt="Downloads" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/bitloops/bitloops?color=111827" alt="License" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?color=6b7280" alt="Contributors" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4" alt="Local first" />
-  </a>
-  <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Agents-Agent--Agnostic-7404e4" alt="Agent agnostic" />
-  </a>
-</p>
-  </div>
+  <p style="margin:8px 0;">
+  [![GitHub stars](https://img.shields.io/github/stars/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/stargazers)
+  [![GitHub forks](https://img.shields.io/github/forks/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/network)
+  [![GitHub contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/graphs/contributors)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=for-the-badge&logo=apache&logoColor=white)](LICENSE)
+  </p>
+  <p style="margin:8px 0;">
+  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/releases)
+  [![Last commit](https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/commits)
+  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48bGluZSB4MT0iNSIgeTE9IjEyIiB4Mj0iMTkiIHkyPSIxMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNzQwNGU0IiBzdHJva2Utd2lkdGg9IjIiLz48bGluZSB4MT0iMTIiIHkxPSI1IiB4Mj0iMTIiIHkyPSIxOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNzQwNGU0IiBzdHJva2Utd2lkdGg9IjIiLz48L3N2Zz4=&logoColor=7404e4)](https://github.com/bitloops/bitloops)
+  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cmVjdCB4PSI0IiB5PSI0IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHJ4PSIyIiBmaWxsPSJub25lIiBzdHJva2U9IiM3NDA0ZTQiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjYiIGN5PSIxMiIgcj0iMSIgZmlsbD0iIzAwRkYwMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iNiIgcj0iMSIgZmlsbD0iIzAwRkYwMCIvPjxjaXJjbGUgY3g9IjE4IiBjeT0iMTIiIHI9IjEiIGZpbGw9IiMwMEZGMDAiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjE4IiByPSIxIiBmaWxsPSIjMDBGRjAwIi8+PC9zdmc+&logoColor=7404e4)](https://github.com/bitloops/bitloops)
+  </p>
+
+<br>
 
 ## About Bitloops
 
@@ -110,23 +93,8 @@ to AI-assisted development.
 - **Local observability:** A local dashboard lets teams inspect AI-assisted activity without sending code
   or commit history to a cloud service.
 
-### Manual external knowledge
-
-Bitloops can also ingest repository-scoped external knowledge by URL:
-
-```bash
-bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
-bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
-```
-
-Supported sources:
-
-- GitHub issues
-- GitHub pull requests
-- Jira issues
-- Confluence pages
-
-For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
+- **External knowledge integration:** Connect GitHub issues, pull requests, Jira tickets, and Confluence pages
+  directly to your repository context.
 
 ## Installation
 
@@ -196,10 +164,27 @@ bitloops dashboard
 
 ## What is DevQL?
 
-DevQL is a query language created to offer you and your AI agents valuable and
-targeted insights regarding your codebases within milliseconds.
+DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
 
 [Read more here](./DevQL-Getting_Started.md)
+
+## External Knowledge
+
+Bitloops can ingest repository-scoped external knowledge by URL:
+
+```bash
+bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
+bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
+```
+
+Supported sources:
+
+- GitHub issues
+- GitHub pull requests
+- Jira issues
+- Confluence pages
+
+For this flow, SQLite stores repository-scoped identity and relations, DuckDB stores version metadata, and the full payload content is stored in the configured blob backend.
 
 ## FAQs
 
