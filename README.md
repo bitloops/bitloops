@@ -27,9 +27,10 @@
   <p style="margin:8px 0;">
   [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/releases)
   [![Last commit](https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/commits)
-  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48bGluZSB4MT0iNSIgeTE9IjEyIiB4Mj0iMTkiIHkyPSIxMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNzQwNGU0IiBzdHJva2Utd2lkdGg9IjIiLz48bGluZSB4MT0iMTIiIHkxPSI1IiB4Mj0iMTIiIHkyPSIxOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNzQwNGU0IiBzdHJva2Utd2lkdGg9IjIiLz48L3N2Zz4=&logoColor=7404e4)](https://github.com/bitloops/bitloops)
-  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cmVjdCB4PSI0IiB5PSI0IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHJ4PSIyIiBmaWxsPSJub25lIiBzdHJva2U9IiM3NDA0ZTQiIHN0cm9rZS13aWR0aD0iMiIvPjxjaXJjbGUgY3g9IjYiIGN5PSIxMiIgcj0iMSIgZmlsbD0iIzAwRkYwMCIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iNiIgcj0iMSIgZmlsbD0iIzAwRkYwMCIvPjxjaXJjbGUgY3g9IjE4IiBjeT0iMTIiIHI9IjEiIGZpbGw9IiMwMEZGMDAiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjE4IiByPSIxIiBmaWxsPSIjMDBGRjAwIi8+PC9zdmc+&logoColor=7404e4)](https://github.com/bitloops/bitloops)
+  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=for-the-badge)](https://github.com/bitloops/bitloops)
+  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=for-the-badge)](https://github.com/bitloops/bitloops)
   </p>
+</div>
 
 <br>
 
