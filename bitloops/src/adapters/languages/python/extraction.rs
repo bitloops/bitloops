@@ -106,14 +106,17 @@ fn push_python_class_artefact(
         seen,
         node,
         content,
-        "class_definition",
-        name.to_string(),
-        symbol_fqn,
-        parent_symbol_fqn,
-        false,
-        merge_python_modifiers(node, content, pending_modifiers),
-        node.child_by_field_name("body")
-            .and_then(|body| extract_docstring_from_body(body, content)),
+        PythonArtefactDescriptor {
+            language_kind: "class_definition",
+            name: name.to_string(),
+            symbol_fqn,
+            parent_symbol_fqn,
+            inside_parent: false,
+            modifiers: merge_python_modifiers(node, content, pending_modifiers),
+            docstring: node
+                .child_by_field_name("body")
+                .and_then(|body| extract_docstring_from_body(body, content)),
+        },
     );
 }
 
@@ -152,14 +155,17 @@ fn push_python_function_artefact(
         seen,
         node,
         content,
-        "function_definition",
-        name.to_string(),
-        symbol_fqn,
-        parent_symbol_fqn,
-        inside_class,
-        merge_python_modifiers(node, content, pending_modifiers),
-        node.child_by_field_name("body")
-            .and_then(|body| extract_docstring_from_body(body, content)),
+        PythonArtefactDescriptor {
+            language_kind: "function_definition",
+            name: name.to_string(),
+            symbol_fqn,
+            parent_symbol_fqn,
+            inside_parent: inside_class,
+            modifiers: merge_python_modifiers(node, content, pending_modifiers),
+            docstring: node
+                .child_by_field_name("body")
+                .and_then(|body| extract_docstring_from_body(body, content)),
+        },
     );
 }
 
@@ -177,13 +183,15 @@ fn push_python_import_artefact(
         seen,
         node,
         content,
-        node.kind(),
-        name.clone(),
-        format!("{path}::import::{name}"),
-        None,
-        false,
-        Vec::new(),
-        None,
+        PythonArtefactDescriptor {
+            language_kind: node.kind(),
+            name: name.clone(),
+            symbol_fqn: format!("{path}::import::{name}"),
+            parent_symbol_fqn: None,
+            inside_parent: false,
+            modifiers: Vec::new(),
+            docstring: None,
+        },
     );
 }
 
@@ -210,13 +218,15 @@ fn push_python_assignment_artefacts(
                     seen,
                     node,
                     content,
-                    "assignment",
-                    name.to_string(),
-                    format!("{path}::{name}"),
-                    None,
-                    false,
-                    Vec::new(),
-                    None,
+                    PythonArtefactDescriptor {
+                        language_kind: "assignment",
+                        name: name.to_string(),
+                        symbol_fqn: format!("{path}::{name}"),
+                        parent_symbol_fqn: None,
+                        inside_parent: false,
+                        modifiers: Vec::new(),
+                        docstring: None,
+                    },
                 );
             }
         }
@@ -239,13 +249,15 @@ fn push_python_assignment_artefacts(
             seen,
             node,
             content,
-            "assignment",
-            name.to_string(),
-            format!("{path}::{name}"),
-            None,
-            false,
-            Vec::new(),
-            None,
+            PythonArtefactDescriptor {
+                language_kind: "assignment",
+                name: name.to_string(),
+                symbol_fqn: format!("{path}::{name}"),
+                parent_symbol_fqn: None,
+                inside_parent: false,
+                modifiers: Vec::new(),
+                docstring: None,
+            },
         );
     }
 }
@@ -255,14 +267,17 @@ fn push_python_artefact(
     seen: &mut HashSet<(String, String, i32)>,
     node: tree_sitter::Node,
     content: &str,
-    language_kind: &str,
-    name: String,
-    symbol_fqn: String,
-    parent_symbol_fqn: Option<String>,
-    inside_parent: bool,
-    modifiers: Vec<String>,
-    docstring: Option<String>,
+    descriptor: PythonArtefactDescriptor,
 ) {
+    let PythonArtefactDescriptor {
+        language_kind,
+        name,
+        symbol_fqn,
+        parent_symbol_fqn,
+        inside_parent,
+        modifiers,
+        docstring,
+    } = descriptor;
     if name.is_empty()
         || !is_supported_language_kind(PYTHON_SUPPORTED_LANGUAGE_KINDS, language_kind)
     {
@@ -301,6 +316,16 @@ fn push_python_artefact(
         modifiers,
         docstring,
     });
+}
+
+struct PythonArtefactDescriptor {
+    language_kind: &'static str,
+    name: String,
+    symbol_fqn: String,
+    parent_symbol_fqn: Option<String>,
+    inside_parent: bool,
+    modifiers: Vec<String>,
+    docstring: Option<String>,
 }
 
 fn python_function_owner(

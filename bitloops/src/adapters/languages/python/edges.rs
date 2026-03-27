@@ -66,43 +66,35 @@ pub(crate) fn extract_python_dependency_edges(
     let mut seen_calls = HashSet::new();
     let mut seen_references = HashSet::new();
     let mut seen_extends = HashSet::new();
-
-    collect_python_edges_recursive(
-        root,
+    let mut traversal = PythonEdgeTraversalCtx {
         content,
         path,
-        &call_ctx,
-        &reference_ctx,
-        &method_targets_by_parent_and_name,
-        &mut edges,
-        &mut seen_calls,
-        &mut seen_references,
-        &mut seen_extends,
-    );
+        call_ctx: &call_ctx,
+        reference_ctx: &reference_ctx,
+        method_targets_by_parent_and_name: &method_targets_by_parent_and_name,
+        out: &mut edges,
+        seen_calls: &mut seen_calls,
+        seen_references: &mut seen_references,
+        seen_extends: &mut seen_extends,
+    };
+
+    collect_python_edges_recursive(root, &mut traversal);
 
     Ok(edges)
 }
 
 fn collect_python_edges_recursive(
     node: tree_sitter::Node,
-    content: &str,
-    path: &str,
-    call_ctx: &CallCtx<'_>,
-    reference_ctx: &ReferenceCtx<'_>,
-    method_targets_by_parent_and_name: &HashMap<(String, String), String>,
-    out: &mut Vec<DependencyEdge>,
-    seen_calls: &mut HashSet<String>,
-    seen_references: &mut HashSet<String>,
-    seen_extends: &mut HashSet<String>,
+    traversal: &mut PythonEdgeTraversalCtx<'_>,
 ) {
     let line_no = node.start_position().row as i32 + 1;
 
     match node.kind() {
         "import_statement" | "import_from_statement" | "future_import_statement" => {
-            for import_ref in python_import_refs(node, content) {
-                out.push(DependencyEdge {
+            for import_ref in python_import_refs(node, traversal.content) {
+                traversal.out.push(DependencyEdge {
                     edge_kind: EdgeKind::Imports,
-                    from_symbol_fqn: path.to_string(),
+                    from_symbol_fqn: traversal.path.to_string(),
                     to_target_symbol_fqn: None,
                     to_symbol_ref: Some(import_ref),
                     start_line: Some(line_no),
@@ -113,31 +105,31 @@ fn collect_python_edges_recursive(
         }
         "call" => collect_python_call_edge(
             node,
-            content,
-            path,
-            call_ctx,
-            method_targets_by_parent_and_name,
+            traversal.content,
+            traversal.path,
+            traversal.call_ctx,
+            traversal.method_targets_by_parent_and_name,
             &mut EdgeCollector {
-                out,
-                seen: seen_calls,
+                out: traversal.out,
+                seen: traversal.seen_calls,
             },
         ),
         "identifier" => collect_python_reference_edge(
             node,
-            content,
-            reference_ctx,
+            traversal.content,
+            traversal.reference_ctx,
             &mut EdgeCollector {
-                out,
-                seen: seen_references,
+                out: traversal.out,
+                seen: traversal.seen_references,
             },
         ),
         "class_definition" => collect_python_extends_edges(
             node,
-            content,
-            reference_ctx,
+            traversal.content,
+            traversal.reference_ctx,
             &mut EdgeCollector {
-                out,
-                seen: seen_extends,
+                out: traversal.out,
+                seen: traversal.seen_extends,
             },
         ),
         _ => {}
@@ -145,18 +137,7 @@ fn collect_python_edges_recursive(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_python_edges_recursive(
-            child,
-            content,
-            path,
-            call_ctx,
-            reference_ctx,
-            method_targets_by_parent_and_name,
-            out,
-            seen_calls,
-            seen_references,
-            seen_extends,
-        );
+        collect_python_edges_recursive(child, traversal);
     }
 }
 
@@ -183,13 +164,15 @@ fn collect_python_call_edge(
             };
             push_python_call_edge(
                 collector,
-                &owner.symbol_fqn,
-                name.trim(),
-                CallForm::Function,
-                line_no,
                 ctx,
-                None,
-                path,
+                PythonCallDescriptor {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    target_name: name.trim().to_string(),
+                    call_form: CallForm::Function,
+                    line_no,
+                    local_override: None,
+                    path: path.to_string(),
+                },
             );
         }
         "attribute" => {
@@ -226,13 +209,15 @@ fn collect_python_call_edge(
 
             push_python_call_edge(
                 collector,
-                &owner.symbol_fqn,
-                name,
-                CallForm::Method,
-                line_no,
                 ctx,
-                target,
-                path,
+                PythonCallDescriptor {
+                    from_symbol_fqn: owner.symbol_fqn.clone(),
+                    target_name: name.to_string(),
+                    call_form: CallForm::Method,
+                    line_no,
+                    local_override: target,
+                    path: path.to_string(),
+                },
             );
         }
         _ => {}
@@ -241,14 +226,17 @@ fn collect_python_call_edge(
 
 fn push_python_call_edge(
     collector: &mut EdgeCollector<'_>,
-    from_symbol_fqn: &str,
-    target_name: &str,
-    call_form: CallForm,
-    line_no: i32,
     ctx: &CallCtx<'_>,
-    local_override: Option<String>,
-    path: &str,
+    descriptor: PythonCallDescriptor,
 ) {
+    let PythonCallDescriptor {
+        from_symbol_fqn,
+        target_name,
+        call_form,
+        line_no,
+        local_override,
+        path,
+    } = descriptor;
     let target_name = target_name.trim();
     if target_name.is_empty() {
         return;
@@ -271,7 +259,7 @@ fn push_python_call_edge(
 
     let key = format!(
         "{}|{}|{}|{}|{}|{}",
-        from_symbol_fqn,
+        from_symbol_fqn.as_str(),
         to_target_symbol_fqn.as_deref().unwrap_or(""),
         to_symbol_ref.as_deref().unwrap_or(""),
         line_no,
@@ -284,13 +272,34 @@ fn push_python_call_edge(
 
     collector.out.push(DependencyEdge {
         edge_kind: EdgeKind::Calls,
-        from_symbol_fqn: from_symbol_fqn.to_string(),
+        from_symbol_fqn,
         to_target_symbol_fqn,
         to_symbol_ref,
         start_line: Some(line_no),
         end_line: Some(line_no),
         metadata: EdgeMetadata::call(call_form, resolution),
     });
+}
+
+struct PythonEdgeTraversalCtx<'a> {
+    content: &'a str,
+    path: &'a str,
+    call_ctx: &'a CallCtx<'a>,
+    reference_ctx: &'a ReferenceCtx<'a>,
+    method_targets_by_parent_and_name: &'a HashMap<(String, String), String>,
+    out: &'a mut Vec<DependencyEdge>,
+    seen_calls: &'a mut HashSet<String>,
+    seen_references: &'a mut HashSet<String>,
+    seen_extends: &'a mut HashSet<String>,
+}
+
+struct PythonCallDescriptor {
+    from_symbol_fqn: String,
+    target_name: String,
+    call_form: CallForm,
+    line_no: i32,
+    local_override: Option<String>,
+    path: String,
 }
 
 fn collect_python_reference_edge(
