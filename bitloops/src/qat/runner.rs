@@ -18,6 +18,10 @@ pub struct QatArgs {
     #[arg(long, default_value_t = false)]
     pub smoke: bool,
 
+    /// Run the DevQL capability journey suite.
+    #[arg(long, default_value_t = false)]
+    pub devql: bool,
+
     /// Run a specific feature file or feature directory.
     #[arg(long)]
     pub feature: Option<PathBuf>,
@@ -25,9 +29,17 @@ pub struct QatArgs {
     /// Directory where run artifacts are written.
     #[arg(long)]
     pub runs_dir: Option<PathBuf>,
+
+    /// Maximum number of scenarios to execute concurrently.
+    ///
+    /// Defaults to `1` to keep QAT runs deterministic and avoid output
+    /// deadlocks under heavy feature suites.
+    #[arg(long)]
+    pub concurrency: Option<usize>,
 }
 
 pub async fn run(args: QatArgs) -> Result<()> {
+    let max_concurrent = resolve_max_concurrent_scenarios(args.concurrency);
     let binary_path = env::current_exe().context("resolving current bitloops executable")?; // it gets bitloops binary path from target/debug/bitloops
     let runs_root = resolve_runs_root(args.runs_dir.clone())?;
     let suite_root = create_suite_root(&runs_root)?;
@@ -53,6 +65,7 @@ pub async fn run(args: QatArgs) -> Result<()> {
     let before_config = Arc::clone(&config);
     let result = QatWorld::cucumber()
         .steps(steps::collection())
+        .max_concurrent_scenarios(max_concurrent)
         .before(move |_, _, scenario, world| {
             let config = Arc::clone(&before_config);
             Box::pin(async move {
@@ -121,7 +134,7 @@ fn resolve_feature_path(args: &QatArgs) -> Result<PathBuf> {
         return Ok(resolved);
     }
 
-    Ok(default_feature_path(&feature_root(), args.smoke))
+    Ok(default_feature_path(&feature_root(), args))
 }
 
 fn feature_root() -> PathBuf {
@@ -130,12 +143,31 @@ fn feature_root() -> PathBuf {
         .join("features")
 }
 
-fn default_feature_path(feature_root: &Path, smoke: bool) -> PathBuf {
-    if smoke {
+fn default_feature_path(feature_root: &Path, args: &QatArgs) -> PathBuf {
+    if args.smoke {
         feature_root.join("smoke")
+    } else if args.devql {
+        feature_root.join("devql")
     } else {
         feature_root.join("claude-code")
     }
+}
+
+fn resolve_max_concurrent_scenarios(explicit: Option<usize>) -> usize {
+    explicit.unwrap_or_else(|| {
+        parse_positive_usize(
+            env::var("BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS")
+                .ok()
+                .as_deref(),
+            1,
+        )
+    })
+}
+
+fn parse_positive_usize(raw: Option<&str>, default_value: usize) -> usize {
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_value)
 }
 
 #[cfg(test)]
@@ -145,7 +177,29 @@ mod tests {
     #[test]
     fn default_feature_path_defaults_to_claude_suite() {
         let root = PathBuf::from("/tmp/qat/features");
-        assert_eq!(default_feature_path(&root, false), root.join("claude-code"));
-        assert_eq!(default_feature_path(&root, true), root.join("smoke"));
+        let mut args = QatArgs::default();
+        assert_eq!(default_feature_path(&root, &args), root.join("claude-code"));
+
+        args.smoke = true;
+        assert_eq!(default_feature_path(&root, &args), root.join("smoke"));
+
+        args.smoke = false;
+        args.devql = true;
+        assert_eq!(default_feature_path(&root, &args), root.join("devql"));
+    }
+
+    #[test]
+    fn parse_positive_usize_defaults_for_invalid_values() {
+        assert_eq!(parse_positive_usize(None, 3), 3);
+        assert_eq!(parse_positive_usize(Some(""), 3), 3);
+        assert_eq!(parse_positive_usize(Some("0"), 3), 3);
+        assert_eq!(parse_positive_usize(Some("-1"), 3), 3);
+        assert_eq!(parse_positive_usize(Some("abc"), 3), 3);
+    }
+
+    #[test]
+    fn parse_positive_usize_accepts_positive_values() {
+        assert_eq!(parse_positive_usize(Some("1"), 3), 1);
+        assert_eq!(parse_positive_usize(Some(" 8 "), 3), 8);
     }
 }

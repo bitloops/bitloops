@@ -9,6 +9,7 @@ Feature: Bitloops Claude Code workflows
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
+    And I ensure Claude Code auth in bitloops
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
     Then claude-code session exists in bitloops
@@ -21,6 +22,7 @@ Feature: Bitloops Claude Code workflows
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
     And I run EnableCLI for bitloops
+    And I ensure Claude Code auth in bitloops
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
     And I make a second change using Claude Code to bitloops
