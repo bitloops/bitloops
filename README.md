@@ -19,34 +19,35 @@
     <a href="#faqs">FAQs</a>
   </p>
   <p style="margin:4px 0;">
-  <p align="center">
+<p align="center">
   <a href="https://github.com/bitloops/bitloops/network/">
-    <img src="https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork" />
+    <img src="https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/stargazers/">
-    <img src="https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star" />
+    <img src="https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/commit/">
-    <img src="https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=flat-square&color=6b7280" />
+    <img src="https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=flat-square&color=6b7280" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/tags/">
-    <img src="https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4" />
+    <img src="https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/releases">
-    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280" />
+    <img src="https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827" />
+    <img src="https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops/graphs/contributors">
-    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280" />
+    <img src="https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square" />
+    <img src="https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
   <a href="https://github.com/bitloops/bitloops">
-    <img src="https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square" />
+    <img src="https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square" height="20" style="vertical-align: middle; margin: 2px;" />
   </a>
+</p>
 </p>
 </p>
 </div>
