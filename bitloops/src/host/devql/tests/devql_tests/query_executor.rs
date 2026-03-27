@@ -249,63 +249,6 @@ async fn checkpoint_matches_for_artefact_snapshot_reads_projection_rows() {
 }
 
 #[tokio::test]
-async fn blob_shas_changed_in_events_reads_duckdb_and_sqlite_stores() {
-    let duckdb_path = duckdb_path_with_sql(
-        "CREATE TABLE checkpoint_events (
-            repo_id TEXT,
-            event_type TEXT,
-            event_time TEXT,
-            checkpoint_id TEXT,
-            session_id TEXT,
-            agent TEXT,
-            commit_sha TEXT,
-            branch TEXT,
-            strategy TEXT,
-            files_touched TEXT,
-            payload TEXT
-        );
-        INSERT INTO checkpoint_events VALUES (
-            'repo-1',
-            'checkpoint_committed',
-            '2026-03-17T12:00:00Z',
-            'checkpoint-1',
-            'session-1',
-            'codex',
-            'commit-1',
-            'main',
-            'manual',
-            '[\"src/lib.rs\"]',
-            '{}'
-        );",
-    )
-    .await;
-    let relational = sqlite_relational_with_sql(
-        "CREATE TABLE file_state (
-            repo_id TEXT,
-            commit_sha TEXT,
-            blob_sha TEXT
-        );
-        INSERT INTO file_state VALUES ('repo-1', 'commit-1', 'blob-1');",
-    )
-    .await;
-    let cfg = executor_test_cfg();
-    let events_cfg = EventsBackendConfig {
-        duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
-        clickhouse_url: None,
-        clickhouse_user: None,
-        clickhouse_password: None,
-        clickhouse_database: None,
-    };
-
-    let blob_shas =
-        blob_shas_changed_in_events(&cfg, &events_cfg, &relational, "repo-1", None, None)
-            .await
-            .expect("blob shas");
-
-    assert_eq!(blob_shas, vec!["blob-1".to_string()]);
-}
-
-#[tokio::test]
 async fn attach_chat_history_to_artefacts_uses_empty_history_when_blob_is_missing() {
     let relational = sqlite_relational_with_sql(
         "CREATE TABLE file_state (

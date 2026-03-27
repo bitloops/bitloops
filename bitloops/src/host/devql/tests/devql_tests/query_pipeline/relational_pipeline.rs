@@ -43,6 +43,34 @@ async fn build_relational_artefacts_query_uses_projection_exists_for_activity_fi
 }
 
 #[tokio::test]
+async fn build_relational_clones_query_uses_shared_filtered_artefact_cte() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->project("packages/api")->artefacts(kind:"function",agent:"codex",since:"2026-03-20T00:00:00Z")->clones(min_score:0.75)->limit(10)"#,
+    )
+    .unwrap();
+
+    let sql =
+        build_relational_clones_query(&cfg, &events_cfg, &parsed, &relational, &cfg.repo.repo_id)
+            .await
+            .unwrap();
+
+    assert!(sql.contains("WITH filtered AS"));
+    assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
+    assert!(sql.contains("JOIN filtered src ON src.symbol_id = ce.source_symbol_id"));
+    assert!(sql.contains("cfs.path = a.path"));
+    assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+    assert!(sql.contains("cfs.agent = 'codex'"));
+    assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
+    assert!(sql.contains("ce.score >= 0.75"));
+    assert!(!sql.contains("blob_sha IN"));
+}
+
+#[tokio::test]
 async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_store() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
