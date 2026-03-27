@@ -3,6 +3,141 @@ use super::*;
 use super::helpers::{commit_file, init_devql_schema};
 
 #[test]
+pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_checkpoints() {
+    let dir = tempfile::tempdir().unwrap();
+    let head = setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+
+    let backend = session_backend(dir.path());
+    backend
+        .save_session(&SessionState {
+            session_id: "projection-session".to_string(),
+            phase: SessionPhase::Idle,
+            base_commit: head,
+            step_count: 1,
+            agent_type: "claude-code".to_string(),
+            files_touched: vec![
+                "src/projection_a.ts".to_string(),
+                "src/projection_b.ts".to_string(),
+                "src/projection_missing.ts".to_string(),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/projection_a.ts"),
+        "export const projectionA = () => 1;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("src/projection_b.ts"),
+        "export const projectionB = () => 2;\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "project snapshot rows"]);
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    strategy.post_commit().unwrap();
+
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .unwrap()
+        .get(&head_sha)
+        .cloned()
+        .expect("post_commit should map the commit to a checkpoint");
+    let blob_a = run_git(
+        dir.path(),
+        &["rev-parse", &format!("{head_sha}:src/projection_a.ts")],
+    )
+    .unwrap();
+    let blob_b = run_git(
+        dir.path(),
+        &["rev-parse", &format!("{head_sha}:src/projection_b.ts")],
+    )
+    .unwrap();
+
+    let sqlite = rusqlite::Connection::open(&devql_sqlite_path).unwrap();
+    let projected_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+             WHERE checkpoint_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![checkpoint_id.as_str(), head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        projected_rows, 2,
+        "post_commit should project one snapshot row per resolved touched file"
+    );
+
+    let projection_a_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+             WHERE checkpoint_id = ?1 AND path = ?2 AND blob_sha = ?3",
+            rusqlite::params![
+                checkpoint_id.as_str(),
+                "src/projection_a.ts",
+                blob_a.as_str()
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let projection_b_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+             WHERE checkpoint_id = ?1 AND path = ?2 AND blob_sha = ?3",
+            rusqlite::params![
+                checkpoint_id.as_str(),
+                "src/projection_b.ts",
+                blob_b.as_str()
+            ],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let missing_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+             WHERE checkpoint_id = ?1 AND path = ?2",
+            rusqlite::params![checkpoint_id.as_str(), "src/projection_missing.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(
+        projection_a_rows, 1,
+        "expected projection row for first file"
+    );
+    assert_eq!(
+        projection_b_rows, 1,
+        "expected projection row for second file"
+    );
+    assert_eq!(
+        missing_rows, 0,
+        "unresolvable touched files should be skipped from the projection"
+    );
+    drop(sqlite);
+
+    strategy.post_commit().unwrap();
+
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let replayed_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoint_file_snapshots
+             WHERE checkpoint_id = ?1 AND commit_sha = ?2",
+            rusqlite::params![checkpoint_id.as_str(), head_sha.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        replayed_rows, 2,
+        "replaying post_commit for the same mapped commit must stay idempotent"
+    );
+}
+
+#[test]
 pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

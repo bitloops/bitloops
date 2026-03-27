@@ -3,20 +3,20 @@ mod sql;
 
 use self::parsing::{artefact_from_value, dependency_edge_from_value, file_context_from_value};
 use self::sql::{
-    CurrentArtefactsWindowSql, DependencyScope, build_artefacts_by_ids_sql,
-    build_child_artefacts_sql, build_current_artefacts_count_sql,
-    build_current_artefacts_cursor_exists_sql, build_current_artefacts_sql,
-    build_current_artefacts_window_sql, build_current_dependency_batch_sql,
-    build_current_dependency_sql, build_file_context_list_sql, build_file_context_lookup_sql,
-    normalise_repo_relative_path, quote_devql_string,
+    DependencyScope, build_artefacts_by_ids_sql, build_child_artefacts_sql,
+    build_current_artefacts_count_sql, build_current_artefacts_cursor_exists_sql,
+    build_current_artefacts_sql, build_current_artefacts_window_sql,
+    build_current_dependency_batch_sql, build_current_dependency_sql, build_file_context_list_sql,
+    build_file_context_lookup_sql, normalise_repo_relative_path,
 };
 use super::DevqlGraphqlContext;
 use super::git_history::git_default_branch_name;
+use crate::artefact_query_planner::{ArtefactPagination, plan_graphql_artefact_query};
+use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
 };
-use crate::graphql::{ResolverScope, TemporalAccessMode};
-use crate::host::devql::{execute_query_json_with_composition, sqlite_query_rows_path};
+use crate::host::devql::sqlite_query_rows_path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -97,19 +97,16 @@ impl DevqlGraphqlContext {
             filter
                 .validate()
                 .map_err(|err| anyhow::anyhow!(err.message))?;
-            if filter.needs_event_backed_filter() {
-                return self.list_artefacts_via_devql(path, filter, scope).await;
-            }
         }
-
-        let sql = build_current_artefacts_sql(
+        let spec = plan_graphql_artefact_query(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             path,
-            scope.project_path(),
             filter,
-            scope.temporal_scope(),
+            scope,
+            None,
         );
+        let sql = build_current_artefacts_sql(&spec);
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)
@@ -123,14 +120,15 @@ impl DevqlGraphqlContext {
         filter: Option<&ArtefactFilterInput>,
         scope: &ResolverScope,
     ) -> Result<usize> {
-        let sql = build_current_artefacts_count_sql(
+        let spec = plan_graphql_artefact_query(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             path,
-            scope.project_path(),
             filter,
-            scope.temporal_scope(),
+            scope,
+            None,
         );
+        let sql = build_current_artefacts_count_sql(&spec);
         let rows = self.query_sqlite_rows(&sql).await?;
         let total_count = rows
             .first()
@@ -151,15 +149,15 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
         cursor: &str,
     ) -> Result<bool> {
-        let sql = build_current_artefacts_cursor_exists_sql(
+        let spec = plan_graphql_artefact_query(
             self.repo_identity.repo_id.as_str(),
             &self.current_branch_name(),
             path,
-            scope.project_path(),
             filter,
-            scope.temporal_scope(),
-            cursor,
+            scope,
+            None,
         );
+        let sql = build_current_artefacts_cursor_exists_sql(&spec, cursor);
         Ok(!self.query_sqlite_rows(&sql).await?.is_empty())
     }
 
@@ -171,16 +169,15 @@ impl DevqlGraphqlContext {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Artefact>> {
-        let sql = build_current_artefacts_window_sql(CurrentArtefactsWindowSql {
-            repo_id: self.repo_identity.repo_id.as_str(),
-            branch: &self.current_branch_name(),
+        let spec = plan_graphql_artefact_query(
+            self.repo_identity.repo_id.as_str(),
+            &self.current_branch_name(),
             path,
-            project_path: scope.project_path(),
             filter,
-            temporal_scope: scope.temporal_scope(),
-            after,
-            limit,
-        });
+            scope,
+            Some(ArtefactPagination::new(after, limit)),
+        );
+        let sql = build_current_artefacts_window_sql(&spec);
         let rows = self.query_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)
@@ -319,73 +316,6 @@ impl DevqlGraphqlContext {
         Ok(edges_by_artefact)
     }
 
-    async fn list_artefacts_via_devql(
-        &self,
-        path: Option<&str>,
-        filter: &ArtefactFilterInput,
-        scope: &ResolverScope,
-    ) -> Result<Vec<Artefact>> {
-        let mut stages = Vec::new();
-        if let Some(temporal_stage) = devql_temporal_stage(scope)? {
-            stages.push(temporal_stage);
-        }
-        let scoped_path = match (path, scope.project_path()) {
-            (Some(path), _) => Some(path.to_string()),
-            (None, Some(project_path)) => Some(format!("{project_path}/**")),
-            (None, None) => None,
-        };
-
-        if let Some(path) = scoped_path.as_deref() {
-            if path.contains('*') || path.contains('?') {
-                stages.push(format!("files(path:{})", quote_devql_string(path)));
-            } else {
-                stages.push(format!("file({})", quote_devql_string(path)));
-            }
-        }
-
-        let mut args = Vec::new();
-        if let Some(kind) = filter.kind {
-            args.push(format!(
-                "kind:{}",
-                quote_devql_string(kind.as_devql_value())
-            ));
-        }
-        if let Some(symbol_fqn) = filter.symbol_fqn.as_deref() {
-            args.push(format!("symbol_fqn:{}", quote_devql_string(symbol_fqn)));
-        }
-        if let Some(lines) = filter.lines.as_ref() {
-            args.push(format!("lines:{}..{}", lines.start, lines.end));
-        }
-        if let Some(agent) = filter.agent.as_deref() {
-            args.push(format!("agent:{}", quote_devql_string(agent)));
-        }
-        if let Some(since) = filter.since.as_ref() {
-            args.push(format!("since:{}", quote_devql_string(since.as_str())));
-        }
-
-        if args.is_empty() {
-            stages.push("artefacts()".to_string());
-        } else {
-            stages.push(format!("artefacts({})", args.join(",")));
-        }
-        stages.push(format!("limit({})", super::GRAPHQL_DEVQL_SCAN_LIMIT));
-
-        let cfg = self.config.as_ref().with_context(|| {
-            self.config_error
-                .clone()
-                .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-        })?;
-        let result = execute_query_json_with_composition(cfg, &stages.join("->"), None).await?;
-        let rows = result
-            .as_array()
-            .cloned()
-            .with_context(|| "DevQL artefact query returned a non-array payload")?;
-        rows.into_iter()
-            .map(artefact_from_value)
-            .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
-            .collect()
-    }
-
     async fn query_sqlite_rows(&self, sql: &str) -> Result<Vec<Value>> {
         let sqlite_path = self.devql_sqlite_path()?;
         sqlite_query_rows_path(&sqlite_path, sql).await
@@ -402,23 +332,5 @@ impl DevqlGraphqlContext {
 
     fn current_branch_name(&self) -> String {
         git_default_branch_name(self.repo_root.as_path())
-    }
-}
-
-fn devql_temporal_stage(scope: &ResolverScope) -> Result<Option<String>> {
-    let Some(temporal_scope) = scope.temporal_scope() else {
-        return Ok(None);
-    };
-
-    match temporal_scope.access_mode() {
-        TemporalAccessMode::HistoricalCommit => Ok(Some(format!(
-            "asOf(commit:{})",
-            quote_devql_string(temporal_scope.resolved_commit())
-        ))),
-        TemporalAccessMode::SaveCurrent => Ok(None),
-        TemporalAccessMode::SaveRevision(revision_id) => anyhow::bail!(
-            "event-backed artefact filters do not support asOf(saveRevision:\"{}\") yet",
-            revision_id
-        ),
     }
 }

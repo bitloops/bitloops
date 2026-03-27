@@ -7,7 +7,7 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, FileContext, Project,
-    connection::PageInfo, paginate_items,
+    connection::PageInfo,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -155,28 +155,6 @@ impl TemporalScope {
         }
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        if filter
-            .as_ref()
-            .is_some_and(|filter| filter.needs_event_backed_filter())
-        {
-            let artefacts = context
-                .list_artefacts(None, filter.as_ref(), &self.scope)
-                .await
-                .map_err(|err| {
-                    backend_error(format!(
-                        "failed to query temporally scoped artefacts: {err:#}"
-                    ))
-                })?;
-            let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
-                artefact.cursor()
-            })?;
-            return Ok(ArtefactConnection::new(
-                page.items.into_iter().map(ArtefactEdge::new).collect(),
-                page.page_info,
-                page.total_count,
-            ));
-        }
-
         let total_count = context
             .count_artefacts(None, filter.as_ref(), &self.scope)
             .await

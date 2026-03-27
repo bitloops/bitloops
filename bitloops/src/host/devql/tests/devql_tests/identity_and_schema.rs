@@ -146,6 +146,14 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("temp_checkpoint_id BIGINT"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots"));
+    assert!(sql.contains("event_time TIMESTAMPTZ NOT NULL"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
     assert!(sql.contains("PRIMARY KEY (repo_id, branch, symbol_id)"));
     assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
@@ -162,6 +170,14 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
 #[test]
 fn sqlite_schema_sql_includes_sync_state_table() {
     let sql = sqlite_schema_sql();
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots"));
+    assert!(sql.contains("event_time TEXT NOT NULL"));
+    assert!(sql.contains("PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx"));
+    assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("PRIMARY KEY (repo_id, state_key)"));
 }

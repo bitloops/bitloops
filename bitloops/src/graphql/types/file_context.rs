@@ -43,29 +43,6 @@ impl FileContext {
         }
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        if filter
-            .as_ref()
-            .is_some_and(|filter| filter.needs_event_backed_filter())
-        {
-            let artefacts = context
-                .list_artefacts(Some(self.path.as_str()), filter.as_ref(), &self.scope)
-                .await
-                .map_err(|err| {
-                    backend_error(format!(
-                        "failed to query artefacts for file {}: {err:#}",
-                        self.path
-                    ))
-                })?;
-            let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
-                artefact.cursor()
-            })?;
-            return Ok(ArtefactConnection::new(
-                page.items.into_iter().map(ArtefactEdge::new).collect(),
-                page.page_info,
-                page.total_count,
-            ));
-        }
-
         let total_count = context
             .count_artefacts(Some(self.path.as_str()), filter.as_ref(), &self.scope)
             .await

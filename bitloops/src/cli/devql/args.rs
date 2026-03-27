@@ -12,6 +12,8 @@ pub enum DevqlCommand {
     Init(DevqlInitArgs),
     /// Ingest checkpoint/events and relational artefacts for configured backends.
     Ingest(DevqlIngestArgs),
+    /// Backfill or repair DevQL relational projections.
+    Projection(DevqlProjectionArgs),
     /// Execute a DevQL query.
     Query(DevqlQueryArgs),
     /// Check backend connectivity for Postgres and ClickHouse.
@@ -34,6 +36,37 @@ pub struct DevqlIngestArgs {
     /// Limit checkpoints processed (newest-first).
     #[arg(long, default_value_t = 500)]
     pub max_checkpoints: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlProjectionArgs {
+    #[command(subcommand)]
+    pub command: DevqlProjectionCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlProjectionCommand {
+    /// Backfill or repair the checkpoint_file_snapshots projection.
+    CheckpointFileSnapshots(DevqlCheckpointFileSnapshotsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlCheckpointFileSnapshotsArgs {
+    /// Apply writes in bounded checkpoint batches.
+    #[arg(long, default_value_t = 200)]
+    pub batch_size: usize,
+
+    /// Stop after this many checkpoints (after any resume filter).
+    #[arg(long)]
+    pub max_checkpoints: Option<usize>,
+
+    /// Resume after the specified checkpoint_id in the stored checkpoint order.
+    #[arg(long)]
+    pub resume_after: Option<String>,
+
+    /// Report counters without mutating checkpoint_file_snapshots.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug, Clone)]

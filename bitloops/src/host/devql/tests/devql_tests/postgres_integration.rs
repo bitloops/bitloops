@@ -113,6 +113,58 @@ VALUES ('{}', '{}', '{}', 'blob-b', 'src/a.ts', 'typescript', 'function', 'funct
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn init_postgres_schema_creates_checkpoint_file_snapshots_projection() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let cfg = test_cfg();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+    init_postgres_schema(&cfg, &client).await.unwrap();
+
+    let table_name: Option<String> = client
+        .query_one(
+            "SELECT to_regclass('public.checkpoint_file_snapshots')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        table_name.as_deref(),
+        Some("checkpoint_file_snapshots"),
+        "expected init_postgres_schema to create checkpoint_file_snapshots"
+    );
+
+    let index_rows = client
+        .query(
+            "SELECT indexname
+             FROM pg_indexes
+             WHERE schemaname = 'public' AND tablename = 'checkpoint_file_snapshots'
+             ORDER BY indexname",
+            &[],
+        )
+        .await
+        .unwrap();
+    let index_names: Vec<String> = index_rows.into_iter().map(|row| row.get(0)).collect();
+    assert_eq!(
+        index_names,
+        vec![
+            "checkpoint_file_snapshots_agent_time_idx".to_string(),
+            "checkpoint_file_snapshots_checkpoint_idx".to_string(),
+            "checkpoint_file_snapshots_commit_idx".to_string(),
+            "checkpoint_file_snapshots_event_time_idx".to_string(),
+            "checkpoint_file_snapshots_lookup_idx".to_string(),
+            "checkpoint_file_snapshots_pkey".to_string(),
+        ],
+        "expected init_postgres_schema to create the projection indexes"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
 async fn current_snapshot_updates_lines_and_bytes_for_moved_js_symbol_while_history_is_preserved() {
     let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
     let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();

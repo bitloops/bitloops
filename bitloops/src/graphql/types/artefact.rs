@@ -91,10 +91,6 @@ impl ArtefactFilterInput {
         }
         Ok(())
     }
-
-    pub(crate) fn needs_event_backed_filter(&self) -> bool {
-        self.agent.is_some() || self.since.is_some()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]

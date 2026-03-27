@@ -48,6 +48,36 @@ ON current_file_state (repo_id, commit_sha);
 CREATE INDEX IF NOT EXISTS current_file_state_blob_idx
 ON current_file_state (repo_id, blob_sha);
 
+-- Exact checkpoint-to-file snapshot projection for event-backed artefact filters.
+CREATE TABLE IF NOT EXISTS checkpoint_file_snapshots (
+    repo_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT '',
+    commit_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    PRIMARY KEY (repo_id, checkpoint_id, path, blob_sha)
+);
+
+CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_lookup_idx
+ON checkpoint_file_snapshots (repo_id, path, blob_sha);
+
+CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_agent_time_idx
+ON checkpoint_file_snapshots (repo_id, agent, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_event_time_idx
+ON checkpoint_file_snapshots (repo_id, event_time);
+
+CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_checkpoint_idx
+ON checkpoint_file_snapshots (repo_id, checkpoint_id);
+
+CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx
+ON checkpoint_file_snapshots (repo_id, commit_sha);
+
 CREATE TABLE IF NOT EXISTS artefacts (
     artefact_id TEXT PRIMARY KEY,
     symbol_id TEXT,
