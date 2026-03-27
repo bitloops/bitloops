@@ -33,12 +33,12 @@ bitloops dashboard --recheck-local-dashboard-net
 
 When the dashboard server is running, it also serves the DevQL GraphQL surface:
 
-| Route | Purpose |
-|---|---|
-| `/devql` | GraphQL queries and mutations |
-| `/devql/playground` | DevQL Explorer UI |
-| `/devql/sdl` | Generated schema SDL |
-| `/devql/ws` | Subscription transport |
+| Route               | Purpose                       |
+| ------------------- | ----------------------------- |
+| `/devql`            | GraphQL queries and mutations |
+| `/devql/playground` | DevQL Explorer UI             |
+| `/devql/sdl`        | Generated schema SDL          |
+| `/devql/ws`         | Subscription transport        |
 
 This is the same schema the CLI executes in-process for `bitloops devql query`, `bitloops devql init`, `bitloops devql ingest`, and the DevQL knowledge commands.
 
@@ -96,10 +96,14 @@ Real-time status of configured stores:
 
 ```json title=".bitloops/config.json"
 {
-  "dashboard": {
-    "local_dashboard": {
-      "tls": true,
-      "bitloops_local": true
+  "version": "1.0",
+  "scope": "project",
+  "settings": {
+    "dashboard": {
+      "local_dashboard": {
+        "tls": true,
+        "bitloops_local": true
+      }
     }
   }
 }
