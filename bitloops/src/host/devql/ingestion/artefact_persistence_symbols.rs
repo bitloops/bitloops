@@ -2,7 +2,7 @@ use super::*;
 
 // Symbol record building, content hashing, and artefact DB upserts.
 
-pub(super) fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -> &'a str {
+pub(super) fn artefact_source_slice<'a>(content: &'a str, item: &LanguageArtefact) -> &'a str {
     let len = content.len();
     let start = usize::try_from(item.start_byte)
         .unwrap_or_default()
@@ -15,7 +15,7 @@ pub(super) fn artefact_source_slice<'a>(content: &'a str, item: &JsTsArtefact) -
     content.get(start..end).unwrap_or("")
 }
 
-pub(super) fn symbol_content_hash(item: &JsTsArtefact, content: &str) -> String {
+pub(super) fn symbol_content_hash(item: &LanguageArtefact, content: &str) -> String {
     deterministic_uuid(&format!(
         "{}|{}|{}|{}|{}|{}",
         item.canonical_kind.as_deref().unwrap_or("<null>"),
@@ -32,7 +32,7 @@ pub(super) fn build_symbol_records(
     path: &str,
     blob_sha: &str,
     file_artefact: &FileArtefactRow,
-    items: &[JsTsArtefact],
+    items: &[LanguageArtefact],
     content: &str,
 ) -> Vec<PersistedArtefactRecord> {
     let mut out = Vec::with_capacity(items.len());

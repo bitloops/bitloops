@@ -1,4 +1,11 @@
 use super::*;
+use crate::adapters::languages::rust::canonical::{
+    RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::adapters::languages::ts_js::canonical::{
+    TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 
 fn extension_runtime_cfg() -> DevqlConfig {
     DevqlConfig {
@@ -25,14 +32,14 @@ fn extension_runtime_cfg() -> DevqlConfig {
     }
 }
 
-fn canonical_kind(artefact: &JsTsArtefact) -> Option<&str> {
+fn canonical_kind(artefact: &LanguageArtefact) -> Option<&str> {
     artefact.canonical_kind.as_deref()
 }
 
 fn artefact_by_language_kind<'a>(
-    artefacts: &'a [JsTsArtefact],
+    artefacts: &'a [LanguageArtefact],
     language_kind: &str,
-) -> &'a JsTsArtefact {
+) -> &'a LanguageArtefact {
     artefacts
         .iter()
         .find(|artefact| artefact.language_kind == language_kind)
@@ -40,10 +47,10 @@ fn artefact_by_language_kind<'a>(
 }
 
 fn artefact_by_name_and_language_kind<'a>(
-    artefacts: &'a [JsTsArtefact],
+    artefacts: &'a [LanguageArtefact],
     language_kind: &str,
     name: &str,
-) -> &'a JsTsArtefact {
+) -> &'a LanguageArtefact {
     artefacts
         .iter()
         .find(|artefact| artefact.language_kind == language_kind && artefact.name == name)
@@ -70,8 +77,15 @@ fn js_ts_canonical_mapping_covers_supported_kind_table() {
     ];
 
     for (language_kind, supported, canonical_kind) in expected {
-        assert_eq!(js_ts_supports_language_kind(language_kind), supported);
-        assert_eq!(js_ts_canonical_kind(language_kind), canonical_kind);
+        assert_eq!(
+            is_supported_language_kind(TS_JS_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(TS_JS_CANONICAL_MAPPINGS, language_kind, false)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
     }
 }
 
@@ -147,9 +161,13 @@ fn rust_canonical_mapping_covers_supported_kind_table() {
     ];
 
     for ((language_kind, inside_impl), supported, canonical_kind) in expected {
-        assert_eq!(rust_supports_language_kind(language_kind), supported);
         assert_eq!(
-            rust_canonical_kind(language_kind, inside_impl),
+            is_supported_language_kind(RUST_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(RUST_CANONICAL_MAPPINGS, language_kind, inside_impl)
+                .map(CanonicalKindProjection::as_str),
             canonical_kind
         );
     }
@@ -295,16 +313,23 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
 }
 
 #[test]
-fn devql_language_pack_runtime_registry_resolves_built_in_pack_implementations() {
-    assert!(resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID).is_some());
-    assert!(resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID).is_some());
-    assert!(resolve_built_in_language_pack("unknown-pack").is_none());
+fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
+    let registry = language_adapter_registry().expect("initialize language adapter registry");
+    assert_eq!(
+        registry.registered_pack_ids(),
+        vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]
+    );
+    assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
+    assert!(registry.get(TS_JS_LANGUAGE_PACK_ID).is_some());
+    assert!(registry.get("unknown-pack").is_none());
 }
 
 #[test]
-fn devql_language_pack_runtime_executes_rust_and_ts_js_built_ins() {
-    let rust_pack = resolve_built_in_language_pack(RUST_LANGUAGE_PACK_ID)
-        .expect("resolve rust built-in language pack runtime");
+fn devql_language_adapter_registry_executes_rust_and_ts_js_built_ins() {
+    let registry = language_adapter_registry().expect("initialize language adapter registry");
+    let rust_pack = registry
+        .get(RUST_LANGUAGE_PACK_ID)
+        .expect("resolve rust built-in language adapter pack");
     let rust_content = r#"//! crate docs
 fn greet() {
     helper();
@@ -312,21 +337,23 @@ fn greet() {
 
 fn helper() {}
 "#;
-    let rust_artefacts = (rust_pack.extract_artefacts)(rust_content, "src/lib.rs")
-        .expect("extract rust artefacts via language-pack runtime");
+    let rust_artefacts = rust_pack
+        .extract_artefacts(rust_content, "src/lib.rs")
+        .expect("extract rust artefacts via language adapter registry");
     assert!(
         rust_artefacts
             .iter()
             .any(|artefact| artefact.name == "greet"),
-        "rust built-in runtime should surface function artefacts"
+        "rust built-in registry pack should surface function artefacts"
     );
     assert!(
-        (rust_pack.extract_file_docstring)(rust_content).is_some(),
-        "rust built-in runtime should expose crate-level docstrings"
+        rust_pack.extract_file_docstring(rust_content).is_some(),
+        "rust built-in registry pack should expose crate-level docstrings"
     );
 
-    let ts_pack = resolve_built_in_language_pack(TS_JS_LANGUAGE_PACK_ID)
-        .expect("resolve ts/js built-in language pack runtime");
+    let ts_pack = registry
+        .get(TS_JS_LANGUAGE_PACK_ID)
+        .expect("resolve ts/js built-in language adapter pack");
     let ts_content = r#"export function greet() {
     return helper();
 }
@@ -335,19 +362,21 @@ function helper() {
     return 1;
 }
 "#;
-    let ts_artefacts = (ts_pack.extract_artefacts)(ts_content, "src/main.ts")
-        .expect("extract ts artefacts via language-pack runtime");
+    let ts_artefacts = ts_pack
+        .extract_artefacts(ts_content, "src/main.ts")
+        .expect("extract ts artefacts via language adapter registry");
     assert!(
         ts_artefacts.iter().any(|artefact| artefact.name == "greet"),
-        "ts/js built-in runtime should surface function artefacts"
+        "ts/js built-in registry pack should surface function artefacts"
     );
-    let ts_edges = (ts_pack.extract_dependency_edges)(ts_content, "src/main.ts", &ts_artefacts)
-        .expect("extract ts dependency edges via language-pack runtime");
+    let ts_edges = ts_pack
+        .extract_dependency_edges(ts_content, "src/main.ts", &ts_artefacts)
+        .expect("extract ts dependency edges via language adapter registry");
     assert!(
         ts_edges
             .iter()
             .any(|edge| edge.edge_kind == EdgeKind::Calls),
-        "ts/js built-in runtime should emit call edges"
+        "ts/js built-in registry pack should emit call edges"
     );
 }
 
@@ -370,4 +399,65 @@ fn devql_extension_host_builds_capability_contexts_from_registered_owners() {
         TEST_HARNESS_CAPABILITY_INGESTER_ID
     );
     assert_eq!(ingest_context.commit_sha.as_deref(), Some("abc123"));
+}
+
+#[test]
+fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
+    let cfg = extension_runtime_cfg();
+    let lifecycle = collect_language_adapter_lifecycle(&cfg, "local-cli", false, false)
+        .expect("collect language adapter lifecycle summary");
+
+    let pack_ids = lifecycle
+        .summary
+        .packs
+        .iter()
+        .map(|pack| pack.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pack_ids,
+        vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]
+    );
+    assert!(
+        lifecycle
+            .readiness_reports
+            .iter()
+            .all(|report| report.ready),
+        "built-in language adapters should report ready without pending migrations"
+    );
+}
+
+#[test]
+fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_adapter_entries() {
+    let cfg = extension_runtime_cfg();
+    let lifecycle = collect_language_adapter_lifecycle(&cfg, "local-cli", false, false)
+        .expect("collect language adapter lifecycle summary");
+    let ext_host = crate::host::extension_host::CoreExtensionHost::with_builtins()
+        .expect("bootstrap core extension host");
+    let snapshot = ext_host
+        .readiness_snapshot()
+        .with_language_adapter_readiness(
+            lifecycle
+                .summary
+                .packs
+                .iter()
+                .map(|pack| pack.id.clone())
+                .collect(),
+            lifecycle.readiness_reports,
+        );
+    let report = ext_host.registry_report_with_snapshot(snapshot);
+
+    assert_eq!(
+        report.language_adapter_pack_ids,
+        vec![
+            RUST_LANGUAGE_PACK_ID.to_string(),
+            TS_JS_LANGUAGE_PACK_ID.to_string()
+        ]
+    );
+    assert!(
+        report
+            .readiness
+            .iter()
+            .any(|entry| entry.family == "language-adapter-pack"),
+        "language adapter readiness entries should be present in extension report"
+    );
 }

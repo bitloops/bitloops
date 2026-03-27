@@ -446,8 +446,7 @@ fn shadow_branch_ref_for_session_state(state: &SessionState) -> String {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    let hash = Sha256::digest(data);
-    format!("{hash:x}")
+    hex::encode(Sha256::digest(data))
 }
 
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Result<String> {

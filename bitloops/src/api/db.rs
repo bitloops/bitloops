@@ -21,16 +21,16 @@ pub(super) trait RelationalHealthStore: Send + Sync {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BackendHealthKind {
+pub(crate) enum BackendHealthKind {
     Ok,
     Skip,
     Fail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct BackendHealth {
-    pub(super) kind: BackendHealthKind,
-    pub(super) detail: String,
+pub(crate) struct BackendHealth {
+    pub(crate) kind: BackendHealthKind,
+    pub(crate) detail: String,
 }
 
 impl BackendHealth {
@@ -55,7 +55,7 @@ impl BackendHealth {
         }
     }
 
-    pub(super) fn status_label(&self) -> &'static str {
+    pub(crate) fn status_label(&self) -> &'static str {
         match self.kind {
             BackendHealthKind::Ok => "OK",
             BackendHealthKind::Skip => "SKIP",
@@ -65,11 +65,11 @@ impl BackendHealth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DashboardDbHealth {
-    pub(super) relational: BackendHealth,
-    pub(super) events: BackendHealth,
-    pub(super) postgres: BackendHealth,
-    pub(super) clickhouse: BackendHealth,
+pub(crate) struct DashboardDbHealth {
+    pub(crate) relational: BackendHealth,
+    pub(crate) events: BackendHealth,
+    pub(crate) postgres: BackendHealth,
+    pub(crate) clickhouse: BackendHealth,
 }
 
 impl DashboardDbHealth {
@@ -132,7 +132,7 @@ impl fmt::Debug for DashboardDbPools {
 }
 
 impl DashboardDbPools {
-    pub(super) async fn health_check(&self) -> DashboardDbHealth {
+    pub(crate) async fn health_check(&self) -> DashboardDbHealth {
         let relational_store = self.relational.clone();
         let clickhouse_pool = self.clickhouse.as_ref();
         let duckdb_pool = self.duckdb.as_ref();

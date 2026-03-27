@@ -15,7 +15,6 @@ pub mod rewind;
 pub mod root;
 pub mod status;
 pub mod testlens;
-pub mod testlens_types;
 pub mod versioncheck;
 
 /// Bitloops CLI
@@ -77,7 +76,7 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
-    /// Test harness ingestion and querying over DevQL production artefacts.
+    /// Test harness ingestion for DevQL production artefacts.
     Testlens(testlens::TestLensArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]

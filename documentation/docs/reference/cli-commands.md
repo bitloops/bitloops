@@ -160,7 +160,7 @@ bitloops doctor
 
 ### `devql init`
 
-Create database schema.
+Create DevQL schema for the configured relational and events backends.
 
 ```bash
 bitloops devql init
@@ -168,41 +168,109 @@ bitloops devql init
 
 ### `devql ingest`
 
-Parse source files and populate the knowledge graph.
+Ingest checkpoints, events, artefacts, and related enrichments into the configured stores.
 
 ```bash
-bitloops devql ingest [--knowledge-url <url>]
+bitloops devql ingest [--init <true|false>] [--max-checkpoints <number>]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--knowledge-url` | Ingest a specific external resource (GitHub issue, Jira ticket, Confluence page) |
+| `--init` | Bootstrap schema before ingesting. Defaults to `true`. |
+| `--max-checkpoints` | Limit how many checkpoints are processed. Defaults to `500`. |
 
 **Examples:**
 
 ```bash
-# Ingest the codebase
 bitloops devql ingest
 
-# Ingest a GitHub issue
-bitloops devql ingest --knowledge-url https://github.com/org/repo/issues/123
-
-# Ingest a Jira ticket
-bitloops devql ingest --knowledge-url https://your-org.atlassian.net/browse/PROJ-456
+bitloops devql ingest --init=false --max-checkpoints 200
 ```
 
 ### `devql query`
 
-Query the knowledge graph.
+Execute a DevQL query against the in-process GraphQL schema.
 
 ```bash
-bitloops devql query "<query>"
+bitloops devql query [--graphql] [--compact] "<query>"
 ```
 
+`bitloops devql query` supports two input modes:
+
+- DevQL DSL when the query contains `->`
+- Raw GraphQL otherwise
+
+`--graphql` remains available as an explicit raw-GraphQL override. `--compact` emits compact JSON.
+
+**Examples:**
+
 ```bash
-bitloops devql query "artefacts(language='rust')"
-bitloops devql query "checkpoints"
-bitloops devql query "chat_history"
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
+bitloops devql query '{ repo(name: "bitloops") { artefacts(first: 5) { edges { node { path symbolFqn canonicalKind } } } } }'
+bitloops devql query --graphql --compact '{ health { relational { backend connected } } }'
+```
+
+### `devql connection-status`
+
+Check configured backend connectivity for DevQL.
+
+```bash
+bitloops devql connection-status
+```
+
+This is the command form of the global `bitloops --connection-status` check.
+
+### `devql packs`
+
+Inspect registered capability packs, readiness, migrations, and optional health information.
+
+```bash
+bitloops devql packs [--json] [--with-health] [--apply-migrations] [--with-extensions]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit JSON instead of human-readable output |
+| `--with-health` | Run pack health checks where available |
+| `--apply-migrations` | Apply registered pack migrations before reporting |
+| `--with-extensions` | Include Core extension-host language-pack and capability metadata |
+
+### `devql knowledge add`
+
+Add a repository-scoped external knowledge source by URL.
+
+```bash
+bitloops devql knowledge add <url> [--commit <sha-or-ref>]
+```
+
+### `devql knowledge associate`
+
+Associate an existing knowledge item with a typed Bitloops target.
+
+```bash
+bitloops devql knowledge associate <source-ref> --to <target-ref>
+```
+
+Example:
+
+```bash
+bitloops devql knowledge associate 'knowledge:item-1' --to 'commit:abc123'
+```
+
+### `devql knowledge refresh`
+
+Refresh an existing knowledge source and create a new immutable version when the content changes.
+
+```bash
+bitloops devql knowledge refresh <knowledge-ref>
+```
+
+### `devql knowledge versions`
+
+List immutable document versions for a knowledge item.
+
+```bash
+bitloops devql knowledge versions <knowledge-ref>
 ```
 
 ---

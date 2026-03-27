@@ -6,7 +6,6 @@ pub mod ingesters;
 pub mod mapping;
 pub mod migrations;
 pub mod pack;
-pub mod query;
 pub mod query_examples;
 pub mod register;
 pub mod schema;

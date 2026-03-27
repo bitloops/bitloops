@@ -57,21 +57,25 @@ Bitloops uses Tree-sitter to parse source files and extract functions, structs, 
 ## Step 4: Query
 
 ```bash
-bitloops devql query "artefacts(language='rust')"
+bitloops devql query 'repo("your-repo")->artefacts(kind:"function")->limit(10)'
 ```
 
 ```
-┌──────────────────────────┬──────────┬─────────────────────────────┐
-│ name                     │ type     │ file                        │
-├──────────────────────────┼──────────┼─────────────────────────────┤
-│ main                     │ function │ src/main.rs                 │
-│ Config                   │ struct   │ src/config.rs               │
-│ run_cli                  │ function │ src/cli.rs                  │
-│ ...                      │          │                             │
-└──────────────────────────┴──────────┴─────────────────────────────┘
+┌────────────────────────────────────┬───────────────────────────────┬────────────────┬───────────┬─────────┐
+│ path                               │ symbol fqn                    │ canonical kind │ start line│ end line│
+├────────────────────────────────────┼───────────────────────────────┼────────────────┼───────────┼─────────┤
+│ bitloops/src/main.rs               │ bitloops::main               │ FUNCTION       │ 17        │ 33      │
+│ bitloops/src/graphql.rs            │ bitloops::graphql::schema_sdl│ FUNCTION       │ 43        │ 49      │
+└────────────────────────────────────┴───────────────────────────────┴────────────────┴───────────┴─────────┘
 ```
 
-See the [DevQL Query Cookbook](/guides/devql-query-cookbook) for more query examples.
+Raw GraphQL also works directly:
+
+```bash
+bitloops devql query '{ repo(name: "your-repo") { artefacts(first: 2) { edges { node { path symbolFqn canonicalKind } } } } }'
+```
+
+See [DevQL GraphQL](/guides/devql-graphql) for the endpoint surface and SDL export workflow, and the [DevQL Query Cookbook](/guides/devql-query-cookbook) for more query examples.
 
 ## Step 5: Launch the Dashboard (Optional)
 
@@ -80,6 +84,12 @@ bitloops dashboard
 ```
 
 Open `http://localhost:5667` to visually browse artefacts, relationships, and store health.
+
+The same server also exposes DevQL GraphQL at:
+
+- `http://localhost:5667/devql`
+- `http://localhost:5667/devql/playground`
+- `http://localhost:5667/devql/sdl`
 
 ## Re-ingesting After Changes
 

@@ -31,7 +31,7 @@ jobs:
             target: aarch64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -109,7 +109,7 @@ jobs:
           Compress-Archive -Path bitloops/target/${{ matrix.target }}/release/bitloops.exe -DestinationPath dist/bitloops-${{ matrix.target }}.zip
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.target }}
           path: dist/bitloops-${{ matrix.target }}.*
@@ -120,7 +120,7 @@ jobs:
     needs: build
     steps:
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true
@@ -154,7 +154,7 @@ jobs:
           repositories: homebrew-tap
 
       - name: Checkout tap repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: bitloops/homebrew-tap
           token: ${{ steps.app-token.outputs.token }}

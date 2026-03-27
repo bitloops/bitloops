@@ -81,6 +81,25 @@ pub fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("stdout should be valid utf-8")
 }
 
+pub fn prepare_graphql_workspace(workspace: &Workspace) {
+    run_bitloops_or_panic(
+        workspace.repo_dir(),
+        &["init", "--agent", "codex", "--telemetry", "false"],
+    );
+
+    let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
+        .expect("resolve repo identity for GraphQL workspace");
+    let cfg =
+        bitloops::host::devql::DevqlConfig::from_env(workspace.repo_dir().to_path_buf(), repo)
+            .expect("build DevQL config for GraphQL workspace");
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for GraphQL workspace")
+        .block_on(bitloops::host::devql::run_init(&cfg))
+        .expect("initialise DevQL schema for GraphQL workspace");
+}
+
 pub fn seed_production_artefacts(workspace: &Workspace, commit_sha: &str) {
     production_seed::seed_production_artefacts(workspace, commit_sha)
 }

@@ -17,6 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+async-graphql = { version = "7", features = ["dataloader"] }
+async-graphql-axum = "7"
 axum = "0.8"
 env_logger = "0.11"
 figlet-rs = "1.0.0"
@@ -32,7 +34,8 @@ tree-sitter = "0.26.7"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.24.1"
-sha2 = "0.10"
+sha2 = "0.11"
+hex = "0.4"
 tokio = { version = "1", features = ["full"] }
 utoipa = "5"
 uuid = { version = "1", features = ["v4"] }

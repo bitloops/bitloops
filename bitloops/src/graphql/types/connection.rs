@@ -1,0 +1,367 @@
+use async_graphql::{Result, SimpleObject};
+
+use crate::graphql::{bad_cursor_error, bad_user_input_error};
+
+use super::{
+    Artefact, ChatEntry, Checkpoint, Commit, DependencyEdge, KnowledgeItem, KnowledgeRelation,
+    KnowledgeVersion, SemanticClone, TelemetryEvent,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct PageInfo {
+    pub has_next_page: bool,
+    pub has_previous_page: bool,
+    pub start_cursor: Option<String>,
+    pub end_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CommitEdge {
+    pub node: Commit,
+    pub cursor: String,
+}
+
+impl CommitEdge {
+    pub fn new(node: Commit) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CommitConnection {
+    pub edges: Vec<CommitEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl CommitConnection {
+    pub fn new(edges: Vec<CommitEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct ArtefactEdge {
+    pub node: Artefact,
+    pub cursor: String,
+}
+
+impl ArtefactEdge {
+    pub fn new(node: Artefact) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct ArtefactConnection {
+    pub edges: Vec<ArtefactEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl ArtefactConnection {
+    pub fn new(edges: Vec<ArtefactEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ChatEntryEdge {
+    pub node: ChatEntry,
+    pub cursor: String,
+}
+
+impl ChatEntryEdge {
+    pub fn new(node: ChatEntry) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ChatEntryConnection {
+    pub edges: Vec<ChatEntryEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl ChatEntryConnection {
+    pub fn new(edges: Vec<ChatEntryEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct CheckpointEdge {
+    pub node: Checkpoint,
+    pub cursor: String,
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct CloneEdge {
+    pub node: SemanticClone,
+    pub cursor: String,
+}
+
+impl CloneEdge {
+    pub fn new(node: SemanticClone) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct CloneConnection {
+    pub edges: Vec<CloneEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl CloneConnection {
+    pub fn new(edges: Vec<CloneEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+impl CheckpointEdge {
+    pub fn new(node: Checkpoint) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct CheckpointConnection {
+    pub edges: Vec<CheckpointEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl CheckpointConnection {
+    pub fn new(edges: Vec<CheckpointEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct TelemetryEventEdge {
+    pub node: TelemetryEvent,
+    pub cursor: String,
+}
+
+impl TelemetryEventEdge {
+    pub fn new(node: TelemetryEvent) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct TelemetryEventConnection {
+    pub edges: Vec<TelemetryEventEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl TelemetryEventConnection {
+    pub fn new(edges: Vec<TelemetryEventEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct DependencyConnectionEdge {
+    pub node: DependencyEdge,
+    pub cursor: String,
+}
+
+impl DependencyConnectionEdge {
+    pub fn new(node: DependencyEdge) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct DependencyEdgeConnection {
+    pub edges: Vec<DependencyConnectionEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl DependencyEdgeConnection {
+    pub fn new(
+        edges: Vec<DependencyConnectionEdge>,
+        page_info: PageInfo,
+        total_count: usize,
+    ) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeItemEdge {
+    pub node: KnowledgeItem,
+    pub cursor: String,
+}
+
+impl KnowledgeItemEdge {
+    pub fn new(node: KnowledgeItem) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeItemConnection {
+    pub edges: Vec<KnowledgeItemEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeItemConnection {
+    pub fn new(edges: Vec<KnowledgeItemEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeVersionEdge {
+    pub node: KnowledgeVersion,
+    pub cursor: String,
+}
+
+impl KnowledgeVersionEdge {
+    pub fn new(node: KnowledgeVersion) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeVersionConnection {
+    pub edges: Vec<KnowledgeVersionEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeVersionConnection {
+    pub fn new(edges: Vec<KnowledgeVersionEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeRelationEdge {
+    pub node: KnowledgeRelation,
+    pub cursor: String,
+}
+
+impl KnowledgeRelationEdge {
+    pub fn new(node: KnowledgeRelation) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct KnowledgeRelationConnection {
+    pub edges: Vec<KnowledgeRelationEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl KnowledgeRelationConnection {
+    pub fn new(edges: Vec<KnowledgeRelationEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PaginatedItems<T> {
+    pub items: Vec<T>,
+    pub page_info: PageInfo,
+    pub total_count: usize,
+}
+
+pub fn paginate_items<T: Clone>(
+    items: &[T],
+    first: i32,
+    after: Option<&str>,
+    cursor_of: impl Fn(&T) -> String,
+) -> Result<PaginatedItems<T>> {
+    if first <= 0 {
+        return Err(bad_user_input_error("`first` must be greater than zero"));
+    }
+
+    let total_count = items.len();
+    let start_index = match after {
+        Some(cursor) => {
+            let Some(position) = items.iter().position(|item| cursor_of(item) == cursor) else {
+                return Err(bad_cursor_error(format!(
+                    "cursor `{cursor}` does not match any result in this connection"
+                )));
+            };
+            position.saturating_add(1)
+        }
+        None => 0,
+    };
+
+    let end_index = start_index.saturating_add(first as usize).min(total_count);
+    let page_items = items[start_index..end_index].to_vec();
+    let start_cursor = page_items.first().map(&cursor_of);
+    let end_cursor = page_items.last().map(&cursor_of);
+
+    Ok(PaginatedItems {
+        items: page_items,
+        page_info: PageInfo {
+            has_next_page: end_index < total_count,
+            has_previous_page: start_index > 0,
+            start_cursor,
+            end_cursor,
+        },
+        total_count,
+    })
+}

@@ -268,17 +268,17 @@ pub(super) struct ApiAgentsQuery {
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        super::handlers::handle_api_root,
-        super::handlers::handle_api_kpis,
-        super::handlers::handle_api_commits,
-        super::handlers::handle_api_branches,
-        super::handlers::handle_api_users,
-        super::handlers::handle_api_agents,
-        super::handlers::handle_api_checkpoint,
-        super::handlers::handle_api_db_health,
-        super::handlers::handle_api_check_bundle_version,
-        super::handlers::handle_api_fetch_bundle,
-        super::handlers::handle_api_openapi
+        super::handlers::meta::handle_api_root,
+        super::handlers::dashboard::handle_api_kpis,
+        super::handlers::dashboard::handle_api_commits,
+        super::handlers::dashboard::handle_api_branches,
+        super::handlers::dashboard::handle_api_users,
+        super::handlers::dashboard::handle_api_agents,
+        super::handlers::checkpoint::handle_api_checkpoint,
+        super::handlers::health::handle_api_db_health,
+        super::handlers::bundle::handle_api_check_bundle_version,
+        super::handlers::bundle::handle_api_fetch_bundle,
+        super::handlers::meta::handle_api_openapi
     ),
     components(schemas(
         ApiErrorEnvelope,

@@ -13,6 +13,7 @@ pub(super) async fn load_stage_covering_tests(
     client: &mut tokio_postgres::Client,
     repo_id: String,
     production_symbol_id: String,
+    commit_sha: Option<String>,
     linkage_source_owned: Option<String>,
     min_confidence: Option<f64>,
     limit: usize,
@@ -37,6 +38,10 @@ pub(super) async fn load_stage_covering_tests(
            AND ts.canonical_kind = 'test_scenario'",
     );
     let mut next_param = 3usize;
+    if commit_sha.is_some() {
+        sql.push_str(&format!(" AND te.commit_sha = ${next_param}"));
+        next_param += 1;
+    }
     if min_confidence.is_some() {
         sql.push_str(&format!(
             " AND COALESCE((te.metadata::jsonb ->> 'confidence')::double precision, 0.0) >= ${next_param}"
@@ -52,23 +57,47 @@ pub(super) async fn load_stage_covering_tests(
         " ORDER BY confidence DESC, ts.path, ts.name LIMIT {limit}"
     ));
 
-    let rows = match (min_confidence, linkage_source_owned.as_deref()) {
-        (Some(mc), Some(ls)) => {
+    let rows = match (
+        commit_sha.as_deref(),
+        min_confidence,
+        linkage_source_owned.as_deref(),
+    ) {
+        (Some(sha), Some(mc), Some(ls)) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &mc, &ls])
+                .await
+        }
+        (Some(sha), Some(mc), None) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &mc])
+                .await
+        }
+        (Some(sha), None, Some(ls)) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &sha, &ls])
+                .await
+        }
+        (Some(sha), None, None) => {
+            client
+                .query(&sql, &[&repo_id, &production_symbol_id, &sha])
+                .await
+        }
+        (None, Some(mc), Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc, &ls])
                 .await
         }
-        (Some(mc), None) => {
+        (None, Some(mc), None) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &mc])
                 .await
         }
-        (None, Some(ls)) => {
+        (None, None, Some(ls)) => {
             client
                 .query(&sql, &[&repo_id, &production_symbol_id, &ls])
                 .await
         }
-        (None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
+        (None, None, None) => client.query(&sql, &[&repo_id, &production_symbol_id]).await,
     }
     .context("failed querying stage covering tests")?;
 
@@ -99,15 +128,7 @@ pub(super) async fn load_stage_line_coverage(
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
         "WHERE cc.repo_id = $1 ",
-        "AND (",
-        "  ch.production_symbol_id = $2 ",
-        "  OR EXISTS (",
-        "    SELECT 1 FROM artefacts_current ac ",
-        "    WHERE ac.repo_id = cc.repo_id ",
-        "      AND ac.artefact_id = $2 ",
-        "      AND ac.symbol_id = ch.production_symbol_id",
-        "  )",
-        ") ",
+        "AND ch.production_symbol_id = $2 ",
         "AND ch.branch_id = -1 ",
         "GROUP BY ch.line ORDER BY ch.line",
     );
@@ -116,15 +137,7 @@ pub(super) async fn load_stage_line_coverage(
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
         "WHERE cc.repo_id = $1 ",
-        "AND (",
-        "  ch.production_symbol_id = $2 ",
-        "  OR EXISTS (",
-        "    SELECT 1 FROM artefacts_current ac ",
-        "    WHERE ac.repo_id = cc.repo_id ",
-        "      AND ac.artefact_id = $2 ",
-        "      AND ac.symbol_id = ch.production_symbol_id",
-        "  )",
-        ") ",
+        "AND ch.production_symbol_id = $2 ",
         "AND ch.branch_id = -1 AND cc.commit_sha = $3 ",
         "GROUP BY ch.line ORDER BY ch.line",
     );
@@ -163,15 +176,7 @@ pub(super) async fn load_stage_branch_coverage(
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
         "WHERE cc.repo_id = $1 ",
-        "AND (",
-        "  ch.production_symbol_id = $2 ",
-        "  OR EXISTS (",
-        "    SELECT 1 FROM artefacts_current ac ",
-        "    WHERE ac.repo_id = cc.repo_id ",
-        "      AND ac.artefact_id = $2 ",
-        "      AND ac.symbol_id = ch.production_symbol_id",
-        "  )",
-        ") ",
+        "AND ch.production_symbol_id = $2 ",
         "AND ch.branch_id != -1 ",
         "GROUP BY ch.line, ch.branch_id ORDER BY ch.line, ch.branch_id",
     );
@@ -182,15 +187,7 @@ pub(super) async fn load_stage_branch_coverage(
         "FROM coverage_hits ch ",
         "JOIN coverage_captures cc ON cc.capture_id = ch.capture_id ",
         "WHERE cc.repo_id = $1 ",
-        "AND (",
-        "  ch.production_symbol_id = $2 ",
-        "  OR EXISTS (",
-        "    SELECT 1 FROM artefacts_current ac ",
-        "    WHERE ac.repo_id = cc.repo_id ",
-        "      AND ac.artefact_id = $2 ",
-        "      AND ac.symbol_id = ch.production_symbol_id",
-        "  )",
-        ") ",
+        "AND ch.production_symbol_id = $2 ",
         "AND ch.branch_id != -1 AND cc.commit_sha = $3 ",
         "GROUP BY ch.line, ch.branch_id ORDER BY ch.line, ch.branch_id",
     );

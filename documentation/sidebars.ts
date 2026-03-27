@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         'guides/end-to-end-workflow',
         'guides/team-setup',
         'guides/configuring-devql',
+        'guides/devql-graphql',
         'guides/devql-query-cookbook',
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',
@@ -46,6 +47,7 @@ const sidebars: SidebarsConfig = {
         'reference/cli-commands',
         'reference/configuration',
         'reference/environment-variables',
+        'reference/rust-code-standards',
       ],
     },
     {
