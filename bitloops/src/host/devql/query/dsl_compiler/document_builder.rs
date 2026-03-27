@@ -104,3 +104,77 @@ fn render_args(args: &[GraphqlArgument]) -> String {
         .join(", ");
     format!("({rendered})")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_args_preserves_preescaped_literals() {
+        let query = GraphqlDocumentBuilder::new(vec![GraphqlField::new(
+            "repo",
+            vec![
+                GraphqlArgument::new("name", r#""bitloops\"cli""#),
+                GraphqlArgument::new("first", "5"),
+            ],
+            vec![GraphqlSelection::scalar("name")],
+        )])
+        .build();
+
+        assert!(query.contains(r#"repo(name: "bitloops\"cli", first: 5) {"#));
+    }
+
+    #[test]
+    fn render_field_nesting_uses_two_space_indentation_per_depth() {
+        let query = GraphqlDocumentBuilder::new(vec![GraphqlField::new(
+            "repo",
+            vec![GraphqlArgument::new("name", r#""bitloops-cli""#)],
+            vec![
+                GraphqlField::new(
+                    "artefacts",
+                    vec![GraphqlArgument::new("first", "2")],
+                    vec![GraphqlSelection::scalar("path")],
+                )
+                .into(),
+            ],
+        )])
+        .build();
+
+        assert_eq!(
+            query,
+            r#"query {
+  repo(name: "bitloops-cli") {
+    artefacts(first: 2) {
+      path
+    }
+  }
+}"#
+        );
+    }
+
+    #[test]
+    fn render_empty_selection_set_as_leaf_field() {
+        let query = GraphqlDocumentBuilder::new(vec![GraphqlField::new(
+            "repo",
+            vec![GraphqlArgument::new("name", r#""bitloops-cli""#)],
+            vec![
+                GraphqlField::new(
+                    "extension",
+                    vec![GraphqlArgument::new("stage", r#""tests""#)],
+                    Vec::new(),
+                )
+                .into(),
+            ],
+        )])
+        .build();
+
+        assert_eq!(
+            query,
+            r#"query {
+  repo(name: "bitloops-cli") {
+    extension(stage: "tests")
+  }
+}"#
+        );
+    }
+}

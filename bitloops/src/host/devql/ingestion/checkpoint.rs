@@ -444,9 +444,11 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
 
         let Some(blob_sha) = load_file_state_blob_sha(cfg, relational, commit_sha, &path).await?
         else {
-            eprintln!(
-                "[bitloops] Warning: skipping checkpoint snapshot projection for checkpoint {} at commit {} because file_state has no row for `{}`",
-                cp.checkpoint_id, commit_sha, path
+            log::warn!(
+                "skipping checkpoint snapshot projection: missing file_state row (checkpoint_id={}, commit_sha={}, path={})",
+                cp.checkpoint_id,
+                commit_sha,
+                path
             );
             continue;
         };

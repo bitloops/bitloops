@@ -59,7 +59,7 @@ impl DevqlGraphqlContext {
             capability_host,
             capability_host_bootstrap_error,
             loader_metrics: LoaderMetrics::default(),
-            subscriptions: SubscriptionHub::shared(),
+            subscriptions: SubscriptionHub::new_arc(),
         }
     }
 

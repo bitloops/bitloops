@@ -36,7 +36,7 @@ impl Default for SubscriptionHub {
 }
 
 impl SubscriptionHub {
-    pub(crate) fn shared() -> Arc<Self> {
+    pub(crate) fn new_arc() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
