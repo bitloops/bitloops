@@ -19,16 +19,16 @@
     <a href="#faqs">FAQs</a>
   </p>
   <p style="margin:8px 0;">
-  [![GitHub stars](https://img.shields.io/github/stars/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/stargazers)
-  [![GitHub forks](https://img.shields.io/github/forks/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/network)
-  [![GitHub contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=for-the-badge&logo=github&color=181717)](https://github.com/bitloops/bitloops/graphs/contributors)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=for-the-badge&logo=apache&logoColor=white)](LICENSE)
+  [![Stars](https://img.shields.io/github/stars/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/stargazers)
+  [![Forks](https://img.shields.io/github/forks/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/network)
+  [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat&color=181717)](https://github.com/bitloops/bitloops/graphs/contributors)
+  [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat&color=181717)](LICENSE)
   </p>
   <p style="margin:8px 0;">
-  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/releases)
-  [![Last commit](https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=for-the-badge&logo=github&color=6b7280)](https://github.com/bitloops/bitloops/commits)
-  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=for-the-badge)](https://github.com/bitloops/bitloops)
-  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=for-the-badge)](https://github.com/bitloops/bitloops)
+  [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat&color=6b7280)](https://github.com/bitloops/bitloops/releases)
+  [![Last Commit](https://img.shields.io/github/last-commit/bitloops/bitloops/main?style=flat&color=6b7280)](https://github.com/bitloops/bitloops/commits)
+  [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat)](https://github.com/bitloops/bitloops)
+  [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat)](https://github.com/bitloops/bitloops)
   </p>
 </div>
 
