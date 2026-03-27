@@ -38,6 +38,7 @@ const sidebars: SidebarsConfig = {
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',
         'guides/using-the-dashboard',
+        'guides/dashboard-local-https-setup',
       ],
     },
     {

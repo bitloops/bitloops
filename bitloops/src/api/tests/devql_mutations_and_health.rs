@@ -1,0 +1,614 @@
+use super::*;
+
+#[tokio::test]
+async fn devql_schema_builds_and_executes_in_process() {
+    let temp = TempDir::new().expect("temp dir");
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        temp.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ repo(name: "demo") { id name provider organization } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["name"], "demo");
+    assert_eq!(json["repo"]["provider"], "local");
+}
+
+#[tokio::test]
+async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let init_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+                repoIdentity
+                repoId
+                relationalBackend
+                eventsBackend
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        init_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        init_response.errors
+    );
+    let init_json = init_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(init_json["initSchema"]["success"], true);
+    assert_eq!(init_json["initSchema"]["relationalBackend"], "sqlite");
+    assert_eq!(init_json["initSchema"]["eventsBackend"], "duckdb");
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    for table in ["repositories", "artefacts", "artefacts_current"] {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("query sqlite schema");
+        assert_eq!(count, 1, "expected sqlite table `{table}`");
+    }
+
+    let second_init = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              initSchema {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        second_init.errors.is_empty(),
+        "graphql errors: {:?}",
+        second_init.errors
+    );
+    let second_init_json = second_init.data.into_json().expect("graphql data to json");
+    assert_eq!(second_init_json["initSchema"]["success"], true);
+
+    let ingest_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: 500 }) {
+                success
+                initRequested
+                checkpointsProcessed
+                eventsInserted
+                artefactsUpserted
+                checkpointsWithoutCommit
+                temporaryRowsPromoted
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        ingest_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        ingest_response.errors
+    );
+    let ingest_json = ingest_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(ingest_json["ingest"]["success"], true);
+    assert_eq!(ingest_json["ingest"]["initRequested"], true);
+    assert_eq!(ingest_json["ingest"]["checkpointsProcessed"], 0);
+    assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
+    assert_eq!(ingest_json["ingest"]["temporaryRowsPromoted"], 0);
+
+    let repository_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
+        .expect("count repositories");
+    assert_eq!(repository_count, 1, "expected repository row after ingest");
+}
+
+#[tokio::test]
+async fn devql_mutations_report_validation_and_backend_errors() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let invalid_input = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: -1 }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(invalid_input.errors.len(), 1, "expected one graphql error");
+    let invalid_extensions = invalid_input.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        invalid_extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        invalid_extensions.get("kind"),
+        Some(&async_graphql::Value::from("validation"))
+    );
+    assert_eq!(
+        invalid_extensions.get("operation"),
+        Some(&async_graphql::Value::from("ingest"))
+    );
+
+    let missing_schema = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: false, maxCheckpoints: 1 }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(missing_schema.errors.len(), 1, "expected one graphql error");
+    let backend_extensions = missing_schema.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        backend_extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert_eq!(
+        backend_extensions.get("kind"),
+        Some(&async_graphql::Value::from("ingestion"))
+    );
+    assert_eq!(
+        backend_extensions.get("operation"),
+        Some(&async_graphql::Value::from("ingest"))
+    );
+}
+
+#[tokio::test]
+async fn devql_mutations_manage_knowledge_and_apply_migrations() {
+    let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let server = MockSequentialHttpServer::start(vec![
+        MockHttpResponse::json(
+            200,
+            json!({
+                "fields": {
+                    "summary": "Knowledge item",
+                    "status": { "name": "Open" },
+                    "reporter": { "displayName": "Spiros" },
+                    "updated": "2026-03-26T10:00:00Z",
+                    "description": {
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "First Jira body" }]
+                            }
+                        ]
+                    }
+                }
+            }),
+        ),
+        MockHttpResponse::json(
+            200,
+            json!({
+                "fields": {
+                    "summary": "Knowledge item",
+                    "status": { "name": "In Progress" },
+                    "reporter": { "displayName": "Spiros" },
+                    "updated": "2026-03-26T11:00:00Z",
+                    "description": {
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "Updated Jira body" }]
+                            }
+                        ]
+                    }
+                }
+            }),
+        ),
+    ]);
+    update_seeded_jira_site_url(repo.path(), server.url.as_str());
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let duckdb_path = knowledge_duckdb_path(repo.path());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let apply_response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              applyMigrations {
+                success
+                migrationsApplied {
+                  packId
+                  migrationName
+                  description
+                  appliedAt
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        apply_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        apply_response.errors
+    );
+    let apply_json = apply_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(apply_json["applyMigrations"]["success"], true);
+    let applied = apply_json["applyMigrations"]["migrationsApplied"]
+        .as_array()
+        .expect("migrationsApplied array");
+    assert!(
+        applied
+            .iter()
+            .any(|migration| migration["packId"] == "knowledge"),
+        "expected knowledge pack migration in {applied:?}"
+    );
+
+    let add_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              addKnowledge(input: {{ url: "{}/browse/CLI-1525" }}) {{
+                success
+                knowledgeItemVersionId
+                itemCreated
+                newVersionCreated
+                knowledgeItem {{
+                  id
+                  provider
+                  sourceKind
+                  externalUrl
+                  latestVersion {{
+                    id
+                    title
+                    bodyPreview
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            server.url
+        )))
+        .await;
+    assert!(
+        add_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        add_response.errors
+    );
+    let add_json = add_response.data.into_json().expect("graphql data to json");
+    assert_eq!(add_json["addKnowledge"]["success"], true);
+    assert_eq!(add_json["addKnowledge"]["itemCreated"], true);
+    assert_eq!(add_json["addKnowledge"]["newVersionCreated"], true);
+    assert_eq!(
+        add_json["addKnowledge"]["knowledgeItem"]["provider"],
+        "JIRA"
+    );
+    assert_eq!(
+        add_json["addKnowledge"]["knowledgeItem"]["latestVersion"]["bodyPreview"],
+        "First Jira body"
+    );
+    let knowledge_item_id = add_json["addKnowledge"]["knowledgeItem"]["id"]
+        .as_str()
+        .expect("knowledge item id")
+        .to_string();
+    let first_version_id = add_json["addKnowledge"]["knowledgeItemVersionId"]
+        .as_str()
+        .expect("knowledge item version id")
+        .to_string();
+
+    let associate_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              associateKnowledge(
+                input: {{
+                  sourceRef: "knowledge:{knowledge_item_id}"
+                  targetRef: "commit:HEAD"
+                }}
+              ) {{
+                success
+                relation {{
+                  id
+                  targetType
+                  targetId
+                  relationType
+                  associationMethod
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+    assert!(
+        associate_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        associate_response.errors
+    );
+    let associate_json = associate_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(associate_json["associateKnowledge"]["success"], true);
+    assert_eq!(
+        associate_json["associateKnowledge"]["relation"]["targetType"],
+        "COMMIT"
+    );
+    assert_eq!(
+        associate_json["associateKnowledge"]["relation"]["relationType"],
+        "associated_with"
+    );
+
+    let refresh_response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              refreshKnowledge(input: {{ knowledgeRef: "knowledge:{knowledge_item_id}" }}) {{
+                success
+                latestDocumentVersionId
+                contentChanged
+                newVersionCreated
+                knowledgeItem {{
+                  id
+                  latestVersion {{
+                    id
+                    title
+                    bodyPreview
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+    assert!(
+        refresh_response.errors.is_empty(),
+        "graphql errors: {:?}",
+        refresh_response.errors
+    );
+    let refresh_json = refresh_response
+        .data
+        .into_json()
+        .expect("graphql data to json");
+    assert_eq!(refresh_json["refreshKnowledge"]["success"], true);
+    assert_eq!(refresh_json["refreshKnowledge"]["contentChanged"], true);
+    assert_eq!(refresh_json["refreshKnowledge"]["newVersionCreated"], true);
+    assert_ne!(
+        refresh_json["refreshKnowledge"]["latestDocumentVersionId"],
+        json!(first_version_id)
+    );
+    assert_eq!(
+        refresh_json["refreshKnowledge"]["knowledgeItem"]["latestVersion"]["bodyPreview"],
+        "Updated Jira body"
+    );
+
+    let sqlite = rusqlite::Connection::open(sqlite_path).expect("open sqlite");
+    let knowledge_item_count: i64 = sqlite
+        .query_row("SELECT COUNT(*) FROM knowledge_items", [], |row| row.get(0))
+        .expect("count knowledge items");
+    assert_eq!(knowledge_item_count, 1);
+    let relation_count: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_relation_assertions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count knowledge relations");
+    assert_eq!(relation_count, 1);
+
+    let duckdb = duckdb::Connection::open(duckdb_path).expect("open duckdb");
+    let document_count: i64 = duckdb
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_document_versions",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count knowledge versions");
+    assert_eq!(document_count, 2);
+}
+
+#[tokio::test]
+async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flows() {
+    let repo = seed_graphql_knowledge_mutation_repo("https://seed.invalid");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let server = MockSequentialHttpServer::start(vec![MockHttpResponse::json(
+        500,
+        json!({ "errorMessages": ["provider boom"] }),
+    )]);
+    update_seeded_jira_site_url(repo.path(), server.url.as_str());
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let provider_error = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              addKnowledge(input: {{ url: "{}/browse/CLI-1525" }}) {{
+                success
+              }}
+            }}
+            "#,
+            server.url
+        )))
+        .await;
+    assert_eq!(provider_error.errors.len(), 1, "expected one graphql error");
+    let provider_extensions = provider_error.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        provider_extensions.get("code"),
+        Some(&async_graphql::Value::from("BACKEND_ERROR"))
+    );
+    assert_eq!(
+        provider_extensions.get("kind"),
+        Some(&async_graphql::Value::from("provider"))
+    );
+    assert_eq!(
+        provider_extensions.get("operation"),
+        Some(&async_graphql::Value::from("addKnowledge"))
+    );
+
+    let invalid_reference = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              associateKnowledge(
+                input: {
+                  sourceRef: "knowledge:missing-item"
+                  targetRef: "commit:HEAD"
+                }
+              ) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert_eq!(
+        invalid_reference.errors.len(),
+        1,
+        "expected one graphql error"
+    );
+    let reference_extensions = invalid_reference.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        reference_extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        reference_extensions.get("kind"),
+        Some(&async_graphql::Value::from("reference"))
+    );
+    assert_eq!(
+        reference_extensions.get("operation"),
+        Some(&async_graphql::Value::from("associateKnowledge"))
+    );
+}
+
+#[tokio::test]
+async fn devql_health_query_reports_backend_and_blob_status_in_process() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ health { relational { backend status connected } events { backend status connected } blob { backend status connected } } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["health"]["relational"]["backend"], "sqlite");
+    assert_eq!(json["health"]["relational"]["status"], "SKIP");
+    assert_eq!(json["health"]["relational"]["connected"], false);
+    assert_eq!(json["health"]["events"]["backend"], "duckdb");
+    assert_eq!(json["health"]["events"]["status"], "SKIP");
+    assert_eq!(json["health"]["events"]["connected"], false);
+    assert_eq!(json["health"]["blob"]["backend"], "local");
+    assert_eq!(json["health"]["blob"]["status"], "OK");
+    assert_eq!(json["health"]["blob"]["connected"], true);
+}
+
+#[tokio::test]
+async fn devql_health_query_surfaces_blob_bootstrap_errors() {
+    let repo = seed_dashboard_repo();
+    write_envelope_config(
+        repo.path(),
+        json!({
+            "stores": {
+                "blob": {
+                    "s3_bucket": "bucket-a",
+                    "gcs_bucket": "bucket-b"
+                }
+            }
+        }),
+    );
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"{ health { blob { backend status connected detail } } }"#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["health"]["blob"]["backend"], "invalid");
+    assert_eq!(json["health"]["blob"]["status"], "FAIL");
+    assert_eq!(json["health"]["blob"]["connected"], false);
+    assert!(
+        json["health"]["blob"]["detail"]
+            .as_str()
+            .expect("blob detail string")
+            .contains("both s3_bucket and gcs_bucket are set")
+    );
+}

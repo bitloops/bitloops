@@ -12,9 +12,10 @@ use super::store_config_utils::{
     resolve_required_provider_string, user_home_dir,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, GithubProviderConfig,
-    ProviderConfig, RelationalBackendConfig, StoreBackendConfig, StoreEmbeddingConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
+    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
+    WatchRuntimeConfig,
 };
 use super::unified_config::{
     UnifiedSettings, load_effective_config, resolve_dashboard_from_unified,
@@ -27,12 +28,14 @@ fn effective_settings_for_repo(repo_root: &Path) -> Result<UnifiedSettings> {
     load_effective_config(global_dir.as_deref(), repo_root)
 }
 
-pub fn dashboard_use_bitloops_local() -> bool {
+pub fn resolve_dashboard_config() -> DashboardFileConfig {
     let repo_root = current_repo_root_or_cwd();
-    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_dashboard_config_for_repo(&repo_root)
+}
+
+pub fn resolve_dashboard_config_for_repo(repo_root: &Path) -> DashboardFileConfig {
+    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
     resolve_dashboard_from_unified(&settings)
-        .use_bitloops_local
-        .unwrap_or(false)
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {

@@ -7,7 +7,9 @@ use super::store_config_utils::{
     current_repo_root_or_cwd, load_repo_config_value, read_any_bool, read_any_string,
     read_any_string_opt, read_any_u64, read_any_u64_opt,
 };
-use super::types::{DashboardFileConfig, StoreFileConfig, WatchFileConfig};
+use super::types::{
+    DashboardFileConfig, DashboardLocalDashboardConfig, StoreFileConfig, WatchFileConfig,
+};
 
 impl StoreFileConfig {
     /// Load config from `<repo>/.bitloops/config.json`.
@@ -110,9 +112,19 @@ impl DashboardFileConfig {
             return Self::default();
         };
 
-        Self {
-            use_bitloops_local: read_any_bool(root, &[DASHBOARD_USE_BITLOOPS_LOCAL_KEY]),
-        }
+        let local_dashboard = root
+            .get(DASHBOARD_LOCAL_DASHBOARD_KEY)
+            .and_then(Value::as_object)
+            .map(|local| DashboardLocalDashboardConfig {
+                tls: read_any_bool(local, &[DASHBOARD_LOCAL_DASHBOARD_TLS_KEY]),
+                bitloops_local: read_any_bool(
+                    local,
+                    &[DASHBOARD_LOCAL_DASHBOARD_BITLOOPS_LOCAL_KEY],
+                ),
+            })
+            .filter(|local| local.tls.is_some() || local.bitloops_local.is_some());
+
+        Self { local_dashboard }
     }
 }
 
