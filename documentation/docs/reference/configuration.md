@@ -57,10 +57,28 @@ The main configuration file for stores, knowledge providers, and project-level s
     "api_key": "${OPENAI_API_KEY}"
   },
   "dashboard": {
-    "use_bitloops_local": false
+    "local_dashboard": {
+      "tls": true,
+      "bitloops_local": true
+    }
   }
 }
 ```
+
+### Dashboard Local Network Hints
+
+`dashboard.local_dashboard` stores local HTTPS and hostname hints for dashboard startup.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `dashboard.local_dashboard.tls` | boolean | unset | When `true`, dashboard fast-path assumes local TLS material is already available. |
+| `dashboard.local_dashboard.bitloops_local` | boolean | unset | When `true`, dashboard fast-path assumes `bitloops.local` host mapping is already available. |
+
+Notes:
+
+- These are local-network hints for `bitloops dashboard`.
+- To force a full recheck of local dashboard network/TLS setup, run `bitloops dashboard --recheck-local-dashboard-net`.
+- To force loopback HTTP without TLS, run `bitloops dashboard --http --host 127.0.0.1`.
 
 ### Environment Variable Interpolation
 

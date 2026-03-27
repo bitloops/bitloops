@@ -15,14 +15,18 @@ bitloops dashboard
 
 ```
 ✔ Dashboard server started
-  → http://localhost:5667
+  → https://bitloops.local:5667
 ```
+
+If local HTTPS is not set up yet, follow [Dashboard Local HTTPS Setup](/guides/dashboard-local-https-setup).
 
 ### Custom Port and Host
 
 ```bash
 bitloops dashboard --port 8080
 bitloops dashboard --host 0.0.0.0 --port 3000
+bitloops dashboard --http --host 127.0.0.1
+bitloops dashboard --recheck-local-dashboard-net
 ```
 
 ## DevQL GraphQL Endpoints
@@ -93,7 +97,10 @@ Real-time status of configured stores:
 ```json title=".bitloops/config.json"
 {
   "dashboard": {
-    "use_bitloops_local": false
+    "local_dashboard": {
+      "tls": true,
+      "bitloops_local": true
+    }
   }
 }
 ```

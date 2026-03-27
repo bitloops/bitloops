@@ -161,11 +161,36 @@ Provider values support `${ENV_VAR}` interpolation. That interpolation is limite
 | `semantic.api_key` | string | none | Provider API key. |
 | `semantic.base_url` | string | none | Optional custom API base URL. |
 
-### Dashboard key
+### Dashboard keys
+
+Dashboard local network hints are nested under `dashboard.local_dashboard`.
 
 | Key | Type | Default | Notes |
 | --- | ---- | ------- | ----- |
-| `dashboard.use_bitloops_local` | boolean | `false` | When `true`, dashboard defaults to host `bitloops.local` unless `--host` is provided. |
+| `dashboard.local_dashboard.tls` | boolean | unset | When `true`, dashboard fast-path assumes local TLS material is already present and valid. |
+| `dashboard.local_dashboard.bitloops_local` | boolean | unset | When `true`, dashboard fast-path assumes `bitloops.local` host mapping is already present and valid. |
+
+Example:
+
+```json
+{
+  "version": "1.0",
+  "scope": "project",
+  "settings": {
+    "dashboard": {
+      "local_dashboard": {
+        "tls": true,
+        "bitloops_local": true
+      }
+    }
+  }
+}
+```
+
+CLI interaction:
+
+- `bitloops dashboard --recheck-local-dashboard-net` forces a full local dashboard network/TLS recheck.
+- `bitloops dashboard --http --host 127.0.0.1` explicitly forces loopback HTTP mode (no TLS).
 
 ## 4) Manual knowledge ingestion
 
