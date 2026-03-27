@@ -610,4 +610,3 @@ async fn devql_health_query_surfaces_blob_bootstrap_errors() {
             .contains("both s3_bucket and gcs_bucket are set")
     );
 }
-

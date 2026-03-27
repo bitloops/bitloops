@@ -1666,4 +1666,3 @@ async fn devql_graphql_commit_loader_caches_within_a_request_and_resets_per_requ
     let second_snapshot = context.loader_metrics_snapshot();
     assert_eq!(second_snapshot.commit_by_sha_batches, 2);
 }
-

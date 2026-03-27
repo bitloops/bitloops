@@ -844,4 +844,3 @@ async fn api_fetch_bundle_returns_internal_on_manifest_parse_failure() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(payload["error"]["code"], "internal");
 }
-

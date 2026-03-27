@@ -440,4 +440,3 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
     }
     assert!(saw_complete, "expected a COMPLETE ingestion progress event");
 }
-

@@ -304,4 +304,3 @@ fn paginate_clamps_limit_and_offset() {
     let paged = paginate(&items, page);
     assert_eq!(paged, vec![4, 5, 6]);
 }
-

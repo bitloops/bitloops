@@ -1093,4 +1093,3 @@ async fn devql_event_checkpoint_commit_loader_batches_repository_checkpoint_read
     let snapshot = context.loader_metrics_snapshot();
     assert_eq!(snapshot.commit_by_sha_batches, 1);
 }
-
