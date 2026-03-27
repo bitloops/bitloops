@@ -7,6 +7,8 @@ edition = "2024"
 default = ["duckdb-bundled"]
 # Compile libduckdb from C++ (slow; offline or targets without official prebuilts, e.g. linux-musl cross builds).
 duckdb-bundled = ["duckdb/bundled"]
+# Compile and expose the QAT command and supporting runtime modules.
+qat = []
 
 [lib]
 path = "src/lib.rs"
@@ -22,6 +24,7 @@ async-graphql-axum = "7"
 axum = "0.8"
 env_logger = "0.11"
 figlet-rs = "1.0.0"
+cucumber = "0.22.1"
 log = "0.4"
 notify = "8.2.0"
 clap = { version = "4", features = ["derive"] }
@@ -50,6 +53,7 @@ object_store = { version = "0.13.2", features = ["aws", "gcp"] }
 fastembed = { version = "5.12.1", default-features = false, features = ["hf-hub-rustls-tls", "image-models", "ort-load-dynamic"] }
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 rustls = "0.23"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
