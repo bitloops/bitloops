@@ -1,356 +1,29 @@
-use anyhow::{Result, anyhow};
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{OnceLock, RwLock};
+mod classification;
+mod claude;
+mod constants;
+mod repo;
+mod storage;
+mod worktree;
 
-// Directory constants.
-pub const BITLOOPS_DIR: &str = ".bitloops";
-pub const BITLOOPS_TMP_DIR: &str = ".bitloops/tmp";
-// Legacy compatibility path used by git-backed checkpoint metadata.
-pub const BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
-pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
-pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";
-pub const BITLOOPS_EVENT_STORE_DIR: &str = ".bitloops/stores/event";
-pub const BITLOOPS_BLOB_STORE_DIR: &str = ".bitloops/stores/blob";
-pub const BITLOOPS_EMBEDDINGS_DIR: &str = ".bitloops/embeddings";
-pub const BITLOOPS_EMBEDDING_MODELS_DIR: &str = ".bitloops/embeddings/models";
-pub const RELATIONAL_DB_FILE_NAME: &str = "relational.db";
-pub const EVENTS_DB_FILE_NAME: &str = "events.duckdb";
-
-// Metadata file names.
-pub const CONTEXT_FILE_NAME: &str = "context.md";
-pub const PROMPT_FILE_NAME: &str = "prompt.txt";
-pub const SUMMARY_FILE_NAME: &str = "summary.txt";
-pub const TRANSCRIPT_FILE_NAME: &str = "full.jsonl";
-// Legacy transcript filename used by git-backed metadata checkpoints.
-pub const TRANSCRIPT_FILE_NAME_LEGACY: &str = "full.log";
-pub const METADATA_FILE_NAME: &str = "metadata.json";
-pub const CHECKPOINT_FILE_NAME: &str = "checkpoint.json";
-pub const CONTENT_HASH_FILE_NAME: &str = "content_hash.txt";
-pub const EXPORT_DATA_FILE_NAME: &str = "export.json";
-pub const SETTINGS_FILE_NAME: &str = "settings.json";
-
-// Legacy metadata branch used by git-backed checkpoint storage.
-pub const METADATA_BRANCH_NAME: &str = "bitloops/checkpoints/v1";
-
-#[derive(Clone)]
-struct RepoRootCache {
-    cwd: PathBuf,
-    root: PathBuf,
-}
-
-fn repo_root_cache() -> &'static RwLock<Option<RepoRootCache>> {
-    static CACHE: OnceLock<RwLock<Option<RepoRootCache>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(None))
-}
-
-/// Returns true if `path` is inside CLI infrastructure (`.bitloops`), while also
-/// treating legacy `.bitloops` paths as infrastructure for compatibility.
-pub fn is_infrastructure_path(path: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    is_dir_or_descendant(&normalized, BITLOOPS_DIR)
-}
-
-fn is_dir_or_descendant(path: &str, dir: &str) -> bool {
-    path == dir || path.starts_with(&format!("{dir}/"))
-}
-
-/// Returns true if `path` is inside a protected directory that should not be
-/// touched by destructive operations.
-pub fn is_protected_path(path: &str) -> bool {
-    let normalized = path
-        .replace('\\', "/")
-        .trim_start_matches("./")
-        .trim_end_matches('/')
-        .to_string();
-
-    [
-        ".git",
-        ".worktrees",
-        BITLOOPS_DIR,
-        ".claude",
-        ".github/hooks",
-        ".codex",
-        ".cursor",
-        ".gemini",
-    ]
-    .iter()
-    .any(|dir| is_dir_or_descendant(&normalized, dir))
-}
-
-/// Converts an absolute path to a path relative to `cwd`.
-/// Returns an empty string if the absolute path is outside `cwd`.
-pub fn to_relative_path(abs_path: &str, cwd: &str) -> String {
-    let abs = Path::new(abs_path);
-    if !abs.is_absolute() {
-        return abs_path.to_string();
-    }
-    match abs.strip_prefix(Path::new(cwd)) {
-        Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
-        Ok(rel) => rel.to_string_lossy().into_owned(),
-        Err(_) => String::new(),
-    }
-}
-
-/// Converts a path to Claude's project directory format.
-/// Claude replaces any non-alphanumeric character with `-`.
-pub fn sanitize_path_for_claude(path: &str) -> String {
-    path.chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
-}
-
-/// Returns Claude's project directory for the repository path.
-/// In tests, `BITLOOPS_TEST_CLAUDE_PROJECT_DIR` can override the destination.
-pub fn get_claude_project_dir(repo_path: &str) -> Result<PathBuf> {
-    let override_path = env::var("BITLOOPS_TEST_CLAUDE_PROJECT_DIR").unwrap_or_default();
-    if !override_path.is_empty() {
-        return Ok(PathBuf::from(override_path));
-    }
-
-    let home_dir = env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .ok_or_else(|| anyhow!("failed to get home directory"))?;
-
-    let project_dir = sanitize_path_for_claude(repo_path);
-    Ok(Path::new(&home_dir)
-        .join(".claude")
-        .join("projects")
-        .join(project_dir))
-}
-
-/// Returns the git repository root (`git rev-parse --show-toplevel`).
-/// The result is cached per current working directory.
-pub fn repo_root() -> Result<PathBuf> {
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::new());
-
-    if !cwd.as_os_str().is_empty() {
-        let cache = repo_root_cache().read().expect("repo root cache poisoned");
-        if let Some(entry) = cache.as_ref()
-            && entry.cwd == cwd
-        {
-            return Ok(entry.root.clone());
-        }
-    }
-
-    let mut cmd = Command::new("git");
-    cmd.args(["rev-parse", "--show-toplevel"])
-        .stdin(Stdio::null());
-    if !cwd.as_os_str().is_empty() {
-        cmd.current_dir(&cwd);
-    }
-    let output = cmd
-        .output()
-        .map_err(|err| anyhow!("failed to get git repository root: {err}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            return Err(anyhow!("failed to get git repository root"));
-        }
-        return Err(anyhow!("failed to get git repository root: {stderr}"));
-    }
-
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if root.is_empty() {
-        return Err(anyhow!(
-            "failed to get git repository root: git returned empty output"
-        ));
-    }
-    let root = PathBuf::from(root);
-
-    if !cwd.as_os_str().is_empty() {
-        let mut cache = repo_root_cache().write().expect("repo root cache poisoned");
-        *cache = Some(RepoRootCache {
-            cwd,
-            root: root.clone(),
-        });
-    }
-
-    Ok(root)
-}
-
-/// Opens the current repository by resolving its root.
-pub fn open_repository() -> Result<PathBuf> {
-    repo_root()
-}
-
-/// Discovers the Bitloops project root by walking upward from `start`.
-///
-/// Uses the nearest ancestor containing a `.bitloops/` directory marker.
-/// Falls back to git root when no marker is found between `start` and the
-/// filesystem root (spec §10.1).
-pub fn bitloops_project_root(start: &Path) -> Result<PathBuf> {
-    let mut dir = if start.is_absolute() {
-        start.to_path_buf()
-    } else {
-        env::current_dir()
-            .map_err(|e| anyhow!("cannot determine current directory: {e}"))?
-            .join(start)
-    };
-
-    // First pass: walk up looking for .bitloops/ marker.
-    let mut search = dir.clone();
-    loop {
-        if search.join(BITLOOPS_DIR).is_dir() {
-            return Ok(search);
-        }
-        match search.parent() {
-            Some(parent) if parent != search => search = parent.to_path_buf(),
-            _ => break,
-        }
-    }
-
-    // Fallback: walk up looking for .git (git root).
-    loop {
-        if dir.join(".git").exists() {
-            return Ok(dir);
-        }
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => {
-                return Err(anyhow!(
-                    "not inside a git repository (no .git directory found)"
-                ));
-            }
-        }
-    }
-}
-
-/// Returns true when the current repository root is a linked worktree.
-pub fn is_inside_worktree() -> bool {
-    let Ok(root) = repo_root() else {
-        return false;
-    };
-
-    get_worktree_id(&root)
-        .map(|worktree_id| !worktree_id.is_empty())
-        .unwrap_or(false)
-}
-
-/// Returns the main repository root.
-///
-/// In a main checkout this is the current repo root.
-/// In a linked worktree this parses `.git` (`gitdir: .../.git/worktrees/<id>`)
-/// and returns the parent repository path before `/.git/`.
-pub fn get_main_repo_root() -> Result<PathBuf> {
-    let worktree_root = repo_root()?;
-    let git_path = worktree_root.join(".git");
-    let git_meta = fs::metadata(&git_path).map_err(|err| anyhow!("failed to stat .git: {err}"))?;
-
-    if git_meta.is_dir() {
-        return Ok(worktree_root);
-    }
-
-    let content =
-        fs::read_to_string(&git_path).map_err(|err| anyhow!("failed to read .git file: {err}"))?;
-    let line = content.trim();
-    let gitdir = line
-        .strip_prefix("gitdir: ")
-        .ok_or_else(|| anyhow!("invalid .git file format: {line}"))?;
-
-    let gitdir_path = if Path::new(gitdir).is_absolute() {
-        PathBuf::from(gitdir)
-    } else {
-        worktree_root.join(gitdir)
-    };
-    let normalized = gitdir_path.to_string_lossy().replace('\\', "/");
-
-    let Some((main_root, _)) = normalized.rsplit_once("/.git/") else {
-        return Err(anyhow!("unexpected gitdir format: {gitdir}"));
-    };
-
-    Ok(PathBuf::from(main_root))
-}
-
-/// Clears cached repository root (mainly for tests).
-pub fn clear_repo_root_cache() {
-    let mut cache = repo_root_cache().write().expect("repo root cache poisoned");
-    *cache = None;
-}
-
-/// Returns an absolute path.
-/// If `path` is relative, it is resolved against `repo_root()`.
-pub fn abs_path(path: &str) -> Result<PathBuf> {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    Ok(repo_root()?.join(path))
-}
-
-/// Returns `.bitloops/metadata/<session_id>`.
-pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
-    format!("{BITLOOPS_METADATA_DIR}/{session_id}")
-}
-
-pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(BITLOOPS_RELATIONAL_STORE_DIR)
-        .join(RELATIONAL_DB_FILE_NAME)
-}
-
-pub fn default_events_db_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(BITLOOPS_EVENT_STORE_DIR)
-        .join(EVENTS_DB_FILE_NAME)
-}
-
-pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(BITLOOPS_BLOB_STORE_DIR)
-}
-
-pub fn default_embedding_model_cache_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join(BITLOOPS_EMBEDDING_MODELS_DIR)
-}
-
-/// Attempts to extract a session ID from a transcript path.
-/// Expected shape: `.../sessions/<id>.jsonl`.
-pub fn extract_session_id_from_transcript_path(transcript_path: &str) -> String {
-    let normalized = transcript_path.replace('\\', "/");
-    let parts: Vec<&str> = normalized.split('/').collect();
-    for (idx, part) in parts.iter().enumerate() {
-        if *part != "sessions" || idx + 1 >= parts.len() {
-            continue;
-        }
-        let filename = parts[idx + 1];
-        return filename
-            .strip_suffix(".jsonl")
-            .unwrap_or(filename)
-            .to_string();
-    }
-    String::new()
-}
-
-/// Returns the git worktree identifier for `worktree_path`.
-/// Main worktree (`.git` directory) returns `""`.
-pub fn get_worktree_id(worktree_path: &Path) -> Result<String> {
-    let git_path = worktree_path.join(".git");
-    let info = fs::metadata(&git_path).map_err(|err| anyhow!("failed to stat .git: {err}"))?;
-
-    // Main worktree has `.git` directory.
-    if info.is_dir() {
-        return Ok(String::new());
-    }
-
-    // Linked worktree has `.git` file with `gitdir: ...`.
-    let content =
-        fs::read_to_string(&git_path).map_err(|err| anyhow!("failed to read .git file: {err}"))?;
-    let line = content.trim();
-    if !line.starts_with("gitdir: ") {
-        return Err(anyhow!("invalid .git file format: {line}"));
-    }
-
-    let gitdir = line.trim_start_matches("gitdir: ");
-    let normalized_gitdir = gitdir.replace('\\', "/");
-    let marker = ".git/worktrees/";
-    let Some((_, worktree_id)) = normalized_gitdir.split_once(marker) else {
-        return Err(anyhow!("unexpected gitdir format (no worktrees): {gitdir}"));
-    };
-    Ok(worktree_id.trim_end_matches('/').to_string())
-}
+pub use classification::{is_infrastructure_path, is_protected_path, to_relative_path};
+pub use claude::{get_claude_project_dir, sanitize_path_for_claude};
+pub use constants::{
+    BITLOOPS_BLOB_STORE_DIR, BITLOOPS_DIR, BITLOOPS_EMBEDDING_MODELS_DIR, BITLOOPS_EMBEDDINGS_DIR,
+    BITLOOPS_EVENT_STORE_DIR, BITLOOPS_METADATA_DIR, BITLOOPS_RELATIONAL_STORE_DIR,
+    BITLOOPS_STORES_DIR, BITLOOPS_TMP_DIR, CHECKPOINT_FILE_NAME, CONTENT_HASH_FILE_NAME,
+    CONTEXT_FILE_NAME, EVENTS_DB_FILE_NAME, EXPORT_DATA_FILE_NAME, METADATA_BRANCH_NAME,
+    METADATA_FILE_NAME, PROMPT_FILE_NAME, RELATIONAL_DB_FILE_NAME, SETTINGS_FILE_NAME,
+    SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, TRANSCRIPT_FILE_NAME_LEGACY,
+};
+pub use repo::{
+    abs_path, bitloops_project_root, clear_repo_root_cache, open_repository, repo_root,
+};
+pub use storage::{
+    default_blob_store_path, default_embedding_model_cache_dir, default_events_db_path,
+    default_relational_db_path, extract_session_id_from_transcript_path,
+    session_metadata_dir_from_session_id,
+};
+pub use worktree::{get_main_repo_root, get_worktree_id, is_inside_worktree};
 
 #[cfg(test)]
 mod tests {
@@ -704,7 +377,6 @@ mod tests {
 
     #[test]
     fn test_is_inside_worktree() {
-        // Main repo should return false.
         let main_repo = tempdir().expect("create temp dir");
         init_git_repo_with_commit(main_repo.path());
         with_cwd(main_repo.path(), || {
@@ -714,7 +386,6 @@ mod tests {
             );
         });
 
-        // Linked worktree should return true.
         let worktree_dir = main_repo.path().join("worktree");
         run_git(
             main_repo.path(),
@@ -730,7 +401,6 @@ mod tests {
             assert!(is_inside_worktree(), "linked checkout should be a worktree");
         });
 
-        // Non-repository should return false.
         let non_repo = tempdir().expect("create non-repo dir");
         with_cwd(non_repo.path(), || {
             assert!(!is_inside_worktree(), "non-repo should not be a worktree");
@@ -739,7 +409,6 @@ mod tests {
 
     #[test]
     fn test_get_main_repo_root() {
-        // Main repository returns itself.
         let main_repo = tempdir().expect("create temp dir");
         init_git_repo_with_commit(main_repo.path());
         with_cwd(main_repo.path(), || {
@@ -747,7 +416,6 @@ mod tests {
             assert_eq!(canonical(&root), canonical(main_repo.path()));
         });
 
-        // Linked worktree returns main repository path.
         let worktree_dir = main_repo.path().join("worktree");
         run_git(
             main_repo.path(),
@@ -867,14 +535,11 @@ mod tests {
         });
     }
 
-    // ── CLI-1471: monorepo project-root discovery ───────────────────────
-
     #[test]
     fn monorepo_bitloops_project_root_finds_nearest_ancestor() {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        // Create nested package with its own .bitloops
         let app_dir = root.path().join("packages/app");
         fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
 
@@ -891,7 +556,6 @@ mod tests {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        // Nested directory WITHOUT .bitloops — should fall back to git root
         let lib_dir = root.path().join("packages/lib");
         fs::create_dir_all(&lib_dir).unwrap();
 
@@ -908,7 +572,6 @@ mod tests {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        // .bitloops at package level, cwd is deeper inside src/
         let app_dir = root.path().join("packages/app");
         fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
         let deep_dir = app_dir.join("src/components");
@@ -927,7 +590,6 @@ mod tests {
         let root = tempdir().expect("create monorepo root");
         init_git_repo(root.path());
 
-        // .bitloops at BOTH git root and nested package
         fs::create_dir_all(root.path().join(".bitloops")).unwrap();
         let app_dir = root.path().join("packages/app");
         fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
@@ -948,7 +610,6 @@ mod tests {
         let app_dir = root.path().join("packages/app");
         fs::create_dir_all(app_dir.join(".bitloops")).unwrap();
 
-        // repo_root() must still return git root regardless of .bitloops markers
         with_cwd(&app_dir, || {
             clear_repo_root_cache();
             let git_root = repo_root().unwrap();
@@ -965,7 +626,6 @@ mod tests {
         let root = tempdir().expect("create single repo");
         init_git_repo(root.path());
 
-        // Standard single-package repo: .bitloops at git root
         fs::create_dir_all(root.path().join(".bitloops")).unwrap();
 
         let result = bitloops_project_root(root.path()).unwrap();
