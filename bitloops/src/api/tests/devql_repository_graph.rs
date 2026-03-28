@@ -152,6 +152,122 @@ async fn devql_repository_queries_resolve_repo_commit_branch_user_agent_and_chec
 }
 
 #[tokio::test]
+async fn devql_repository_checkpoint_queries_fall_back_to_committed_storage_when_event_store_is_empty()
+ {
+    let repo = seed_dashboard_repo();
+    seed_duckdb_events(repo.path(), &[]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                checkpoints(first: 5) {
+                  totalCount
+                  edges {
+                    node {
+                      id
+                      sessionId
+                      commitSha
+                      branch
+                      agent
+                      strategy
+                      filesTouched
+                      eventTime
+                      checkpointsCount
+                      sessionCount
+                      createdAt
+                      firstPromptPreview
+                      agents
+                      tokenUsage {
+                        inputTokens
+                        outputTokens
+                        cacheCreationTokens
+                        cacheReadTokens
+                        apiCallCount
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["checkpoints"]["totalCount"], 1);
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["id"],
+        "aabbccddeeff"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["agent"],
+        "claude-code"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["strategy"],
+        "manual-commit"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["filesTouched"],
+        json!(["app.rs"])
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["eventTime"],
+        "2026-02-27T12:00:00+00:00"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["checkpointsCount"],
+        2
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["sessionCount"],
+        1
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["createdAt"],
+        "2026-02-27T12:00:00Z"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["firstPromptPreview"],
+        "Build dashboard API"
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["agents"],
+        json!(["claude-code"])
+    );
+    assert_eq!(
+        json["repo"]["checkpoints"]["edges"][0]["node"]["tokenUsage"],
+        json!({
+            "inputTokens": 100,
+            "outputTokens": 40,
+            "cacheCreationTokens": 10,
+            "cacheReadTokens": 5,
+            "apiCallCount": 3
+        })
+    );
+}
+
+#[tokio::test]
 async fn devql_commit_connection_supports_cursor_pagination() {
     let repo = seed_dashboard_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(

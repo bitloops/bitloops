@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
+pub mod checkpoints;
 pub mod clean;
+pub mod daemon;
 pub mod dashboard;
 pub mod debug;
 pub mod devql;
@@ -13,7 +15,6 @@ pub mod reset;
 pub mod resume;
 pub mod rewind;
 pub mod root;
-pub mod status;
 pub mod testlens;
 pub mod versioncheck;
 
@@ -46,6 +47,18 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Manage the Bitloops daemon lifecycle.
+    Daemon(daemon::DaemonArgs),
+    /// Start the Bitloops daemon for the current repository.
+    Start(daemon::DaemonStartArgs),
+    /// Stop the Bitloops daemon for the current repository.
+    Stop(daemon::DaemonStopArgs),
+    /// Show Bitloops daemon status for the current repository.
+    Status(daemon::DaemonStatusArgs),
+    /// Restart the Bitloops daemon for the current repository.
+    Restart(daemon::DaemonRestartArgs),
+    /// Repository/session checkpoint status and related views.
+    Checkpoints(checkpoints::CheckpointsArgs),
     /// Browse checkpoints and rewind your session.
     Rewind(rewind::RewindArgs),
     /// Switch to a branch and resume its session.
@@ -60,9 +73,7 @@ pub enum Commands {
     Enable(enable::EnableArgs),
     /// Disable Bitloops in the current project.
     Disable(root::DisableArgs),
-    /// Show current status.
-    Status(status::StatusArgs),
-    /// Serve the local Bitloops dashboard.
+    /// Open the local Bitloops dashboard in your browser.
     Dashboard(dashboard::DashboardArgs),
     /// Internal: agent hook handlers (called by supported agents, not users).
     #[command(hide = true)]
@@ -81,6 +92,12 @@ pub enum Commands {
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
+    /// Hidden internal daemon process entry point.
+    #[command(name = "__daemon-process", hide = true)]
+    DaemonProcess(crate::daemon::InternalDaemonProcessArgs),
+    /// Hidden internal daemon supervisor entry point.
+    #[command(name = "__daemon-supervisor", hide = true)]
+    DaemonSupervisor(crate::daemon::InternalDaemonSupervisorArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -150,6 +167,12 @@ pub async fn run(cli: Cli) -> Result<()> {
     let hidden_chain = root::hidden_chain_for_command(&command);
 
     let result = match command {
+        Commands::Daemon(args) => daemon::run(args).await,
+        Commands::Start(args) => daemon::run_start(args).await,
+        Commands::Stop(args) => daemon::run_stop(args).await,
+        Commands::Status(args) => daemon::run_status(args).await,
+        Commands::Restart(args) => daemon::run_restart(args).await,
+        Commands::Checkpoints(args) => checkpoints::run(args).await,
         Commands::Rewind(args) => rewind::run(&args),
         Commands::Resume(args) => root::run_resume_command(&args),
         Commands::Clean(args) => root::run_clean_command(&args),
@@ -157,7 +180,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Init(args) => init::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
         Commands::Disable(args) => root::run_disable_command(&args),
-        Commands::Status(args) => status::run(args).await,
         Commands::Dashboard(args) => dashboard::run(args).await,
         Commands::Hooks(args) => {
             crate::host::hooks::dispatcher::run(args, &strategy_registry).await
@@ -168,6 +190,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Devql(args) => devql::run(args).await,
         Commands::Testlens(args) => testlens::run(args).await,
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
+        Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
+        Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

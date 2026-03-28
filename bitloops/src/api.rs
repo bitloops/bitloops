@@ -12,10 +12,12 @@ pub mod tls;
 
 use crate::graphql;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
@@ -32,7 +34,11 @@ pub(super) const GIT_RECORD_SEPARATOR: char = '\u{1e}';
 pub(super) const DASHBOARD_FALLBACK_INSTALL_HTML: &str =
     include_str!("api/dashboard_fallback_install.html");
 
-#[derive(Debug, Clone)]
+pub type DashboardReadyHook =
+    Arc<dyn Fn(&DashboardReadyInfo) -> Result<()> + Send + Sync + 'static>;
+pub type DashboardShutdownHook = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardServerConfig {
     pub host: Option<String>,
     pub port: u16,
@@ -40,6 +46,37 @@ pub struct DashboardServerConfig {
     pub force_http: bool,
     pub recheck_local_dashboard_net: bool,
     pub bundle_dir: Option<PathBuf>,
+}
+
+pub struct DashboardRuntimeOptions {
+    pub ready_subject: String,
+    pub print_ready_banner: bool,
+    pub open_browser: bool,
+    pub shutdown_message: Option<String>,
+    pub on_ready: Option<DashboardReadyHook>,
+    pub on_shutdown: Option<DashboardShutdownHook>,
+}
+
+impl Default for DashboardRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            ready_subject: "Dashboard".to_string(),
+            print_ready_banner: true,
+            open_browser: true,
+            shutdown_message: Some("Dashboard server stopped.".to_string()),
+            on_ready: None,
+            on_shutdown: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardReadyInfo {
+    pub url: String,
+    pub host: String,
+    pub port: u16,
+    pub bundle_dir: PathBuf,
+    pub repo_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -263,7 +300,18 @@ fn warning_block_lines(warning: &str, use_color: bool) -> Vec<String> {
 }
 
 pub async fn run(config: DashboardServerConfig) -> Result<()> {
-    dashboard_runtime::run(config).await
+    run_with_options(config, DashboardRuntimeOptions::default()).await
+}
+
+pub async fn run_with_options(
+    config: DashboardServerConfig,
+    options: DashboardRuntimeOptions,
+) -> Result<()> {
+    dashboard_runtime::run(config, options).await
+}
+
+pub fn open_in_default_browser(url: &str) -> Result<()> {
+    dashboard_runtime::open_in_default_browser(url)
 }
 
 #[cfg(test)]

@@ -85,7 +85,7 @@ bitloops dashboard
 
 Open `http://localhost:5667` to visually browse artefacts, relationships, and store health.
 
-The same server also exposes DevQL GraphQL at:
+The same daemon also exposes DevQL GraphQL at:
 
 - `http://localhost:5667/devql`
 - `http://localhost:5667/devql/playground`

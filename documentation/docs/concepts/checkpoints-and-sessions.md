@@ -23,7 +23,7 @@ This is the **live state**. It updates in real time. If your session is interrup
 You can check what's being tracked mid-session:
 
 ```bash
-bitloops status
+bitloops checkpoints status
 ```
 
 ```

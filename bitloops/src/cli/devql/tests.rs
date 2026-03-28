@@ -314,33 +314,20 @@ fn devql_run_init_executes_graphql_mutation() {
 }
 
 #[test]
-fn devql_run_init_executes_graphql_mutation_and_is_idempotent() {
+fn devql_run_init_requires_running_daemon() {
     let repo = seed_devql_cli_repo();
-    let sqlite_path = sqlite_path_for_repo(repo.path());
     let _guard = enter_process_state(Some(repo.path()), &[]);
 
-    test_runtime()
+    let err = test_runtime()
         .block_on(run(DevqlArgs {
             command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
         }))
-        .expect("devql init should succeed");
-    test_runtime()
-        .block_on(run(DevqlArgs {
-            command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
-        }))
-        .expect("second devql init should succeed");
+        .expect_err("devql init should require a running daemon");
 
-    let conn = Connection::open(sqlite_path).expect("open sqlite");
-    for table in ["repositories", "artefacts", "artefacts_current"] {
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                [table],
-                |row| row.get(0),
-            )
-            .expect("query sqlite schema");
-        assert_eq!(count, 1, "expected sqlite table `{table}`");
-    }
+    assert!(
+        err.to_string().contains("Bitloops daemon is not running"),
+        "expected daemon-required error, got: {err:#}"
+    );
 }
 
 #[test]
@@ -402,25 +389,23 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
 }
 
 #[test]
-fn devql_run_ingest_executes_graphql_mutation_and_persists_repository_row() {
+fn devql_run_ingest_requires_running_daemon() {
     let repo = seed_devql_cli_repo();
-    let sqlite_path = sqlite_path_for_repo(repo.path());
     let _guard = enter_process_state(Some(repo.path()), &[]);
 
-    test_runtime()
+    let err = test_runtime()
         .block_on(run(DevqlArgs {
             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
                 init: true,
                 max_checkpoints: 500,
             })),
         }))
-        .expect("devql ingest should succeed");
+        .expect_err("devql ingest should require a running daemon");
 
-    let conn = Connection::open(sqlite_path).expect("open sqlite");
-    let repository_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
-        .expect("count repositories");
-    assert_eq!(repository_count, 1, "expected one repository row");
+    assert!(
+        err.to_string().contains("Bitloops daemon is not running"),
+        "expected daemon-required error, got: {err:#}"
+    );
 }
 
 #[test]

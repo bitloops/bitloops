@@ -71,7 +71,7 @@ The main configuration file for stores, knowledge providers, and project-level s
 
 ### Dashboard Local Network Hints
 
-`dashboard.local_dashboard` stores local HTTPS and hostname hints for dashboard startup.
+`dashboard.local_dashboard` stores local HTTPS and hostname hints for daemon startup and the dashboard launcher.
 
 | Field                                      | Type    | Default | Description                                                                                  |
 | ------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------- |
@@ -80,9 +80,9 @@ The main configuration file for stores, knowledge providers, and project-level s
 
 Notes:
 
-- These are local-network hints for `bitloops dashboard`.
-- To force a full recheck of local dashboard network/TLS setup, run `bitloops dashboard --recheck-local-dashboard-net`.
-- To force loopback HTTP without TLS, run `bitloops dashboard --http --host 127.0.0.1`.
+- These are local-network hints for `bitloops daemon start` and `bitloops dashboard`.
+- To force a full recheck of local dashboard network/TLS setup, run `bitloops daemon start --recheck-local-dashboard-net`.
+- To force loopback HTTP without TLS, run `bitloops daemon start --http --host 127.0.0.1`.
 
 ### Environment Variable Interpolation
 

@@ -179,12 +179,12 @@ async fn wait_until_ready(url: &str, child: &mut Child) {
             Ok(Some(status)) => {
                 let stderr = read_child_stderr(child);
                 panic!(
-                    "dashboard process exited before readiness check succeeded at {url}\nchild status: {status}\nchild stderr:\n{stderr}"
+                    "daemon process exited before readiness check succeeded at {url}\nchild status: {status}\nchild stderr:\n{stderr}"
                 );
             }
             Ok(None) => {}
             Err(err) => {
-                panic!("failed to inspect dashboard process status while waiting for {url}: {err}")
+                panic!("failed to inspect daemon process status while waiting for {url}: {err}")
             }
         }
 
@@ -203,7 +203,7 @@ async fn wait_until_ready(url: &str, child: &mut Child) {
         ),
     };
     panic!(
-        "dashboard server did not become ready at {url}\nchild status: {child_status}\nchild stderr:\n{child_stderr}"
+        "daemon server did not become ready at {url}\nchild status: {child_status}\nchild stderr:\n{child_stderr}"
     );
 }
 
@@ -225,8 +225,9 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
 
     let child = Command::new(bitloops_bin())
         .args([
-            "dashboard",
-            "--no-open",
+            "daemon",
+            "start",
+            "--http",
             "--host",
             "127.0.0.1",
             "--port",
@@ -249,7 +250,7 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start dashboard process");
+        .expect("start daemon process");
     let mut guard = ChildGuard { child };
 
     wait_until_ready(&format!("http://127.0.0.1:{port}/api"), &mut guard.child).await;

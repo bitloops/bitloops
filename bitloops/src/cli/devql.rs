@@ -2,8 +2,9 @@ use anyhow::{Result, bail};
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::host::devql::{
-    CheckpointFileSnapshotBackfillOptions, DevqlConfig, resolve_repo_identity,
-    run_capability_packs_report, run_checkpoint_file_snapshot_backfill, run_query,
+    CheckpointFileSnapshotBackfillOptions, DevqlConfig, compile_query_document,
+    format_query_output, resolve_repo_identity, run_capability_packs_report,
+    run_checkpoint_file_snapshot_backfill, use_raw_graphql_mode,
 };
 use crate::utils::paths;
 
@@ -87,7 +88,16 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
                 .await
             }
         },
-        DevqlCommand::Query(args) => run_query(&cfg, &args.query, args.compact, args.graphql).await,
+        DevqlCommand::Query(args) => {
+            let use_raw_graphql = use_raw_graphql_mode(&args.query, args.graphql);
+            let document = compile_query_document(&args.query, args.graphql)?;
+            let data: serde_json::Value =
+                crate::daemon::execute_graphql(&cfg.repo_root, &document, serde_json::json!({}))
+                    .await?;
+            let output = format_query_output(&data, args.compact, use_raw_graphql)?;
+            println!("{output}");
+            Ok(())
+        }
         DevqlCommand::Packs(args) => run_capability_packs_report(
             &cfg,
             args.json,

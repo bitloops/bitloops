@@ -4,7 +4,7 @@ title: Dashboard Local HTTPS Setup
 
 # Dashboard Local HTTPS Setup
 
-This guide configures local HTTPS for `bitloops dashboard` at `https://bitloops.local:5667`.
+This guide configures local HTTPS for the Bitloops daemon and `bitloops dashboard` at `https://bitloops.local:5667`.
 
 It covers:
 
@@ -124,7 +124,7 @@ Add-Content -Path "C:\Windows\System32\drivers\etc\hosts" -Value "`n127.0.0.1 bi
 
 ## 3) Optional dashboard config hints
 
-When these values are set, Bitloops uses the configured HTTPS fast path (unless you pass `--recheck-local-dashboard-net`):
+When these values are set, Bitloops uses the configured HTTPS fast path (unless you pass `--recheck-local-dashboard-net` to `bitloops daemon start`):
 
 ```json title=".bitloops/config.json"
 {
@@ -146,24 +146,30 @@ Meaning:
 - `dashboard.local_dashboard.tls: true` assumes local TLS material is already valid
 - `dashboard.local_dashboard.bitloops_local: true` assumes `bitloops.local` host mapping is already valid
 
-## 4) Start dashboard
+## 4) Start the daemon or dashboard launcher
 
-Standard path:
+Open the dashboard via the launcher:
 
 ```bash
 bitloops dashboard
 ```
 
+Start the daemon explicitly:
+
+```bash
+bitloops daemon start
+```
+
 Force HTTP loopback (no TLS, explicit opt-in):
 
 ```bash
-bitloops dashboard --http --host 127.0.0.1
+bitloops daemon start --http --host 127.0.0.1
 ```
 
 Force a full local network/TLS recheck and refresh hints:
 
 ```bash
-bitloops dashboard --recheck-local-dashboard-net
+bitloops daemon start --recheck-local-dashboard-net
 ```
 
 ## 5) Verify and troubleshoot
@@ -184,7 +190,7 @@ If browser trust still fails:
 
 1. Run `mkcert -install` again.
 2. Fully quit and reopen your browser.
-3. Re-run `bitloops dashboard --recheck-local-dashboard-net`.
+3. Re-run `bitloops daemon start --recheck-local-dashboard-net`.
 
 If DNS cache is stale:
 

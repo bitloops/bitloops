@@ -81,14 +81,58 @@ bitloops disable
 
 ---
 
-## Session & Checkpoint Commands
+## Daemon & Dashboard Commands
 
 ### `status`
 
-Show current state.
+Show daemon state for the current repository.
 
 ```bash
 bitloops status
+```
+
+```
+Bitloops daemon: running
+Mode: always-on service
+URL: https://bitloops.local:5667
+PID: 12345
+Supervisor service: com.bitloops.daemon (launchd, installed)
+Supervisor state: running
+```
+
+### `start`
+
+Start the Bitloops daemon for the current repository. By default it starts in the foreground. If the repository is already configured for always-on mode, Bitloops reuses the global supervisor service instead of creating a new service or prompting again.
+
+```bash
+bitloops start
+bitloops daemon start
+```
+
+### `stop`
+
+Stop the daemon for the current repository. For always-on repositories, this stops the repo runtime managed by the global supervisor.
+
+```bash
+bitloops stop
+bitloops daemon stop
+```
+
+### `restart`
+
+Restart the daemon for the current repository. For always-on repositories, this restarts the repo runtime managed by the global supervisor.
+
+```bash
+bitloops restart
+bitloops daemon restart
+```
+
+### `checkpoints status`
+
+Show repository capture and checkpoint state.
+
+```bash
+bitloops checkpoints status
 ```
 
 ```
@@ -97,6 +141,10 @@ Agent:       claude-code
 Session:     idle (last session: 5m ago)
 Checkpoints: 12 total
 ```
+
+---
+
+## Session & Checkpoint Commands
 
 ### `explain`
 
@@ -189,7 +237,7 @@ bitloops devql ingest --init=false --max-checkpoints 200
 
 ### `devql query`
 
-Execute a DevQL query against the in-process GraphQL schema.
+Execute a DevQL query through the local Bitloops daemon.
 
 ```bash
 bitloops devql query [--graphql] [--compact] "<query>"
@@ -201,6 +249,8 @@ bitloops devql query [--graphql] [--compact] "<query>"
 - Raw GraphQL otherwise
 
 `--graphql` remains available as an explicit raw-GraphQL override. `--compact` emits compact JSON.
+
+DevQL commands require a running daemon. Start one with `bitloops start`, `bitloops daemon start -d`, or `bitloops daemon start --until-stopped`.
 
 **Examples:**
 
@@ -279,20 +329,31 @@ bitloops devql knowledge versions <knowledge-ref>
 
 ### `dashboard`
 
-Start the local web dashboard.
+Open the local web dashboard in your browser. If the current repository already uses always-on mode, Bitloops ensures that runtime is running through the global `com.bitloops.daemon` service and then opens the browser. Otherwise, Bitloops prompts you to start it in foreground, detached, or always-on mode.
 
 ```bash
-bitloops dashboard [--port <number>] [--host <hostname>] [--http] [--recheck-local-dashboard-net] [--no-open] [--bundle-dir <path>]
+bitloops dashboard
+```
+
+### `daemon start`
+
+Start the daemon with explicit lifecycle and server options.
+
+```bash
+bitloops daemon start [-d | --until-stopped] [--host <hostname>] [--port <number>] [--http] [--recheck-local-dashboard-net] [--bundle-dir <path>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `5667` | Port for the dashboard server |
+| `-d`, `--detached` | `false` | Start in the background and return immediately |
+| `--until-stopped` | `false` | Install or refresh the single user-scoped `com.bitloops.daemon` service, then start this repository under it |
+| `--port` | `5667` | Port for the daemon server |
 | `--host` | auto (`bitloops.local` / fallback loopback) | Hostname to bind to |
 | `--http` | `false` | Force HTTP fast-path (requires `--host 127.0.0.1`) |
 | `--recheck-local-dashboard-net` | `false` | Force full local dashboard network/TLS recheck |
-| `--no-open` | `false` | Do not open the URL in the default browser |
 | `--bundle-dir` / `--bundle` | `~/.bitloops/dashboard/bundle` | Bundle directory to serve |
+
+Always-on mode installs one global user-level service named `com.bitloops.daemon`. That supervisor manages repo-scoped daemon runtimes internally.
 
 ---
 

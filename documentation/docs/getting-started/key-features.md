@@ -111,13 +111,13 @@ Agents can call DevQL autonomously to get exactly the context they need, in mill
 
 ## The Dashboard
 
-For humans who prefer visuals over CLI output, there's a local dashboard:
+For humans who prefer visuals over CLI output, there's a local dashboard launcher:
 
 ```bash
 bitloops dashboard
 ```
 
-Browse checkpoints, session transcripts, artefact relationships, AI usage patterns, and store health — all from `localhost:5667`.
+Browse checkpoints, session transcripts, artefact relationships, AI usage patterns, and store health. Bitloops opens the dashboard and starts the local daemon if needed.
 
 ---
 

@@ -217,6 +217,12 @@ pub fn run_resume_command(args: &ResumeArgs) -> Result<()> {
 
 pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
     match command {
+        crate::cli::Commands::Daemon(_) => "daemon",
+        crate::cli::Commands::Start(_) => "start",
+        crate::cli::Commands::Stop(_) => "stop",
+        crate::cli::Commands::Status(_) => "status",
+        crate::cli::Commands::Restart(_) => "restart",
+        crate::cli::Commands::Checkpoints(_) => "checkpoints",
         crate::cli::Commands::Rewind(_) => "rewind",
         crate::cli::Commands::Resume(_) => "resume",
         crate::cli::Commands::Clean(_) => "clean",
@@ -224,7 +230,6 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Init(_) => "init",
         crate::cli::Commands::Enable(_) => "enable",
         crate::cli::Commands::Disable(_) => "disable",
-        crate::cli::Commands::Status(_) => "status",
         crate::cli::Commands::Dashboard(_) => "dashboard",
         crate::cli::Commands::Hooks(_) => "hooks",
         crate::cli::Commands::Version(_) => "version",
@@ -233,6 +238,8 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Devql(_) => "devql",
         crate::cli::Commands::Testlens(_) => "testlens",
         crate::cli::Commands::DevqlWatcher(_) => "__devql-watcher",
+        crate::cli::Commands::DaemonProcess(_) => "__daemon-process",
+        crate::cli::Commands::DaemonSupervisor(_) => "__daemon-supervisor",
         crate::cli::Commands::Doctor(_) => "doctor",
         crate::cli::Commands::SendAnalytics(_) => "__send_analytics",
         crate::cli::Commands::Completion(_) => "completion",
@@ -247,6 +254,8 @@ pub(crate) fn hidden_chain_for_command(command: &crate::cli::Commands) -> Vec<bo
         crate::cli::Commands::Hooks(_)
             | crate::cli::Commands::Debug(_)
             | crate::cli::Commands::DevqlWatcher(_)
+            | crate::cli::Commands::DaemonProcess(_)
+            | crate::cli::Commands::DaemonSupervisor(_)
             | crate::cli::Commands::SendAnalytics(_)
             | crate::cli::Commands::Completion(_)
             | crate::cli::Commands::CurlBashPostInstall
@@ -254,17 +263,9 @@ pub(crate) fn hidden_chain_for_command(command: &crate::cli::Commands) -> Vec<bo
 }
 
 pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
-    !matches!(
+    matches!(
         command,
-        crate::cli::Commands::Clean(_)
-            | crate::cli::Commands::Disable(_)
-            | crate::cli::Commands::Hooks(_)
-            | crate::cli::Commands::Help(_)
-            | crate::cli::Commands::Version(_)
-            | crate::cli::Commands::Completion(_)
-            | crate::cli::Commands::CurlBashPostInstall
-            | crate::cli::Commands::SendAnalytics(_)
-            | crate::cli::Commands::DevqlWatcher(_)
+        crate::cli::Commands::Devql(_) | crate::cli::Commands::Testlens(_)
     )
 }
 
@@ -386,10 +387,17 @@ pub fn run_send_analytics_command(
 pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Result<()> {
     let mut cmd = crate::cli::Cli::command();
     // clap_complete splits subcommand paths using "__". Our hidden
-    // "__send_analytics" and "__devql-watcher" commands conflict with that
-    // separator and cause a panic during completion generation, so we rename
-    // them only in this generated tree. Runtime parsing remains unchanged.
+    // "__send_analytics", "__devql-watcher", and daemon internal commands
+    // conflict with that separator and can panic during completion generation,
+    // so we rename them only in this generated tree. Runtime parsing remains
+    // unchanged.
     cmd = cmd.mut_subcommand("__devql-watcher", |sub| sub.name("devql-watcher-internal"));
+    cmd = cmd.mut_subcommand("__daemon-process", |sub| {
+        sub.name("daemon-process-internal")
+    });
+    cmd = cmd.mut_subcommand("__daemon-supervisor", |sub| {
+        sub.name("daemon-supervisor-internal")
+    });
     cmd = cmd.mut_subcommand("__send_analytics", |sub| {
         sub.name("send-analytics-internal")
     });

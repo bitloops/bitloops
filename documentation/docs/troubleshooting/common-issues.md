@@ -9,7 +9,7 @@ Solutions for frequently encountered problems with Bitloops.
 
 ## Session Appears Stuck
 
-**Symptom**: `bitloops status` shows an active session that should have ended.
+**Symptom**: `bitloops checkpoints status` shows an active session that should have ended.
 
 **Solution**: Run the doctor command to diagnose:
 
@@ -27,7 +27,7 @@ This clears the shadow state without deleting checkpoint data.
 
 ## Hooks Not Firing
 
-**Symptom**: You're using an AI agent but `bitloops status` shows no session activity.
+**Symptom**: You're using an AI agent but `bitloops checkpoints status` shows no session activity.
 
 **Possible causes**:
 
@@ -59,16 +59,19 @@ This clears the shadow state without deleting checkpoint data.
 
 **Possible causes**:
 
-1. **Port already in use** — try a different port:
+1. **Port already in use** — start the daemon on a different port:
    ```bash
-   bitloops dashboard --port 8080
+   bitloops daemon start --port 8080
    ```
 
 2. **Stores not initialized** — run `bitloops devql init` first
 
 3. **Local HTTPS/hostname not configured** — follow [Dashboard Local HTTPS Setup](/guides/dashboard-local-https-setup)
 
-4. **Check for errors** in the terminal output when starting the dashboard
+4. **Check daemon status**:
+   ```bash
+   bitloops status
+   ```
 
 ## No Checkpoints After Committing
 
@@ -76,7 +79,7 @@ This clears the shadow state without deleting checkpoint data.
 
 **Check**:
 
-1. Is capture enabled? `bitloops status`
+1. Is capture enabled? `bitloops checkpoints status`
 2. Are git hooks installed? Check `.git/hooks/` for Bitloops hooks
 3. Reinitialize if needed: `bitloops init --agent <name> --force`
 

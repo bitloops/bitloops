@@ -14,24 +14,31 @@ bitloops dashboard
 ```
 
 ```
-✔ Dashboard server started
+✔ Opened Bitloops dashboard
   → https://bitloops.local:5667
 ```
 
+`bitloops dashboard` is now a browser launcher. If this repository is already configured for always-on mode, Bitloops starts or reuses the repo runtime through the global `com.bitloops.daemon` service and then opens the dashboard. Otherwise, if the daemon is not running yet, Bitloops prompts you to start it in foreground, detached, or always-on mode.
+
 If local HTTPS is not set up yet, follow [Dashboard Local HTTPS Setup](/guides/dashboard-local-https-setup).
 
-### Custom Port and Host
+### Starting the Daemon Explicitly
 
 ```bash
-bitloops dashboard --port 8080
-bitloops dashboard --host 0.0.0.0 --port 3000
-bitloops dashboard --http --host 127.0.0.1
-bitloops dashboard --recheck-local-dashboard-net
+bitloops daemon start
+bitloops daemon start -d
+bitloops daemon start --until-stopped
+bitloops daemon start --port 8080
+bitloops daemon start --host 0.0.0.0 --port 3000
+bitloops daemon start --http --host 127.0.0.1
+bitloops daemon start --recheck-local-dashboard-net
 ```
+
+Always-on mode installs one user-scoped global service named `com.bitloops.daemon`. That service stays stable across repositories and manages repo-scoped runtimes internally.
 
 ## DevQL GraphQL Endpoints
 
-When the dashboard server is running, it also serves the DevQL GraphQL surface:
+When the daemon is running, it also serves the DevQL GraphQL surface:
 
 | Route               | Purpose                       |
 | ------------------- | ----------------------------- |
@@ -40,7 +47,7 @@ When the dashboard server is running, it also serves the DevQL GraphQL surface:
 | `/devql/sdl`        | Generated schema SDL          |
 | `/devql/ws`         | Subscription transport        |
 
-This is the same schema the CLI executes in-process for `bitloops devql query`, `bitloops devql init`, `bitloops devql ingest`, and the DevQL knowledge commands.
+This is the same schema the CLI calls over the local daemon for `bitloops devql query`, `bitloops devql init`, `bitloops devql ingest`, and the DevQL knowledge commands.
 
 ## Dashboard Views
 
@@ -109,4 +116,4 @@ Real-time status of configured stores:
 }
 ```
 
-The dashboard is a bundled web application served by Bitloops's built-in HTTP server (Axum). It runs entirely locally — no external services involved.
+The dashboard is a bundled web application served by the Bitloops daemon (Axum). It runs entirely locally — no external services involved.

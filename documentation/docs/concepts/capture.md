@@ -26,7 +26,7 @@ When you work with an AI agent, Bitloops hooks into the conversation and records
 | **Model identity** | Which AI model produced this output |
 | **Tool use** | Shell commands, file operations, API calls |
 
-Draft Commits update in real time. You can check what's being captured mid-session with `bitloops status`.
+Draft Commits update in real time. You can check what's being captured mid-session with `bitloops checkpoints status`.
 
 ## From Draft to Permanent
 

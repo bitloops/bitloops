@@ -16,7 +16,7 @@ You're working on an Express.js API. You want to add rate limiting to your endpo
 Bitloops is initialized and enabled (see [Quickstart](/getting-started/quickstart)):
 
 ```bash
-bitloops status
+bitloops checkpoints status
 ```
 
 ```
@@ -39,7 +39,7 @@ Open your AI agent and give it a task:
 Bitloops immediately begins creating **Draft Commits** — recording your prompt, the session start, and every subsequent action:
 
 ```bash
-bitloops status
+bitloops checkpoints status
 ```
 
 ```

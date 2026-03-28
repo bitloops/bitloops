@@ -20,7 +20,7 @@ impl DevqlGraphqlContext {
             .context("store backend configuration unavailable")?;
         let repo_id = self.repo_identity.repo_id.as_str();
 
-        if backend_config.events.has_clickhouse() {
+        let checkpoints = if backend_config.events.has_clickhouse() {
             let cfg = self.config.as_ref().with_context(|| {
                 self.config_error
                     .clone()
@@ -32,20 +32,25 @@ impl DevqlGraphqlContext {
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            return rows
-                .into_iter()
+            rows.into_iter()
                 .map(checkpoint_from_row)
-                .collect::<Result<Vec<_>>>();
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            let sql = build_duckdb_checkpoints_sql(repo_id, scope, agent, since);
+            let duckdb_path = backend_config
+                .events
+                .resolve_duckdb_db_path_for_repo(&self.repo_root);
+            let rows: Vec<Value> = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+            rows.into_iter()
+                .map(checkpoint_from_row)
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        if checkpoints.is_empty() {
+            return self.list_committed_checkpoints(scope, agent, since).await;
         }
 
-        let sql = build_duckdb_checkpoints_sql(repo_id, scope, agent, since);
-        let duckdb_path = backend_config
-            .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root);
-        let rows: Vec<Value> = duckdb_query_rows_path(&duckdb_path, &sql).await?;
-        rows.into_iter()
-            .map(checkpoint_from_row)
-            .collect::<Result<Vec<_>>>()
+        Ok(checkpoints)
     }
 
     pub(crate) async fn list_telemetry_events(

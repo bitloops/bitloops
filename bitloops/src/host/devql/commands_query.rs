@@ -58,7 +58,7 @@ pub(crate) async fn execute_query_json_with_composition(
     Ok(Value::Array(rows))
 }
 
-fn compile_query_document(query: &str, raw_graphql: bool) -> Result<String> {
+pub(crate) fn compile_query_document(query: &str, raw_graphql: bool) -> Result<String> {
     if use_raw_graphql_mode(query, raw_graphql) {
         let trimmed = query.trim();
         if trimmed.is_empty() {
@@ -74,11 +74,15 @@ fn looks_like_devql_pipeline(query: &str) -> bool {
     query.contains("->")
 }
 
-fn use_raw_graphql_mode(query: &str, raw_graphql: bool) -> bool {
+pub(crate) fn use_raw_graphql_mode(query: &str, raw_graphql: bool) -> bool {
     raw_graphql || !looks_like_devql_pipeline(query)
 }
 
-fn format_query_output(data: &Value, compact: bool, raw_graphql: bool) -> Result<String> {
+pub(crate) fn format_query_output(
+    data: &Value,
+    compact: bool,
+    raw_graphql: bool,
+) -> Result<String> {
     if raw_graphql {
         return if compact {
             Ok(serde_json::to_string(data)?)

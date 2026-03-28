@@ -482,7 +482,7 @@ async fn devql_run_requires_subcommand() {
 }
 
 #[tokio::test]
-async fn devql_run_init_uses_default_sqlite_duckdb_after_repo_resolution() {
+async fn devql_run_init_requires_running_daemon_after_repo_resolution() {
     let repo = seed_git_repo();
     let home = TempDir::new().expect("home dir");
     let home_path = home.path().to_string_lossy().to_string();
@@ -499,14 +499,15 @@ async fn devql_run_init_uses_default_sqlite_duckdb_after_repo_resolution() {
         ],
     );
 
-    let result = run_devql_command(DevqlArgs {
+    let err = run_devql_command(DevqlArgs {
         command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
     })
-    .await;
+    .await
+    .expect_err("devql init should require a running daemon");
 
     assert!(
-        result.is_ok(),
-        "default DevQL backends should initialise after repo resolution: {result:#?}"
+        err.to_string().contains("Bitloops daemon is not running"),
+        "expected daemon-required error after repo resolution, got: {err:#}"
     );
 }
 #[path = "devql_tests/clones.rs"]

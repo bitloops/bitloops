@@ -59,7 +59,8 @@ pub use self::commands_projection::{
     run_checkpoint_file_snapshot_backfill,
 };
 pub(crate) use self::commands_query::{
-    RegisteredStageCompositionContext, execute_query_json_with_composition,
+    RegisteredStageCompositionContext, compile_query_document, execute_query_json_with_composition,
+    format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{

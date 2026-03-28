@@ -363,7 +363,7 @@ pub fn load_existing_dashboard_tls_material(browser_host: &str) -> Result<Dashbo
     browser_host_has_matching_san(&cert_path, &leaf_cert, browser_host).with_context(|| {
         format!(
             "dashboard TLS fast path validation failed for host {browser_host}; \
-             run `bitloops dashboard --recheck-local-dashboard-net` once to refresh local dashboard network hints"
+             run `bitloops daemon start --recheck-local-dashboard-net` once to refresh local dashboard network hints"
         )
     })?;
     let server_config = load_server_config(&cert_path, &key_path)?;

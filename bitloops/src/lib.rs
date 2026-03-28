@@ -4,6 +4,7 @@ pub(crate) mod artefact_query_planner;
 pub mod capability_packs;
 pub mod cli;
 pub mod config;
+pub mod daemon;
 pub mod git;
 pub mod graphql;
 pub mod host;

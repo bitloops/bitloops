@@ -71,9 +71,7 @@ pub(super) async fn execute_devql_graphql<T: DeserializeOwned>(
         return Ok(serde_json::from_value(data?)?);
     }
 
-    let data =
-        crate::graphql::execute_in_process(repo_root.to_path_buf(), query, variables).await?;
-    Ok(serde_json::from_value(data)?)
+    crate::daemon::execute_graphql(repo_root, query, variables).await
 }
 
 pub(super) async fn run_init_via_graphql(repo_root: &Path) -> Result<()> {

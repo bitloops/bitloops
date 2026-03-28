@@ -1,4 +1,5 @@
 use std::fs;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -23,8 +24,10 @@ pub(super) fn build(
     let repo_root =
         repo_root.ok_or_else(|| anyhow!("local embedding provider requires repo root"))?;
     let init_options = build_init_options(resolved_model, repo_root)?;
-    let embedder = TextEmbedding::try_new(init_options)
-        .with_context(|| format!("loading local embedding model `{model}`"))?;
+    let embedder = guard_ort_panic(
+        || TextEmbedding::try_new(init_options),
+        &format!("loading local embedding model `{model}`"),
+    )?;
 
     Ok(Box::new(LocalEmbeddingsProvider {
         provider: provider.to_string(),
@@ -66,9 +69,10 @@ impl EmbeddingProvider for LocalEmbeddingsProvider {
             .embedder
             .lock()
             .map_err(|_| anyhow!("local embedding provider mutex was poisoned"))?;
-        let outputs = embedder
-            .embed(vec![input], None)
-            .with_context(|| format!("running local embedding model `{}`", self.model))?;
+        let outputs = guard_ort_panic(
+            || embedder.embed(vec![input], None),
+            &format!("running local embedding model `{}`", self.model),
+        )?;
         let output = outputs
             .into_iter()
             .next()
@@ -103,6 +107,37 @@ fn build_init_options(model: EmbeddingModel, repo_root: &Path) -> Result<InitOpt
 
 fn default_local_embedding_cache_dir(repo_root: &Path) -> PathBuf {
     paths::default_embedding_model_cache_dir(repo_root)
+}
+
+fn guard_ort_panic<T, F>(action: F, context: &str) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    match panic::catch_unwind(AssertUnwindSafe(action)) {
+        Ok(result) => result.with_context(|| context.to_string()),
+        Err(payload) => Err(anyhow!(
+            "{context}: {}",
+            format_embedding_runtime_panic(payload)
+        )),
+    }
+}
+
+fn format_embedding_runtime_panic(payload: Box<dyn std::any::Any + Send>) -> String {
+    let message = match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_string(),
+            Err(_) => "local embedding runtime panicked".to_string(),
+        },
+    };
+
+    if message.contains("Failed to load ONNX Runtime dylib") {
+        format!(
+            "{message}. Install or point `ORT_DYLIB_PATH` at `libonnxruntime.dylib`, or disable local embeddings with `BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none`."
+        )
+    } else {
+        message
+    }
 }
 
 #[cfg(test)]
@@ -186,5 +221,36 @@ mod tests {
         );
         assert!(options.cache_dir.exists());
         assert!(!options.show_download_progress);
+    }
+
+    #[test]
+    fn guard_ort_panic_wraps_dynload_panics_with_guidance() {
+        let err = guard_ort_panic(
+            || -> Result<()> {
+                panic!("Failed to load ONNX Runtime dylib: dlopen failed");
+            },
+            "loading local embedding model `jinaai/jina-embeddings-v2-base-code`",
+        )
+        .expect_err("panic should be converted into an error");
+
+        let text = err.to_string();
+        assert!(text.contains("Failed to load ONNX Runtime dylib"));
+        assert!(text.contains("ORT_DYLIB_PATH"));
+        assert!(text.contains("BITLOOPS_DEVQL_EMBEDDING_PROVIDER=none"));
+    }
+
+    #[test]
+    fn guard_ort_panic_preserves_regular_errors() {
+        let err = guard_ort_panic(
+            || -> Result<()> { Err(anyhow!("embed failed")) },
+            "running local embedding model `jinaai/jina-embeddings-v2-base-code`",
+        )
+        .expect_err("regular error should be preserved");
+
+        let text = format!("{err:#}");
+        assert!(text.contains("embed failed"));
+        assert!(
+            text.contains("running local embedding model `jinaai/jina-embeddings-v2-base-code`")
+        );
     }
 }

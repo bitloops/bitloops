@@ -185,6 +185,15 @@ To view your checkpoints, run the following command again from within the root o
 bitloops dashboard
 ```
 
+To control the daemon directly:
+
+```bash
+bitloops daemon start
+bitloops daemon stop
+bitloops status
+bitloops checkpoints status
+```
+
 ## Supported Agents
 
 - [x] Claude Code

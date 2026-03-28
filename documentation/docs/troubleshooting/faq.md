@@ -57,7 +57,7 @@ Yes. Install Bitloops in CI, run `bitloops devql init && bitloops devql ingest`,
 
 ## Troubleshooting
 
-### `bitloops status` shows "Session: active" but I'm not using an agent
+### `bitloops checkpoints status` shows "Session: active" but I'm not using an agent
 
 The session may be stuck. Run:
 
@@ -73,7 +73,7 @@ bitloops reset
 
 ### Hooks don't seem to fire for my agent
 
-1. Verify capture is enabled: `bitloops status`
+1. Verify capture is enabled: `bitloops checkpoints status`
 2. Reinstall hooks: `bitloops init --agent <name> --force`
 3. Check that the agent is actually using its hook system (some agents require specific configuration)
 
