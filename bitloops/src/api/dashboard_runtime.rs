@@ -1,7 +1,7 @@
 use super::{
     DashboardReadyInfo, DashboardRuntimeOptions, DashboardServerConfig, DashboardStartupMode,
-    DashboardState, DashboardTransport, FALLBACK_LOCAL_HOST, LocalDashboardDiscovery,
-    PREFERRED_LOCAL_HOST, ServeMode, db, hosts, router, tls,
+    DashboardState, DashboardTransport, FALLBACK_LOCAL_HOST, LocalDashboardDiscovery, ServeMode,
+    db, router, tls,
 };
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config};
 use crate::graphql::{self, DevqlGraphqlContext};
@@ -47,37 +47,14 @@ pub(super) async fn run(
         );
     }
 
-    let mut selected_host = match startup_mode {
+    let selected_host = match startup_mode {
         DashboardStartupMode::FastHttpLoopback => FALLBACK_LOCAL_HOST.to_string(),
-        DashboardStartupMode::FastConfiguredHttps => explicit_host.clone().unwrap_or_else(|| {
-            if local_dashboard_cfg.and_then(|cfg| cfg.bitloops_local) == Some(false) {
-                FALLBACK_LOCAL_HOST.to_string()
-            } else {
-                PREFERRED_LOCAL_HOST.to_string()
-            }
-        }),
-        DashboardStartupMode::SlowProbe => explicit_host
-            .clone()
-            .unwrap_or_else(|| PREFERRED_LOCAL_HOST.to_string()),
-    };
-
-    if matches!(startup_mode, DashboardStartupMode::SlowProbe)
-        && explicit_host.is_none()
-        && selected_host == PREFERRED_LOCAL_HOST
-    {
-        match hosts::ensure_default_dashboard_host_mapping()? {
-            hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
-                discovery.bitloops_local = true;
-            }
-            hosts::HostMappingOutcome::NeedsFallback { reason } => {
-                startup_warnings.push(format!(
-                    "Warning: could not map {PREFERRED_LOCAL_HOST} in the hosts file: {reason}\n\
-                     Falling back to localhost for this run."
-                ));
-                selected_host = FALLBACK_LOCAL_HOST.to_string();
-            }
+        DashboardStartupMode::FastConfiguredHttps | DashboardStartupMode::SlowProbe => {
+            explicit_host
+                .clone()
+                .unwrap_or_else(|| FALLBACK_LOCAL_HOST.to_string())
         }
-    }
+    };
 
     let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
 
@@ -115,7 +92,7 @@ pub(super) async fn run(
             if !tls::mkcert_on_path() {
                 startup_warnings.push(
                     "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
-                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
                         .to_string(),
                 );
                 (DashboardTransport::Http, None)
@@ -137,7 +114,7 @@ pub(super) async fn run(
                         startup_warnings.push(format!(
                             "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
                              Falling back to local HTTP.\n\
-                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
                         ));
                         (DashboardTransport::Http, None)
                     }
@@ -157,7 +134,7 @@ pub(super) async fn run(
         .unwrap_or_else(|_| PathBuf::from("."));
 
     if matches!(startup_mode, DashboardStartupMode::SlowProbe)
-        && (discovery.tls || discovery.bitloops_local)
+        && discovery.tls
         && let Err(err) = persist_local_dashboard_discovery(&repo_root, discovery)
     {
         startup_warnings.push(format!(
@@ -276,7 +253,7 @@ fn persist_local_dashboard_discovery(
     repo_root: &Path,
     discovery: LocalDashboardDiscovery,
 ) -> Result<()> {
-    if !discovery.tls && !discovery.bitloops_local {
+    if !discovery.tls {
         return Ok(());
     }
 
@@ -340,9 +317,6 @@ fn persist_local_dashboard_discovery(
 
     if discovery.tls {
         local_dashboard_obj.insert("tls".to_string(), serde_json::Value::Bool(true));
-    }
-    if discovery.bitloops_local {
-        local_dashboard_obj.insert("bitloops_local".to_string(), serde_json::Value::Bool(true));
     }
 
     let mut serialized =

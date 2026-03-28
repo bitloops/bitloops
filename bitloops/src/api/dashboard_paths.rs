@@ -1,6 +1,4 @@
 use super::{DEFAULT_BUNDLE_RELATIVE_DIR, DashboardTransport};
-#[cfg(test)]
-use super::{FALLBACK_LOCAL_HOST, PREFERRED_LOCAL_HOST};
 use anyhow::{Context, Result, anyhow};
 use std::env;
 use std::ffi::OsStr;
@@ -94,22 +92,6 @@ pub(super) fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBu
         return home.join(suffix);
     }
     path.to_path_buf()
-}
-
-#[cfg(test)]
-pub(super) fn select_host_with_dashboard_preference(
-    explicit_host: Option<&str>,
-    use_bitloops_local: bool,
-) -> String {
-    if let Some(host) = explicit_host.and_then(normalized_host) {
-        return host.to_string();
-    }
-
-    if use_bitloops_local {
-        PREFERRED_LOCAL_HOST.to_string()
-    } else {
-        FALLBACK_LOCAL_HOST.to_string()
-    }
 }
 
 pub(super) fn normalized_host(input: &str) -> Option<&str> {

@@ -275,8 +275,7 @@ fn dashboard_from_unified_reads_local_dashboard_flags() {
     let settings = UnifiedSettings {
         dashboard: Some(json!({
             "local_dashboard": {
-                "tls": true,
-                "bitloops_local": true
+                "tls": true
             }
         })),
         ..Default::default()
@@ -286,7 +285,6 @@ fn dashboard_from_unified_reads_local_dashboard_flags() {
         cfg.local_dashboard,
         Some(DashboardLocalDashboardConfig {
             tls: Some(true),
-            bitloops_local: Some(true),
         })
     );
 }

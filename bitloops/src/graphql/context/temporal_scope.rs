@@ -7,7 +7,7 @@ use super::git_history::git_default_branch_name;
 use crate::graphql::types::temporal_scope::{AsOfInput, AsOfSelector};
 use crate::graphql::{ResolvedTemporalScope, TemporalAccessMode};
 use crate::host::checkpoints::strategy::manual_commit::run_git;
-use crate::host::devql::{esc_pg, sqlite_query_rows_path};
+use crate::host::devql::esc_pg;
 
 impl DevqlGraphqlContext {
     pub(crate) async fn resolve_temporal_scope(
@@ -78,7 +78,7 @@ impl DevqlGraphqlContext {
             branch = esc_pg(&branch),
             revision_id = esc_pg(revision_id),
         );
-        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
         rows.into_iter()
             .find_map(|row| {
                 row.get("commit_sha")

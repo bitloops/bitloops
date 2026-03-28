@@ -7,7 +7,7 @@ use super::{
     build_branch_commit_log_args, canonical_agent_key, dashboard_user,
     default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url, has_bundle_index,
     paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
-    select_host_with_dashboard_preference, select_startup_mode, warning_block_lines,
+    select_startup_mode, warning_block_lines,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};
 use crate::test_support::process_state::{ProcessStateGuard, enter_env_vars, enter_process_state};

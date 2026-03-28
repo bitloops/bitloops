@@ -13,8 +13,9 @@ use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::{DevqlConfig, RepoIdentity};
 use crate::storage::blob::BlobStore;
 use anyhow::{Result, anyhow};
+use serde_json::Value;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::loaders::LoaderMetrics;
@@ -66,6 +67,36 @@ impl fmt::Debug for DevqlGraphqlContext {
 }
 
 impl DevqlGraphqlContext {
+    pub(crate) async fn query_sqlite_rows_at_path(
+        &self,
+        path: &Path,
+        sql: &str,
+    ) -> Result<Vec<Value>> {
+        self.db.query_sqlite_rows(path, sql).await
+    }
+
+    pub(crate) async fn query_devql_sqlite_rows(&self, sql: &str) -> Result<Vec<Value>> {
+        let sqlite_path = self.devql_sqlite_path()?;
+        self.query_sqlite_rows_at_path(&sqlite_path, sql).await
+    }
+
+    pub(crate) async fn execute_sqlite_batch_at_path(&self, path: &Path, sql: &str) -> Result<()> {
+        self.db.execute_sqlite_batch(path, sql).await
+    }
+
+    pub(crate) async fn query_duckdb_rows_at_path(
+        &self,
+        path: &Path,
+        sql: &str,
+    ) -> Result<Vec<Value>> {
+        self.db.query_duckdb_rows(path, sql).await
+    }
+
+    pub(crate) async fn query_clickhouse_data(&self, sql: &str) -> Result<Value> {
+        let cfg = self.devql_config()?;
+        self.db.query_clickhouse_data(&cfg, sql).await
+    }
+
     pub(crate) fn loader_metrics(&self) -> &LoaderMetrics {
         &self.loader_metrics
     }

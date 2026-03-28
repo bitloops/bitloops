@@ -117,12 +117,8 @@ impl DashboardFileConfig {
             .and_then(Value::as_object)
             .map(|local| DashboardLocalDashboardConfig {
                 tls: read_any_bool(local, &[DASHBOARD_LOCAL_DASHBOARD_TLS_KEY]),
-                bitloops_local: read_any_bool(
-                    local,
-                    &[DASHBOARD_LOCAL_DASHBOARD_BITLOOPS_LOCAL_KEY],
-                ),
             })
-            .filter(|local| local.tls.is_some() || local.bitloops_local.is_some());
+            .filter(|local| local.tls.is_some());
 
         Self { local_dashboard }
     }

@@ -12,7 +12,6 @@ pub(crate) const SEMANTIC_CONFIG_KEY: &str = "semantic";
 pub(crate) const DASHBOARD_CONFIG_KEY: &str = "dashboard";
 pub(crate) const DASHBOARD_LOCAL_DASHBOARD_KEY: &str = "local_dashboard";
 pub(crate) const DASHBOARD_LOCAL_DASHBOARD_TLS_KEY: &str = "tls";
-pub(crate) const DASHBOARD_LOCAL_DASHBOARD_BITLOOPS_LOCAL_KEY: &str = "bitloops_local";
 pub(crate) const WATCH_CONFIG_KEY: &str = "watch";
 pub(crate) const DEVQL_CONFIG_KEY: &str = "devql";
 pub(crate) const WATCH_DEBOUNCE_MS_KEY: &str = "watch_debounce_ms";

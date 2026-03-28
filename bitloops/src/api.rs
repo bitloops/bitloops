@@ -6,7 +6,6 @@ mod dashboard_runtime;
 mod db;
 mod dto;
 mod handlers;
-mod hosts;
 mod router;
 pub mod tls;
 
@@ -23,7 +22,6 @@ pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
-const PREFERRED_LOCAL_HOST: &str = "bitloops.local";
 const FALLBACK_LOCAL_HOST: &str = "127.0.0.1";
 const DEFAULT_BUNDLE_RELATIVE_DIR: &str = ".bitloops/dashboard/bundle";
 pub(super) const API_GIT_SCAN_LIMIT: usize = 5_000;
@@ -160,7 +158,6 @@ enum DashboardStartupMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LocalDashboardDiscovery {
     tls: bool,
-    bitloops_local: bool,
 }
 
 #[derive(Clone)]
@@ -275,14 +272,6 @@ pub(super) fn has_bundle_index(bundle_dir: &Path) -> bool {
 
 pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Option<PathBuf> {
     dashboard_paths::resolve_bundle_file(bundle_dir, request_path)
-}
-
-#[cfg(test)]
-fn select_host_with_dashboard_preference(
-    explicit_host: Option<&str>,
-    use_bitloops_local: bool,
-) -> String {
-    dashboard_paths::select_host_with_dashboard_preference(explicit_host, use_bitloops_local)
 }
 
 #[cfg(test)]

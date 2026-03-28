@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::Url;
+use serde_json::{Value, json};
 use std::fmt;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::time::{Duration, timeout};
 use tokio_postgres::NoTls;
 
@@ -14,11 +14,6 @@ use crate::config::{StoreBackendConfig, resolve_store_backend_config};
 const POSTGRES_POOL_SIZE: usize = 4;
 /// Max time allowed per backend health ping so /api/db/health stays responsive.
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
-type RelationalHealthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
-
-pub(super) trait RelationalHealthStore: Send + Sync {
-    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32>;
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendHealthKind {
@@ -114,7 +109,8 @@ pub(super) struct DashboardDbInit {
 pub(crate) struct DashboardDbPools {
     pub(super) has_postgres: bool,
     pub(super) has_clickhouse: bool,
-    pub(super) relational: Option<Arc<dyn RelationalHealthStore>>,
+    pub(super) postgres: Option<PostgresPool>,
+    pub(super) sqlite: Option<SqlitePool>,
     pub(super) clickhouse: Option<ClickHousePool>,
     pub(super) duckdb: Option<DuckDbPool>,
 }
@@ -124,7 +120,8 @@ impl fmt::Debug for DashboardDbPools {
         f.debug_struct("DashboardDbPools")
             .field("has_postgres", &self.has_postgres)
             .field("has_clickhouse", &self.has_clickhouse)
-            .field("relational_enabled", &self.relational.is_some())
+            .field("postgres_enabled", &self.postgres.is_some())
+            .field("sqlite_enabled", &self.sqlite.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
             .field("duckdb_enabled", &self.duckdb.is_some())
             .finish()
@@ -133,18 +130,24 @@ impl fmt::Debug for DashboardDbPools {
 
 impl DashboardDbPools {
     pub(crate) async fn health_check(&self) -> DashboardDbHealth {
-        let relational_store = self.relational.clone();
+        let postgres_pool = self.postgres.clone();
+        let sqlite_pool = self.sqlite.clone();
         let clickhouse_pool = self.clickhouse.as_ref();
         let duckdb_pool = self.duckdb.as_ref();
 
         let relational_fut = async move {
-            match relational_store {
-                Some(store) => match timeout(HEALTH_CHECK_TIMEOUT, store.ping()).await {
+            match (postgres_pool, sqlite_pool) {
+                (Some(pool), _) => match timeout(HEALTH_CHECK_TIMEOUT, pool.ping()).await {
                     Ok(Ok(value)) => BackendHealth::ok(format!("SELECT 1 => {value}")),
                     Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
                     Err(_) => BackendHealth::fail("health check timed out".to_string()),
                 },
-                None => BackendHealth::skip("not configured"),
+                (None, Some(pool)) => match timeout(HEALTH_CHECK_TIMEOUT, pool.ping()).await {
+                    Ok(Ok(value)) => BackendHealth::ok(format!("SELECT 1 => {value}")),
+                    Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
+                    Err(_) => BackendHealth::fail("health check timed out".to_string()),
+                },
+                (None, None) => BackendHealth::skip("not configured"),
             }
         };
         let clickhouse_fut = async move {
@@ -184,6 +187,118 @@ impl DashboardDbPools {
             self.has_clickhouse,
         )
     }
+
+    pub(crate) async fn query_sqlite_rows(&self, path: &Path, sql: &str) -> Result<Vec<Value>> {
+        let started = Instant::now();
+        let pooled = self.sqlite.as_ref().is_some_and(|pool| pool.path() == path);
+        let result = if let Some(pool) = self.sqlite.as_ref()
+            && pool.path() == path
+        {
+            pool.query_rows(sql).await
+        } else {
+            crate::host::devql::sqlite_query_rows_path(path, sql).await
+        };
+        record_backend_stage(
+            "server.db.sqlite.query_rows",
+            started.elapsed(),
+            json!({
+                "path": path.display().to_string(),
+                "pooled": pooled,
+                "rows": result.as_ref().map(|rows| rows.len()).ok(),
+                "sqlBytes": sql.len(),
+                "error": result.as_ref().err().map(|err| format!("{err:#}")),
+            }),
+        );
+        result
+    }
+
+    pub(crate) async fn execute_sqlite_batch(&self, path: &Path, sql: &str) -> Result<()> {
+        let started = Instant::now();
+        let pooled = self.sqlite.as_ref().is_some_and(|pool| pool.path() == path);
+        let result = if let Some(pool) = self.sqlite.as_ref()
+            && pool.path() == path
+        {
+            pool.execute_batch(sql).await
+        } else {
+            sqlite_exec_path(path, sql).await
+        };
+        record_backend_stage(
+            "server.db.sqlite.execute_batch",
+            started.elapsed(),
+            json!({
+                "path": path.display().to_string(),
+                "pooled": pooled,
+                "sqlBytes": sql.len(),
+                "error": result.as_ref().err().map(|err| format!("{err:#}")),
+            }),
+        );
+        result
+    }
+
+    pub(crate) async fn query_duckdb_rows(&self, path: &Path, sql: &str) -> Result<Vec<Value>> {
+        let started = Instant::now();
+        let pooled = self.duckdb.as_ref().is_some_and(|pool| pool.path() == path);
+        let result = if let Some(pool) = self.duckdb.as_ref()
+            && pool.path() == path
+        {
+            pool.query_rows(sql).await
+        } else {
+            crate::host::devql::duckdb_query_rows_path(path, sql).await
+        };
+        record_backend_stage(
+            "server.db.duckdb.query_rows",
+            started.elapsed(),
+            json!({
+                "path": path.display().to_string(),
+                "pooled": pooled,
+                "rows": result.as_ref().map(|rows| rows.len()).ok(),
+                "sqlBytes": sql.len(),
+                "error": result.as_ref().err().map(|err| format!("{err:#}")),
+            }),
+        );
+        result
+    }
+
+    pub(crate) async fn query_clickhouse_data(
+        &self,
+        cfg: &crate::host::devql::DevqlConfig,
+        sql: &str,
+    ) -> Result<Value> {
+        let started = Instant::now();
+        let pooled = self.clickhouse.is_some();
+        let result = if let Some(pool) = self.clickhouse.as_ref() {
+            pool.query_data(sql).await
+        } else {
+            crate::host::devql::clickhouse_query_data(cfg, sql).await
+        };
+        record_backend_stage(
+            "server.db.clickhouse.query_data",
+            started.elapsed(),
+            json!({
+                "pooled": pooled,
+                "sqlBytes": sql.len(),
+                "responseKind": result.as_ref().ok().map(json_value_kind),
+                "rowCount": result.as_ref().ok().and_then(|value| value.as_array().map(|rows| rows.len())),
+                "error": result.as_ref().err().map(|err| format!("{err:#}")),
+            }),
+        );
+        result
+    }
+}
+
+fn json_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn record_backend_stage(stage: &str, elapsed: Duration, detail: Value) {
+    crate::devql_timing::record_current_stage(stage, elapsed, detail);
 }
 
 #[derive(Clone)]
@@ -235,7 +350,7 @@ impl PostgresPool {
         &self.inner.clients[idx]
     }
 
-    async fn ping_inner(&self) -> Result<i32> {
+    async fn ping(&self) -> Result<i32> {
         let row = self
             .pick_client()
             .query_one("SELECT 1", &[])
@@ -248,15 +363,10 @@ impl PostgresPool {
     }
 }
 
-impl RelationalHealthStore for PostgresPool {
-    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32> {
-        Box::pin(async move { self.ping_inner().await })
-    }
-}
-
 #[derive(Clone)]
 pub(super) struct SqlitePool {
     db_path: PathBuf,
+    connection: Arc<Mutex<rusqlite::Connection>>,
 }
 
 impl fmt::Debug for SqlitePool {
@@ -270,28 +380,64 @@ impl fmt::Debug for SqlitePool {
 impl SqlitePool {
     async fn connect(db_path: PathBuf) -> Result<Self> {
         ensure_sqlite_file_exists(&db_path)?;
-        let pool = Self { db_path };
-        let _ = pool.ping_inner().await?;
+        let connect_path = db_path.clone();
+        let connection = tokio::task::spawn_blocking(move || open_sqlite_connection(&connect_path))
+            .await
+            .context("joining SQLite connect task")??;
+        let pool = Self {
+            db_path,
+            connection: Arc::new(Mutex::new(connection)),
+        };
+        let _ = pool.ping().await?;
         Ok(pool)
     }
 
-    async fn ping_inner(&self) -> Result<i32> {
-        let db_path = self.db_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<i32> {
-            let conn = open_sqlite_connection(&db_path)?;
+    fn path(&self) -> &Path {
+        &self.db_path
+    }
+
+    async fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+    {
+        let connection = Arc::clone(&self.connection);
+        tokio::task::spawn_blocking(move || -> Result<T> {
+            let conn = connection
+                .lock()
+                .map_err(|err| anyhow!("locking SQLite dashboard connection: {err}"))?;
+            operation(&conn)
+        })
+        .await
+        .context("joining SQLite connection task")?
+    }
+
+    async fn execute_batch(&self, sql: &str) -> Result<()> {
+        let sql = sql.to_string();
+        self.with_connection(move |conn| {
+            conn.execute_batch(&sql)
+                .context("executing SQLite statements")?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn ping(&self) -> Result<i32> {
+        self.with_connection(|conn| {
             let value: i32 = conn
                 .query_row("SELECT 1", [], |row| row.get(0))
                 .context("running SQLite health query `SELECT 1`")?;
             Ok(value)
         })
         .await
-        .context("joining SQLite health query task")?
     }
-}
 
-impl RelationalHealthStore for SqlitePool {
-    fn ping<'a>(&'a self) -> RelationalHealthFuture<'a, i32> {
-        Box::pin(async move { self.ping_inner().await })
+    async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
+        let sql = sql.to_string();
+        self.with_connection(move |conn| sqlite_query_rows_with_connection(conn, &sql))
+            .await
     }
 }
 
@@ -323,16 +469,6 @@ fn open_duckdb_connection_existing(path: &Path) -> Result<duckdb::Connection> {
         .with_context(|| format!("opening DuckDB events database at {}", path.display()))
 }
 
-fn open_duckdb_connection_for_health(path: &Path) -> Result<duckdb::Connection> {
-    ensure_duckdb_file_exists(path)?;
-    duckdb::Connection::open(path).with_context(|| {
-        format!(
-            "opening DuckDB events database for health check at {}",
-            path.display()
-        )
-    })
-}
-
 fn open_sqlite_connection_existing(db_path: &Path) -> Result<rusqlite::Connection> {
     ensure_sqlite_file_exists(db_path)?;
     rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
@@ -344,6 +480,73 @@ fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
     Ok(conn)
+}
+
+async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
+    let db_path = path.to_path_buf();
+    let statement = sql.to_string();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = open_sqlite_connection(&db_path)?;
+        conn.execute_batch(&statement)
+            .context("executing SQLite statements")?;
+        Ok(())
+    })
+    .await
+    .context("joining SQLite execute task")?
+}
+
+fn sqlite_query_rows_with_connection(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare(sql).context("preparing SQLite query")?;
+    let column_names = stmt
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    let mut rows = stmt.query([]).context("executing SQLite query")?;
+    let mut out = Vec::new();
+
+    while let Some(row) = rows.next().context("iterating SQLite query rows")? {
+        let mut obj = serde_json::Map::new();
+        for (idx, column_name) in column_names.iter().enumerate() {
+            let value_ref = row.get_ref(idx).with_context(|| {
+                format!("reading SQLite value for column index {idx} (`{column_name}`)")
+            })?;
+            obj.insert(
+                column_name.clone(),
+                crate::host::devql::sqlite_value_to_json(value_ref),
+            );
+        }
+        out.push(Value::Object(obj));
+    }
+
+    Ok(out)
+}
+
+fn duckdb_query_rows_with_connection(conn: &duckdb::Connection, sql: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn.prepare(sql).context("preparing DuckDB query")?;
+    let mut rows = stmt.query([]).context("executing DuckDB query")?;
+    let column_names = rows
+        .as_ref()
+        .map(|statement| statement.column_names())
+        .unwrap_or_default();
+    let mut out = Vec::new();
+
+    while let Some(row) = rows.next().context("iterating DuckDB query rows")? {
+        let mut obj = serde_json::Map::new();
+        for (idx, column_name) in column_names.iter().enumerate() {
+            let value_ref = row.get_ref(idx).with_context(|| {
+                format!("reading DuckDB value for column index {idx} (`{column_name}`)")
+            })?;
+            let owned: duckdb::types::Value = value_ref.to_owned();
+            obj.insert(
+                column_name.clone(),
+                crate::host::devql::duckdb_value_to_json(owned),
+            );
+        }
+        out.push(Value::Object(obj));
+    }
+
+    Ok(out)
 }
 
 #[derive(Clone)]
@@ -417,11 +620,31 @@ impl ClickHousePool {
         })?;
         Ok(value)
     }
+
+    async fn query_data(&self, sql: &str) -> Result<Value> {
+        let mut query = sql.trim().to_string();
+        if !query.to_ascii_uppercase().contains("FORMAT JSON") {
+            query.push_str(" FORMAT JSON");
+        }
+
+        let raw = self.run_sql(&query).await?;
+        if raw.trim().is_empty() {
+            return Ok(Value::Array(vec![]));
+        }
+
+        let parsed: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing ClickHouse JSON response: {raw}"))?;
+        Ok(parsed
+            .get("data")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(vec![])))
+    }
 }
 
 #[derive(Clone)]
 pub(super) struct DuckDbPool {
     path: PathBuf,
+    connection: Arc<Mutex<duckdb::Connection>>,
 }
 
 impl fmt::Debug for DuckDbPool {
@@ -435,22 +658,42 @@ impl fmt::Debug for DuckDbPool {
 impl DuckDbPool {
     async fn connect(path: PathBuf) -> Result<Self> {
         let connect_path = path.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = open_duckdb_connection_existing(&connect_path)?;
-            conn.execute_batch("SELECT 1")
-                .context("running initial DuckDB connectivity check")?;
-            Ok(())
+        let connection =
+            tokio::task::spawn_blocking(move || open_duckdb_connection_existing(&connect_path))
+                .await
+                .context("joining DuckDB connect task")??;
+        let pool = Self {
+            path,
+            connection: Arc::new(Mutex::new(connection)),
+        };
+        let _ = pool.ping().await?;
+        Ok(pool)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    async fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&duckdb::Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+    {
+        let connection = Arc::clone(&self.connection);
+        tokio::task::spawn_blocking(move || -> Result<T> {
+            let conn = connection
+                .lock()
+                .map_err(|err| anyhow!("locking DuckDB dashboard connection: {err}"))?;
+            operation(&conn)
         })
         .await
-        .context("joining DuckDB initial connectivity task")??;
-
-        Ok(Self { path })
+        .context("joining DuckDB connection task")?
     }
 
     async fn ping(&self) -> Result<i32> {
-        let path = self.path.clone();
-        tokio::task::spawn_blocking(move || -> Result<i32> {
-            let conn = open_duckdb_connection_for_health(&path)?;
+        self.with_connection(|conn| {
             let mut stmt = conn
                 .prepare("SELECT 1")
                 .context("preparing DuckDB health query")?;
@@ -463,7 +706,12 @@ impl DuckDbPool {
             Ok(value)
         })
         .await
-        .context("joining DuckDB health query task")?
+    }
+
+    async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
+        let sql = sql.to_string();
+        self.with_connection(move |conn| duckdb_query_rows_with_connection(conn, &sql))
+            .await
     }
 }
 
@@ -550,7 +798,8 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
     let mut pools = DashboardDbPools {
         has_postgres,
         has_clickhouse,
-        relational: None,
+        postgres: None,
+        sqlite: None,
         clickhouse: None,
         duckdb: None,
     };
@@ -559,18 +808,15 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
 
     if let Some(dsn) = cfg.backends.relational.postgres_dsn.clone() {
         match PostgresPool::connect(&dsn, POSTGRES_POOL_SIZE).await {
-            Ok(pool) => {
-                let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
-                match relational_store.ping().await {
-                    Ok(value) => {
-                        pools.relational = Some(relational_store);
-                        relational_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
-                    }
-                    Err(err) => {
-                        relational_health = BackendHealth::fail(format!("{err:#}"));
-                    }
+            Ok(pool) => match pool.ping().await {
+                Ok(value) => {
+                    pools.postgres = Some(pool);
+                    relational_health = BackendHealth::ok(format!("SELECT 1 => {value}"));
                 }
-            }
+                Err(err) => {
+                    relational_health = BackendHealth::fail(format!("{err:#}"));
+                }
+            },
             Err(err) => {
                 relational_health = BackendHealth::fail(format!("{err:#}"));
             }
@@ -580,19 +826,16 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
             Ok(db_path) => {
                 let db_label = db_path.display().to_string();
                 match SqlitePool::connect(db_path).await {
-                    Ok(pool) => {
-                        let relational_store: Arc<dyn RelationalHealthStore> = Arc::new(pool);
-                        match relational_store.ping().await {
-                            Ok(value) => {
-                                pools.relational = Some(relational_store);
-                                relational_health =
-                                    BackendHealth::ok(format!("SELECT 1 => {value} ({db_label})"));
-                            }
-                            Err(err) => {
-                                relational_health = BackendHealth::fail(format!("{err:#}"));
-                            }
+                    Ok(pool) => match pool.ping().await {
+                        Ok(value) => {
+                            pools.sqlite = Some(pool);
+                            relational_health =
+                                BackendHealth::ok(format!("SELECT 1 => {value} ({db_label})"));
                         }
-                    }
+                        Err(err) => {
+                            relational_health = BackendHealth::fail(format!("{err:#}"));
+                        }
+                    },
                     Err(err) => {
                         relational_health = BackendHealth::fail(format!("{err:#}"));
                     }
@@ -652,6 +895,8 @@ pub(super) async fn init_dashboard_db() -> DashboardDbInit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn ok_health() -> BackendHealth {
@@ -760,5 +1005,68 @@ mod tests {
         let err = open_duckdb_connection_existing(&missing).expect_err("missing duckdb must fail");
         let msg = format!("{err:#}");
         assert!(msg.contains("DuckDB database file not found"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_db_pools_execute_and_query_sqlite_with_shared_pool() -> Result<()> {
+        let dir = tempdir()?;
+        let sqlite_path = dir.path().join("shared.sqlite");
+        let _ = rusqlite::Connection::open(&sqlite_path)
+            .context("creating sqlite file for shared pool test")?;
+        let sqlite = SqlitePool::connect(sqlite_path.clone()).await?;
+        let pools = DashboardDbPools {
+            has_postgres: false,
+            has_clickhouse: false,
+            postgres: None,
+            sqlite: Some(sqlite),
+            clickhouse: None,
+            duckdb: None,
+        };
+
+        pools
+            .execute_sqlite_batch(
+                &sqlite_path,
+                "CREATE TABLE metrics(value INTEGER); INSERT INTO metrics(value) VALUES (1), (2);",
+            )
+            .await?;
+        let rows = pools
+            .query_sqlite_rows(&sqlite_path, "SELECT value FROM metrics ORDER BY value")
+            .await?;
+
+        assert_eq!(rows, vec![json!({ "value": 1 }), json!({ "value": 2 })]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dashboard_db_pools_query_duckdb_with_shared_pool() -> Result<()> {
+        let dir = tempdir()?;
+        let duckdb_path = dir.path().join("events.duckdb");
+        let conn =
+            duckdb::Connection::open(&duckdb_path).context("creating duckdb file for test")?;
+        conn.execute_batch(
+            "CREATE TABLE checkpoint_events(value INTEGER); INSERT INTO checkpoint_events(value) VALUES (3), (4);",
+        )
+        .context("seeding duckdb rows for shared pool test")?;
+        drop(conn);
+
+        let duckdb = DuckDbPool::connect(duckdb_path.clone()).await?;
+        let pools = DashboardDbPools {
+            has_postgres: false,
+            has_clickhouse: false,
+            postgres: None,
+            sqlite: None,
+            clickhouse: None,
+            duckdb: Some(duckdb),
+        };
+
+        let rows = pools
+            .query_duckdb_rows(
+                &duckdb_path,
+                "SELECT value FROM checkpoint_events ORDER BY value",
+            )
+            .await?;
+
+        assert_eq!(rows, vec![json!({ "value": 3 }), json!({ "value": 4 })]);
+        Ok(())
     }
 }

@@ -8,8 +8,7 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
@@ -21,7 +20,6 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
         resolve_dashboard_config().local_dashboard,
         Some(DashboardLocalDashboardConfig {
             tls: Some(true),
-            bitloops_local: Some(true),
         })
     );
 }
@@ -40,8 +38,7 @@ fn dashboard_file_config_reads_local_dashboard_flags() {
     let value = serde_json::json!({
         "dashboard": {
             "local_dashboard": {
-                "tls": true,
-                "bitloops_local": true
+                "tls": true
             }
         }
     });
@@ -51,7 +48,6 @@ fn dashboard_file_config_reads_local_dashboard_flags() {
         cfg.local_dashboard,
         Some(DashboardLocalDashboardConfig {
             tls: Some(true),
-            bitloops_local: Some(true),
         })
     );
 }
@@ -75,8 +71,7 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
     let value = serde_json::json!({
         "dashboard": {
             "local_dashboard": {
-                "tls": "yes",
-                "bitloops_local": "yes"
+                "tls": "yes"
             }
         }
     });
@@ -86,7 +81,6 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
         cfg.local_dashboard,
         Some(DashboardLocalDashboardConfig {
             tls: Some(true),
-            bitloops_local: Some(true),
         })
     );
 }
@@ -99,8 +93,7 @@ fn dashboard_file_config_load_reads_repo_config_file() {
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
@@ -112,7 +105,6 @@ fn dashboard_file_config_load_reads_repo_config_file() {
             cfg.local_dashboard,
             Some(DashboardLocalDashboardConfig {
                 tls: Some(true),
-                bitloops_local: Some(true),
             })
         );
     });
@@ -126,8 +118,7 @@ fn resolve_dashboard_config_reads_repo_config_file() {
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
@@ -138,7 +129,6 @@ fn resolve_dashboard_config_reads_repo_config_file() {
             resolve_dashboard_config().local_dashboard,
             Some(DashboardLocalDashboardConfig {
                 tls: Some(true),
-                bitloops_local: Some(true),
             })
         );
     });

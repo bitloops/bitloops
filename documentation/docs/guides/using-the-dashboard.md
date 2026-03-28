@@ -15,7 +15,7 @@ bitloops dashboard
 
 ```
 ✔ Opened Bitloops dashboard
-  → https://bitloops.local:5667
+  → https://127.0.0.1:5667
 ```
 
 `bitloops dashboard` is now a browser launcher. If this repository is already configured for always-on mode, Bitloops starts or reuses the repo runtime through the global `com.bitloops.daemon` service and then opens the dashboard. Otherwise, if the daemon is not running yet, Bitloops prompts you to start it in foreground, detached, or always-on mode.
@@ -108,8 +108,7 @@ Real-time status of configured stores:
   "settings": {
     "dashboard": {
       "local_dashboard": {
-        "tls": true,
-        "bitloops_local": true
+        "tls": true
       }
     }
   }

@@ -638,9 +638,9 @@ pub(crate) use self::core_contracts::CanonicalKindProjection;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
-    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, escape_like_pattern,
-    glob_to_sql_like, postgres_exec, sql_like_with_escape, sqlite_exec_path_allow_create,
-    sqlite_query_rows_path,
+    clickhouse_query_data, duckdb_query_rows_path, duckdb_value_to_json, esc_ch, esc_pg,
+    escape_like_pattern, glob_to_sql_like, postgres_exec, sql_like_with_escape,
+    sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
 use self::ingestion_artefact_identity::*;

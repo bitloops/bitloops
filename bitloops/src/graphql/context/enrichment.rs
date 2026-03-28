@@ -7,10 +7,7 @@ use crate::graphql::types::{
 use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, read_session_content_by_id,
 };
-use crate::host::devql::{
-    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, escape_like_pattern,
-    sql_like_with_escape, sqlite_query_rows_path,
-};
+use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -34,7 +31,7 @@ impl DevqlGraphqlContext {
             project_path,
             filter,
         );
-        let rows = sqlite_query_rows_path(&self.devql_sqlite_path()?, &sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
             .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
@@ -54,7 +51,7 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             filter,
         );
-        let rows = sqlite_query_rows_path(&self.devql_sqlite_path()?, &sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
             .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
@@ -153,13 +150,9 @@ impl DevqlGraphqlContext {
         let repo_id = self.repo_identity.repo_id.as_str();
 
         if backend_config.events.has_clickhouse() {
-            let cfg = self.config.as_ref().with_context(|| {
-                self.config_error
-                    .clone()
-                    .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-            })?;
             let sql = build_clickhouse_chat_history_sql(repo_id, path_candidates);
-            let rows = clickhouse_query_data(cfg, &sql)
+            let rows = self
+                .query_clickhouse_data(&sql)
                 .await?
                 .as_array()
                 .cloned()
@@ -174,7 +167,7 @@ impl DevqlGraphqlContext {
         let duckdb_path = backend_config
             .events
             .resolve_duckdb_db_path_for_repo(&self.repo_root);
-        let rows = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+        let rows = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
         rows.into_iter()
             .map(normalise_duckdb_event_row)
             .map(checkpoint_chat_event_from_row)

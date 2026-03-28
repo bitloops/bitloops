@@ -61,27 +61,25 @@ The main configuration file for stores, knowledge providers, and project-level s
     },
     "dashboard": {
       "local_dashboard": {
-        "tls": true,
-        "bitloops_local": true
+        "tls": true
       }
     }
   }
 }
 ```
 
-### Dashboard Local Network Hints
+### Dashboard Local TLS Hints
 
-`dashboard.local_dashboard` stores local HTTPS and hostname hints for daemon startup and the dashboard launcher.
+`dashboard.local_dashboard` stores local HTTPS hints for daemon startup and the dashboard launcher.
 
 | Field                                      | Type    | Default | Description                                                                                  |
 | ------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------- |
 | `dashboard.local_dashboard.tls`            | boolean | unset   | When `true`, dashboard fast-path assumes local TLS material is already available.            |
-| `dashboard.local_dashboard.bitloops_local` | boolean | unset   | When `true`, dashboard fast-path assumes `bitloops.local` host mapping is already available. |
 
 Notes:
 
-- These are local-network hints for `bitloops daemon start` and `bitloops dashboard`.
-- To force a full recheck of local dashboard network/TLS setup, run `bitloops daemon start --recheck-local-dashboard-net`.
+- These are local TLS hints for `bitloops daemon start` and `bitloops dashboard`.
+- To force a full recheck of local dashboard TLS setup, run `bitloops daemon start --recheck-local-dashboard-net`.
 - To force loopback HTTP without TLS, run `bitloops daemon start --http --host 127.0.0.1`.
 
 ### Environment Variable Interpolation

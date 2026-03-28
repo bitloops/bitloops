@@ -1,4 +1,6 @@
 use anyhow::{Result, bail};
+use serde_json::{Value, json};
+use std::time::Instant;
 
 use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::host::devql::{
@@ -90,12 +92,89 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         },
         DevqlCommand::Query(args) => {
             let use_raw_graphql = use_raw_graphql_mode(&args.query, args.graphql);
+            let trace = crate::devql_timing::timings_enabled_from_env()
+                .then(crate::devql_timing::TimingTrace::new);
+
+            let compile_started = Instant::now();
             let document = compile_query_document(&args.query, args.graphql)?;
-            let data: serde_json::Value =
-                crate::daemon::execute_graphql(&cfg.repo_root, &document, serde_json::json!({}))
-                    .await?;
-            let output = format_query_output(&data, args.compact, use_raw_graphql)?;
+            if let Some(trace) = trace.as_ref() {
+                trace.record(
+                    "cli.devql.compile_query_document",
+                    compile_started.elapsed(),
+                    json!({
+                        "inputBytes": args.query.len(),
+                        "rawGraphql": use_raw_graphql,
+                    }),
+                );
+            }
+
+            let execute_started = Instant::now();
+            let data: serde_json::Value = match crate::daemon::execute_graphql(
+                &cfg.repo_root,
+                &document,
+                serde_json::json!({}),
+            )
+            .await
+            {
+                Ok(data) => {
+                    if let Some(trace) = trace.as_ref() {
+                        trace.record(
+                            "cli.devql.execute_graphql",
+                            execute_started.elapsed(),
+                            Value::Null,
+                        );
+                    }
+                    data
+                }
+                Err(err) => {
+                    if let Some(trace) = trace.as_ref() {
+                        trace.record(
+                            "cli.devql.execute_graphql",
+                            execute_started.elapsed(),
+                            json!({
+                                "error": format!("{err:#}"),
+                            }),
+                        );
+                        crate::devql_timing::print_summary("cli", &trace.summary_value());
+                    }
+                    return Err(err);
+                }
+            };
+
+            let format_started = Instant::now();
+            let output = match format_query_output(&data, args.compact, use_raw_graphql) {
+                Ok(output) => {
+                    if let Some(trace) = trace.as_ref() {
+                        trace.record(
+                            "cli.devql.format_query_output",
+                            format_started.elapsed(),
+                            json!({
+                                "compact": args.compact,
+                                "outputBytes": output.len(),
+                            }),
+                        );
+                    }
+                    output
+                }
+                Err(err) => {
+                    if let Some(trace) = trace.as_ref() {
+                        trace.record(
+                            "cli.devql.format_query_output",
+                            format_started.elapsed(),
+                            json!({
+                                "compact": args.compact,
+                                "error": format!("{err:#}"),
+                            }),
+                        );
+                        crate::devql_timing::print_summary("cli", &trace.summary_value());
+                    }
+                    return Err(err);
+                }
+            };
             println!("{output}");
+            if let Some(trace) = trace.as_ref() {
+                crate::devql_timing::print_summary("cli", &trace.summary_value());
+            }
             Ok(())
         }
         DevqlCommand::Packs(args) => run_capability_packs_report(

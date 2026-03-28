@@ -176,7 +176,6 @@ pub struct DashboardFileConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DashboardLocalDashboardConfig {
     pub tls: Option<bool>,
-    pub bitloops_local: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -94,7 +94,7 @@ bitloops status
 ```
 Bitloops daemon: running
 Mode: always-on service
-URL: https://bitloops.local:5667
+URL: https://127.0.0.1:5667
 PID: 12345
 Supervisor service: com.bitloops.daemon (launchd, installed)
 Supervisor state: running
@@ -348,9 +348,9 @@ bitloops daemon start [-d | --until-stopped] [--host <hostname>] [--port <number
 | `-d`, `--detached` | `false` | Start in the background and return immediately |
 | `--until-stopped` | `false` | Install or refresh the single user-scoped `com.bitloops.daemon` service, then start this repository under it |
 | `--port` | `5667` | Port for the daemon server |
-| `--host` | auto (`bitloops.local` / fallback loopback) | Hostname to bind to |
+| `--host` | auto (loopback) | Hostname to bind to |
 | `--http` | `false` | Force HTTP fast-path (requires `--host 127.0.0.1`) |
-| `--recheck-local-dashboard-net` | `false` | Force full local dashboard network/TLS recheck |
+| `--recheck-local-dashboard-net` | `false` | Force full local dashboard TLS recheck |
 | `--bundle-dir` / `--bundle` | `~/.bitloops/dashboard/bundle` | Bundle directory to serve |
 
 Always-on mode installs one global user-level service named `com.bitloops.daemon`. That supervisor manages repo-scoped daemon runtimes internally.

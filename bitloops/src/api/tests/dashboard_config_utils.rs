@@ -1,24 +1,6 @@
 use super::*;
 
 #[test]
-fn select_host_prefers_bitloops_local_when_config_enabled() {
-    let selected = select_host_with_dashboard_preference(None, true);
-    assert_eq!(selected, "bitloops.local");
-}
-
-#[test]
-fn select_host_falls_back_to_localhost_when_config_disabled() {
-    let selected = select_host_with_dashboard_preference(None, false);
-    assert_eq!(selected, "127.0.0.1");
-}
-
-#[test]
-fn select_host_respects_explicit_host() {
-    let selected = select_host_with_dashboard_preference(Some("localhost"), true);
-    assert_eq!(selected, "localhost");
-}
-
-#[test]
 fn startup_mode_fast_http_requires_loopback_host() {
     let config = DashboardServerConfig {
         host: None,
@@ -61,7 +43,6 @@ fn startup_mode_uses_configured_https_fast_path() {
     };
     let local_dashboard = crate::config::DashboardLocalDashboardConfig {
         tls: Some(true),
-        bitloops_local: Some(true),
     };
 
     let mode =
@@ -81,7 +62,6 @@ fn startup_mode_recheck_flag_forces_slow_probe() {
     };
     let local_dashboard = crate::config::DashboardLocalDashboardConfig {
         tls: Some(true),
-        bitloops_local: Some(true),
     };
 
     let mode = select_startup_mode(&config, Some(&local_dashboard), None).expect("slow probe");

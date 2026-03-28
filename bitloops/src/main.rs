@@ -94,8 +94,7 @@ mod tests {
             serde_json::json!({
                 "dashboard": {
                     "local_dashboard": {
-                        "tls": true,
-                        "bitloops_local": true
+                        "tls": true
                     }
                 }
             }),
@@ -107,7 +106,6 @@ mod tests {
             resolve_dashboard_config().local_dashboard,
             Some(DashboardLocalDashboardConfig {
                 tls: Some(true),
-                bitloops_local: Some(true),
             })
         );
     }

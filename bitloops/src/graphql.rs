@@ -33,8 +33,11 @@ use async_graphql::{Request, Schema, ServerError, Variables};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
+    http::HeaderMap,
     response::{Html, IntoResponse},
 };
+use serde_json::json;
+use std::time::Instant;
 
 pub(crate) type DevqlSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
@@ -83,12 +86,37 @@ pub(crate) async fn execute_in_process(
 
 pub(crate) async fn graphql_handler(
     State(state): State<crate::api::DashboardState>,
+    headers: HeaderMap,
     request: GraphQLRequest,
 ) -> GraphQLResponse {
-    state
-        .devql_schema()
-        .execute(request.into_inner())
-        .await
+    let request = request.into_inner();
+    if !crate::devql_timing::timings_requested(&headers) {
+        return state.devql_schema().execute(request).await.into();
+    }
+
+    let query_bytes = request.query.len();
+    let operation_name = request.operation_name.clone();
+    let trace = crate::devql_timing::TimingTrace::new();
+    let execute_started = Instant::now();
+    let response =
+        crate::devql_timing::scope_trace(trace.clone(), state.devql_schema().execute(request))
+            .await;
+    let error_count = response.errors.len();
+    trace.record(
+        "server.graphql.execute",
+        execute_started.elapsed(),
+        json!({
+            "queryBytes": query_bytes,
+            "operationName": operation_name,
+            "errors": error_count,
+        }),
+    );
+
+    let timing_value = async_graphql::Value::from_json(trace.summary_value())
+        .unwrap_or(async_graphql::Value::Null);
+
+    response
+        .extension(crate::devql_timing::DEVQL_TIMINGS_EXTENSION, timing_value)
         .into()
 }
 

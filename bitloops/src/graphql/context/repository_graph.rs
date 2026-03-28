@@ -16,7 +16,6 @@ use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
 };
-use crate::host::devql::sqlite_query_rows_path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -61,7 +60,7 @@ impl DevqlGraphqlContext {
             path,
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .next()
             .map(file_context_from_value)
@@ -80,7 +79,7 @@ impl DevqlGraphqlContext {
             glob,
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(file_context_from_value)
             .map(|result| result.map(|file| file.with_scope(scope.clone())))
@@ -107,7 +106,7 @@ impl DevqlGraphqlContext {
             None,
         );
         let sql = build_current_artefacts_sql(&spec);
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
@@ -129,7 +128,7 @@ impl DevqlGraphqlContext {
             None,
         );
         let sql = build_current_artefacts_count_sql(&spec);
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         let total_count = rows
             .first()
             .and_then(|row| row.get("total_count"))
@@ -158,7 +157,7 @@ impl DevqlGraphqlContext {
             None,
         );
         let sql = build_current_artefacts_cursor_exists_sql(&spec, cursor);
-        Ok(!self.query_sqlite_rows(&sql).await?.is_empty())
+        Ok(!self.query_devql_sqlite_rows(&sql).await?.is_empty())
     }
 
     pub(crate) async fn list_artefacts_window(
@@ -178,7 +177,7 @@ impl DevqlGraphqlContext {
             Some(ArtefactPagination::new(after, limit)),
         );
         let sql = build_current_artefacts_window_sql(&spec);
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
@@ -201,7 +200,7 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         let mut artefacts = HashMap::new();
         for row in rows {
             let artefact = artefact_from_value(row)?.with_scope(scope.clone());
@@ -222,7 +221,7 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
@@ -246,7 +245,7 @@ impl DevqlGraphqlContext {
             filter.copied().unwrap_or_default(),
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(dependency_edge_from_value)
             .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
@@ -270,7 +269,7 @@ impl DevqlGraphqlContext {
             filter.copied().unwrap_or_default(),
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(dependency_edge_from_value)
             .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
@@ -297,7 +296,7 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_sqlite_rows(&sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         let mut edges_by_artefact = HashMap::<String, Vec<DependencyEdge>>::new();
         for row in rows {
             let owner_artefact_id = row
@@ -314,11 +313,6 @@ impl DevqlGraphqlContext {
                 .push(edge);
         }
         Ok(edges_by_artefact)
-    }
-
-    async fn query_sqlite_rows(&self, sql: &str) -> Result<Vec<Value>> {
-        let sqlite_path = self.devql_sqlite_path()?;
-        sqlite_query_rows_path(&sqlite_path, sql).await
     }
 
     pub(crate) fn devql_sqlite_path(&self) -> Result<std::path::PathBuf> {
