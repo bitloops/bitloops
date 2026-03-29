@@ -1119,15 +1119,15 @@ fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) -> Result<()>
         }
     }
 
-    if !allow_stopped_service && let Some(metadata) = read_service_metadata(repo_root)? {
-        if metadata.service_name == GLOBAL_SUPERVISOR_SERVICE_NAME
-            && supervisor_available().unwrap_or(false)
-        {
-            bail!(
-                "Bitloops daemon is already running as an always-on service ({}) for this repository.",
-                metadata.service_name
-            );
-        }
+    if !allow_stopped_service
+        && let Some(metadata) = read_service_metadata(repo_root)?
+        && metadata.service_name == GLOBAL_SUPERVISOR_SERVICE_NAME
+        && supervisor_available().unwrap_or(false)
+    {
+        bail!(
+            "Bitloops daemon is already running as an always-on service ({}) for this repository.",
+            metadata.service_name
+        );
     }
 
     Ok(())

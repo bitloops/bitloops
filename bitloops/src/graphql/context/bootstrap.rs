@@ -69,6 +69,7 @@ impl DevqlGraphqlContext {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build(
         schema_mode: DevqlSchemaMode,
         config_root: std::path::PathBuf,

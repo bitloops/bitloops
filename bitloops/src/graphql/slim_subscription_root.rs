@@ -22,9 +22,7 @@ impl SlimSubscriptionRoot {
         Box::pin(stream::unfold(
             (receiver, repo_name),
             |(mut receiver, repo_name)| async move {
-                let Some(repo_name) = repo_name.clone() else {
-                    return None;
-                };
+                let repo_name = repo_name.clone()?;
                 loop {
                     match receiver.recv().await {
                         Ok(event) => {
@@ -49,9 +47,7 @@ impl SlimSubscriptionRoot {
         Box::pin(stream::unfold(
             (receiver, repo_name),
             |(mut receiver, repo_name)| async move {
-                let Some(repo_name) = repo_name.clone() else {
-                    return None;
-                };
+                let repo_name = repo_name.clone()?;
                 loop {
                     match receiver.recv().await {
                         Ok(event) => {

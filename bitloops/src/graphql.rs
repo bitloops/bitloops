@@ -148,10 +148,10 @@ pub(crate) async fn slim_graphql_handler(
         Ok(scope) => scope,
         Err(err) => return graphql_error_response(err),
     };
-    if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path()) {
-        if let Err(err) = upsert_repo_path_registry_scope(registry_path, scope) {
-            return graphql_error_response(err);
-        }
+    if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
+        && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
+    {
+        return graphql_error_response(err);
     }
     let repo_root = scope
         .as_ref()
@@ -206,10 +206,10 @@ pub(crate) async fn slim_graphql_ws_handler(
         Ok(scope) => scope,
         Err(err) => return graphql_error_response(err).into_response(),
     };
-    if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path()) {
-        if let Err(err) = upsert_repo_path_registry_scope(registry_path, scope) {
-            return graphql_error_response(err).into_response();
-        }
+    if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
+        && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
+    {
+        return graphql_error_response(err).into_response();
     }
 
     let repo_root = scope
