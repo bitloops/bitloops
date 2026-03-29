@@ -68,8 +68,8 @@ pub(super) fn seed_graphql_temporal_repo() -> SeededGraphqlTemporalRepo {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL temporal sqlite");
     conn.execute(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-         VALUES (?1, 'local', 'local', 'graphql-temporal', 'main')",
-        rusqlite::params![repo_id.as_str()],
+         VALUES (?1, 'local', 'local', ?2, 'main')",
+        rusqlite::params![repo_id.as_str(), SEEDED_REPO_NAME],
     )
     .expect("insert repository row");
     conn.execute(
@@ -534,8 +534,8 @@ pub(super) fn seed_graphql_event_backed_repo() -> SeededGraphqlEventBackedRepo {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL event-backed sqlite");
     conn.execute(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-         VALUES (?1, 'local', 'local', 'graphql-event-backed', 'main')",
-        rusqlite::params![repo_id.as_str()],
+         VALUES (?1, 'local', 'local', ?2, 'main')",
+        rusqlite::params![repo_id.as_str(), SEEDED_REPO_NAME],
     )
     .expect("insert repository row");
     conn.execute(
@@ -775,8 +775,8 @@ pub(super) fn seed_graphql_save_revision_event_backed_repo()
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL saveRevision sqlite");
     conn.execute(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-         VALUES (?1, 'local', 'local', 'graphql-save-revision', 'main')",
-        rusqlite::params![repo_id.as_str()],
+         VALUES (?1, 'local', 'local', ?2, 'main')",
+        rusqlite::params![repo_id.as_str(), SEEDED_REPO_NAME],
     )
     .expect("insert repository row");
     conn.execute(

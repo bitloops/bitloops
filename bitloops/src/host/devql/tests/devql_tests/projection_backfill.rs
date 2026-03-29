@@ -35,6 +35,7 @@ fn write_local_devql_config(repo_root: &Path) {
 
 fn test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.to_path_buf();
     cfg.repo_root = repo_root.to_path_buf();
     cfg.repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     cfg

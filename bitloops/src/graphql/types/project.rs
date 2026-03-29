@@ -35,7 +35,7 @@ impl Project {
     async fn as_of(&self, ctx: &Context<'_>, input: AsOfInput) -> Result<TemporalScope> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let temporal_scope = context
-            .resolve_temporal_scope(&input)
+            .resolve_temporal_scope(&self.scope, &input)
             .await
             .map_err(|err| {
                 let message = format!("{err:#}");

@@ -152,6 +152,7 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");
@@ -417,6 +418,7 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let sqlite_path = temp.path().join("relational.sqlite");
     if let Some(parent) = sqlite_path.parent() {

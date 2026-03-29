@@ -3,6 +3,7 @@ use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, w
 
 fn executor_test_cfg() -> DevqlConfig {
     DevqlConfig {
+        config_root: PathBuf::from("."),
         repo_root: PathBuf::from("."),
         repo: RepoIdentity {
             provider: "local".to_string(),
@@ -38,6 +39,7 @@ fn executor_events_cfg() -> EventsBackendConfig {
 
 fn executor_test_cfg_for_repo_root(repo_root: PathBuf) -> DevqlConfig {
     let mut cfg = executor_test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     cfg
 }

@@ -2,7 +2,8 @@ use async_graphql::dataloader::{DataLoader, HashMapCache, Loader};
 use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
-use async_graphql::{Request, ServerResult};
+use async_graphql::{Request, ServerError, ServerResult};
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{
     Arc,
@@ -93,8 +94,22 @@ impl Extension for LoaderRegistryRequestExtension {
         request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        next.run(ctx, request.data(DataLoaders::new(context))).await
+        let context = request
+            .data
+            .get(&TypeId::of::<DevqlGraphqlContext>())
+            .and_then(|value| value.downcast_ref::<DevqlGraphqlContext>())
+            .or_else(|| ctx.data_opt::<DevqlGraphqlContext>())
+            .cloned()
+            .ok_or_else(|| {
+                ServerError::new(
+                    format!(
+                        "Data `{}` does not exist.",
+                        std::any::type_name::<DevqlGraphqlContext>()
+                    ),
+                    None,
+                )
+            })?;
+        next.run(ctx, request.data(DataLoaders::new(&context))).await
     }
 }
 

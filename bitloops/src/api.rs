@@ -10,6 +10,7 @@ mod router;
 pub mod tls;
 
 use crate::graphql;
+use crate::graphql::SubscriptionHub;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -53,6 +54,8 @@ pub struct DashboardRuntimeOptions {
     pub shutdown_message: Option<String>,
     pub on_ready: Option<DashboardReadyHook>,
     pub on_shutdown: Option<DashboardShutdownHook>,
+    pub config_root: Option<PathBuf>,
+    pub repo_registry_path: Option<PathBuf>,
 }
 
 impl Default for DashboardRuntimeOptions {
@@ -64,6 +67,8 @@ impl Default for DashboardRuntimeOptions {
             shutdown_message: Some("Dashboard server stopped.".to_string()),
             on_ready: None,
             on_shutdown: None,
+            config_root: None,
+            repo_registry_path: None,
         }
     }
 }
@@ -162,16 +167,36 @@ struct LocalDashboardDiscovery {
 
 #[derive(Clone)]
 pub(crate) struct DashboardState {
+    pub(super) config_root: PathBuf,
     pub(super) repo_root: PathBuf,
+    pub(super) repo_registry_path: Option<PathBuf>,
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) subscription_hub: Arc<SubscriptionHub>,
     pub(super) devql_schema: graphql::DevqlSchema,
+    pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
 }
 
 impl DashboardState {
     pub(crate) fn devql_schema(&self) -> &graphql::DevqlSchema {
         &self.devql_schema
+    }
+
+    pub(crate) fn devql_global_schema(&self) -> &graphql::DevqlSchema {
+        &self.devql_schema
+    }
+
+    pub(crate) fn devql_slim_schema(&self) -> &graphql::SlimDevqlSchema {
+        &self.devql_slim_schema
+    }
+
+    pub(crate) fn repo_registry_path(&self) -> Option<&Path> {
+        self.repo_registry_path.as_deref()
+    }
+
+    pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
+        Arc::clone(&self.subscription_hub)
     }
 }
 

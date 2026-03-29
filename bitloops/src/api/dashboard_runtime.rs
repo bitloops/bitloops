@@ -3,8 +3,8 @@ use super::{
     DashboardState, DashboardTransport, FALLBACK_LOCAL_HOST, LocalDashboardDiscovery, ServeMode,
     db, router, tls,
 };
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config};
-use crate::graphql::{self, DevqlGraphqlContext};
+use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config_for_repo};
+use crate::graphql;
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
 use crate::utils::paths;
 use anyhow::{Context, Result, anyhow, bail};
@@ -32,7 +32,13 @@ pub(super) async fn run(
 ) -> Result<()> {
     let mut startup_warnings: Vec<String> = Vec::new();
     let mut discovery = LocalDashboardDiscovery::default();
-    let dashboard_cfg = resolve_dashboard_config();
+    let config_root = options
+        .config_root
+        .clone()
+        .or_else(|| paths::repo_root().ok())
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dashboard_cfg = resolve_dashboard_config_for_repo(&config_root);
     let local_dashboard_cfg = dashboard_cfg.local_dashboard.as_ref();
     let explicit_host = config
         .host
@@ -129,9 +135,7 @@ pub(super) async fn run(
     } else {
         ServeMode::HelloWorld
     };
-    let repo_root = paths::repo_root()
-        .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let repo_root = config_root.clone();
 
     if matches!(startup_mode, DashboardStartupMode::SlowProbe)
         && discovery.tls
@@ -143,10 +147,8 @@ pub(super) async fn run(
     }
 
     let url = format_dashboard_url(transport, &browser_host, local_addr.port());
-    let devql_schema = graphql::build_schema(DevqlGraphqlContext::new(
-        repo_root.clone(),
-        db_init.pools.clone(),
-    ));
+    let devql_schema = graphql::build_global_schema_template();
+    let devql_slim_schema = graphql::build_slim_schema_template();
 
     if options.print_ready_banner {
         println!();
@@ -202,11 +204,15 @@ pub(super) async fn run(
     }
 
     let state = DashboardState {
+        config_root: config_root.clone(),
         repo_root,
+        repo_registry_path: options.repo_registry_path.clone(),
         mode: serve_mode,
         db: db_init.pools,
         bundle_dir,
+        subscription_hub: graphql::SubscriptionHub::new_arc(),
         devql_schema,
+        devql_slim_schema,
     };
 
     match (transport, tls_acceptor) {

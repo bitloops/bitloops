@@ -9,6 +9,7 @@ use crate::host::language_adapter::{is_supported_language_kind, resolve_canonica
 
 fn extension_runtime_cfg() -> DevqlConfig {
     DevqlConfig {
+        config_root: PathBuf::from("/tmp/repo"),
         repo_root: PathBuf::from("/tmp/repo"),
         repo: RepoIdentity {
             provider: "github".to_string(),

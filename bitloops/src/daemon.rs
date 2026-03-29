@@ -22,8 +22,11 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
-
-const DAEMON_DIR: &str = ".bitloops/daemon";
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, resolve_blob_local_path_for_repo,
+    resolve_store_backend_config_for_repo,
+};
+use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const SERVICE_STATE_FILE_NAME: &str = "service.json";
 const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
@@ -71,7 +74,7 @@ impl From<DaemonProcessModeArg> for DaemonMode {
 #[derive(Debug, Clone, Args)]
 pub struct InternalDaemonProcessArgs {
     #[arg(long)]
-    pub repo_root: PathBuf,
+    pub config_path: PathBuf,
 
     #[arg(long, value_enum)]
     pub mode: DaemonProcessModeArg,
@@ -100,13 +103,13 @@ pub struct InternalDaemonSupervisorArgs {}
 
 impl InternalDaemonProcessArgs {
     pub fn from_server_config(
-        repo_root: &Path,
+        daemon_config: &ResolvedDaemonConfig,
         mode: DaemonMode,
         service_name: Option<String>,
         config: &DashboardServerConfig,
     ) -> Self {
         Self {
-            repo_root: repo_root.to_path_buf(),
+            config_path: daemon_config.config_path.clone(),
             mode: match mode {
                 DaemonMode::Detached => DaemonProcessModeArg::Detached,
                 DaemonMode::Service => DaemonProcessModeArg::Service,
@@ -135,8 +138,8 @@ impl InternalDaemonProcessArgs {
     pub fn argv(&self) -> Vec<OsString> {
         let mut argv = vec![
             OsString::from(INTERNAL_DAEMON_COMMAND_NAME),
-            OsString::from("--repo-root"),
-            self.repo_root.clone().into_os_string(),
+            OsString::from("--config-path"),
+            self.config_path.clone().into_os_string(),
             OsString::from("--mode"),
             OsString::from(match self.mode {
                 DaemonProcessModeArg::Detached => "detached",
@@ -170,7 +173,8 @@ impl InternalDaemonProcessArgs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonRuntimeState {
     pub version: u8,
-    pub repo_root: PathBuf,
+    pub config_path: PathBuf,
+    pub config_root: PathBuf,
     pub pid: u32,
     pub mode: DaemonMode,
     pub service_name: Option<String>,
@@ -178,6 +182,10 @@ pub struct DaemonRuntimeState {
     pub host: String,
     pub port: u16,
     pub bundle_dir: PathBuf,
+    pub relational_db_path: PathBuf,
+    pub events_db_path: PathBuf,
+    pub blob_store_path: PathBuf,
+    pub repo_registry_path: PathBuf,
     pub binary_fingerprint: String,
     pub updated_at_unix: u64,
 }
@@ -212,7 +220,8 @@ impl fmt::Display for ServiceManagerKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonServiceMetadata {
     pub version: u8,
-    pub repo_root: PathBuf,
+    pub config_path: PathBuf,
+    pub config_root: PathBuf,
     pub manager: ServiceManagerKind,
     pub service_name: String,
     pub service_file: Option<PathBuf>,
@@ -249,13 +258,21 @@ pub struct DaemonStatusReport {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct SupervisorStartRequest {
-    repo_root: PathBuf,
+    config_path: PathBuf,
     config: DashboardServerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct SupervisorRepoRequest {
-    repo_root: PathBuf,
+struct SupervisorStopRequest {}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedDaemonConfig {
+    pub config_path: PathBuf,
+    pub config_root: PathBuf,
+    pub relational_db_path: PathBuf,
+    pub events_db_path: PathBuf,
+    pub blob_store_path: PathBuf,
+    pub repo_registry_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,15 +286,93 @@ struct SupervisorAppState {
 }
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(DAEMON_DIR).join(RUNTIME_STATE_FILE_NAME)
+    let _ = repo_root;
+    global_daemon_dir_fallback().join(RUNTIME_STATE_FILE_NAME)
 }
 
 pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(DAEMON_DIR).join(SERVICE_STATE_FILE_NAME)
+    let _ = repo_root;
+    global_daemon_dir_fallback().join(SERVICE_STATE_FILE_NAME)
 }
 
 fn global_daemon_dir() -> Result<PathBuf> {
     Ok(user_home_dir()?.join(GLOBAL_DAEMON_DIR))
+}
+
+fn global_daemon_dir_fallback() -> PathBuf {
+    user_home_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(GLOBAL_DAEMON_DIR)
+}
+
+pub fn resolve_daemon_config(explicit_config_path: Option<&Path>) -> Result<ResolvedDaemonConfig> {
+    let config_path = match explicit_config_path {
+        Some(path) => expand_user_path(path)?,
+        None => env::current_dir()
+            .context("resolving current directory for Bitloops daemon config")?
+            .join(BITLOOPS_CONFIG_RELATIVE_PATH),
+    };
+    if !config_path.is_file() {
+        bail!(
+            "Bitloops daemon config not found at {}. Pass `--config <path>` or run the command from a directory containing `./{}`.",
+            config_path.display(),
+            BITLOOPS_CONFIG_RELATIVE_PATH
+        );
+    }
+
+    let config_path = config_path
+        .canonicalize()
+        .unwrap_or_else(|_| config_path.to_path_buf());
+    let config_root = derive_config_root(&config_path)?;
+    let backend_config = resolve_store_backend_config_for_repo(&config_root)
+        .with_context(|| format!("resolving store backends from {}", config_path.display()))?;
+    let relational_db_path = backend_config
+        .relational
+        .resolve_sqlite_db_path_for_repo(&config_root)
+        .context("resolving SQLite path for Bitloops daemon")?;
+    let events_db_path = backend_config
+        .events
+        .resolve_duckdb_db_path_for_repo(&config_root);
+    let blob_store_path =
+        resolve_blob_local_path_for_repo(&config_root, backend_config.blobs.local_path.as_deref())
+            .context("resolving blob store path for Bitloops daemon")?;
+
+    Ok(ResolvedDaemonConfig {
+        config_path,
+        config_root,
+        relational_db_path,
+        events_db_path,
+        blob_store_path,
+        repo_registry_path: global_daemon_dir()?.join("repo-path-registry.json"),
+    })
+}
+
+fn derive_config_root(config_path: &Path) -> Result<PathBuf> {
+    let config_dir = config_path
+        .parent()
+        .context("resolving Bitloops daemon config directory")?;
+    if config_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == ".bitloops")
+    {
+        return config_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .context("resolving Bitloops daemon config root");
+    }
+    Ok(config_dir.to_path_buf())
+}
+
+fn expand_user_path(path: &Path) -> Result<PathBuf> {
+    let raw = path.to_string_lossy();
+    if raw == "~" {
+        return user_home_dir();
+    }
+    if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        return Ok(user_home_dir()?.join(rest));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn supervisor_runtime_state_path() -> Result<PathBuf> {
@@ -290,8 +385,9 @@ fn supervisor_service_metadata_path() -> Result<PathBuf> {
 
 pub async fn run_internal_process(args: InternalDaemonProcessArgs) -> Result<()> {
     let mode: DaemonMode = args.mode.into();
+    let daemon_config = resolve_daemon_config(Some(args.config_path.as_path()))?;
     run_server(
-        &args.repo_root,
+        &daemon_config,
         args.server_config(),
         mode,
         args.service_name,
@@ -326,9 +422,9 @@ pub async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs) -> Res
 
     let app = Router::new()
         .route("/health", get(supervisor_health))
-        .route("/repos/start", post(handle_supervisor_start_repo))
-        .route("/repos/stop", post(handle_supervisor_stop_repo))
-        .route("/repos/restart", post(handle_supervisor_restart_repo))
+        .route("/daemon/start", post(handle_supervisor_start_repo))
+        .route("/daemon/stop", post(handle_supervisor_stop_repo))
+        .route("/daemon/restart", post(handle_supervisor_restart_repo))
         .with_state(SupervisorAppState {
             operation_lock: Arc::new(Mutex::new(())),
         });
@@ -342,14 +438,14 @@ pub async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs) -> Res
 }
 
 pub async fn start_foreground(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
     open_browser: bool,
     ready_subject: &str,
 ) -> Result<()> {
-    ensure_can_start(repo_root, false)?;
+    ensure_can_start(daemon_config.config_root.as_path(), false)?;
     run_server(
-        repo_root,
+        daemon_config,
         config,
         DaemonMode::Foreground,
         None,
@@ -361,19 +457,19 @@ pub async fn start_foreground(
 }
 
 pub async fn start_detached(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
-    ensure_can_start(repo_root, false)?;
+    ensure_can_start(daemon_config.config_root.as_path(), false)?;
     let args = InternalDaemonProcessArgs::from_server_config(
-        repo_root,
+        daemon_config,
         DaemonMode::Detached,
         None,
         &config,
     );
     let mut command = build_daemon_spawn_command(&args)?;
     command
-        .current_dir(repo_root)
+        .current_dir(&daemon_config.config_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -381,34 +477,44 @@ pub async fn start_detached(
     let child = command.spawn().with_context(|| {
         format!(
             "spawning detached Bitloops daemon for {}",
-            repo_root.display()
+            daemon_config.config_path.display()
         )
     })?;
     log::debug!("spawned detached daemon pid={}", child.id());
-    wait_until_ready(repo_root, READY_TIMEOUT).await
+    wait_until_ready(READY_TIMEOUT).await
 }
 
 pub async fn start_service(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
-    supervisor_start_repo(repo_root, config).await
+    supervisor_start_repo(daemon_config, config).await
 }
 
-pub async fn restart(repo_root: &Path) -> Result<DaemonRuntimeState> {
-    let service = read_service_metadata(repo_root)?;
-    let runtime = read_runtime_state(repo_root)?;
+pub async fn restart(config_override: Option<&ResolvedDaemonConfig>) -> Result<DaemonRuntimeState> {
+    let service = read_service_metadata(Path::new("."))?;
+    let runtime = read_runtime_state(Path::new("."))?;
 
     if service.is_some() {
-        let config = service
+        let server_config = service
             .as_ref()
             .map(|metadata| metadata.config.clone())
             .context("service metadata missing for Bitloops daemon")?;
-        return supervisor_restart_repo(repo_root, config).await;
+        let daemon_config = match config_override {
+            Some(daemon_config) => daemon_config.clone(),
+            None => {
+                let config_path = service
+                    .as_ref()
+                    .map(|metadata| metadata.config_path.clone())
+                    .context("daemon config path missing for Bitloops service metadata")?;
+                resolve_daemon_config(Some(config_path.as_path()))?
+            }
+        };
+        return supervisor_restart_repo(&daemon_config, server_config).await;
     }
 
     let runtime = runtime.context(
-        "Bitloops daemon is not running for this repository. Start it with `bitloops daemon start`.",
+        "Bitloops daemon is not running. Start it with `bitloops daemon start`.",
     )?;
     let config = DashboardServerConfig {
         host: Some(runtime.host.clone()),
@@ -416,11 +522,15 @@ pub async fn restart(repo_root: &Path) -> Result<DaemonRuntimeState> {
         no_open: true,
         force_http: runtime.url.starts_with("http://"),
         recheck_local_dashboard_net: false,
-        bundle_dir: Some(runtime.bundle_dir.clone()),
+            bundle_dir: Some(runtime.bundle_dir.clone()),
+        };
+    stop().await?;
+    let daemon_config = match config_override {
+        Some(daemon_config) => daemon_config.clone(),
+        None => resolve_daemon_config(Some(runtime.config_path.as_path()))?,
     };
-    stop(repo_root).await?;
     match runtime.mode {
-        DaemonMode::Detached => start_detached(repo_root, config).await,
+        DaemonMode::Detached => start_detached(&daemon_config, config).await,
         DaemonMode::Foreground => {
             bail!(
                 "cannot restart a foreground daemon from another process; run `bitloops daemon start` again"
@@ -432,24 +542,24 @@ pub async fn restart(repo_root: &Path) -> Result<DaemonRuntimeState> {
     }
 }
 
-pub async fn stop(repo_root: &Path) -> Result<()> {
-    let service = read_service_metadata(repo_root)?;
-    let runtime = read_runtime_state(repo_root)?;
+pub async fn stop() -> Result<()> {
+    let service = read_service_metadata(Path::new("."))?;
+    let runtime = read_runtime_state(Path::new("."))?;
 
     if let Some(metadata) = service {
         if supervisor_available().unwrap_or(false) {
-            if let Err(err) = supervisor_stop_repo(repo_root).await {
+            if let Err(err) = supervisor_stop_repo().await {
                 if runtime.is_some() {
                     log::debug!("supervisor stop fallback to direct runtime stop: {err:#}");
-                    stop_service_managed_repo_runtime(repo_root)?;
+                    stop_service_managed_repo_runtime()?;
                 } else {
                     return Err(err);
                 }
             }
         } else if runtime.is_some() {
-            stop_service_managed_repo_runtime(repo_root)?;
+            stop_service_managed_repo_runtime()?;
         }
-        let runtime_path = runtime_state_path(repo_root);
+        let runtime_path = runtime_state_path(Path::new("."));
         if runtime_path.exists() {
             wait_for_runtime_cleanup(&runtime_path, STOP_TIMEOUT)?;
         }
@@ -458,16 +568,16 @@ pub async fn stop(repo_root: &Path) -> Result<()> {
     }
 
     let runtime = runtime.context(
-        "Bitloops daemon is not running for this repository. Start it with `bitloops daemon start`.",
+        "Bitloops daemon is not running. Start it with `bitloops daemon start`.",
     )?;
     terminate_process(runtime.pid)?;
-    wait_for_runtime_cleanup(&runtime_state_path(repo_root), STOP_TIMEOUT)?;
+    wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
     Ok(())
 }
 
-pub async fn status(repo_root: &Path) -> Result<DaemonStatusReport> {
-    let runtime = read_runtime_state(repo_root)?;
-    let service = read_service_metadata(repo_root)?;
+pub async fn status() -> Result<DaemonStatusReport> {
+    let runtime = read_runtime_state(Path::new("."))?;
+    let service = read_service_metadata(Path::new("."))?;
     let service_running = service.is_some()
         && read_supervisor_service_metadata()?
             .as_ref()
@@ -486,7 +596,7 @@ pub async fn status(repo_root: &Path) -> Result<DaemonStatusReport> {
     })
 }
 
-pub async fn wait_until_ready(repo_root: &Path, timeout: Duration) -> Result<DaemonRuntimeState> {
+pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {
     let started = Instant::now();
     loop {
         if started.elapsed() > timeout {
@@ -496,7 +606,7 @@ pub async fn wait_until_ready(repo_root: &Path, timeout: Duration) -> Result<Dae
             );
         }
 
-        if let Some(state) = read_runtime_state(repo_root)?
+        if let Some(state) = read_runtime_state(Path::new("."))?
             && daemon_http_ready(&state).await
         {
             return Ok(state);
@@ -508,6 +618,25 @@ pub async fn wait_until_ready(repo_root: &Path, timeout: Duration) -> Result<Dae
 
 pub async fn execute_graphql<T: DeserializeOwned>(
     repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    execute_graphql_request(repo_root, "/devql/global", None, query, variables).await
+}
+
+pub(crate) async fn execute_slim_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    scope: &SlimCliRepoScope,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    execute_graphql_request(repo_root, "/devql", Some(scope), query, variables).await
+}
+
+async fn execute_graphql_request<T: DeserializeOwned>(
+    repo_root: &Path,
+    endpoint_path: &str,
+    scope: Option<&SlimCliRepoScope>,
     query: &str,
     variables: Value,
 ) -> Result<T> {
@@ -538,12 +667,15 @@ pub async fn execute_graphql<T: DeserializeOwned>(
         );
     }
 
-    let endpoint = format!("{}/devql", runtime.url.trim_end_matches('/'));
+    let endpoint = format!("{}{}", runtime.url.trim_end_matches('/'), endpoint_path);
     let send_started = Instant::now();
     let mut request = client.post(endpoint).json(&json!({
         "query": query,
         "variables": variables,
     }));
+    if let Some(scope) = scope {
+        request = attach_slim_cli_scope_headers(request, scope);
+    }
     if timings_enabled {
         request = request.header(
             crate::devql_timing::DEVQL_TIMINGS_HEADER,
@@ -643,8 +775,8 @@ pub fn choose_dashboard_launch_mode() -> Result<Option<DaemonMode>> {
     Ok(choice)
 }
 
-pub fn daemon_url(repo_root: &Path) -> Result<Option<String>> {
-    Ok(read_runtime_state(repo_root)?.map(|state| state.url))
+pub fn daemon_url() -> Result<Option<String>> {
+    Ok(read_runtime_state(Path::new("."))?.map(|state| state.url))
 }
 
 async fn supervisor_health() -> Json<SupervisorHealthResponse> {
@@ -658,7 +790,9 @@ async fn handle_supervisor_start_repo(
     Json(request): Json<SupervisorStartRequest>,
 ) -> Result<Json<DaemonRuntimeState>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
-    ensure_service_managed_repo_runtime(&request.repo_root, request.config)
+    let daemon_config =
+        resolve_daemon_config(Some(request.config_path.as_path())).map_err(supervisor_api_error)?;
+    ensure_service_managed_repo_runtime(&daemon_config, request.config)
         .await
         .map(Json)
         .map_err(supervisor_api_error)
@@ -666,10 +800,10 @@ async fn handle_supervisor_start_repo(
 
 async fn handle_supervisor_stop_repo(
     State(state): State<SupervisorAppState>,
-    Json(request): Json<SupervisorRepoRequest>,
+    Json(_request): Json<SupervisorStopRequest>,
 ) -> Result<Json<SupervisorHealthResponse>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
-    stop_service_managed_repo_runtime(&request.repo_root).map_err(supervisor_api_error)?;
+    stop_service_managed_repo_runtime().map_err(supervisor_api_error)?;
     Ok(Json(SupervisorHealthResponse {
         status: "ok".to_string(),
     }))
@@ -680,7 +814,9 @@ async fn handle_supervisor_restart_repo(
     Json(request): Json<SupervisorStartRequest>,
 ) -> Result<Json<DaemonRuntimeState>, (axum::http::StatusCode, String)> {
     let _guard = state.operation_lock.lock().await;
-    restart_service_managed_repo_runtime(&request.repo_root, request.config)
+    let daemon_config =
+        resolve_daemon_config(Some(request.config_path.as_path())).map_err(supervisor_api_error)?;
+    restart_service_managed_repo_runtime(&daemon_config, request.config)
         .await
         .map(Json)
         .map_err(supervisor_api_error)
@@ -718,7 +854,7 @@ async fn wait_for_shutdown_signal() {
 }
 
 async fn run_server(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
     mode: DaemonMode,
     service_name: Option<String>,
@@ -726,13 +862,14 @@ async fn run_server(
     ready_subject: &str,
     print_banner: bool,
 ) -> Result<()> {
-    let repo_root = repo_root
+    let config_root = daemon_config
+        .config_root
         .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
-    let runtime_path = runtime_state_path(&repo_root);
-    let service_metadata_path = service_metadata_path(&repo_root);
+        .unwrap_or_else(|_| daemon_config.config_root.clone());
+    let runtime_path = runtime_state_path(&config_root);
+    let service_metadata_path = service_metadata_path(&config_root);
     let current_fingerprint = current_binary_fingerprint()?;
-    let on_ready_repo_root = repo_root.clone();
+    let on_ready_config = daemon_config.clone();
     let on_ready_runtime_path = runtime_path.clone();
     let on_ready_service_metadata_path = service_metadata_path.clone();
     let on_ready_service_name = service_name.clone();
@@ -741,7 +878,8 @@ async fn run_server(
             &on_ready_runtime_path,
             &DaemonRuntimeState {
                 version: 1,
-                repo_root: on_ready_repo_root.clone(),
+                config_path: on_ready_config.config_path.clone(),
+                config_root: on_ready_config.config_root.clone(),
                 pid: std::process::id(),
                 mode,
                 service_name: on_ready_service_name.clone(),
@@ -749,6 +887,10 @@ async fn run_server(
                 host: ready.host.clone(),
                 port: ready.port,
                 bundle_dir: ready.bundle_dir.clone(),
+                relational_db_path: on_ready_config.relational_db_path.clone(),
+                events_db_path: on_ready_config.events_db_path.clone(),
+                blob_store_path: on_ready_config.blob_store_path.clone(),
+                repo_registry_path: on_ready_config.repo_registry_path.clone(),
                 binary_fingerprint: current_fingerprint.clone(),
                 updated_at_unix: unix_timestamp_now(),
             },
@@ -779,46 +921,49 @@ async fn run_server(
             shutdown_message: Some("Bitloops daemon stopped.".to_string()),
             on_ready: Some(ready_hook),
             on_shutdown: Some(on_shutdown),
+            config_root: Some(config_root),
+            repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
         },
     )
     .await
 }
 
 async fn ensure_service_managed_repo_runtime(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
-    let repo_root = repo_root
+    let config_root = daemon_config
+        .config_root
         .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
+        .unwrap_or_else(|_| daemon_config.config_root.clone());
 
-    if let Some(runtime) = read_runtime_state(&repo_root)? {
+    if let Some(runtime) = read_runtime_state(&config_root)? {
         if runtime.mode == DaemonMode::Service
             && runtime.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME)
         {
-            install_or_update_repo_service_binding(&repo_root, config)?;
+            install_or_update_repo_service_binding(daemon_config, config)?;
             if daemon_http_ready(&runtime).await {
                 return Ok(runtime);
             }
-            return wait_until_ready(&repo_root, READY_TIMEOUT).await;
+            return wait_until_ready(READY_TIMEOUT).await;
         }
 
         bail!(
-            "Bitloops daemon is already running for this repository at {}. Use `bitloops daemon restart` if you need to replace it.",
+            "Bitloops daemon is already running at {}. Use `bitloops daemon restart` if you need to replace it.",
             runtime.url
         );
     }
 
-    let binding = install_or_update_repo_service_binding(&repo_root, config.clone())?;
+    let binding = install_or_update_repo_service_binding(daemon_config, config.clone())?;
     let args = InternalDaemonProcessArgs::from_server_config(
-        &repo_root,
+        daemon_config,
         DaemonMode::Service,
         Some(binding.service_name.clone()),
         &config,
     );
     let mut command = build_daemon_spawn_command(&args)?;
     command
-        .current_dir(&repo_root)
+        .current_dir(&config_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -826,19 +971,16 @@ async fn ensure_service_managed_repo_runtime(
     command.spawn().with_context(|| {
         format!(
             "spawning service-managed Bitloops daemon for {}",
-            repo_root.display()
+            daemon_config.config_path.display()
         )
     })?;
 
-    wait_until_ready(&repo_root, READY_TIMEOUT).await
+    wait_until_ready(READY_TIMEOUT).await
 }
 
-fn stop_service_managed_repo_runtime(repo_root: &Path) -> Result<()> {
-    let repo_root = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
-    let runtime = read_runtime_state(&repo_root)?;
-    let binding = read_service_metadata(&repo_root)?;
+fn stop_service_managed_repo_runtime() -> Result<()> {
+    let runtime = read_runtime_state(Path::new("."))?;
+    let binding = read_service_metadata(Path::new("."))?;
 
     match runtime {
         Some(state)
@@ -846,38 +988,33 @@ fn stop_service_managed_repo_runtime(repo_root: &Path) -> Result<()> {
                 && state.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME) =>
         {
             terminate_process(state.pid)?;
-            wait_for_runtime_cleanup(&runtime_state_path(&repo_root), STOP_TIMEOUT)?;
+            wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
             Ok(())
         }
         Some(state) => bail!(
-            "Bitloops daemon is running for this repository in {} mode. Use `bitloops daemon stop` from that mode instead.",
+            "Bitloops daemon is running in {} mode. Use `bitloops daemon stop` from that mode instead.",
             state.mode
         ),
         None if binding.is_some() => Ok(()),
-        None => bail!(
-            "Bitloops daemon is not running for this repository. Start it with `bitloops daemon start`."
-        ),
+        None => bail!("Bitloops daemon is not running. Start it with `bitloops daemon start`."),
     }
 }
 
 async fn restart_service_managed_repo_runtime(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
-    let repo_root = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
-    if read_runtime_state(&repo_root)?.is_some() {
-        stop_service_managed_repo_runtime(&repo_root)?;
+    if read_runtime_state(daemon_config.config_root.as_path())?.is_some() {
+        stop_service_managed_repo_runtime()?;
     }
-    ensure_service_managed_repo_runtime(&repo_root, config).await
+    ensure_service_managed_repo_runtime(daemon_config, config).await
 }
 
 fn install_or_update_repo_service_binding(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonServiceMetadata> {
-    let existing = read_service_metadata(repo_root)?;
+    let existing = read_service_metadata(daemon_config.config_root.as_path())?;
     if let Some(existing) = existing.as_ref()
         && existing.service_name != GLOBAL_SUPERVISOR_SERVICE_NAME
     {
@@ -885,7 +1022,8 @@ fn install_or_update_repo_service_binding(
     }
     let metadata = DaemonServiceMetadata {
         version: 1,
-        repo_root: repo_root.to_path_buf(),
+        config_path: daemon_config.config_path.clone(),
+        config_root: daemon_config.config_root.clone(),
         manager: current_service_manager(),
         service_name: GLOBAL_SUPERVISOR_SERVICE_NAME.to_string(),
         service_file: None,
@@ -893,7 +1031,10 @@ fn install_or_update_repo_service_binding(
         last_url: existing.as_ref().and_then(|value| value.last_url.clone()),
         last_pid: existing.as_ref().and_then(|value| value.last_pid),
     };
-    write_service_metadata(&service_metadata_path(repo_root), &metadata)?;
+    write_service_metadata(
+        &service_metadata_path(daemon_config.config_root.as_path()),
+        &metadata,
+    )?;
     Ok(metadata)
 }
 
@@ -1209,7 +1350,7 @@ async fn query_health(state: &DaemonRuntimeState) -> Result<DaemonHealthSummary>
     }
 
     let payload: HealthEnvelope = execute_graphql(
-        &state.repo_root,
+        &state.config_root,
         r#"{ health { relational { backend connected } events { backend connected } blob { backend connected } } }"#,
         json!({}),
     )
@@ -1288,17 +1429,17 @@ async fn supervisor_http_ready(runtime: &SupervisorRuntimeState) -> bool {
 }
 
 async fn supervisor_start_repo(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
     let runtime = ensure_supervisor_available().await?;
     let response = reqwest::Client::new()
         .post(format!(
-            "{}/repos/start",
+            "{}/daemon/start",
             runtime.control_url.trim_end_matches('/')
         ))
         .json(&SupervisorStartRequest {
-            repo_root: repo_root.to_path_buf(),
+            config_path: daemon_config.config_path.clone(),
             config,
         })
         .send()
@@ -1307,17 +1448,15 @@ async fn supervisor_start_repo(
     decode_supervisor_response(response).await
 }
 
-async fn supervisor_stop_repo(repo_root: &Path) -> Result<()> {
+async fn supervisor_stop_repo() -> Result<()> {
     let runtime = read_supervisor_runtime_state()?
-        .context("Bitloops daemon supervisor is not running for service-managed repositories")?;
+        .context("Bitloops daemon supervisor is not running")?;
     let response = reqwest::Client::new()
         .post(format!(
-            "{}/repos/stop",
+            "{}/daemon/stop",
             runtime.control_url.trim_end_matches('/')
         ))
-        .json(&SupervisorRepoRequest {
-            repo_root: repo_root.to_path_buf(),
-        })
+        .json(&SupervisorStopRequest {})
         .send()
         .await
         .context("sending stop request to Bitloops daemon supervisor")?;
@@ -1327,17 +1466,17 @@ async fn supervisor_stop_repo(repo_root: &Path) -> Result<()> {
 }
 
 async fn supervisor_restart_repo(
-    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
 ) -> Result<DaemonRuntimeState> {
     let runtime = ensure_supervisor_available().await?;
     let response = reqwest::Client::new()
         .post(format!(
-            "{}/repos/restart",
+            "{}/daemon/restart",
             runtime.control_url.trim_end_matches('/')
         ))
         .json(&SupervisorStartRequest {
-            repo_root: repo_root.to_path_buf(),
+            config_path: daemon_config.config_path.clone(),
             config,
         })
         .send()
@@ -1760,7 +1899,38 @@ fn emit_query_timing_debug(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::process_state::enter_process_state;
+    use serde_json::json;
     use tempfile::TempDir;
+
+    fn write_daemon_test_config(config_root: &Path) -> PathBuf {
+        let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+        let parent = config_path.parent().expect("config parent");
+        fs::create_dir_all(parent).expect("create config parent");
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&json!({
+                "version": "1.0",
+                "scope": "project",
+                "settings": {
+                    "stores": {
+                        "relational": {
+                            "sqlite_path": ".bitloops/stores/daemon.sqlite"
+                        },
+                        "events": {
+                            "duckdb_path": ".bitloops/stores/daemon.duckdb"
+                        },
+                        "blob": {
+                            "local_path": ".bitloops/blob-store"
+                        }
+                    }
+                }
+            }))
+            .expect("serialise test config"),
+        )
+        .expect("write test config");
+        config_path
+    }
 
     #[test]
     fn supervisor_service_name_is_global_and_stable() {
@@ -1800,7 +1970,8 @@ mod tests {
             &runtime_path,
             &DaemonRuntimeState {
                 version: 1,
-                repo_root: repo_root.to_path_buf(),
+                config_path: repo_root.join(".bitloops").join("config.json"),
+                config_root: repo_root.to_path_buf(),
                 pid: 999_999,
                 mode: DaemonMode::Detached,
                 service_name: None,
@@ -1808,6 +1979,10 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 5667,
                 bundle_dir: repo_root.join("bundle"),
+                relational_db_path: repo_root.join("relational.db"),
+                events_db_path: repo_root.join("events.duckdb"),
+                blob_store_path: repo_root.join("blob"),
+                repo_registry_path: repo_root.join("repo-path-registry.json"),
                 binary_fingerprint: "test".to_string(),
                 updated_at_unix: 0,
             },
@@ -1819,6 +1994,64 @@ mod tests {
         assert!(
             !runtime_path.exists(),
             "stale runtime state file should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn resolve_daemon_config_uses_explicit_config_path_independent_of_cwd() {
+        let config_root = TempDir::new().expect("temp dir");
+        let other_cwd = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_test_config(config_root.path());
+        let _guard = enter_process_state(Some(other_cwd.path()), &[]);
+
+        let resolved =
+            resolve_daemon_config(Some(config_path.as_path())).expect("resolve daemon config");
+        let canonical_root = config_root
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| config_root.path().to_path_buf());
+
+        assert_eq!(resolved.config_root, canonical_root);
+        assert_eq!(
+            resolved.relational_db_path,
+            canonical_root.join(".bitloops/stores/daemon.sqlite")
+        );
+        assert_eq!(
+            resolved.events_db_path,
+            canonical_root.join(".bitloops/stores/daemon.duckdb")
+        );
+        assert_eq!(
+            resolved.blob_store_path,
+            canonical_root.join(".bitloops/blob-store")
+        );
+        assert_eq!(
+            resolved.repo_registry_path,
+            global_daemon_dir_fallback().join("repo-path-registry.json")
+        );
+    }
+
+    #[test]
+    fn resolve_daemon_config_uses_local_dot_bitloops_config_by_default() {
+        let config_root = TempDir::new().expect("temp dir");
+        let config_path = write_daemon_test_config(config_root.path());
+        let _guard = enter_process_state(Some(config_root.path()), &[]);
+
+        let resolved = resolve_daemon_config(None).expect("resolve daemon config");
+        let canonical_root = config_root
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| config_root.path().to_path_buf());
+
+        assert_eq!(
+            resolved.config_path,
+            config_path
+                .canonicalize()
+                .unwrap_or_else(|_| config_path.clone())
+        );
+        assert_eq!(resolved.config_root, canonical_root);
+        assert_eq!(
+            resolved.relational_db_path,
+            canonical_root.join(".bitloops/stores/daemon.sqlite")
         );
     }
 }

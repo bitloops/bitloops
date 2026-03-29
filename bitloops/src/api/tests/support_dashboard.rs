@@ -7,10 +7,11 @@ pub(super) fn test_state(
 ) -> DashboardState {
     let db = crate::api::DashboardDbPools::default();
     DashboardState {
-        devql_schema: crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
-            repo_root.clone(),
-            db.clone(),
-        )),
+        config_root: repo_root.clone(),
+        repo_registry_path: None,
+        subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
+        devql_schema: crate::graphql::build_global_schema_template(),
+        devql_slim_schema: crate::graphql::build_slim_schema_template(),
         repo_root,
         mode,
         db,
@@ -36,6 +37,7 @@ pub(super) fn seed_dashboard_repo() -> TempDir {
     git_ok(repo_root, &["add", "app.rs"]);
     git_ok(repo_root, &["commit", "-m", "Checkpoint commit"]);
     let checkpoint_commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+    seed_repository_catalog_row(repo_root, SEEDED_REPO_NAME, "main");
 
     git_ok(
         repo_root,

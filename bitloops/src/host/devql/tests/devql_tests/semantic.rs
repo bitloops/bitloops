@@ -62,6 +62,7 @@ async fn init_relational_schema_creates_test_harness_tables() {
     .expect("write store config");
 
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let relational = RelationalStorage::local_only(db_path.clone());
     init_relational_schema(&cfg, &relational)

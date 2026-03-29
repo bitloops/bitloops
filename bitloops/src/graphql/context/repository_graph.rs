@@ -21,9 +21,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 impl DevqlGraphqlContext {
-    pub(crate) fn validate_project_path(&self, path: &str) -> std::result::Result<String, String> {
+    pub(crate) fn validate_project_path(
+        &self,
+        scope: &ResolverScope,
+        path: &str,
+    ) -> std::result::Result<String, String> {
         let normalized = normalise_repo_relative_path(path, false)?;
-        let candidate = self.repo_root.join(&normalized);
+        let repo_root = self
+            .repo_root_for_scope(scope)
+            .map_err(|err| err.to_string())?;
+        let candidate = repo_root.join(&normalized);
         if !candidate.exists() {
             return Err(format!("unknown project path `{normalized}`"));
         }
@@ -54,9 +61,10 @@ impl DevqlGraphqlContext {
         if !scope.contains_repo_path(path) {
             return Ok(None);
         }
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_file_context_lookup_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             path,
             scope.temporal_scope(),
         );
@@ -73,9 +81,10 @@ impl DevqlGraphqlContext {
         glob: &str,
         scope: &ResolverScope,
     ) -> Result<Vec<FileContext>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_file_context_list_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             glob,
             scope.temporal_scope(),
         );
@@ -97,9 +106,10 @@ impl DevqlGraphqlContext {
                 .validate()
                 .map_err(|err| anyhow::anyhow!(err.message))?;
         }
+        let repo_id = self.repo_id_for_scope(scope)?;
         let spec = plan_graphql_artefact_query(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             path,
             filter,
             scope,
@@ -119,9 +129,10 @@ impl DevqlGraphqlContext {
         filter: Option<&ArtefactFilterInput>,
         scope: &ResolverScope,
     ) -> Result<usize> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let spec = plan_graphql_artefact_query(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             path,
             filter,
             scope,
@@ -148,9 +159,10 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
         cursor: &str,
     ) -> Result<bool> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let spec = plan_graphql_artefact_query(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             path,
             filter,
             scope,
@@ -168,9 +180,10 @@ impl DevqlGraphqlContext {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Artefact>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let spec = plan_graphql_artefact_query(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             path,
             filter,
             scope,
@@ -193,9 +206,10 @@ impl DevqlGraphqlContext {
             return Ok(HashMap::new());
         }
 
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_artefacts_by_ids_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             artefact_ids,
             scope.project_path(),
             scope.temporal_scope(),
@@ -214,9 +228,10 @@ impl DevqlGraphqlContext {
         parent_artefact_id: &str,
         scope: &ResolverScope,
     ) -> Result<Vec<Artefact>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_child_artefacts_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             parent_artefact_id,
             scope.project_path(),
             scope.temporal_scope(),
@@ -237,9 +252,10 @@ impl DevqlGraphqlContext {
         if !scope.contains_repo_path(path) {
             return Ok(Vec::new());
         }
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_current_dependency_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             DependencyScope::File(path),
             scope.project_path(),
             filter.copied().unwrap_or_default(),
@@ -261,9 +277,10 @@ impl DevqlGraphqlContext {
             return Ok(Vec::new());
         };
 
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_current_dependency_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             DependencyScope::Project(project_path),
             None,
             filter.copied().unwrap_or_default(),
@@ -287,9 +304,10 @@ impl DevqlGraphqlContext {
             return Ok(HashMap::new());
         }
 
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_current_dependency_batch_sql(
-            self.repo_identity.repo_id.as_str(),
-            &self.current_branch_name(),
+            &repo_id,
+            &self.current_branch_name(scope),
             artefact_ids,
             direction,
             filter,
@@ -320,11 +338,27 @@ impl DevqlGraphqlContext {
             .as_ref()
             .context("store backend configuration unavailable")?
             .relational
-            .resolve_sqlite_db_path_for_repo(&self.repo_root)
+            .resolve_sqlite_db_path_for_repo(&self.config_root)
             .context("resolving SQLite path for GraphQL DevQL queries")
     }
 
-    fn current_branch_name(&self) -> String {
-        git_default_branch_name(self.repo_root.as_path())
+    pub(crate) fn current_branch_name(&self, scope: &ResolverScope) -> String {
+        let repository = self.repository_selection_for_scope(scope).ok();
+        scope
+            .branch_name()
+            .map(str::to_string)
+            .or_else(|| self.branch_override.clone())
+            .or_else(|| {
+                repository
+                    .as_ref()
+                    .and_then(|repository| repository.default_branch().map(str::to_string))
+            })
+            .or_else(|| {
+                repository
+                    .as_ref()
+                    .and_then(|repository| repository.repo_root().cloned())
+                    .map(|repo_root| git_default_branch_name(repo_root.as_path()))
+            })
+            .unwrap_or_else(|| "main".to_string())
     }
 }

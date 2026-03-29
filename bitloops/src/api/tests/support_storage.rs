@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const SEEDED_REPO_NAME: &str = "demo";
+
 pub(super) fn insert_commit_checkpoint_mapping(
     repo_root: &Path,
     commit_sha: &str,
@@ -48,6 +50,31 @@ pub(super) fn write_envelope_config(repo_root: &Path, settings: serde_json::Valu
         .expect("serialise config"),
     )
     .expect("write config");
+}
+
+pub(super) fn seed_repository_catalog_row(
+    repo_root: &Path,
+    repo_name: &str,
+    default_branch: &str,
+) {
+    let head_commit = git_ok(repo_root, &["rev-parse", "HEAD"]);
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    crate::storage::init::init_database(&sqlite_path, false, &head_commit)
+        .expect("initialise relational sqlite store");
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES (?1, 'local', 'local', ?2, ?3)
+         ON CONFLICT(repo_id) DO UPDATE SET
+            provider = excluded.provider,
+            organization = excluded.organization,
+            name = excluded.name,
+            default_branch = excluded.default_branch",
+        rusqlite::params![repo_id.as_str(), repo_name, default_branch],
+    )
+    .expect("upsert repository row");
 }
 
 pub(super) fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str) {

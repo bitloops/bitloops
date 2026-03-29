@@ -13,7 +13,7 @@ pub async fn run_post_commit_artefact_refresh(
     commit_sha: &str,
     changed_files: &[String],
 ) -> Result<PostCommitArtefactRefreshStats> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for post-commit artefact refresh")?;
     let relational = RelationalStorage::connect(
         cfg,
@@ -37,7 +37,7 @@ pub async fn run_post_commit_checkpoint_projection_refresh(
         return Ok(());
     }
 
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for post-commit checkpoint projection refresh")?;
     let relational = RelationalStorage::connect(
         cfg,
@@ -54,7 +54,7 @@ pub async fn run_post_merge_artefact_refresh(
     commit_sha: &str,
     changed_files: &[String],
 ) -> Result<PostCommitArtefactRefreshStats> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for post-merge artefact refresh")?;
     let relational =
         RelationalStorage::connect(cfg, &backends.relational, "git post-merge artefact refresh")
@@ -190,7 +190,7 @@ pub async fn run_post_checkout_branch_seed(
         return Ok(());
     }
 
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for post-checkout branch seeding")?;
     let relational =
         RelationalStorage::connect(cfg, &backends.relational, "git post-checkout branch seed")

@@ -95,6 +95,7 @@ async fn execute_registered_coverage_stage_returns_coverage_data() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");

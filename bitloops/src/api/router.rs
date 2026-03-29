@@ -7,8 +7,11 @@ use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
     has_bundle_index, resolve_bundle_file,
 };
-use crate::graphql::{graphql_handler, graphql_playground_handler, graphql_sdl_handler};
-use async_graphql_axum::GraphQLSubscription;
+use crate::graphql::{
+    global_graphql_handler, global_graphql_playground_handler, global_graphql_sdl_handler,
+    global_graphql_ws_handler, slim_graphql_handler, slim_graphql_playground_handler,
+    slim_graphql_sdl_handler, slim_graphql_ws_handler,
+};
 use axum::{
     Router,
     body::Body,
@@ -173,17 +176,23 @@ const BUNDLE_UPDATE_PROMPT_SCRIPT: &str = r##"<script id="bitloops-bundle-update
 </script>"##;
 
 pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
-    let devql_schema = state.devql_schema.clone();
     Router::new()
         .route("/api/", get(handle_api_root))
         .nest("/api", build_dashboard_api_router())
+        .route("/devql", post(slim_graphql_handler).get(slim_graphql_playground_handler))
+        .route("/devql/playground", get(slim_graphql_playground_handler))
+        .route("/devql/sdl", get(slim_graphql_sdl_handler))
+        .route("/devql/ws", get(slim_graphql_ws_handler))
         .route(
-            "/devql",
-            post(graphql_handler).get(graphql_playground_handler),
+            "/devql/global",
+            post(global_graphql_handler).get(global_graphql_playground_handler),
         )
-        .route("/devql/playground", get(graphql_playground_handler))
-        .route("/devql/sdl", get(graphql_sdl_handler))
-        .route_service("/devql/ws", GraphQLSubscription::new(devql_schema))
+        .route(
+            "/devql/global/playground",
+            get(global_graphql_playground_handler),
+        )
+        .route("/devql/global/sdl", get(global_graphql_sdl_handler))
+        .route("/devql/global/ws", get(global_graphql_ws_handler))
         .route("/", any(handle_dashboard_root))
         .route("/{*path}", any(handle_dashboard_path))
         .with_state(state)

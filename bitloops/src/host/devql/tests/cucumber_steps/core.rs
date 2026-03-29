@@ -984,6 +984,7 @@ async fn execute_registered_stage_query(
     let commit_sha = git_ok(&repo_root, &["rev-parse", "HEAD"]);
 
     let mut cfg = DevqlBddWorld::test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root.clone();
     let sqlite_path = temp.path().join("relational.sqlite");
     write_repo_config(&repo_root, &sqlite_path);

@@ -1,5 +1,43 @@
 use super::*;
 
+fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
+    vec![
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ID.to_string(),
+            repo.repo_id,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_NAME.to_string(),
+            repo.name,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_PROVIDER.to_string(),
+            repo.provider,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ORGANISATION.to_string(),
+            repo.organization,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_IDENTITY.to_string(),
+            repo.identity,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ROOT.to_string(),
+            repo_root.to_string_lossy().to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_BRANCH.to_string(),
+            "main".to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_GIT_DIR_RELATIVE_PATH.to_string(),
+            ".git".to_string(),
+        ),
+    ]
+}
+
 #[tokio::test]
 async fn devql_playground_route_serves_explorer() {
     let temp = TempDir::new().expect("temp dir");
@@ -12,7 +50,7 @@ async fn devql_playground_route_serves_explorer() {
     let (status, body) = request_text(app, "/devql/playground").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("DevQL Explorer"));
+    assert!(body.contains("DevQL Slim Explorer"));
     assert!(body.contains("/devql"));
 }
 
@@ -28,35 +66,41 @@ async fn devql_sdl_route_returns_schema_text() {
     let (status, body) = request_text(app, "/devql/sdl").await;
 
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, crate::graphql::slim_schema_sdl());
     assert!(body.contains("health: HealthStatus!"));
-    assert!(body.contains("type QueryRoot"));
+    assert!(body.contains("type SlimQueryRoot"));
     assert!(body.contains("type MutationRoot"));
-    assert!(body.contains("repo(name: String!): Repository!"));
-    assert!(body.contains("initSchema: InitSchemaResult!"));
-    assert!(body.contains("ingest(input: IngestInput!): IngestResult!"));
+    assert!(body.contains("defaultBranch: String!"));
     assert!(body.contains("checkpoints(agent: String, since: DateTime"));
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
     assert!(body.contains("chatHistory"));
-    assert!(body.contains("input IngestInput"));
-    assert!(body.contains("type Clone"));
-    assert!(body.contains("type ChatEntry"));
-    assert!(body.contains("type InitSchemaResult"));
-    assert!(body.contains("type IngestResult"));
-    assert!(body.contains("type KnowledgeItem"));
-    assert!(body.contains("type KnowledgePayload"));
-    assert!(body.contains("type TelemetryEvent"));
-    assert!(body.contains("type TelemetryEventConnection"));
-    assert!(body.contains("type SubscriptionRoot"));
-    assert!(body.contains("checkpointIngested(repoName: String!): Checkpoint!"));
-    assert!(body.contains("ingestionProgress(repoName: String!): IngestionProgressEvent!"));
-    assert!(body.contains("type IngestionProgressEvent"));
-    assert!(body.contains("enum IngestionPhase"));
-    assert!(body.contains("project(path: String!): Project!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
-    assert!(body.contains("input AsOfInput"));
-    assert!(body.contains("type TemporalScope"));
+    assert!(!body.contains("repo(name: String!): Repository!"));
+}
+
+#[tokio::test]
+async fn devql_global_routes_serve_full_schema_and_playground() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (playground_status, playground_body) = request_text(app.clone(), "/devql/global/playground").await;
+    assert_eq!(playground_status, StatusCode::OK);
+    assert!(playground_body.contains("DevQL Global Explorer"));
+    assert!(playground_body.contains("/devql/global"));
+
+    let (sdl_status, sdl_body) = request_text(app, "/devql/global/sdl").await;
+    assert_eq!(sdl_status, StatusCode::OK);
+    assert_eq!(sdl_body, crate::graphql::schema_sdl());
+    assert!(sdl_body.contains("type QueryRoot"));
+    assert!(sdl_body.contains("repo(name: String!): Repository!"));
+    assert!(sdl_body.contains("branch(name: String!): Repository!"));
+    assert!(sdl_body.contains("project(path: String!): Project!"));
 }
 
 #[test]
@@ -64,6 +108,14 @@ fn checked_in_schema_file_matches_runtime_sdl() {
     let expected = crate::graphql::schema_sdl();
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.graphql");
     let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.graphql");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn checked_in_slim_schema_file_matches_runtime_sdl() {
+    let expected = crate::graphql::slim_schema_sdl();
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.slim.graphql");
+    let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.slim.graphql");
     assert_eq!(actual, expected);
 }
 
@@ -143,17 +195,17 @@ async fn devql_graphql_rejects_queries_over_the_complexity_limit() {
 
 #[tokio::test]
 async fn devql_post_route_executes_graphql_requests() {
-    let temp = TempDir::new().expect("temp dir");
+    let repo = seed_graphql_devql_repo();
     let app = build_dashboard_router(test_state(
-        temp.path().to_path_buf(),
+        repo.path().to_path_buf(),
         ServeMode::HelloWorld,
-        temp.path().to_path_buf(),
+        repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json_with_method_and_content_type(
-        app,
+    let (global_status, global_payload) = request_json_with_method_and_content_type(
+        app.clone(),
         Method::POST,
-        "/devql",
+        "/devql/global",
         "application/json",
         Body::from(
             r#"{"query":"{ repo(name: \"demo\") { name provider } health { blob { backend connected } } }"}"#,
@@ -161,11 +213,33 @@ async fn devql_post_route_executes_graphql_requests() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(payload["data"]["repo"]["name"], "demo");
-    assert_eq!(payload["data"]["repo"]["provider"], "local");
-    assert_eq!(payload["data"]["health"]["blob"]["backend"], "local");
-    assert_eq!(payload["data"]["health"]["blob"]["connected"], true);
+    assert_eq!(global_status, StatusCode::OK);
+    assert_eq!(global_payload["data"]["repo"]["name"], "demo");
+    assert_eq!(global_payload["data"]["repo"]["provider"], "local");
+    assert_eq!(global_payload["data"]["health"]["blob"]["backend"], "local");
+    assert_eq!(global_payload["data"]["health"]["blob"]["connected"], true);
+
+    let slim_headers = slim_scope_headers(repo.path());
+    let slim_headers_ref = slim_headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let (slim_status, slim_payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql",
+        "application/json",
+        &slim_headers_ref,
+        Body::from(
+            r#"{"query":"{ defaultBranch health { blob { backend connected } } }"}"#,
+        ),
+    )
+    .await;
+
+    assert_eq!(slim_status, StatusCode::OK);
+    assert_eq!(slim_payload["data"]["defaultBranch"], "main");
+    assert_eq!(slim_payload["data"]["health"]["blob"]["backend"], "local");
+    assert_eq!(slim_payload["data"]["health"]["blob"]["connected"], true);
 }
 
 #[tokio::test]
@@ -388,13 +462,18 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
             }
         }),
     );
-    let context = crate::graphql::DevqlGraphqlContext::new(
+    let context = crate::graphql::DevqlGraphqlContext::for_slim_request(
         repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        Some("main".to_string()),
+        None,
+        None,
+        true,
         super::super::db::DashboardDbPools::default(),
     );
     let mut progress_rx = context.subscriptions().subscribe_progress();
     let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
-    let schema = crate::graphql::build_schema(context);
+    let schema = crate::graphql::build_slim_schema(context);
 
     let response = schema
         .execute(async_graphql::Request::new(

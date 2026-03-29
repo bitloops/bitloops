@@ -18,7 +18,7 @@ impl DevqlGraphqlContext {
         agent: Option<&str>,
         since: Option<&DateTimeScalar>,
     ) -> Result<Vec<Checkpoint>> {
-        let repo_root = self.repo_root.clone();
+        let repo_root = self.repo_root_for_scope(scope)?;
         let scope = scope.clone();
         let agent = agent.map(str::to_string);
         let since = since.cloned();
@@ -66,17 +66,18 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn list_commit_checkpoints(
         &self,
+        scope: &ResolverScope,
         commit_sha: &str,
     ) -> Result<Vec<Checkpoint>> {
-        let repo_root = self.repo_root.clone();
-        let repo_id = self.repo_identity.repo_id.clone();
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let repo_id = self.repo_id_for_scope(scope)?;
         let commit_sha = commit_sha.to_string();
         let sqlite_path = self
             .backend_config
             .as_ref()
             .context("store backend configuration unavailable")?
             .relational
-            .resolve_sqlite_db_path_for_repo(&self.repo_root)
+            .resolve_sqlite_db_path_for_repo(&self.config_root)
             .context("resolving SQLite path for commit checkpoints")?;
 
         task::spawn_blocking(move || -> Result<Vec<Checkpoint>> {

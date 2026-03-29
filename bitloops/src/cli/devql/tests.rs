@@ -283,7 +283,7 @@ fn devql_run_init_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "initSchema": {
@@ -339,7 +339,7 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "ingest": {
@@ -448,7 +448,7 @@ fn devql_run_knowledge_add_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "addKnowledge": {
@@ -501,7 +501,7 @@ fn devql_run_knowledge_associate_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "associateKnowledge": {
@@ -549,7 +549,7 @@ fn devql_run_knowledge_refresh_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "refreshKnowledge": {

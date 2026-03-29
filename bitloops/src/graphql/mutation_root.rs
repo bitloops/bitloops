@@ -179,11 +179,14 @@ impl MutationRoot {
             ));
         }
 
-        let cfg = ctx
-            .data_unchecked::<DevqlGraphqlContext>()
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "ingest", err))?;
+        let cfg = context
             .devql_config()
             .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
-        let observer = GraphqlIngestionObserver::new(ctx.data_unchecked::<DevqlGraphqlContext>());
+        let observer = GraphqlIngestionObserver::new(context);
         let summary = crate::host::devql::execute_ingest_with_observer(
             &cfg,
             input.init,
@@ -200,6 +203,11 @@ impl MutationRoot {
         ctx: &Context<'_>,
         input: AddKnowledgeInput,
     ) -> Result<AddKnowledgeMutationResult> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .require_repo_write_scope()
+            .map_err(|err| {
+                operation_error("BAD_USER_INPUT", "validation", "addKnowledge", err)
+            })?;
         let url = require_non_empty_input(input.url, "url", "addKnowledge")?;
         let commit_ref = normalise_optional_input(input.commit_ref, "commitRef", "addKnowledge")?;
         let payload: AddKnowledgeIngesterPayload = execute_knowledge_ingester(
@@ -249,6 +257,11 @@ impl MutationRoot {
         ctx: &Context<'_>,
         input: AssociateKnowledgeInput,
     ) -> Result<AssociateKnowledgeMutationResult> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .require_repo_write_scope()
+            .map_err(|err| {
+                operation_error("BAD_USER_INPUT", "validation", "associateKnowledge", err)
+            })?;
         let source_ref =
             require_non_empty_input(input.source_ref, "sourceRef", "associateKnowledge")?;
         let target_ref =
@@ -281,6 +294,11 @@ impl MutationRoot {
         ctx: &Context<'_>,
         input: RefreshKnowledgeInput,
     ) -> Result<RefreshKnowledgeMutationResult> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .require_repo_write_scope()
+            .map_err(|err| {
+                operation_error("BAD_USER_INPUT", "validation", "refreshKnowledge", err)
+            })?;
         let knowledge_ref =
             require_non_empty_input(input.knowledge_ref, "knowledgeRef", "refreshKnowledge")?;
         let payload: RefreshKnowledgeIngesterPayload = execute_knowledge_ingester(

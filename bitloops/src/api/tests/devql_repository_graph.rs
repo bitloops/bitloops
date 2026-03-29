@@ -437,6 +437,7 @@ async fn devql_repository_queries_handle_repos_without_checkpoint_storage() {
     .expect("update app.rs");
     git_ok(repo.path(), &["add", "app.rs"]);
     git_ok(repo.path(), &["commit", "-m", "Second commit"]);
+    seed_repository_catalog_row(repo.path(), SEEDED_REPO_NAME, "main");
 
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
         repo.path().to_path_buf(),
@@ -1781,4 +1782,82 @@ async fn devql_graphql_commit_loader_caches_within_a_request_and_resets_per_requ
     );
     let second_snapshot = context.loader_metrics_snapshot();
     assert_eq!(second_snapshot.commit_by_sha_batches, 2);
+}
+
+#[tokio::test]
+async fn devql_repository_branch_selector_applies_live_branch_scope() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                branch(name: "main") {
+                  defaultBranch
+                  commits(first: 1) {
+                    totalCount
+                    edges {
+                      node {
+                        branch
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["repo"]["branch"]["defaultBranch"], "main");
+    assert_eq!(json["repo"]["branch"]["commits"]["totalCount"], 2);
+    assert_eq!(json["repo"]["branch"]["commits"]["edges"][0]["node"]["branch"], "main");
+}
+
+#[tokio::test]
+async fn devql_global_queries_fail_cleanly_when_repo_checkout_is_unknown() {
+    let repo = seed_dashboard_repo();
+    let registry_dir = TempDir::new().expect("temp dir");
+    let unrelated_root = TempDir::new().expect("temp dir");
+    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
+        repo.path().to_path_buf(),
+        unrelated_root.path().to_path_buf(),
+        Some(registry_dir.path().join("repo-path-registry.json")),
+        super::super::db::DashboardDbPools::default(),
+    );
+    let schema = crate::graphql::build_schema(context);
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(first: 1) {
+                  totalCount
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    assert!(
+        response.errors[0]
+            .message
+            .contains("repo checkout unknown"),
+        "unexpected graphql errors: {:?}",
+        response.errors
+    );
 }

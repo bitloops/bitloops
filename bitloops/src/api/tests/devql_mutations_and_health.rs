@@ -1,17 +1,32 @@
 use super::*;
 
+fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
+    crate::graphql::build_slim_schema(crate::graphql::DevqlGraphqlContext::for_slim_request(
+        repo_root.to_path_buf(),
+        repo_root.to_path_buf(),
+        Some("main".to_string()),
+        None,
+        None,
+        true,
+        super::super::db::DashboardDbPools::default(),
+    ))
+}
+
 #[tokio::test]
 async fn devql_schema_builds_and_executes_in_process() {
     let temp = TempDir::new().expect("temp dir");
+    let repo_name = crate::host::devql::resolve_repo_identity(temp.path())
+        .expect("resolve repo identity")
+        .name;
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
         temp.path().to_path_buf(),
         super::super::db::DashboardDbPools::default(),
     ));
 
     let response = schema
-        .execute(async_graphql::Request::new(
-            r#"{ repo(name: "demo") { id name provider organization } }"#,
-        ))
+        .execute(async_graphql::Request::new(format!(
+            r#"{{ repo(name: "{repo_name}") {{ id name provider organization }} }}"#
+        )))
         .await;
 
     assert!(
@@ -21,7 +36,7 @@ async fn devql_schema_builds_and_executes_in_process() {
     );
 
     let json = response.data.into_json().expect("graphql data to json");
-    assert_eq!(json["repo"]["name"], "demo");
+    assert_eq!(json["repo"]["name"], repo_name);
     assert_eq!(json["repo"]["provider"], "local");
 }
 
@@ -30,10 +45,7 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let sqlite_path = checkpoint_sqlite_path(repo.path());
-    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
-        repo.path().to_path_buf(),
-        super::super::db::DashboardDbPools::default(),
-    ));
+    let schema = slim_schema_for_repo(repo.path());
 
     let init_response = schema
         .execute(async_graphql::Request::new(
@@ -138,10 +150,7 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
 async fn devql_mutations_report_validation_and_backend_errors() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
-    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
-        repo.path().to_path_buf(),
-        super::super::db::DashboardDbPools::default(),
-    ));
+    let schema = slim_schema_for_repo(repo.path());
 
     let invalid_input = schema
         .execute(async_graphql::Request::new(
@@ -251,10 +260,7 @@ async fn devql_mutations_manage_knowledge_and_apply_migrations() {
     update_seeded_jira_site_url(repo.path(), server.url.as_str());
     let sqlite_path = checkpoint_sqlite_path(repo.path());
     let duckdb_path = knowledge_duckdb_path(repo.path());
-    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
-        repo.path().to_path_buf(),
-        super::super::db::DashboardDbPools::default(),
-    ));
+    let schema = slim_schema_for_repo(repo.path());
 
     let apply_response = schema
         .execute(async_graphql::Request::new(
@@ -464,10 +470,7 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
         json!({ "errorMessages": ["provider boom"] }),
     )]);
     update_seeded_jira_site_url(repo.path(), server.url.as_str());
-    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
-        repo.path().to_path_buf(),
-        super::super::db::DashboardDbPools::default(),
-    ));
+    let schema = slim_schema_for_repo(repo.path());
 
     let provider_error = schema
         .execute(async_graphql::Request::new(format!(
@@ -535,6 +538,51 @@ async fn devql_mutations_surface_provider_and_reference_errors_for_knowledge_flo
     assert_eq!(
         reference_extensions.get("operation"),
         Some(&async_graphql::Value::from("associateKnowledge"))
+    );
+}
+
+#[tokio::test]
+async fn devql_global_repo_mutations_require_slim_cli_scope() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            mutation {
+              ingest(input: { init: true, maxCheckpoints: 1 }) {
+                success
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert_eq!(
+        extensions.get("kind"),
+        Some(&async_graphql::Value::from("validation"))
+    );
+    assert_eq!(
+        extensions.get("operation"),
+        Some(&async_graphql::Value::from("ingest"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("repo-scoped DevQL mutations require CLI repository scope")
     );
 }
 

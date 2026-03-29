@@ -369,6 +369,7 @@ mod tests {
 
     fn test_cfg(repo_root: &Path) -> DevqlConfig {
         DevqlConfig {
+            config_root: repo_root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
             repo: RepoIdentity {
                 provider: "github".to_string(),

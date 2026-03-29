@@ -41,12 +41,13 @@ LIMIT 1",
     pub(crate) async fn list_knowledge_items(
         &self,
         provider: Option<KnowledgeProvider>,
-        _scope: &ResolverScope,
+        scope: &ResolverScope,
     ) -> Result<Vec<KnowledgeItem>> {
         let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
+        let repo_id = self.repo_id_for_scope(scope)?;
         let mut conditions = vec![format!(
             "i.repo_id = '{}'",
-            esc_pg(self.repo_identity.repo_id.as_str())
+            esc_pg(&repo_id)
         )];
         if let Some(provider) = provider {
             conditions.push(format!(
@@ -66,21 +67,26 @@ ORDER BY i.updated_at DESC, i.knowledge_item_id DESC",
         );
 
         let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
-        rows.into_iter().map(knowledge_item_from_row).collect()
+        rows.into_iter()
+            .map(knowledge_item_from_row)
+            .map(|result| result.map(|item| item.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn list_knowledge_relations(
         &self,
+        scope: &ResolverScope,
         knowledge_item_id: &str,
     ) -> Result<Vec<KnowledgeRelation>> {
         let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = format!(
             "SELECT relation_assertion_id, source_knowledge_item_version_id, target_type, target_id, \
 target_knowledge_item_version_id, relation_type, association_method, confidence, provenance_json \
 FROM knowledge_relation_assertions \
 WHERE repo_id = '{}' AND knowledge_item_id = '{}' \
 ORDER BY created_at DESC, relation_assertion_id DESC",
-            esc_pg(self.repo_identity.repo_id.as_str()),
+            esc_pg(&repo_id),
             esc_pg(knowledge_item_id)
         );
 
@@ -180,7 +186,7 @@ ORDER BY knowledge_item_id ASC, created_at DESC, knowledge_item_version_id DESC"
             .as_ref()
             .context("store backend configuration unavailable")?
             .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root))
+            .resolve_duckdb_db_path_for_repo(&self.config_root))
     }
 
     async fn ensure_knowledge_sqlite_schema(&self) -> Result<PathBuf> {
@@ -212,6 +218,7 @@ fn knowledge_item_from_row(row: Value) -> Result<KnowledgeItem> {
             &row,
             "latest_knowledge_item_version_id",
         )?,
+        scope: crate::graphql::ResolverScope::default(),
     })
 }
 

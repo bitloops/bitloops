@@ -18,8 +18,7 @@ use crate::capability_packs::semantic_clones::{
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo, resolve_store_embedding_config,
-    resolve_store_semantic_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -521,7 +520,7 @@ async fn initialise_devql_schema_for_command(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -666,9 +665,10 @@ pub(crate) use self::ingestion_types::{
     IngestionProgressUpdate,
 };
 use self::query_executor::*;
-#[cfg(test)]
+pub(crate) use self::query_dsl_compiler::compile_devql_to_graphql_with_mode;
 pub(crate) use self::query_parser::parse_devql_query;
 use self::query_parser::*;
+pub(crate) use self::query_dsl_compiler::GraphqlCompileMode;
 pub(crate) use self::query_parser::{AsOfSelector as DevqlAsOfSelector, ParsedDevqlQuery};
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;

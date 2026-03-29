@@ -3,8 +3,6 @@ use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
 use crate::daemon::{self, DaemonMode};
-use crate::utils::paths;
-
 pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
 
 #[derive(Args, Debug, Clone, Default)]
@@ -15,18 +13,22 @@ pub struct DaemonArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DaemonCommand {
-    /// Start the Bitloops daemon for the current repository.
+    /// Start the global Bitloops daemon.
     Start(DaemonStartArgs),
-    /// Stop the Bitloops daemon for the current repository.
+    /// Stop the global Bitloops daemon.
     Stop(DaemonStopArgs),
-    /// Show Bitloops daemon status for the current repository.
+    /// Show global Bitloops daemon status.
     Status(DaemonStatusArgs),
-    /// Restart the Bitloops daemon for the current repository.
+    /// Restart the global Bitloops daemon.
     Restart(DaemonRestartArgs),
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct DaemonStartArgs {
+    /// Path to the Bitloops daemon config file.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+
     /// Start detached instead of holding the current terminal open.
     #[arg(
         short = 'd',
@@ -62,13 +64,25 @@ pub struct DaemonStartArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStopArgs {}
+pub struct DaemonStopArgs {
+    /// Path to the Bitloops daemon config file.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+}
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStatusArgs {}
+pub struct DaemonStatusArgs {
+    /// Path to the Bitloops daemon config file.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+}
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DaemonRestartArgs {}
+pub struct DaemonRestartArgs {
+    /// Path to the Bitloops daemon config file.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+}
 
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -84,11 +98,11 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 }
 
 pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
-    let repo_root = paths::repo_root()?;
+    let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
 
     if args.until_stopped {
-        let state = daemon::start_service(&repo_root, config).await?;
+        let state = daemon::start_service(&daemon_config, config).await?;
         println!(
             "Bitloops daemon started as an always-on service at {}",
             state.url
@@ -96,9 +110,9 @@ pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
         return Ok(());
     }
 
-    let report = daemon::status(&repo_root).await?;
+    let report = daemon::status().await?;
     if report.service.is_some() {
-        let state = daemon::start_service(&repo_root, config).await?;
+        let state = daemon::start_service(&daemon_config, config).await?;
         println!(
             "Bitloops daemon started under the always-on service at {}",
             state.url
@@ -107,33 +121,41 @@ pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
     }
 
     if args.detached {
-        let state = daemon::start_detached(&repo_root, config).await?;
+        let state = daemon::start_detached(&daemon_config, config).await?;
         println!("Bitloops daemon started in detached mode at {}", state.url);
         return Ok(());
     }
 
-    daemon::start_foreground(&repo_root, config, false, "Bitloops daemon").await
+    daemon::start_foreground(&daemon_config, config, false, "Bitloops daemon").await
 }
 
-pub async fn run_stop(_args: DaemonStopArgs) -> Result<()> {
-    let repo_root = paths::repo_root()?;
-    daemon::stop(&repo_root).await?;
+pub async fn run_stop(args: DaemonStopArgs) -> Result<()> {
+    if let Some(config_path) = args.config.as_deref() {
+        let _ = daemon::resolve_daemon_config(Some(config_path))?;
+    }
+    daemon::stop().await?;
     println!("Bitloops daemon stopped.");
     Ok(())
 }
 
-pub async fn run_status(_args: DaemonStatusArgs) -> Result<()> {
-    let repo_root = paths::repo_root()?;
-    let report = daemon::status(&repo_root).await?;
+pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
+    if let Some(config_path) = args.config.as_deref() {
+        let _ = daemon::resolve_daemon_config(Some(config_path))?;
+    }
+    let report = daemon::status().await?;
     for line in status_lines(&report) {
         println!("{line}");
     }
     Ok(())
 }
 
-pub async fn run_restart(_args: DaemonRestartArgs) -> Result<()> {
-    let repo_root = paths::repo_root()?;
-    let report = daemon::status(&repo_root).await?;
+pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
+    let requested_config: Option<daemon::ResolvedDaemonConfig> = args
+        .config
+        .as_deref()
+        .map(|config_path| daemon::resolve_daemon_config(Some(config_path)))
+        .transpose()?;
+    let report = daemon::status().await?;
 
     if report.service.is_none()
         && let Some(runtime) = report.runtime
@@ -147,24 +169,28 @@ pub async fn run_restart(_args: DaemonRestartArgs) -> Result<()> {
             recheck_local_dashboard_net: false,
             bundle_dir: Some(runtime.bundle_dir),
         };
-        daemon::stop(&repo_root).await?;
-        return daemon::start_foreground(&repo_root, config, false, "Bitloops daemon").await;
+        daemon::stop().await?;
+        let daemon_config = match requested_config {
+            Some(ref daemon_config) => daemon_config.clone(),
+            None => daemon::resolve_daemon_config(Some(runtime.config_path.as_path()))?,
+        };
+        return daemon::start_foreground(&daemon_config, config, false, "Bitloops daemon").await;
     }
 
-    let state = daemon::restart(&repo_root).await?;
+    let state = daemon::restart(requested_config.as_ref()).await?;
     println!("Bitloops daemon restarted at {}", state.url);
     Ok(())
 }
 
 pub async fn launch_dashboard() -> Result<()> {
-    let repo_root = paths::repo_root()?;
-    if let Some(url) = daemon::daemon_url(&repo_root)? {
+    if let Some(url) = daemon::daemon_url()? {
         crate::api::open_in_default_browser(&url)?;
         println!("Opened Bitloops dashboard at {url}");
         return Ok(());
     }
 
-    let report = daemon::status(&repo_root).await?;
+    let daemon_config = daemon::resolve_daemon_config(None)?;
+    let report = daemon::status().await?;
     let config = DashboardServerConfig {
         host: None,
         port: crate::api::DEFAULT_DASHBOARD_PORT,
@@ -175,7 +201,7 @@ pub async fn launch_dashboard() -> Result<()> {
     };
 
     if report.service.is_some() {
-        let state = daemon::start_service(&repo_root, config).await?;
+        let state = daemon::start_service(&daemon_config, config).await?;
         crate::api::open_in_default_browser(&state.url)?;
         println!("Opened Bitloops dashboard at {}", state.url);
         return Ok(());
@@ -189,16 +215,16 @@ pub async fn launch_dashboard() -> Result<()> {
 
     match choice {
         DaemonMode::Foreground => {
-            daemon::start_foreground(&repo_root, config, true, "Dashboard").await
+            daemon::start_foreground(&daemon_config, config, true, "Dashboard").await
         }
         DaemonMode::Detached => {
-            let state = daemon::start_detached(&repo_root, config).await?;
+            let state = daemon::start_detached(&daemon_config, config).await?;
             crate::api::open_in_default_browser(&state.url)?;
             println!("Opened Bitloops dashboard at {}", state.url);
             Ok(())
         }
         DaemonMode::Service => {
-            let state = daemon::start_service(&repo_root, config).await?;
+            let state = daemon::start_service(&daemon_config, config).await?;
             crate::api::open_in_default_browser(&state.url)?;
             println!("Opened Bitloops dashboard at {}", state.url);
             Ok(())
@@ -224,6 +250,7 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         lines.push("Bitloops daemon: running".to_string());
         lines.push(format!("Mode: {}", runtime.mode));
         lines.push(format!("URL: {}", runtime.url));
+        lines.push(format!("Config: {}", runtime.config_path.display()));
         lines.push(format!("PID: {}", runtime.pid));
         append_supervisor_lines(&mut lines, report);
         if let Some(health) = report.health.as_ref() {
@@ -235,6 +262,7 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     if let Some(service) = report.service.as_ref() {
         lines.push("Bitloops daemon: stopped".to_string());
         lines.push("Mode: always-on service".to_string());
+        lines.push(format!("Config: {}", service.config_path.display()));
         lines.push(format!(
             "Supervisor service: {} ({}, installed)",
             service.service_name, service.manager
@@ -363,7 +391,8 @@ mod tests {
             runtime: None,
             service: Some(DaemonServiceMetadata {
                 version: 1,
-                repo_root: std::path::PathBuf::from("/tmp/repo"),
+                config_path: std::path::PathBuf::from("/tmp/.bitloops/config.json"),
+                config_root: std::path::PathBuf::from("/tmp"),
                 manager: ServiceManagerKind::Launchd,
                 service_name: "com.bitloops.daemon".to_string(),
                 service_file: None,

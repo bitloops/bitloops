@@ -55,7 +55,11 @@ pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBa
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
     let repo_root = current_repo_root_or_cwd();
-    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_store_semantic_config_for_repo(&repo_root)
+}
+
+pub fn resolve_store_semantic_config_for_repo(repo_root: &Path) -> StoreSemanticConfig {
+    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
     resolve_semantic_from_unified(&settings, |key| env::var(key).ok())
 }
 
@@ -71,7 +75,11 @@ pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConf
 
 pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
     let repo_root = current_repo_root_or_cwd();
-    let settings = effective_settings_for_repo(&repo_root).unwrap_or_default();
+    resolve_store_embedding_config_for_repo(&repo_root)
+}
+
+pub fn resolve_store_embedding_config_for_repo(repo_root: &Path) -> StoreEmbeddingConfig {
+    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
     resolve_embedding_from_unified(&settings, |key| env::var(key).ok())
 }
 

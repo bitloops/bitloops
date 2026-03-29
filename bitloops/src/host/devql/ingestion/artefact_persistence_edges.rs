@@ -605,6 +605,7 @@ mod tests {
 
     fn sample_cfg() -> DevqlConfig {
         DevqlConfig {
+            config_root: PathBuf::from("."),
             repo_root: PathBuf::from("."),
             repo: RepoIdentity {
                 provider: "git".to_string(),

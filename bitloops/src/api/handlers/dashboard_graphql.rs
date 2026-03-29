@@ -244,7 +244,16 @@ async fn execute_dashboard_graphql<T: DeserializeOwned>(
 ) -> std::result::Result<T, ApiError> {
     let response = state
         .devql_schema()
-        .execute(GraphqlRequest::new(query).variables(Variables::from_json(variables)))
+        .execute(
+            GraphqlRequest::new(query)
+                .variables(Variables::from_json(variables))
+                .data(crate::graphql::DevqlGraphqlContext::for_global_request(
+                    state.config_root.clone(),
+                    state.repo_root.clone(),
+                    state.repo_registry_path.clone(),
+                    state.db.clone(),
+                )),
+        )
         .await;
 
     if let Some(error) = response.errors.first() {

@@ -16,6 +16,12 @@ use self::field_mapping::{
     quote_graphql_string, scalar_selections_for_leaf, tests_result_selections,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GraphqlCompileMode {
+    Global,
+    Slim,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RegisteredStageKind<'a> {
     Tests(&'a RegisteredStageCall),
@@ -26,12 +32,20 @@ pub(super) enum RegisteredStageKind<'a> {
 
 pub fn compile_devql_query_to_graphql(query: &str) -> Result<String> {
     let parsed = parse_devql_query(query)?;
-    compile_devql_to_graphql(&parsed)
+    compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Global)
 }
 
+#[cfg(test)]
 pub(crate) fn compile_devql_to_graphql(parsed: &ParsedDevqlQuery) -> Result<String> {
+    compile_devql_to_graphql_with_mode(parsed, GraphqlCompileMode::Global)
+}
+
+pub(crate) fn compile_devql_to_graphql_with_mode(
+    parsed: &ParsedDevqlQuery,
+    mode: GraphqlCompileMode,
+) -> Result<String> {
     let registered_stage = resolve_registered_stage(parsed)?;
-    validate_graphql_compiler_support(parsed, registered_stage)?;
+    validate_graphql_compiler_support(parsed, registered_stage, mode)?;
 
     let terminal_field = if should_compile_project_stage(parsed, registered_stage) {
         compile_project_stage_leaf(parsed, registered_stage.expect("checked above"))?
@@ -39,18 +53,22 @@ pub(crate) fn compile_devql_to_graphql(parsed: &ParsedDevqlQuery) -> Result<Stri
         compile_terminal_leaf(parsed, registered_stage)?
     };
 
-    let scoped_field = wrap_in_scopes(parsed, terminal_field);
-    let repo_name = parsed.repo.as_deref().unwrap_or("default");
-
-    Ok(GraphqlDocumentBuilder::new(vec![GraphqlField::new(
-        "repo",
-        vec![GraphqlArgument::new(
-            "name",
-            quote_graphql_string(repo_name),
-        )],
-        vec![scoped_field.into()],
-    )])
-    .build())
+    let scoped_field = wrap_in_scopes(parsed, terminal_field, mode);
+    Ok(match mode {
+        GraphqlCompileMode::Global => {
+            let repo_name = parsed.repo.as_deref().unwrap_or("default");
+            GraphqlDocumentBuilder::new(vec![GraphqlField::new(
+                "repo",
+                vec![GraphqlArgument::new(
+                    "name",
+                    quote_graphql_string(repo_name),
+                )],
+                vec![scoped_field.into()],
+            )])
+            .build()
+        }
+        GraphqlCompileMode::Slim => GraphqlDocumentBuilder::new(vec![scoped_field]).build(),
+    })
 }
 
 fn resolve_registered_stage(parsed: &ParsedDevqlQuery) -> Result<Option<RegisteredStageKind<'_>>> {
@@ -69,6 +87,7 @@ fn resolve_registered_stage(parsed: &ParsedDevqlQuery) -> Result<Option<Register
 fn validate_graphql_compiler_support(
     parsed: &ParsedDevqlQuery,
     registered_stage: Option<RegisteredStageKind<'_>>,
+    mode: GraphqlCompileMode,
 ) -> Result<()> {
     if parsed.file.is_some() && parsed.files_path.is_some() {
         bail!("file() cannot be combined with files() in one query");
@@ -154,7 +173,7 @@ fn validate_graphql_compiler_support(
         bail!("deps() after artefacts() is not yet supported by the GraphQL compiler");
     }
 
-    if parsed.has_telemetry_stage && parsed.project_path.is_some() {
+    if mode == GraphqlCompileMode::Global && parsed.has_telemetry_stage && parsed.project_path.is_some() {
         bail!("telemetry() does not support project() scoping in the GraphQL schema yet");
     }
 
@@ -455,7 +474,11 @@ fn compile_artefacts_leaf(
     ))
 }
 
-fn wrap_in_scopes(parsed: &ParsedDevqlQuery, terminal_field: GraphqlField) -> GraphqlField {
+fn wrap_in_scopes(
+    parsed: &ParsedDevqlQuery,
+    terminal_field: GraphqlField,
+    mode: GraphqlCompileMode,
+) -> GraphqlField {
     let mut current = terminal_field;
 
     if let Some(file) = parsed.file.as_deref() {
@@ -483,7 +506,9 @@ fn wrap_in_scopes(parsed: &ParsedDevqlQuery, terminal_field: GraphqlField) -> Gr
         );
     }
 
-    if let Some(project_path) = parsed.project_path.as_deref() {
+    if mode == GraphqlCompileMode::Global
+        && let Some(project_path) = parsed.project_path.as_deref()
+    {
         current = GraphqlField::new(
             "project",
             vec![GraphqlArgument::new(
