@@ -65,9 +65,9 @@ fn startup_mode_recheck_flag_forces_slow_probe() {
 }
 
 #[test]
-fn default_bundle_dir_uses_home_directory() {
-    let path = default_bundle_dir_from_home(Some(Path::new("/tmp/home")));
-    assert_eq!(path, PathBuf::from("/tmp/home/.bitloops/dashboard/bundle"));
+fn default_bundle_dir_uses_cache_directory() {
+    let path = default_bundle_dir_from_cache_dir(Some(Path::new("/tmp/cache/bitloops")));
+    assert_eq!(path, PathBuf::from("/tmp/cache/bitloops/dashboard/bundle"));
 }
 
 #[test]

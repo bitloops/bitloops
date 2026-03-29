@@ -24,6 +24,7 @@ fn executor_test_cfg() -> DevqlConfig {
         embedding_provider: None,
         embedding_model: None,
         embedding_api_key: None,
+        embedding_cache_dir: None,
     }
 }
 
@@ -50,24 +51,13 @@ fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
         std::fs::create_dir_all(parent).expect("create sqlite parent");
     }
     rusqlite::Connection::open(&sqlite_path).expect("create sqlite file");
-    let config_dir = repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_repo_daemon_config(
+        repo_root,
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
+    );
 }
 
 async fn sqlite_relational_with_sql(sql: &str) -> RelationalStorage {

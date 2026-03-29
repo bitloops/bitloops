@@ -1,7 +1,6 @@
 use super::*;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::test_support::process_state::enter_process_state;
-use serde_json::json;
 use tempfile::TempDir;
 
 fn write_daemon_test_config(config_root: &Path) -> PathBuf {
@@ -10,24 +9,15 @@ fn write_daemon_test_config(config_root: &Path) -> PathBuf {
     fs::create_dir_all(parent).expect("create config parent");
     fs::write(
         &config_path,
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": ".bitloops/stores/daemon.sqlite"
-                    },
-                    "events": {
-                        "duckdb_path": ".bitloops/stores/daemon.duckdb"
-                    },
-                    "blob": {
-                        "local_path": ".bitloops/blob-store"
-                    }
-                }
-            }
-        }))
-        .expect("serialise test config"),
+        r#"[stores.relational]
+sqlite_path = ".bitloops/stores/daemon.sqlite"
+
+[stores.events]
+duckdb_path = ".bitloops/stores/daemon.duckdb"
+
+[stores.blob]
+local_path = ".bitloops/blob-store"
+"#,
     )
     .expect("write test config");
     config_path
@@ -71,7 +61,7 @@ fn read_runtime_state_drops_stale_file() {
         &runtime_path,
         &DaemonRuntimeState {
             version: 1,
-            config_path: repo_root.join(".bitloops").join("config.json"),
+            config_path: repo_root.join("config.toml"),
             config_root: repo_root.to_path_buf(),
             pid: 999_999,
             mode: DaemonMode::Detached,
@@ -132,16 +122,25 @@ fn resolve_daemon_config_uses_explicit_config_path_independent_of_cwd() {
 }
 
 #[test]
-fn resolve_daemon_config_uses_local_dot_bitloops_config_by_default() {
+fn resolve_daemon_config_uses_default_global_config_path() {
     let config_root = TempDir::new().expect("temp dir");
-    let config_path = write_daemon_test_config(config_root.path());
-    let _guard = enter_process_state(Some(config_root.path()), &[]);
+    let other_cwd = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(other_cwd.path()),
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_test_config(&config_root.path().join("bitloops"));
 
     let resolved = resolve_daemon_config(None).expect("resolve daemon config");
     let canonical_root = config_root
         .path()
+        .join("bitloops")
         .canonicalize()
-        .unwrap_or_else(|_| config_root.path().to_path_buf());
+        .unwrap_or_else(|_| config_root.path().join("bitloops"));
 
     assert_eq!(
         resolved.config_path,

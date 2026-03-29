@@ -18,8 +18,30 @@ fn bitloops_bin() -> PathBuf {
 
 fn run_cmd(repo: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) =
-        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
+    let mut cmd = test_command_support::new_isolated_bitloops_command(&bin, repo, args);
+    run_cmd_with_prepared_command(&mut cmd, stdin)
+}
+
+fn run_cmd_with_app_paths(
+    workdir: &Path,
+    app_paths: &test_command_support::RepoAppPaths,
+    args: &[&str],
+    stdin: Option<&str>,
+) -> Output {
+    let bin = bitloops_bin();
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .current_dir(workdir)
+        .env_remove("BITLOOPS_DEVQL_PG_DSN")
+        .env_remove("BITLOOPS_DEVQL_CH_URL")
+        .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
+        .env_remove("BITLOOPS_DEVQL_CH_USER")
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+    test_command_support::apply_repo_app_paths(&mut cmd, app_paths);
+    run_cmd_with_prepared_command(&mut cmd, stdin)
+}
+
+fn run_cmd_with_prepared_command(cmd: &mut Command, stdin: Option<&str>) -> Output {
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn bitloops command");
@@ -58,12 +80,10 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     }
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
-    Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .env("PATH", path)
-        .output()
-        .expect("failed to run git")
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo).env("PATH", path);
+    test_command_support::apply_repo_app_env(&mut cmd, repo);
+    cmd.output().expect("failed to run git")
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -111,11 +131,25 @@ fn run_git_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
     out
 }
 
+fn run_git_without_hooks_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
+    let no_hooks_dir = test_command_support::isolated_repo_aux_dir(repo, "no-hooks");
+
+    let mut prefixed_args = Vec::with_capacity(args.len() + 2);
+    prefixed_args.push("-c");
+    let hooks_path_override = format!("core.hooksPath={}", no_hooks_dir.display());
+    prefixed_args.push(hooks_path_override.as_str());
+    prefixed_args.extend_from_slice(args);
+
+    run_git_expect_success(repo, &prefixed_args, context)
+}
+
 fn git_ref_exists(repo: &Path, reference: &str) -> bool {
     if reference == "refs/heads/bitloops/checkpoints/v1" {
-        return read_commit_checkpoint_mappings(repo)
-            .map(|m| !m.is_empty())
-            .unwrap_or(false);
+        return test_command_support::with_repo_app_env(repo, || {
+            read_commit_checkpoint_mappings(repo)
+                .map(|m| !m.is_empty())
+                .unwrap_or(false)
+        });
     }
     run_git_output(repo, &["show-ref", "--verify", "--quiet", reference])
         .status
@@ -127,13 +161,17 @@ fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
         let parts: Vec<&str> = path.split('/').collect();
         if parts.len() == 3 && parts[2] == "metadata.json" {
             let checkpoint_id = format!("{}{}", parts[0], parts[1]);
-            return read_committed(repo, &checkpoint_id)
-                .map(|summary| summary.is_some())
-                .unwrap_or(false);
+            return test_command_support::with_repo_app_env(repo, || {
+                read_committed(repo, &checkpoint_id)
+                    .map(|summary| summary.is_some())
+                    .unwrap_or(false)
+            });
         }
         if parts.len() == 4 && parts[2] == "0" && parts[3] == "metadata.json" {
             let checkpoint_id = format!("{}{}", parts[0], parts[1]);
-            return read_session_content(repo, &checkpoint_id, 0).is_ok();
+            return test_command_support::with_repo_app_env(repo, || {
+                read_session_content(repo, &checkpoint_id, 0).is_ok()
+            });
         }
     }
     run_git_output(repo, &["cat-file", "-e", &format!("{reference}:{path}")])
@@ -143,10 +181,12 @@ fn git_file_exists_in_ref(repo: &Path, reference: &str, path: &str) -> bool {
 
 fn checkpoint_id_for_commit(repo: &Path, rev: &str) -> Option<String> {
     let commit_sha = run_git(repo, &["rev-parse", rev]);
-    read_commit_checkpoint_mappings(repo)
-        .ok()?
-        .get(&commit_sha)
-        .cloned()
+    test_command_support::with_repo_app_env(repo, || {
+        read_commit_checkpoint_mappings(repo)
+            .ok()?
+            .get(&commit_sha)
+            .cloned()
+    })
 }
 
 fn checkpoint_shard(id: &str) -> (String, String) {
@@ -158,35 +198,36 @@ fn checkpoint_shard(id: &str) -> (String, String) {
 }
 
 fn checkpoint_id_for_rev(repo: &Path, rev: &str) -> Option<String> {
-    let mappings = read_commit_checkpoint_mappings(repo).ok()?;
-    let commit_sha = run_git(repo, &["rev-parse", rev]);
-    mappings.get(&commit_sha).cloned()
+    test_command_support::with_repo_app_env(repo, || {
+        let mappings = read_commit_checkpoint_mappings(repo).ok()?;
+        let commit_sha = run_git(repo, &["rev-parse", rev]);
+        mappings.get(&commit_sha).cloned()
+    })
 }
 
 fn all_checkpoint_ids_from_history(repo: &Path) -> Vec<String> {
-    let mappings = match read_commit_checkpoint_mappings(repo) {
-        Ok(m) => m,
-        Err(_) => return vec![],
-    };
-    let hashes = run_git(repo, &["log", "--format=%H"]);
-    hashes
-        .lines()
-        .filter_map(|hash| mappings.get(hash).cloned())
-        .collect()
-}
-
-fn read_json(path: &Path) -> Value {
-    let data = fs::read_to_string(path).expect("failed to read json file");
-    serde_json::from_str(&data).expect("failed to parse json file")
+    test_command_support::with_repo_app_env(repo, || {
+        let mappings = match read_commit_checkpoint_mappings(repo) {
+            Ok(m) => m,
+            Err(_) => return vec![],
+        };
+        let hashes = run_git(repo, &["log", "--format=%H"]);
+        hashes
+            .lines()
+            .filter_map(|hash| mappings.get(hash).cloned())
+            .collect()
+    })
 }
 
 fn session_state(repo: &Path, session_id: &str) -> Value {
-    let backend = create_session_backend_or_local(repo);
-    let state = backend
-        .load_session(session_id)
-        .expect("failed to load session state from backend")
-        .expect("expected session state to exist");
-    serde_json::to_value(state).expect("serialize session state")
+    test_command_support::with_repo_app_env(repo, || {
+        let backend = create_session_backend_or_local(repo);
+        let state = backend
+            .load_session(session_id)
+            .expect("failed to load session state from backend")
+            .expect("expected session state to exist");
+        serde_json::to_value(state).expect("serialize session state")
+    })
 }
 
 fn init_repo(repo: &Path) {
@@ -203,26 +244,22 @@ fn init_and_enable(repo: &Path) {
     let init_out = run_cmd(repo, &["init", "--agent", "claude-code"], None);
     assert_success(&init_out, "bitloops init --agent claude-code");
 
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
+    let out = run_cmd(repo, &["enable", "--agent", "claude-code"], None);
+    assert_success(&out, "bitloops enable --agent claude-code");
 
-    // Keep infrastructure files tracked so stash/pop scenarios do not conflict
-    // on .claude/.bitloops control files. Repo-local stores stay ignored.
+    // Keep agent infrastructure tracked so stash/pop scenarios do not conflict
+    // on .claude control files. Repo-local runtime state is no longer part of
+    // the default tracked footprint.
     run_git_expect_success(
         repo,
-        &["add", ".claude/settings.json", ".bitloops"],
-        "stage enable-generated infra files",
+        &["add", ".claude/settings.json"],
+        "stage enable-generated agent infra files",
     );
-    let commit_out = run_git_output(repo, &["commit", "-m", "seed bitloops infra files"]);
-    if !commit_out.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_out.stderr);
-        assert!(
-            stderr.contains("nothing to commit") || stderr.contains("no changes added to commit"),
-            "unexpected failure committing infra files\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&commit_out.stdout),
-            stderr
-        );
-    }
+    run_git_without_hooks_expect_success(
+        repo,
+        &["commit", "-m", "seed bitloops infra files"],
+        "commit bitloops infra files",
+    );
 }
 
 fn user_prompt_submit(repo: &Path, session_id: &str, transcript_path: &str, prompt: &str) {
@@ -330,14 +367,11 @@ fn next_transcript_uuid(prefix: &str) -> String {
 }
 
 fn set_strategy(repo: &Path, strategy: &str) {
-    let config_path = repo.join(".bitloops/config.json");
-    let mut config = read_json(&config_path);
-    config["settings"]["strategy"] = Value::String(strategy.to_string());
     fs::write(
-        config_path,
-        serde_json::to_string_pretty(&config).expect("serialize config"),
+        repo.join(".bitloops.toml"),
+        format!("[capture]\nstrategy = {strategy:?}\n"),
     )
-    .expect("write config");
+    .expect("write repo policy");
 }
 
 fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {
@@ -363,13 +397,13 @@ fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {
     }
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
-    let out = Command::new("git")
-        .args(["commit"])
+    let mut cmd = Command::new("git");
+    cmd.args(["commit"])
         .current_dir(repo)
         .env("PATH", path)
-        .env("GIT_EDITOR", &script)
-        .output()
-        .expect("run git commit with editor");
+        .env("GIT_EDITOR", &script);
+    test_command_support::apply_repo_app_env(&mut cmd, repo);
+    let out = cmd.output().expect("run git commit with editor");
     assert!(
         out.status.success(),
         "git commit with editor failed\nstdout:\n{}\nstderr:\n{}",
@@ -1449,13 +1483,15 @@ fn cli_1151_resume_in_relocated_repo() {
         &["commit", "-m", "commit relocated resume file"],
         "commit relocated resume file",
     );
+    let original_app_paths = test_command_support::repo_app_paths(&original_repo);
 
     let relocated_root = base.path().join("relocated").join("repo");
     fs::create_dir_all(relocated_root.parent().unwrap()).unwrap();
     fs::rename(&original_repo, &relocated_root).unwrap();
 
-    let out = run_cmd(
+    let out = run_cmd_with_app_paths(
         &relocated_root,
+        &original_app_paths,
         &["resume", "feature/e2e-test", "--force"],
         None,
     );

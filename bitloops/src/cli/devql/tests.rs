@@ -20,16 +20,35 @@ fn test_runtime() -> tokio::runtime::Runtime {
 }
 
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
-    let config_dir = repo_root.join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
+    let sqlite_path = settings["stores"]["relational"]["sqlite_path"]
+        .as_str()
+        .expect("relational sqlite path");
+    let duckdb_path = settings["stores"]["events"]["duckdb_path"]
+        .as_str()
+        .expect("events duckdb path");
+    let embedding_provider = settings["stores"]["embedding_provider"]
+        .as_str()
+        .expect("embedding provider");
+    let semantic_provider = settings["semantic"]["provider"]
+        .as_str()
+        .expect("semantic provider");
+
     fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": settings
-        }))
-        .expect("serialise config"),
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            r#"[stores]
+embedding_provider = {embedding_provider:?}
+
+[stores.relational]
+sqlite_path = {sqlite_path:?}
+
+[stores.events]
+duckdb_path = {duckdb_path:?}
+
+[semantic]
+provider = {semantic_provider:?}
+"#
+        ),
     )
     .expect("write config");
 }

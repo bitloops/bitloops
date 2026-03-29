@@ -1,4 +1,5 @@
 use super::*;
+use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
 
 pub(super) const SEEDED_REPO_NAME: &str = "demo";
 
@@ -37,19 +38,56 @@ pub(super) fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
     }
 }
 
+fn json_value_to_toml_item(value: &serde_json::Value) -> Item {
+    match value {
+        serde_json::Value::Null => Item::None,
+        serde_json::Value::Bool(value) => Item::Value(TomlValue::from(*value)),
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Item::Value(TomlValue::from(value))
+            } else if let Some(value) = number.as_u64() {
+                Item::Value(TomlValue::from(value as i64))
+            } else if let Some(value) = number.as_f64() {
+                Item::Value(TomlValue::from(value))
+            } else {
+                panic!("unsupported numeric config value: {number}");
+            }
+        }
+        serde_json::Value::String(value) => Item::Value(TomlValue::from(value.as_str())),
+        serde_json::Value::Array(values) => {
+            let mut array = Array::new();
+            for value in values {
+                let Item::Value(value) = json_value_to_toml_item(value) else {
+                    panic!("test config arrays must contain scalar values");
+                };
+                array.push(value);
+            }
+            Item::Value(TomlValue::Array(array))
+        }
+        serde_json::Value::Object(map) => {
+            let mut table = Table::new();
+            for (key, value) in map {
+                table[key] = json_value_to_toml_item(value);
+            }
+            Item::Table(table)
+        }
+    }
+}
+
+fn write_daemon_test_config(repo_root: &Path, settings: serde_json::Value) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let parent = config_path.parent().expect("config parent");
+    fs::create_dir_all(parent).expect("create config dir");
+
+    let mut doc = DocumentMut::new();
+    for (key, value) in settings.as_object().expect("top-level config object") {
+        doc[key] = json_value_to_toml_item(value);
+    }
+    fs::write(config_path, doc.to_string()).expect("write config");
+}
+
 pub(super) fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
-    let config_dir = repo_root.join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": settings
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_daemon_test_config(repo_root, settings);
 }
 
 pub(super) fn seed_repository_catalog_row(repo_root: &Path, repo_name: &str, default_branch: &str) {
@@ -74,15 +112,13 @@ pub(super) fn seed_repository_catalog_row(repo_root: &Path, repo_name: &str, def
 }
 
 pub(super) fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str) {
-    let config_path = repo_root.join(".bitloops").join("config.json");
-    let raw = fs::read(&config_path).expect("read config");
-    let mut config: Value = serde_json::from_slice(&raw).expect("parse config");
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let raw = fs::read_to_string(&config_path).expect("read config");
+    let mut config: Value = toml_edit::de::from_str(&raw).expect("parse config");
 
-    let settings = config
-        .get_mut("settings")
-        .and_then(Value::as_object_mut)
-        .expect("settings object");
-    let knowledge = settings
+    let knowledge = config
+        .as_object_mut()
+        .expect("config object")
         .entry("knowledge")
         .or_insert_with(|| json!({}))
         .as_object_mut()
@@ -99,11 +135,7 @@ pub(super) fn update_seeded_jira_site_url(repo_root: &Path, jira_site_url: &str)
         .expect("jira object");
     jira.insert("site_url".to_string(), json!(jira_site_url));
 
-    fs::write(
-        config_path,
-        serde_json::to_vec_pretty(&config).expect("serialise config"),
-    )
-    .expect("write config");
+    write_daemon_test_config(repo_root, config);
 }
 
 #[allow(clippy::too_many_arguments)]

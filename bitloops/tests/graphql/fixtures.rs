@@ -1,13 +1,12 @@
 use crate::test_harness_support::{
-    Workspace, prepare_graphql_workspace, seed_production_artefacts, write_rust_static_link_fixture,
+    Workspace, apply_repo_app_env, prepare_graphql_workspace, seed_production_artefacts,
+    write_rust_static_link_fixture,
 };
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tempfile::TempDir;
 
 pub struct SeededGraphqlWorkspace {
     pub workspace: Workspace,
@@ -16,17 +15,11 @@ pub struct SeededGraphqlWorkspace {
 
 struct DaemonGuard {
     workdir: PathBuf,
-    _home: TempDir,
-    xdg_config_home: PathBuf,
 }
 
 impl DaemonGuard {
     fn start(workdir: &Path) -> Self {
-        let home = TempDir::new().expect("create isolated home for daemon");
-        let xdg_config_home = home.path().join("xdg");
-        fs::create_dir_all(&xdg_config_home).expect("create isolated daemon xdg config home");
-
-        let status = daemon_command(workdir, home.path(), &xdg_config_home)
+        let status = daemon_command(workdir)
             .args([
                 "daemon",
                 "start",
@@ -43,13 +36,11 @@ impl DaemonGuard {
 
         Self {
             workdir: workdir.to_path_buf(),
-            _home: home,
-            xdg_config_home,
         }
     }
 
     fn stop(&self) {
-        let _ = daemon_command(&self.workdir, self._home.path(), &self.xdg_config_home)
+        let _ = daemon_command(&self.workdir)
             .args(["daemon", "stop"])
             .status();
     }
@@ -61,20 +52,13 @@ impl Drop for DaemonGuard {
     }
 }
 
-fn daemon_command(workdir: &Path, home: &Path, xdg_config_home: &Path) -> Command {
+fn daemon_command(workdir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bitloops"));
+    command.current_dir(workdir);
+    apply_repo_app_env(&mut command, workdir);
     command
-        .current_dir(workdir)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("XDG_CONFIG_HOME", xdg_config_home)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
-        .env(DISABLE_VERSION_CHECK_ENV, "1")
-        .env_remove("BITLOOPS_DEVQL_PG_DSN")
-        .env_remove("BITLOOPS_DEVQL_CH_URL")
-        .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
-        .env_remove("BITLOOPS_DEVQL_CH_USER")
-        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+        .env(DISABLE_VERSION_CHECK_ENV, "1");
     command
 }
 
@@ -92,22 +76,12 @@ pub fn seeded_rust_graphql_workspace(name: &str) -> SeededGraphqlWorkspace {
 }
 
 pub fn run_query_json(seeded: &SeededGraphqlWorkspace, args: &[&str]) -> Value {
-    serde_json::from_str(&run_bitloops_with_daemon_home_or_panic(
-        seeded.workspace.repo_dir(),
-        args,
-        seeded._daemon._home.path(),
-        &seeded._daemon.xdg_config_home,
-    ))
-    .expect("bitloops output should be valid JSON")
+    serde_json::from_str(&run_bitloops_or_panic(seeded.workspace.repo_dir(), args))
+        .expect("bitloops output should be valid JSON")
 }
 
-fn run_bitloops_with_daemon_home_or_panic(
-    workdir: &Path,
-    args: &[&str],
-    home: &Path,
-    xdg_config_home: &Path,
-) -> String {
-    let output = daemon_command(workdir, home, xdg_config_home)
+fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
+    let output = daemon_command(workdir)
         .args(args)
         .output()
         .expect("execute bitloops command");

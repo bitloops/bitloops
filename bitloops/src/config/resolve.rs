@@ -40,12 +40,6 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
         return Ok((loaded.root, loaded.settings));
     }
 
-    let legacy_json = repo_root.join(".bitloops").join("config.json");
-    if legacy_json.is_file() {
-        let loaded = load_daemon_settings(Some(&legacy_json))?;
-        return Ok((loaded.root, loaded.settings));
-    }
-
     Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
 }
 
@@ -55,10 +49,8 @@ pub fn resolve_dashboard_config() -> DashboardFileConfig {
 }
 
 pub fn resolve_dashboard_config_for_repo(repo_root: &Path) -> DashboardFileConfig {
-    let settings = daemon_settings_for_repo(repo_root)
-        .map(|(_, settings)| settings)
-        .unwrap_or_default();
-    resolve_dashboard_from_unified(&settings)
+    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    resolve_dashboard_from_unified(&settings, &config_root)
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {
@@ -109,10 +101,8 @@ pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
 }
 
 pub fn resolve_store_embedding_config_for_repo(repo_root: &Path) -> StoreEmbeddingConfig {
-    let settings = daemon_settings_for_repo(repo_root)
-        .map(|(_, settings)| settings)
-        .unwrap_or_default();
-    resolve_embedding_from_unified(&settings, |key| env::var(key).ok())
+    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    resolve_embedding_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -322,6 +312,7 @@ where
 
 pub(crate) fn resolve_store_embedding_config_with<F>(
     file_cfg: StoreFileConfig,
+    config_root: &Path,
     env_lookup: F,
 ) -> StoreEmbeddingConfig
 where
@@ -339,6 +330,10 @@ where
         embedding_provider,
         embedding_model,
         embedding_api_key,
+        embedding_cache_dir: file_cfg
+            .embedding_cache_dir
+            .as_deref()
+            .map(|path| resolve_configured_path(path, config_root)),
     }
 }
 
@@ -402,7 +397,8 @@ pub(crate) fn resolve_store_embedding_config_for_tests(
     file_cfg: StoreFileConfig,
     env: &[(&str, &str)],
 ) -> StoreEmbeddingConfig {
-    resolve_store_embedding_config_with(file_cfg, |key| {
+    let config_root = std::path::Path::new("/repo");
+    resolve_store_embedding_config_with(file_cfg, config_root, |key| {
         env.iter().find_map(|(k, v)| {
             if *k == key {
                 Some((*v).to_string())

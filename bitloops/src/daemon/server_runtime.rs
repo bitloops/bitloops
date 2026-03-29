@@ -162,11 +162,6 @@ pub(super) fn install_or_update_repo_service_binding(
     config: DashboardServerConfig,
 ) -> Result<DaemonServiceMetadata> {
     let existing = read_service_metadata(daemon_config.config_root.as_path())?;
-    if let Some(existing) = existing.as_ref()
-        && existing.service_name != GLOBAL_SUPERVISOR_SERVICE_NAME
-    {
-        cleanup_legacy_repo_service(existing)?;
-    }
     let metadata = DaemonServiceMetadata {
         version: 1,
         config_path: daemon_config.config_path.clone(),
@@ -183,69 +178,6 @@ pub(super) fn install_or_update_repo_service_binding(
         &metadata,
     )?;
     Ok(metadata)
-}
-
-pub(super) fn cleanup_legacy_repo_service(metadata: &DaemonServiceMetadata) -> Result<()> {
-    match metadata.manager {
-        ServiceManagerKind::Launchd => {
-            let domain_target = launchd_domain_target()?;
-            let mut command = Command::new("launchctl");
-            command.arg("bootout").arg(&domain_target);
-            if let Some(path) = metadata.service_file.as_ref() {
-                command.arg(path);
-            } else {
-                command.arg(format!("{domain_target}/{}", metadata.service_name));
-            }
-            let _ = command
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            if let Some(path) = metadata.service_file.as_ref() {
-                let _ = fs::remove_file(path);
-            }
-        }
-        ServiceManagerKind::SystemdUser => {
-            let _ = Command::new("systemctl")
-                .arg("--user")
-                .arg("stop")
-                .arg(&metadata.service_name)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            let _ = Command::new("systemctl")
-                .arg("--user")
-                .arg("disable")
-                .arg(&metadata.service_name)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            if let Some(path) = metadata.service_file.as_ref() {
-                let _ = fs::remove_file(path);
-            }
-            let _ = Command::new("systemctl")
-                .arg("--user")
-                .arg("daemon-reload")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-        ServiceManagerKind::WindowsTask => {
-            let _ = Command::new("schtasks")
-                .arg("/Delete")
-                .arg("/TN")
-                .arg(&metadata.service_name)
-                .arg("/F")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) -> Result<()> {

@@ -117,18 +117,8 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
 }
 
 fn parse_daemon_config_text(data: &str, path: &Path) -> Result<DaemonTomlFile> {
-    match from_str::<DaemonTomlFile>(data) {
-        Ok(file) => Ok(file),
-        Err(err) => {
-            #[cfg(test)]
-            {
-                if let Ok(value) = serde_json::from_str::<Value>(data) {
-                    return Ok(legacy_json_to_daemon_file(value));
-                }
-            }
-            Err(err).with_context(|| format!("parsing Bitloops daemon config {}", path.display()))
-        }
-    }
+    from_str::<DaemonTomlFile>(data)
+        .with_context(|| format!("parsing Bitloops daemon config {}", path.display()))
 }
 
 pub fn ensure_daemon_config_exists() -> Result<PathBuf> {
@@ -229,37 +219,11 @@ fn default_daemon_config_toml() -> String {
 }
 
 fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
-    if !doc[key].is_table() {
-        doc[key] = Item::Table(Table::new());
+    let root = doc.as_table_mut();
+    if !root.contains_key(key) || !root[key].is_table() {
+        root.insert(key, Item::Table(Table::new()));
     }
-    doc[key]
+    root[key]
         .as_table_mut()
         .expect("TOML item should be a table after initialisation")
-}
-
-#[cfg(test)]
-fn legacy_json_to_daemon_file(value: Value) -> DaemonTomlFile {
-    let settings = value.get("settings").cloned().unwrap_or(value);
-
-    DaemonTomlFile {
-        runtime: RuntimeToml {
-            local_dev: settings
-                .get("local_dev")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        },
-        telemetry: TelemetryToml {
-            enabled: settings.get("telemetry").and_then(Value::as_bool),
-        },
-        logging: LoggingToml {
-            level: settings
-                .get("log_level")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-        },
-        stores: settings.get("stores").cloned(),
-        knowledge: settings.get("knowledge").cloned(),
-        semantic: settings.get("semantic").cloned(),
-        dashboard: settings.get("dashboard").cloned(),
-    }
 }

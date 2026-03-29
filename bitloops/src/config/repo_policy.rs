@@ -201,18 +201,8 @@ fn resolve_import_path(root: &Path, import_path: &str) -> PathBuf {
 }
 
 fn parse_policy_text(raw: &str, path: &Path) -> Result<RepoPolicyTomlFile> {
-    match from_str::<RepoPolicyTomlFile>(raw) {
-        Ok(file) => Ok(file),
-        Err(err) => {
-            #[cfg(test)]
-            {
-                if let Ok(value) = serde_json::from_str::<Value>(raw) {
-                    return Ok(legacy_json_to_repo_policy(value));
-                }
-            }
-            Err(err).with_context(|| format!("parsing Bitloops repo policy {}", path.display()))
-        }
-    }
+    from_str::<RepoPolicyTomlFile>(raw)
+        .with_context(|| format!("parsing Bitloops repo policy {}", path.display()))
 }
 
 fn merge_optional_values(base: Option<Value>, overlay: Option<Value>) -> Value {
@@ -309,30 +299,5 @@ fn canonicalize_value(value: &Value) -> Value {
         }
         Value::Array(values) => Value::Array(values.iter().map(canonicalize_value).collect()),
         _ => value.clone(),
-    }
-}
-
-#[cfg(test)]
-fn legacy_json_to_repo_policy(value: Value) -> RepoPolicyTomlFile {
-    let settings = value.get("settings").cloned().unwrap_or(value);
-    let mut capture = Map::new();
-    if let Some(enabled) = settings.get("enabled").cloned() {
-        capture.insert("enabled".into(), enabled);
-    }
-    if let Some(strategy) = settings.get("strategy").cloned() {
-        capture.insert("strategy".into(), strategy);
-    }
-    if let Some(strategy_options) = settings.get("strategy_options").and_then(Value::as_object) {
-        for (key, value) in strategy_options {
-            capture.insert(key.clone(), value.clone());
-        }
-    }
-
-    RepoPolicyTomlFile {
-        capture: (!capture.is_empty()).then_some(Value::Object(capture)),
-        watch: settings.get("watch").cloned(),
-        scope: settings.get("scope").cloned(),
-        agents: settings.get("agents").cloned(),
-        imports: RepoPolicyImports::default(),
     }
 }

@@ -5,8 +5,8 @@ use super::{
     ApiPage, DashboardServerConfig, DashboardStartupMode, DashboardState, DashboardTransport,
     GIT_FIELD_SEPARATOR, GIT_RECORD_SEPARATOR, ServeMode, branch_is_excluded, browser_host_for_url,
     build_branch_commit_log_args, canonical_agent_key, dashboard_user,
-    default_bundle_dir_from_home, expand_tilde_with_home, format_dashboard_url, has_bundle_index,
-    paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
+    default_bundle_dir_from_cache_dir, expand_tilde_with_home, format_dashboard_url,
+    has_bundle_index, paginate, parse_branch_commit_log, parse_numstat_output, resolve_bundle_file,
     select_startup_mode, warning_block_lines,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo, repo_local_blob_root};

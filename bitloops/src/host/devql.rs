@@ -513,6 +513,7 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
         embedding_provider: cfg.embedding_provider.clone(),
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
+        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
     }
 }
 

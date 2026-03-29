@@ -1,102 +1,57 @@
 ---
-sidebar_position: 7
+sidebar_position: 5
 title: Connecting Knowledge Sources
 ---
 
 # Connecting Knowledge Sources
 
-Bitloops can ingest context from external sources — GitHub, Jira, and Confluence — and associate it with your codebase. This gives AI agents access to the "why" behind your code: the requirements, discussions, and decisions that shaped it.
+Knowledge source setup is now split in two:
 
-## GitHub
+- Global daemon config stores provider credentials and endpoints
+- Repo policy imports point the thin CLI at repo-specific knowledge definitions
 
-### Configuration
+## 1. Configure Provider Credentials
 
-Add GitHub as a knowledge provider in `.bitloops/config.json`:
+Add provider credentials to the global daemon config:
 
-```json
-{
-  "knowledge": {
-    "providers": {
-      "github": {
-        "token": "${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
+```toml title="config.toml"
+[knowledge.providers.github]
+token = "${GITHUB_TOKEN}"
+
+[knowledge.providers.atlassian]
+site_url = "https://example.atlassian.net"
+email = "${ATLASSIAN_EMAIL}"
+token = "${ATLASSIAN_TOKEN}"
 ```
 
-Set your GitHub token as an environment variable:
+## 2. Create A Repo Knowledge File
+
+```toml title="bitloops/knowledge.toml"
+[sources.github]
+repositories = ["bitloops/bitloops"]
+labels = ["devql", "documentation"]
+
+[sources.atlassian]
+spaces = ["ENG", "DOCS"]
+projects = ["BIT"]
+```
+
+## 3. Import It From Repo Policy
+
+```toml title=".bitloops.toml"
+[imports]
+knowledge = ["bitloops/knowledge.toml"]
+```
+
+## 4. Ingest Knowledge
 
 ```bash
-export GITHUB_TOKEN=ghp_your_token_here
+bitloops devql knowledge ingest github
+bitloops devql knowledge ingest atlassian
 ```
 
-### Ingesting Issues and PRs
+## Notes
 
-```bash
-# Ingest a specific issue
-bitloops devql ingest --knowledge-url https://github.com/org/repo/issues/123
-
-# Ingest a pull request
-bitloops devql ingest --knowledge-url https://github.com/org/repo/pull/456
-```
-
-## Jira
-
-### Configuration
-
-```json
-{
-  "knowledge": {
-    "providers": {
-      "jira": {
-        "site_url": "https://your-org.atlassian.net",
-        "email": "${ATLASSIAN_EMAIL}",
-        "token": "${ATLASSIAN_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### Ingesting Jira Tickets
-
-```bash
-bitloops devql ingest --knowledge-url https://your-org.atlassian.net/browse/PROJ-123
-```
-
-## Confluence
-
-### Configuration
-
-```json
-{
-  "knowledge": {
-    "providers": {
-      "confluence": {
-        "site_url": "https://your-org.atlassian.net",
-        "email": "${ATLASSIAN_EMAIL}",
-        "token": "${ATLASSIAN_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### Ingesting Confluence Pages
-
-```bash
-bitloops devql ingest --knowledge-url https://your-org.atlassian.net/wiki/spaces/SPACE/pages/12345
-```
-
-## Environment Variable Interpolation
-
-Notice the `${VAR_NAME}` syntax in the configuration. Bitloops resolves these at runtime from your environment variables. This keeps secrets out of your configuration file while allowing the config to be committed to git.
-
-## Knowledge Versioning
-
-Ingested knowledge is associated with a specific version of your codebase. This means:
-
-- Knowledge stays relevant to the code it was captured with
-- As your code evolves, you can re-ingest to keep context current
-- AI agents get version-appropriate context, not stale information
+- Imported knowledge files resolve relative to the policy file that declares them
+- Repo policy affects the config fingerprint sent by the CLI
+- Provider authentication remains global and should not be committed to repo policy

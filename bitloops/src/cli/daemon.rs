@@ -98,6 +98,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 }
 
 pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
+    print_legacy_repo_data_warnings();
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
 
@@ -146,6 +147,9 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
     for line in status_lines(&report) {
         println!("{line}");
     }
+    for line in legacy_repo_data_warnings() {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -183,6 +187,7 @@ pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
 }
 
 pub async fn launch_dashboard() -> Result<()> {
+    print_legacy_repo_data_warnings();
     if let Some(url) = daemon::daemon_url()? {
         crate::api::open_in_default_browser(&url)?;
         println!("Opened Bitloops dashboard at {url}");
@@ -341,6 +346,43 @@ fn append_health_lines(lines: &mut Vec<String>, health: &daemon::DaemonHealthSum
     }
 }
 
+fn print_legacy_repo_data_warnings() {
+    for line in legacy_repo_data_warnings() {
+        eprintln!("{line}");
+    }
+}
+
+fn legacy_repo_data_warnings() -> Vec<String> {
+    let Some(repo_root) = crate::utils::paths::repo_root().ok() else {
+        return Vec::new();
+    };
+
+    let legacy_paths = [
+        repo_root.join(".bitloops").join("stores"),
+        repo_root.join(".bitloops").join("embeddings"),
+        repo_root.join(".bitloops").join("tmp"),
+        repo_root.join(".bitloops").join("metadata"),
+    ];
+    let found: Vec<_> = legacy_paths
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect();
+    if found.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::with_capacity(found.len() + 1);
+    lines.push(
+        "Warning: legacy repo-local Bitloops data was found and is ignored unless you configure those paths explicitly in the daemon config.".to_string(),
+    );
+    lines.extend(
+        found
+            .into_iter()
+            .map(|path| format!("Legacy path: {}", path.display())),
+    );
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +433,7 @@ mod tests {
             runtime: None,
             service: Some(DaemonServiceMetadata {
                 version: 1,
-                config_path: std::path::PathBuf::from("/tmp/.bitloops/config.json"),
+                config_path: std::path::PathBuf::from("/tmp/bitloops/config.toml"),
                 config_root: std::path::PathBuf::from("/tmp"),
                 manager: ServiceManagerKind::Launchd,
                 service_name: "com.bitloops.daemon".to_string(),
@@ -416,7 +458,7 @@ mod tests {
             vec![
                 "Bitloops daemon: stopped".to_string(),
                 "Mode: always-on service".to_string(),
-                "Config: /tmp/.bitloops/config.json".to_string(),
+                "Config: /tmp/bitloops/config.toml".to_string(),
                 "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
                 "Supervisor state: stopped".to_string(),
                 "Last URL: https://127.0.0.1:5173".to_string(),

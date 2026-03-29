@@ -626,6 +626,7 @@ mod tests {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 

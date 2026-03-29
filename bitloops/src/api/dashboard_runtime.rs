@@ -128,7 +128,10 @@ pub(super) async fn run(
         }
     };
 
-    let bundle_dir = resolve_bundle_dir(config.bundle_dir.as_deref());
+    let bundle_dir = resolve_bundle_dir(
+        config.bundle_dir.as_deref(),
+        dashboard_cfg.bundle_dir.as_deref(),
+    );
     let serve_mode = if has_bundle_index(&bundle_dir) {
         ServeMode::Bundle(bundle_dir.clone())
     } else {

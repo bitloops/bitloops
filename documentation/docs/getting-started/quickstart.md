@@ -5,47 +5,94 @@ title: Quickstart
 
 # Quickstart
 
-Installing Bitloops is very simple. Its a CLI that works in the background. 
+This quickstart assumes you want the new daemon-first Bitloops setup.
+
+If you are coming from the old JSON and repo-local storage model, read the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).
 
 ## 1. Install Bitloops
 
-There are few installation options:
-
-**Via curl**
+Choose one install method:
 
 ```bash
 curl -fsSL https://bitloops.com/install.sh | bash
 ```
 
-**Or via Homebrew:**
 ```bash
 brew tap bitloops/tap && brew install bitloops
 ```
 
-**Or via Cargo:**
 ```bash
 cargo install bitloops
 ```
 
-## 2. Initialize Bitloops
-
-Simply:
+## 2. Initialise The Daemon Config
 
 ```bash
 bitloops init
 ```
 
-That's it. 
+This creates the global daemon config at the platform config location, for example `~/.config/bitloops/config.toml` on Linux.
 
-We do ask you if you don't mind sharing anonymous usage data to help us improve Bitloops. No code or personal info collected.
-Press Y and we'll virtually high-five you!
+## 3. Enable A Repository
 
-## 3. Enable Bitloops
-
-This one is tricky.... type:
+From inside a git repository:
 
 ```bash
 bitloops enable
 ```
 
-That's it. Bitloops is now working in the background, capturing your discussions with AI agents, and building an intelligence layer automatically that you or your AI agents can access whenever you want!
+This installs git hooks and supported agent hooks for that repository.
+
+## 4. Add Optional Repo Policy
+
+Create `.bitloops.toml` at the repo root if you want shared capture policy:
+
+```toml title=".bitloops.toml"
+[capture]
+enabled = true
+strategy = "manual-commit"
+
+[watch]
+watch_debounce_ms = 750
+watch_poll_fallback_ms = 2500
+```
+
+Use `.bitloops.local.toml` for local-only overrides.
+
+## 5. Start Or Open Bitloops
+
+Open the dashboard:
+
+```bash
+bitloops dashboard
+```
+
+Or start the daemon yourself:
+
+```bash
+bitloops start
+bitloops start -d
+bitloops start --until-stopped
+```
+
+## 6. Initialise DevQL Storage
+
+```bash
+bitloops devql init
+```
+
+Then ingest and query:
+
+```bash
+bitloops devql ingest
+bitloops devql query "files changed last 7 days"
+```
+
+## 7. Check Status
+
+```bash
+bitloops status
+bitloops checkpoints status --detailed
+```
+
+`bitloops status` reports daemon status. `bitloops checkpoints status` reports repo capture status and shows the resolved policy root and fingerprint.

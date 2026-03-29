@@ -57,6 +57,7 @@ pub struct StoreEmbeddingConfig {
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
+    pub embedding_cache_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +160,7 @@ pub struct StoreFileConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
+    pub(crate) embedding_cache_dir: Option<String>,
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
     pub(crate) blob_s3_region: Option<String>,
@@ -171,6 +173,7 @@ pub struct StoreFileConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DashboardFileConfig {
     pub local_dashboard: Option<DashboardLocalDashboardConfig>,
+    pub bundle_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

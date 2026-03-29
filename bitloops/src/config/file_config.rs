@@ -13,8 +13,7 @@ use super::types::{
 };
 
 impl StoreFileConfig {
-    /// Load config from `<repo>/.bitloops/config.json`.
-    /// Returns default if the file is missing or invalid.
+    /// Load store config from the active daemon configuration.
     pub fn load() -> Self {
         Self::load_for_repo(&current_repo_root_or_cwd())
     }
@@ -79,6 +78,7 @@ impl StoreFileConfig {
             ),
             embedding_model: read_any_string(root, &["embedding_model", ENV_EMBEDDING_MODEL]),
             embedding_api_key: read_any_string(root, &["embedding_api_key", ENV_EMBEDDING_API_KEY]),
+            embedding_cache_dir: read_any_string(root, &["embedding_cache_dir"]),
             blob_local_path: read_any_string_opt(blobs, &["local_path"])
                 .or_else(|| read_any_string(root, &["blob_local_path"])),
             blob_s3_bucket: read_any_string_opt(blobs, &["s3_bucket"])
@@ -98,8 +98,7 @@ impl StoreFileConfig {
 }
 
 impl DashboardFileConfig {
-    /// Load dashboard config from `<repo>/.bitloops/config.json`.
-    /// Returns default if the file is missing or invalid.
+    /// Load dashboard config from the active daemon configuration.
     pub fn load() -> Self {
         load_daemon_settings(None)
             .ok()
@@ -109,9 +108,13 @@ impl DashboardFileConfig {
     }
 
     /// Parse dashboard config from a JSON value.
-    /// Reads the nested `dashboard` object.
+    /// Accepts either the nested `dashboard` object or a root object containing it.
     pub fn from_json_value(value: &Value) -> Self {
-        let Some(root) = value.get(DASHBOARD_CONFIG_KEY).and_then(Value::as_object) else {
+        let Some(root) = value
+            .get(DASHBOARD_CONFIG_KEY)
+            .and_then(Value::as_object)
+            .or_else(|| value.as_object())
+        else {
             return Self::default();
         };
 
@@ -123,7 +126,10 @@ impl DashboardFileConfig {
             })
             .filter(|local| local.tls.is_some());
 
-        Self { local_dashboard }
+        Self {
+            local_dashboard,
+            bundle_dir: read_any_string(root, &["bundle_dir"]).map(Into::into),
+        }
     }
 }
 

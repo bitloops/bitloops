@@ -29,6 +29,7 @@ pub struct DevqlConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
+    pub(crate) embedding_cache_dir: Option<PathBuf>,
 }
 
 impl DevqlConfig {
@@ -67,6 +68,7 @@ impl DevqlConfig {
             embedding_provider: embedding_cfg.embedding_provider,
             embedding_model: embedding_cfg.embedding_model,
             embedding_api_key: embedding_cfg.embedding_api_key,
+            embedding_cache_dir: embedding_cfg.embedding_cache_dir,
         })
     }
 
@@ -198,6 +200,7 @@ mod tests {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 

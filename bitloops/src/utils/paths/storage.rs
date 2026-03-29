@@ -1,10 +1,16 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(test))]
-use crate::utils::platform_dirs::bitloops_data_dir;
 use crate::utils::platform_dirs::bitloops_state_dir;
+#[cfg(not(test))]
+use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
+#[cfg(not(test))]
+use sha2::{Digest, Sha256};
 
 use super::constants::{BITLOOPS_METADATA_DIR, EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME};
+
+fn platform_path_fallback(category: &str) -> PathBuf {
+    std::env::temp_dir().join("bitloops").join(category)
+}
 
 pub fn session_metadata_dir_from_session_id(session_id: &str) -> String {
     format!("{BITLOOPS_METADATA_DIR}/{session_id}")
@@ -22,7 +28,7 @@ pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
 #[cfg(not(test))]
 pub fn default_relational_db_path(_repo_root: &Path) -> PathBuf {
     bitloops_data_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .unwrap_or_else(|_| platform_path_fallback("data"))
         .join("stores")
         .join("relational")
         .join(RELATIONAL_DB_FILE_NAME)
@@ -40,7 +46,7 @@ pub fn default_events_db_path(repo_root: &Path) -> PathBuf {
 #[cfg(not(test))]
 pub fn default_events_db_path(_repo_root: &Path) -> PathBuf {
     bitloops_data_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .unwrap_or_else(|_| platform_path_fallback("data"))
         .join("stores")
         .join("event")
         .join(EVENTS_DB_FILE_NAME)
@@ -54,7 +60,7 @@ pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
 #[cfg(not(test))]
 pub fn default_blob_store_path(_repo_root: &Path) -> PathBuf {
     bitloops_data_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .unwrap_or_else(|_| platform_path_fallback("data"))
         .join("stores")
         .join("blob")
 }
@@ -69,16 +75,41 @@ pub fn default_embedding_model_cache_dir(repo_root: &Path) -> PathBuf {
 
 #[cfg(not(test))]
 pub fn default_embedding_model_cache_dir(_repo_root: &Path) -> PathBuf {
-    bitloops_data_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+    bitloops_cache_dir()
+        .unwrap_or_else(|_| platform_path_fallback("cache"))
         .join("embeddings")
         .join("models")
 }
 
 pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
     bitloops_state_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .unwrap_or_else(|_| platform_path_fallback("state"))
         .join("daemon")
+}
+
+#[cfg(test)]
+pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join(".bitloops").join("tmp")
+}
+
+#[cfg(not(test))]
+pub fn default_session_tmp_dir(repo_root: &Path) -> PathBuf {
+    default_runtime_state_dir(repo_root)
+        .join("repos")
+        .join(repo_state_key(repo_root))
+        .join("tmp")
+}
+
+#[cfg(not(test))]
+fn repo_state_key(repo_root: &Path) -> String {
+    let canonical = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
+    digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
 }
 
 pub fn extract_session_id_from_transcript_path(transcript_path: &str) -> String {

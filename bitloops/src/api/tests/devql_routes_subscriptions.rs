@@ -2,6 +2,9 @@ use super::*;
 
 fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
+    let fingerprint = crate::config::discover_repo_policy(repo_root)
+        .expect("discover repo policy")
+        .fingerprint;
     vec![
         (
             crate::devql_transport::HEADER_SCOPE_REPO_ID.to_string(),
@@ -34,6 +37,10 @@ fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
         (
             crate::devql_transport::HEADER_SCOPE_GIT_DIR_RELATIVE_PATH.to_string(),
             ".git".to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_CONFIG_FINGERPRINT.to_string(),
+            fingerprint,
         ),
     ]
 }

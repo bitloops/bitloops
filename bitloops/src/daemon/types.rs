@@ -273,7 +273,7 @@ pub(super) fn global_daemon_dir() -> Result<PathBuf> {
 
 pub(super) fn global_daemon_dir_fallback() -> PathBuf {
     crate::utils::platform_dirs::bitloops_state_dir()
-        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
         .join("daemon")
 }
 

@@ -60,7 +60,13 @@ fn run_enable(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
 #[test]
 fn run_enable_sets_enabled_true() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": false}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = false
+"#,
+    );
 
     let mut out = Vec::new();
     run_enable(dir.path(), &mut out).unwrap();
@@ -81,7 +87,13 @@ fn run_enable_sets_enabled_true() {
 #[test]
 fn run_enable_already_enabled() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_enable(dir.path(), &mut out).unwrap();
@@ -94,9 +106,18 @@ fn run_enable_already_enabled() {
 }
 
 #[test]
-fn run_disable_sets_enabled_false() {
+fn run_disable_removes_installed_hooks_without_editing_policy() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
+    git_hooks::install_git_hooks(dir.path(), false).unwrap();
+    codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, false).unwrap();
@@ -106,17 +127,29 @@ fn run_disable_sets_enabled_false() {
         output.contains("disabled"),
         "output should mention 'disabled': {output}"
     );
-
     assert!(
-        !settings::is_enabled(dir.path()).unwrap(),
-        "Bitloops should be disabled after run_disable"
+        git_command()
+            .arg("rev-parse")
+            .current_dir(dir.path())
+            .status()
+            .is_ok(),
+        "sanity check git command should still work"
     );
+    assert!(!git_hooks::is_git_hook_installed(dir.path()));
+    assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(settings::is_enabled(dir.path()).unwrap());
 }
 
 #[test]
 fn run_disable_already_disabled() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": false}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = false
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, false).unwrap();
@@ -144,7 +177,12 @@ fn check_disabled_guard_test() {
     );
 
     // Settings with enabled: true → not disabled
-    setup_settings(&dir, r#"{"enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
     let mut out = Vec::new();
     assert!(
         !check_disabled_guard(dir.path(), &mut out),
@@ -152,7 +190,12 @@ fn check_disabled_guard_test() {
     );
 
     // Settings with enabled: false → disabled
-    setup_settings(&dir, r#"{"enabled": false}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = false
+"#,
+    );
     let mut out = Vec::new();
     assert!(
         check_disabled_guard(dir.path(), &mut out),
@@ -170,63 +213,84 @@ fn check_disabled_guard_test() {
 }
 
 #[test]
-fn run_disable_with_local_settings() {
+fn run_disable_leaves_local_policy_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
-    setup_local_settings(&dir, r#"{"enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
+    setup_local_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, false).unwrap();
 
-    let merged = load_settings(dir.path()).unwrap();
-    assert!(!merged.enabled, "merged settings should be disabled");
-
     let local_content = fs::read_to_string(settings_local_path(dir.path())).unwrap();
     assert!(
-        local_content.contains("\"enabled\": false"),
-        "local settings should be updated: {local_content}"
+        local_content.contains("enabled = true"),
+        "local policy should remain unchanged: {local_content}"
     );
 }
 
 #[test]
-fn run_disable_with_project_flag() {
+fn run_disable_with_project_flag_leaves_policy_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
-    setup_local_settings(&dir, r#"{"enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
+    setup_local_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, true).unwrap();
 
     let project_content = fs::read_to_string(settings_path(dir.path())).unwrap();
     assert!(
-        project_content.contains("\"enabled\": false"),
-        "project settings should be disabled: {project_content}"
+        project_content.contains("enabled = true"),
+        "shared policy should remain unchanged: {project_content}"
     );
 
     let local_content = fs::read_to_string(settings_local_path(dir.path())).unwrap();
     assert!(
-        local_content.contains("\"enabled\": true"),
+        local_content.contains("enabled = true"),
         "local settings should remain untouched: {local_content}"
     );
 }
 
 #[test]
-fn run_disable_creates_local_settings_when_missing() {
+fn run_disable_does_not_create_local_policy_when_missing() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, false).unwrap();
 
-    let local_content = fs::read_to_string(settings_local_path(dir.path())).unwrap();
-    assert!(
-        local_content.contains("\"enabled\": false"),
-        "local settings should be created and disabled: {local_content}"
-    );
+    assert!(!settings_local_path(dir.path()).exists());
 
     let project_content = fs::read_to_string(settings_path(dir.path())).unwrap();
     assert!(
-        project_content.contains("\"enabled\": true"),
+        project_content.contains("enabled = true"),
         "project settings should remain enabled: {project_content}"
     );
 }
@@ -270,99 +334,68 @@ fn determine_settings_target_settings_not_exists_no_flags() {
 }
 
 #[test]
-fn run_enable_with_strategy_preserves_existing_settings() {
+fn run_enable_with_strategy_rewrites_repo_policy() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     setup_settings(
         &dir,
-        r#"{"strategy":"manual-commit","enabled":true,"strategy_options":{"push":true,"some_other_option":"value"}}"#,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+push = true
+some_other_option = "value"
+"#,
     );
 
     run_enable_with_strategy(dir.path(), "auto-commit", false, false).unwrap();
 
     let merged = load_settings(dir.path()).unwrap();
     assert_eq!(merged.strategy, "auto-commit");
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("push")
-            .and_then(|v| v.as_bool()),
-        Some(true),
-        "strategy_options.push should be preserved"
-    );
-    assert_eq!(
-        merged
-            .strategy_options
-            .get("some_other_option")
-            .and_then(|v| v.as_str()),
-        Some("value"),
-        "strategy_options.some_other_option should be preserved"
-    );
+    assert!(merged.enabled);
+    assert!(merged.strategy_options.is_empty());
 }
 
 #[test]
-fn setup_bitloops_dir_writes_all_required_gitignore_entries() {
+fn setup_bitloops_dir_creates_directory() {
     let dir = tempfile::tempdir().unwrap();
 
     setup_bitloops_dir(dir.path()).unwrap();
 
-    let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore"))
-        .expect("expected .bitloops/.gitignore to exist");
-
-    for required in [
-        "tmp/",
-        "config.local.json",
-        "metadata/",
-        "logs/",
-        "stores/",
-        "embeddings/",
-    ] {
-        assert!(
-            gitignore.contains(required),
-            "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"
-        );
-    }
+    assert!(dir.path().join(SETTINGS_DIR).is_dir());
 }
 
 #[test]
-fn setup_bitloops_dir_preserves_existing_gitignore_content() {
+fn setup_bitloops_dir_preserves_existing_files() {
     let dir = tempfile::tempdir().unwrap();
     let bitloops_dir = dir.path().join(SETTINGS_DIR);
     fs::create_dir_all(&bitloops_dir).unwrap();
-    fs::write(
-        bitloops_dir.join(".gitignore"),
-        "custom-entry/\nconfig.local.json\n",
-    )
-    .unwrap();
+    fs::write(bitloops_dir.join("marker.txt"), "marker").unwrap();
 
     setup_bitloops_dir(dir.path()).unwrap();
 
-    let gitignore = fs::read_to_string(bitloops_dir.join(".gitignore")).unwrap();
-    assert!(
-        gitignore.contains("custom-entry/"),
-        "existing content should be preserved:\n{gitignore}"
+    assert_eq!(
+        fs::read_to_string(bitloops_dir.join("marker.txt")).unwrap(),
+        "marker"
     );
-    for required in [
-        "tmp/",
-        "config.local.json",
-        "metadata/",
-        "logs/",
-        "stores/",
-        "embeddings/",
-    ] {
-        assert!(
-            gitignore.contains(required),
-            "missing required entry {required} in .bitloops/.gitignore:\n{gitignore}"
-        );
-    }
 }
 
 #[test]
 fn run_enable_with_strategy_preserves_local_settings() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    setup_settings(&dir, r#"{"strategy":"manual-commit","enabled":true}"#);
-    setup_local_settings(&dir, r#"{"strategy_options":{"push":true}}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
+    setup_local_settings(
+        &dir,
+        r#"[capture]
+push = true
+"#,
+    );
 
     run_enable_with_strategy(dir.path(), "auto-commit", true, false).unwrap();
 
@@ -396,7 +429,12 @@ fn run_uninstall_force_nothing_installed() {
 fn run_uninstall_force_removes_bitloops_directory() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    setup_settings(&dir, r#"{"enabled":true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
     assert!(dir.path().join(SETTINGS_DIR).exists());
 
     let mut out = Vec::new();
@@ -415,7 +453,12 @@ fn run_uninstall_force_removes_bitloops_directory() {
 fn run_uninstall_force_removes_git_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    setup_settings(&dir, r#"{"enabled":true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
     git_hooks::install_git_hooks(dir.path(), false).unwrap();
     assert!(
         git_hooks::is_git_hook_installed(dir.path()),
@@ -438,7 +481,12 @@ fn run_uninstall_force_removes_git_hooks() {
 fn run_uninstall_force_removes_codex_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    setup_settings(&dir, r#"{"enabled":true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = true
+"#,
+    );
 
     codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
     assert!(
@@ -491,7 +539,12 @@ fn is_fully_enabled_not_enabled() {
 #[test]
 fn is_fully_enabled_settings_disabled() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"enabled":false}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+enabled = false
+"#,
+    );
     let (enabled, _, _) = is_fully_enabled(dir.path());
     assert!(!enabled, "disabled settings should not be fully enabled");
 }
@@ -799,7 +852,7 @@ fn enable_args_accepts_legacy_agent_flag() {
 }
 
 #[test]
-fn run_enable_without_agent_does_not_initialize_agents() {
+fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     with_repo_cwd(dir.path(), || {
@@ -811,17 +864,20 @@ fn run_enable_without_agent_does_not_initialize_agents() {
         })
         .unwrap();
 
-        assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(dir.path().join(".claude/settings.json").exists());
         assert!(!dir.path().join(".codex/hooks.json").exists());
         assert!(!dir.path().join(".cursor/hooks.json").exists());
         assert!(!dir.path().join(".gemini/settings.json").exists());
         assert!(!dir.path().join(".opencode/plugins/bitloops.ts").exists());
         assert!(git_hooks::is_git_hook_installed(dir.path()));
+        let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
+        assert!(exclude.contains(".bitloops.local.toml"));
+        assert!(exclude.contains(".bitloops/"));
     });
 }
 
 #[test]
-fn run_enable_with_legacy_agent_flag_still_does_not_initialize_agents() {
+fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     with_repo_cwd(dir.path(), || {
@@ -833,7 +889,7 @@ fn run_enable_with_legacy_agent_flag_still_does_not_initialize_agents() {
         })
         .unwrap();
 
-        assert!(!dir.path().join(".cursor/hooks.json").exists());
+        assert!(dir.path().join(".cursor/hooks.json").exists());
         assert!(!dir.path().join(".claude/settings.json").exists());
         assert!(!dir.path().join(".codex/hooks.json").exists());
         assert!(git_hooks::is_git_hook_installed(dir.path()));
@@ -878,34 +934,34 @@ fn initialized_agents_detects_copilot() {
     });
 }
 
-// ── CLI-1469: unified config file pair ──────────────────────────────────
+// ── repo policy and exclude handling ──────────────────────────────────
 
 #[test]
-fn unified_config_gitignore_includes_config_local_json() {
+fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
     let dir = tempfile::tempdir().unwrap();
-    setup_bitloops_dir(dir.path()).unwrap();
+    setup_git_repo(&dir);
+    ensure_repo_local_policy_excluded(dir.path()).unwrap();
 
-    let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore")).unwrap();
-    assert!(
-        gitignore.contains("config.local.json"),
-        ".bitloops/.gitignore must include config.local.json:\n{gitignore}"
-    );
+    let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains(".bitloops.local.toml"));
+    assert!(exclude.contains(".bitloops/"));
 }
 
 #[test]
-fn unified_config_gitignore_excludes_settings_local_json() {
+fn repo_local_policy_exclude_does_not_add_legacy_names() {
     let dir = tempfile::tempdir().unwrap();
-    setup_bitloops_dir(dir.path()).unwrap();
+    setup_git_repo(&dir);
+    ensure_repo_local_policy_excluded(dir.path()).unwrap();
 
-    let gitignore = fs::read_to_string(dir.path().join(SETTINGS_DIR).join(".gitignore")).unwrap();
+    let gitignore = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(
         !gitignore.contains("settings.local.json"),
-        ".bitloops/.gitignore must not include legacy settings.local.json:\n{gitignore}"
+        "git exclude must not include legacy settings.local.json:\n{gitignore}"
     );
 }
 
 #[test]
-fn unified_config_enable_creates_config_json() {
+fn enable_does_not_create_shared_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -919,18 +975,11 @@ fn unified_config_enable_creates_config_json() {
         .unwrap();
     });
 
-    assert!(
-        dir.path().join(".bitloops/config.json").exists(),
-        "enable must create .bitloops/config.json"
-    );
-    assert!(
-        !dir.path().join(".bitloops/settings.json").exists(),
-        "enable must not create legacy .bitloops/settings.json"
-    );
+    assert!(!settings_path(dir.path()).exists());
 }
 
 #[test]
-fn unified_config_enable_local_creates_config_local_json() {
+fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
@@ -944,72 +993,74 @@ fn unified_config_enable_local_creates_config_local_json() {
         .unwrap();
     });
 
-    assert!(
-        dir.path().join(".bitloops/config.local.json").exists(),
-        "enable --local must create .bitloops/config.local.json"
-    );
-    assert!(
-        !dir.path().join(".bitloops/settings.local.json").exists(),
-        "enable --local must not create legacy .bitloops/settings.local.json"
-    );
+    assert!(!settings_local_path(dir.path()).exists());
 }
 
 #[test]
-fn unified_config_disable_writes_config_local_json() {
+fn disable_does_not_create_local_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, false).unwrap();
 
-    assert!(
-        dir.path().join(".bitloops/config.local.json").exists(),
-        "disable must write to .bitloops/config.local.json"
-    );
+    assert!(!settings_local_path(dir.path()).exists());
 }
 
 #[test]
-fn unified_config_disable_project_writes_config_json() {
+fn disable_with_project_flag_does_not_rewrite_shared_repo_policy() {
     let dir = tempfile::tempdir().unwrap();
-    setup_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = true
+"#,
+    );
 
     let mut out = Vec::new();
     run_disable(dir.path(), &mut out, true).unwrap();
 
-    let content = fs::read_to_string(dir.path().join(".bitloops/config.json"))
-        .expect("disable --project must write to .bitloops/config.json");
+    let content =
+        fs::read_to_string(settings_path(dir.path())).expect("shared policy should still exist");
     assert!(
-        content.contains("\"enabled\": false"),
-        "config.json should have enabled: false, got: {content}"
+        content.contains("enabled = true"),
+        "shared repo policy should remain unchanged, got: {content}"
     );
 }
 
 #[test]
-fn unified_config_determine_target_returns_config_json_paths() {
+fn repo_policy_determine_target_returns_toml_policy_paths() {
     let dir = tempfile::tempdir().unwrap();
 
-    // No flags, no existing file → config.json
+    // No flags, no existing file → .bitloops.toml
     let (path, _) = determine_settings_target(dir.path(), false, false);
     let filename = path.file_name().unwrap().to_str().unwrap();
     assert_eq!(
-        filename, "config.json",
-        "default target should be config.json, got: {filename}"
+        filename, ".bitloops.toml",
+        "default target should be .bitloops.toml, got: {filename}"
     );
 
-    // Explicit --local → config.local.json
+    // Explicit --local → .bitloops.local.toml
     let (path, _) = determine_settings_target(dir.path(), true, false);
     let filename = path.file_name().unwrap().to_str().unwrap();
     assert_eq!(
-        filename, "config.local.json",
-        "--local target should be config.local.json, got: {filename}"
+        filename, ".bitloops.local.toml",
+        "--local target should be .bitloops.local.toml, got: {filename}"
     );
 
-    // Explicit --project → config.json
+    // Explicit --project → .bitloops.toml
     let (path, _) = determine_settings_target(dir.path(), false, true);
     let filename = path.file_name().unwrap().to_str().unwrap();
     assert_eq!(
-        filename, "config.json",
-        "--project target should be config.json, got: {filename}"
+        filename, ".bitloops.toml",
+        "--project target should be .bitloops.toml, got: {filename}"
     );
 }
 

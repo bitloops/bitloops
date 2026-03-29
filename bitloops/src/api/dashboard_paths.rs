@@ -1,9 +1,11 @@
-use super::{DEFAULT_BUNDLE_RELATIVE_DIR, DashboardTransport};
+use super::DashboardTransport;
 use anyhow::{Context, Result, anyhow};
 use std::env;
 use std::ffi::OsStr;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
+
+use crate::utils::platform_dirs::bitloops_cache_dir;
 
 pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Option<PathBuf> {
     let mut relative = PathBuf::new();
@@ -51,22 +53,29 @@ pub(super) fn content_type_for_path(path: &Path) -> &'static str {
     }
 }
 
-pub(super) fn resolve_bundle_dir(bundle_arg: Option<&Path>) -> PathBuf {
+pub(super) fn resolve_bundle_dir(
+    bundle_arg: Option<&Path>,
+    configured_bundle_dir: Option<&Path>,
+) -> PathBuf {
     bundle_arg
         .map(expand_tilde)
+        .or_else(|| configured_bundle_dir.map(expand_tilde))
         .unwrap_or_else(default_bundle_dir)
 }
 
 fn default_bundle_dir() -> PathBuf {
-    let home = env::var_os("HOME").map(PathBuf::from);
-    default_bundle_dir_from_home(home.as_deref())
+    default_bundle_dir_from_cache_dir(bitloops_cache_dir().ok().as_deref())
 }
 
-pub(super) fn default_bundle_dir_from_home(home: Option<&Path>) -> PathBuf {
-    if let Some(home) = home {
-        home.join(DEFAULT_BUNDLE_RELATIVE_DIR)
+pub(super) fn default_bundle_dir_from_cache_dir(cache_dir: Option<&Path>) -> PathBuf {
+    if let Some(cache_dir) = cache_dir {
+        cache_dir.join("dashboard").join("bundle")
     } else {
-        PathBuf::from(DEFAULT_BUNDLE_RELATIVE_DIR)
+        std::env::temp_dir()
+            .join("bitloops")
+            .join("cache")
+            .join("dashboard")
+            .join("bundle")
     }
 }
 

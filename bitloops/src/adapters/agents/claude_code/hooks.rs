@@ -8,9 +8,6 @@ use std::path::{Path, PathBuf};
 
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
-/// Deny rule that blocks Claude from reading Bitloops session metadata.
-pub const METADATA_DENY_RULE: &str = "Read(./.bitloops/metadata/**)";
-
 /// Prefix that identifies a Bitloops-managed hook command.
 const BITLOOPS_HOOK_PREFIX: &str = "bitloops ";
 
@@ -158,12 +155,6 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
 
-    // Preserve unknown permission fields (e.g., "ask", "customField").
-    let mut raw_permissions: Map<String, Value> = raw_settings
-        .get("permissions")
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-
     // Parse only the 6 hook types we manage.
     let mut session_start = parse_hook_type(&raw_hooks, "SessionStart");
     let mut session_end = parse_hook_type(&raw_hooks, "SessionEnd");
@@ -213,21 +204,7 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
         count += 1;
     }
 
-    // Add metadata deny rule to permissions.deny if not already present.
-    let mut deny_rules: Vec<String> = raw_permissions
-        .get("deny")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-
-    let permissions_changed = if !deny_rules.contains(&METADATA_DENY_RULE.to_string()) {
-        deny_rules.push(METADATA_DENY_RULE.to_string());
-        raw_permissions.insert("deny".into(), serde_json::to_value(&deny_rules).unwrap());
-        true
-    } else {
-        false
-    };
-
-    if count == 0 && !permissions_changed {
+    if count == 0 {
         return Ok(0); // Nothing changed — skip writing.
     }
 
@@ -239,7 +216,6 @@ pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
     set_hook_type(&mut raw_hooks, "PostToolUse", post_tool_use);
 
     raw_settings.insert("hooks".into(), Value::Object(raw_hooks));
-    raw_settings.insert("permissions".into(), Value::Object(raw_permissions));
 
     write_settings_file(&settings_path, &raw_settings)?;
     Ok(count)
@@ -282,27 +258,6 @@ pub fn uninstall_hooks(repo_root: &Path) -> Result<()> {
         raw_settings.remove("hooks");
     } else {
         raw_settings.insert("hooks".into(), Value::Object(raw_hooks));
-    }
-
-    // Remove our deny rule from permissions.deny.
-    let perms_is_empty = if let Some(Value::Object(perms)) = raw_settings.get_mut("permissions") {
-        if let Some(deny_val) = perms.get("deny")
-            && let Ok(mut rules) = serde_json::from_value::<Vec<String>>(deny_val.clone())
-        {
-            rules.retain(|r| r != METADATA_DENY_RULE);
-            if rules.is_empty() {
-                perms.remove("deny");
-            } else {
-                perms.insert("deny".into(), serde_json::to_value(&rules).unwrap());
-            }
-        }
-        perms.is_empty()
-    } else {
-        false
-    };
-
-    if perms_is_empty {
-        raw_settings.remove("permissions");
     }
 
     write_settings_file(&settings_path, &raw_settings)?;
@@ -393,35 +348,34 @@ mod tests {
         panic!("{description} not found (matcher={matcher_name:?}, command={command:?})");
     }
 
-    // ── permissions.deny tests ────────────────────────────────────────────────
+    // ── permissions preservation tests ────────────────────────────────────────
 
     #[test]
-    fn install_hooks_adds_deny_rule_fresh_install() {
+    fn install_hooks_does_not_write_permissions_fresh_install() {
         let dir = tempfile::tempdir().unwrap();
         install_hooks(dir.path(), false).unwrap();
 
-        let (_, deny) = read_permissions(&dir);
+        let (allow, deny) = read_permissions(&dir);
+        let path = dir.path().join(".claude/settings.json");
+        let data = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&data).unwrap();
         assert!(
-            deny.contains(&METADATA_DENY_RULE.to_string()),
-            "deny should contain our rule, got: {deny:?}"
+            v.get("permissions").is_none(),
+            "fresh install should not create a permissions block"
         );
+        assert!(allow.is_empty());
+        assert!(deny.is_empty());
     }
 
     #[test]
-    fn install_hooks_deny_rule_idempotent() {
+    fn install_hooks_permissions_are_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         install_hooks(dir.path(), false).unwrap();
         install_hooks(dir.path(), false).unwrap();
 
-        let (_, deny) = read_permissions(&dir);
-        let count = deny
-            .iter()
-            .filter(|r| r.as_str() == METADATA_DENY_RULE)
-            .count();
-        assert_eq!(
-            count, 1,
-            "deny rule should appear exactly once, got: {deny:?}"
-        );
+        let (allow, deny) = read_permissions(&dir);
+        assert!(allow.is_empty(), "allow rules should remain empty");
+        assert!(deny.is_empty(), "deny rules should remain empty");
     }
 
     #[test]
@@ -435,10 +389,7 @@ mod tests {
             deny.contains(&"Bash(rm -rf *)".to_string()),
             "user rule preserved"
         );
-        assert!(
-            deny.contains(&METADATA_DENY_RULE.to_string()),
-            "our rule added"
-        );
+        assert_eq!(deny.len(), 1, "no Bitloops deny rule should be added");
     }
 
     #[test]
@@ -457,12 +408,9 @@ mod tests {
     }
 
     #[test]
-    fn install_hooks_skips_existing_deny_rule() {
+    fn install_hooks_preserves_existing_deny_rules() {
         let dir = tempfile::tempdir().unwrap();
-        write_claude_settings(
-            &dir,
-            &format!(r#"{{"permissions": {{"deny": ["{METADATA_DENY_RULE}"]}}}}"#),
-        );
+        write_claude_settings(&dir, r#"{"permissions": {"deny": ["Read(secrets/**)"]}}"#);
         install_hooks(dir.path(), false).unwrap();
 
         let (_, deny) = read_permissions(&dir);
@@ -471,6 +419,7 @@ mod tests {
             1,
             "should still have exactly 1 deny rule, got: {deny:?}"
         );
+        assert_eq!(deny[0], "Read(secrets/**)");
     }
 
     #[test]
@@ -507,10 +456,7 @@ mod tests {
 
         let (allow, deny) = read_permissions(&dir);
         assert_eq!(allow, vec!["Read(**)"], "allow should be preserved");
-        assert!(
-            deny.contains(&METADATA_DENY_RULE.to_string()),
-            "deny rule added"
-        );
+        assert!(deny.is_empty(), "deny rules should remain unchanged");
     }
 
     // ── uninstall tests ───────────────────────────────────────────────────────
@@ -560,34 +506,26 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_hooks_removes_deny_rule() {
+    fn uninstall_hooks_leaves_permissions_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        install_hooks(dir.path(), false).unwrap();
-
-        let (_, deny) = read_permissions(&dir);
-        assert!(
-            deny.contains(&METADATA_DENY_RULE.to_string()),
-            "deny rule should exist after install"
+        write_claude_settings(
+            &dir,
+            r#"{
+  "permissions": {
+    "deny": ["Bash(rm -rf *)"]
+  },
+  "hooks": {
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "bitloops hooks claude-code stop"}]}
+    ]
+  }
+}"#,
         );
 
         uninstall_hooks(dir.path()).unwrap();
 
-        let path = dir.path().join(".claude/settings.json");
-        let data = fs::read_to_string(&path).unwrap();
-        let v: Value = serde_json::from_str(&data).unwrap();
-        // permissions section should be gone (was only our deny rule)
-        let deny_after: Vec<String> = v["permissions"]["deny"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert!(
-            !deny_after.contains(&METADATA_DENY_RULE.to_string()),
-            "deny rule should be removed after uninstall"
-        );
+        let (_, deny_after) = read_permissions(&dir);
+        assert_eq!(deny_after, vec!["Bash(rm -rf *)"]);
     }
 
     #[test]
@@ -595,18 +533,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_claude_settings(
             &dir,
-            &format!(
-                r#"{{
-  "permissions": {{
-    "deny": ["Bash(rm -rf *)", "{METADATA_DENY_RULE}"]
-  }},
-  "hooks": {{
+            r#"{
+  "permissions": {
+    "deny": ["Bash(rm -rf *)"]
+  },
+  "hooks": {
     "Stop": [
-      {{"matcher": "", "hooks": [{{"type": "command", "command": "bitloops hooks claude-code stop"}}]}}
+      {"matcher": "", "hooks": [{"type": "command", "command": "bitloops hooks claude-code stop"}]}
     ]
-  }}
-}}"#
-            ),
+  }
+}"#,
         );
         uninstall_hooks(dir.path()).unwrap();
 
@@ -615,10 +551,7 @@ mod tests {
             deny.contains(&"Bash(rm -rf *)".to_string()),
             "user deny rule should be preserved"
         );
-        assert!(
-            !deny.contains(&METADATA_DENY_RULE.to_string()),
-            "our deny rule should be removed"
-        );
+        assert_eq!(deny.len(), 1, "no Bitloops deny rule should be present");
     }
 
     #[test]

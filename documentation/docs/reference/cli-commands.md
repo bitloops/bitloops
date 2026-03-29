@@ -5,383 +5,194 @@ title: CLI Commands
 
 # CLI Commands
 
-Complete reference for all Bitloops CLI commands.
+Bitloops now has a thin CLI plus a single global user-level daemon service, `com.bitloops.daemon`.
+
+For breaking changes from the older command model, see the [upgrade note](./upgrading-to-the-daemon-architecture.md).
 
 ## Global Options
 
 ```bash
-bitloops --version            # Show version
-bitloops --connection-status  # Check store connectivity
-bitloops help                 # Show available commands
-```
-
-**Example:**
-
-```bash
+bitloops --version
+bitloops --version --check
 bitloops --connection-status
+bitloops help
 ```
 
-```
-Relational (SQLite): ✔ connected
-Event (DuckDB):      ✔ connected
-Blob (local):        ✔ available
-```
+## Initial Setup
 
----
+### `bitloops init`
 
-## Setup & Lifecycle
-
-### `init`
-
-Initialize Bitloops for an AI agent.
+Bootstraps the global daemon config.
 
 ```bash
-bitloops init [--agent <name>] [--force] [--telemetry <true|false>]
+bitloops init
+bitloops init --telemetry false
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--agent <name>` | `claude-code`, `cursor`, `copilot`, `codex`, `gemini`, `opencode` |
-| `--force` | Reinstall hooks even if already configured |
-| `--telemetry` | Enable/disable anonymous telemetry |
+Notes:
 
-If `--agent` is omitted, Bitloops attempts to detect the installed agent.
+- `init` no longer installs hooks.
+- Deprecated flags such as `--agent` and `--force` are accepted only to keep old invocations from failing loudly.
+
+### `bitloops enable`
+
+Installs git hooks and supported agent hooks for the current repository.
 
 ```bash
-bitloops init --agent claude-code
+bitloops enable
+bitloops enable --agent claude-code
 ```
 
-```
-✔ Detected git repository at /Users/you/project
-✔ Stores initialized (SQLite + DuckDB)
-✔ Claude Code hooks installed
-✔ Agent ready: claude-code
-```
+Notes:
 
-### `enable`
+- `enable` no longer writes repo settings files.
+- `.bitloops.local.toml` is added to `.git/info/exclude` so local overrides stay untracked by default.
 
-Start capturing sessions and checkpoints.
+### `bitloops disable`
 
-```bash
-bitloops enable [--local] [--project]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--local` | Personal only (gitignored `settings.local.json`) |
-| `--project` | Team-shared (`settings.json`, committed to git) |
-
-### `disable`
-
-Stop capturing. Does not delete existing data.
+Removes Bitloops hooks from the current repository.
 
 ```bash
 bitloops disable
+bitloops disable --uninstall
 ```
 
----
+## Daemon Lifecycle
 
-## Daemon & Dashboard Commands
+The top-level lifecycle aliases are equivalent to `bitloops daemon ...`.
 
-### `status`
+### `bitloops start`
 
-Show daemon state for the current repository.
-
-```bash
-bitloops status
-```
-
-```
-Bitloops daemon: running
-Mode: always-on service
-URL: https://127.0.0.1:5667
-PID: 12345
-Supervisor service: com.bitloops.daemon (launchd, installed)
-Supervisor state: running
-```
-
-### `start`
-
-Start the Bitloops daemon for the current repository. By default it starts in the foreground. If the repository is already configured for always-on mode, Bitloops reuses the global supervisor service instead of creating a new service or prompting again.
+Starts the Bitloops daemon.
 
 ```bash
 bitloops start
 bitloops daemon start
+bitloops daemon start -d
+bitloops daemon start --until-stopped
 ```
 
-### `stop`
+Key flags:
 
-Stop the daemon for the current repository. For always-on repositories, this stops the repo runtime managed by the global supervisor.
+| Flag | Meaning |
+| --- | --- |
+| `-d`, `--detached` | Start the daemon in the background without installing an always-on service |
+| `--until-stopped` | Install or refresh the global user service and start it |
+| `--host` | Override the bind host |
+| `--port` | Override the bind port |
+| `--http` | Force local HTTP instead of HTTPS |
+| `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
+| `--bundle-dir` | Override the dashboard bundle directory for this run |
+| `--config` | Use an explicit daemon config file |
+
+### `bitloops stop`
+
+Stops the daemon. If the global service is installed, Bitloops stops that service-managed runtime.
 
 ```bash
 bitloops stop
 bitloops daemon stop
 ```
 
-### `restart`
+### `bitloops restart`
 
-Restart the daemon for the current repository. For always-on repositories, this restarts the repo runtime managed by the global supervisor.
+Restarts the daemon using the same targeting rules as `stop`.
 
 ```bash
 bitloops restart
 bitloops daemon restart
 ```
 
-### `checkpoints status`
+### `bitloops status`
 
-Show repository capture and checkpoint state.
-
-```bash
-bitloops checkpoints status
-```
-
-```
-Capture:     enabled
-Agent:       claude-code
-Session:     idle (last session: 5m ago)
-Checkpoints: 12 total
-```
-
----
-
-## Session & Checkpoint Commands
-
-### `explain`
-
-Show reasoning from the most recent AI session.
+Shows daemon status, URL, config path, PID, and supervisor information.
 
 ```bash
-bitloops explain
+bitloops status
+bitloops daemon status
 ```
 
-### `rewind`
+Typical output:
 
-Interactively browse past checkpoints.
-
-```bash
-bitloops rewind
+```text
+Bitloops daemon: running
+Mode: always-on service
+URL: https://127.0.0.1:5667
+Config: /Users/alex/.config/bitloops/config.toml
+PID: 12345
+Supervisor service: com.bitloops.daemon (launchd, installed)
+Supervisor state: running
 ```
 
-### `resume`
-
-Switch between branch-specific sessions.
-
-```bash
-bitloops resume
-```
-
-### `reset`
-
-Clear current session state without deleting data.
-
-```bash
-bitloops reset
-```
-
-### `clean`
-
-Remove orphaned data.
-
-```bash
-bitloops clean
-```
-
-### `doctor`
-
-Diagnose common issues (stuck sessions, missing hooks, store problems).
-
-```bash
-bitloops doctor
-```
-
-```
-✔ Git repository detected
-✔ .bitloops/ directory exists
-✔ Hooks installed for: claude-code
-✔ Stores reachable
-✔ No stuck sessions
-```
-
----
-
-## DevQL Commands
-
-### `devql init`
-
-Create DevQL schema for the configured relational and events backends.
-
-```bash
-bitloops devql init
-```
-
-### `devql ingest`
-
-Ingest checkpoints, events, artefacts, and related enrichments into the configured stores.
-
-```bash
-bitloops devql ingest [--init <true|false>] [--max-checkpoints <number>]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--init` | Bootstrap schema before ingesting. Defaults to `true`. |
-| `--max-checkpoints` | Limit how many checkpoints are processed. Defaults to `500`. |
-
-**Examples:**
-
-```bash
-bitloops devql ingest
-
-bitloops devql ingest --init=false --max-checkpoints 200
-```
-
-### `devql query`
-
-Execute a DevQL query through the local Bitloops daemon.
-
-```bash
-bitloops devql query [--graphql] [--compact] "<query>"
-```
-
-`bitloops devql query` supports two input modes:
-
-- DevQL DSL when the query contains `->`
-- Raw GraphQL otherwise
-
-`--graphql` remains available as an explicit raw-GraphQL override. `--compact` emits compact JSON.
-
-DevQL commands require a running daemon. Start one with `bitloops start`, `bitloops daemon start -d`, or `bitloops daemon start --until-stopped`.
-
-**Examples:**
-
-```bash
-bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
-bitloops devql query '{ repo(name: "bitloops") { artefacts(first: 5) { edges { node { path symbolFqn canonicalKind } } } } }'
-bitloops devql query --graphql --compact '{ health { relational { backend connected } } }'
-```
-
-### `devql connection-status`
-
-Check configured backend connectivity for DevQL.
-
-```bash
-bitloops devql connection-status
-```
-
-This is the command form of the global `bitloops --connection-status` check.
-
-### `devql packs`
-
-Inspect registered capability packs, readiness, migrations, and optional health information.
-
-```bash
-bitloops devql packs [--json] [--with-health] [--apply-migrations] [--with-extensions]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--json` | Emit JSON instead of human-readable output |
-| `--with-health` | Run pack health checks where available |
-| `--apply-migrations` | Apply registered pack migrations before reporting |
-| `--with-extensions` | Include Core extension-host language-pack and capability metadata |
-
-### `devql knowledge add`
-
-Add a repository-scoped external knowledge source by URL.
-
-```bash
-bitloops devql knowledge add <url> [--commit <sha-or-ref>]
-```
-
-### `devql knowledge associate`
-
-Associate an existing knowledge item with a typed Bitloops target.
-
-```bash
-bitloops devql knowledge associate <source-ref> --to <target-ref>
-```
-
-Example:
-
-```bash
-bitloops devql knowledge associate 'knowledge:item-1' --to 'commit:abc123'
-```
-
-### `devql knowledge refresh`
-
-Refresh an existing knowledge source and create a new immutable version when the content changes.
-
-```bash
-bitloops devql knowledge refresh <knowledge-ref>
-```
-
-### `devql knowledge versions`
-
-List immutable document versions for a knowledge item.
-
-```bash
-bitloops devql knowledge versions <knowledge-ref>
-```
-
----
+If Bitloops finds legacy repo-local data such as old store directories, `status` also prints a warning that those paths are ignored unless explicitly configured.
 
 ## Dashboard
 
-### `dashboard`
+### `bitloops dashboard`
 
-Open the local web dashboard in your browser. If the current repository already uses always-on mode, Bitloops ensures that runtime is running through the global `com.bitloops.daemon` service and then opens the browser. Otherwise, Bitloops prompts you to start it in foreground, detached, or always-on mode.
+Opens the dashboard in your browser.
 
 ```bash
 bitloops dashboard
 ```
 
-### `daemon start`
+Behaviour:
 
-Start the daemon with explicit lifecycle and server options.
+- If the daemon is already reachable, Bitloops opens the existing dashboard URL.
+- If the global service is installed but not yet serving the current repo, Bitloops starts it and then opens the dashboard.
+- Otherwise Bitloops prompts for foreground, detached, or always-on launch mode.
 
-```bash
-bitloops daemon start [-d | --until-stopped] [--host <hostname>] [--port <number>] [--http] [--recheck-local-dashboard-net] [--bundle-dir <path>]
-```
+`dashboard` is now a launcher only. It is no longer the command that owns the server process.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-d`, `--detached` | `false` | Start in the background and return immediately |
-| `--until-stopped` | `false` | Install or refresh the single user-scoped `com.bitloops.daemon` service, then start this repository under it |
-| `--port` | `5667` | Port for the daemon server |
-| `--host` | auto (loopback) | Hostname to bind to |
-| `--http` | `false` | Force HTTP fast-path (requires `--host 127.0.0.1`) |
-| `--recheck-local-dashboard-net` | `false` | Force full local dashboard TLS recheck |
-| `--bundle-dir` / `--bundle` | `~/.bitloops/dashboard/bundle` | Bundle directory to serve |
+## Capture And History
 
-Always-on mode installs one global user-level service named `com.bitloops.daemon`. That supervisor manages repo-scoped daemon runtimes internally.
+### `bitloops checkpoints status`
 
----
-
-## Other Commands
-
-### `testlens`
-
-Analyze test coverage and map tests to artefacts.
+Shows repo-level capture status and the resolved thin-CLI policy.
 
 ```bash
-bitloops testlens
+bitloops checkpoints status
+bitloops checkpoints status --detailed
 ```
 
-### `completion`
+The detailed view includes the discovered policy root and config fingerprint.
 
-Generate shell completions.
+### Other capture commands
+
+```bash
+bitloops explain
+bitloops rewind
+bitloops resume <branch>
+bitloops reset
+bitloops clean
+bitloops doctor
+```
+
+## DevQL
+
+DevQL commands now talk to the local daemon over the existing HTTP and GraphQL surface.
+
+### Common commands
+
+```bash
+bitloops devql init
+bitloops devql ingest
+bitloops devql query "files changed last 7 days"
+bitloops devql knowledge ingest github
+```
+
+Highlights:
+
+- `devql init` initialises the configured relational and event stores
+- `devql ingest` sends ingestion work through the daemon
+- `devql query` uses the local daemon transport rather than in-process GraphQL execution
+
+## Completion
+
+Generate shell completion scripts:
 
 ```bash
 bitloops completion bash
 bitloops completion zsh
 bitloops completion fish
-bitloops completion powershell
-```
-
-### `hooks`
-
-Internal command used by agent hook scripts. Not for direct use.
-
-```bash
-bitloops hooks <agent-name> <event>
 ```

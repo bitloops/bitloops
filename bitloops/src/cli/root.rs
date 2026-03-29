@@ -19,9 +19,9 @@ pub const ROOT_SHORT_ABOUT: &str = "Bitloops CLI";
 pub const ROOT_LONG_ABOUT: &str = r#"The command-line interface for Bitloops
 
 Getting Started:
-  To get started with Bitloops CLI, run 'bitloops enable' to configure
-  project settings and git hooks, then run 'bitloops init' to initialize
-  agent integrations. For more information, visit:
+  To get started with Bitloops CLI, run 'bitloops init' to set up the
+  global daemon config, then run 'bitloops enable' inside a repository
+  to install hooks. For more information, visit:
   https://docs.bitloops.io/introduction
 
 Environment Variables:
@@ -39,7 +39,7 @@ pub struct CleanArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DisableArgs {
-    /// Update project settings file instead of local.
+    /// Deprecated: repo policy files are not changed by this command.
     #[arg(long, default_value_t = false)]
     pub project: bool,
 

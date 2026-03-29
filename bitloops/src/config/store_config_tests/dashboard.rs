@@ -80,10 +80,18 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
 }
 
 #[test]
-fn dashboard_file_config_load_reads_repo_config_file() {
+fn dashboard_file_config_load_reads_daemon_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
+    let config_root = temp.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root.as_str()),
+        )],
+    );
     write_repo_config(
-        temp.path(),
+        &temp.path().join("bitloops"),
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
@@ -93,13 +101,11 @@ fn dashboard_file_config_load_reads_repo_config_file() {
         }),
     );
 
-    with_cwd(temp.path(), || {
-        let cfg = DashboardFileConfig::load();
-        assert_eq!(
-            cfg.local_dashboard,
-            Some(DashboardLocalDashboardConfig { tls: Some(true) })
-        );
-    });
+    let cfg = DashboardFileConfig::load();
+    assert_eq!(
+        cfg.local_dashboard,
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
+    );
 }
 
 #[test]

@@ -24,7 +24,6 @@ pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
 const FALLBACK_LOCAL_HOST: &str = "127.0.0.1";
-const DEFAULT_BUNDLE_RELATIVE_DIR: &str = ".bitloops/dashboard/bundle";
 pub(super) const API_GIT_SCAN_LIMIT: usize = 5_000;
 pub(super) const API_DEFAULT_PAGE_LIMIT: usize = 100;
 const API_MAX_PAGE_LIMIT: usize = 500;
@@ -272,8 +271,8 @@ pub(super) fn content_type_for_path(path: &Path) -> &'static str {
 }
 
 #[cfg(test)]
-fn default_bundle_dir_from_home(home: Option<&Path>) -> PathBuf {
-    dashboard_paths::default_bundle_dir_from_home(home)
+fn default_bundle_dir_from_cache_dir(cache_dir: Option<&Path>) -> PathBuf {
+    dashboard_paths::default_bundle_dir_from_cache_dir(cache_dir)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use crate::test_support::process_state::enter_process_state;
 use clap::Parser;
 use std::env;
+use std::fs;
 use std::path::Path;
 use tempfile::{TempDir, tempdir};
 
@@ -32,6 +33,7 @@ fn test_cfg() -> DevqlConfig {
         embedding_provider: None,
         embedding_model: None,
         embedding_api_key: None,
+        embedding_cache_dir: None,
     }
 }
 
@@ -94,6 +96,15 @@ fn create_duckdb_db(path: &Path) {
     let conn = duckdb::Connection::open(path).expect("create duckdb db");
     conn.execute_batch("SELECT 1")
         .expect("validate duckdb db file");
+}
+
+pub(super) fn write_repo_daemon_config(repo_root: &Path, body: impl AsRef<str>) {
+    fs::create_dir_all(repo_root).expect("create test repo root");
+    fs::write(
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        body.as_ref(),
+    )
+    .expect("write test daemon config");
 }
 
 fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {

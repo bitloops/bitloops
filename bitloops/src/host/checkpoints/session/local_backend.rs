@@ -2,8 +2,8 @@
 //!
 //! Storage layout:
 //!   `<git-common-dir>/bitloops-sessions/<session_id>.json`   — session state
-//!   `.bitloops/tmp/pre-prompt-<session_id>.json` — pre-prompt state
-//!   `.bitloops/tmp/pre-task-<tool_use_id>.json`   — pre-task marker
+//!   `<state-dir>/daemon/repos/<repo-hash>/tmp/pre-prompt-<session_id>.json` — pre-prompt state
+//!   `<state-dir>/daemon/repos/<repo-hash>/tmp/pre-task-<tool_use_id>.json`   — pre-task marker
 //!
 //! Legacy compatibility backend. Non-test runtime only falls back to this backend
 //! when `BITLOOPS_ENABLE_LEGACY_LOCAL_BACKEND=1` is set.
@@ -20,7 +20,7 @@ use super::backend::SessionBackend;
 use super::state::{PrePromptState, PreTaskState, SessionState};
 
 pub struct LocalFileBackend {
-    /// Repository root (the directory that contains `.git/` and `.bitloops/`).
+    /// Repository root.
     repo_root: PathBuf,
 }
 
@@ -36,9 +36,9 @@ impl LocalFileBackend {
         self.git_common_dir().join("bitloops-sessions")
     }
 
-    /// `.bitloops/tmp/`
+    /// Repo-scoped session scratch directory.
     fn tmp_dir(&self) -> PathBuf {
-        self.repo_root.join(paths::BITLOOPS_TMP_DIR)
+        paths::default_session_tmp_dir(&self.repo_root)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {

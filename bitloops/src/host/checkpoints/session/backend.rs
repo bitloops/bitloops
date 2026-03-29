@@ -23,7 +23,7 @@ pub trait SessionBackend: Send + Sync {
     /// Delete session state (no-op if already absent).
     fn delete_session(&self, session_id: &str) -> Result<()>;
 
-    // ── Pre-prompt state (.bitloops/tmp/pre-prompt-<id>.json) ────────────
+    // ── Pre-prompt state (<state-dir>/.../pre-prompt-<id>.json) ─────────
 
     /// Load pre-prompt state. Returns `None` if file doesn't exist.
     fn load_pre_prompt(&self, session_id: &str) -> Result<Option<PrePromptState>>;
@@ -34,7 +34,7 @@ pub trait SessionBackend: Send + Sync {
     /// Delete pre-prompt state file (no-op if already absent).
     fn delete_pre_prompt(&self, session_id: &str) -> Result<()>;
 
-    // ── Pre-task markers (.bitloops/tmp/pre-task-<tool-use-id>.json) ─────
+    // ── Pre-task markers (<state-dir>/.../pre-task-<tool-use-id>.json) ───
 
     /// Create a pre-task marker file.
     fn create_pre_task_marker(&self, state: &PreTaskState) -> Result<()>;

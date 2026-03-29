@@ -2,35 +2,21 @@ use super::*;
 
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 use crate::test_support::process_state::enter_process_state;
-use serde_json::json;
-use std::fs;
 use tempfile::TempDir;
 
 fn write_local_devql_config(repo_root: &Path) {
-    let config_dir = repo_root.join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": ".bitloops/stores/devql.sqlite"
-                    },
-                    "events": {
-                        "duckdb_path": ".bitloops/stores/events.duckdb"
-                    }
-                },
-                "semantic": {
-                    "provider": "disabled"
-                }
-            }
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_repo_daemon_config(
+        repo_root,
+        r#"[stores.relational]
+sqlite_path = ".bitloops/stores/devql.sqlite"
+
+[stores.events]
+duckdb_path = ".bitloops/stores/events.duckdb"
+
+[semantic]
+provider = "disabled"
+"#,
+    );
 }
 
 fn test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {

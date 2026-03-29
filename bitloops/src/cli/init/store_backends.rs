@@ -7,7 +7,6 @@ use crate::config::{
     resolve_blob_local_path_for_repo, resolve_duckdb_db_path_for_repo,
     resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
 };
-use crate::utils::paths;
 
 const DUCKDB_CHECKPOINT_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS checkpoint_events (
@@ -33,8 +32,6 @@ ON checkpoint_events (repo_id, commit_sha);
 "#;
 
 pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
-    ensure_default_store_directories(repo_root)?;
-
     let cfg = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for store initialisation")?;
 
@@ -73,17 +70,5 @@ pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
             .with_context(|| format!("creating local blob store root {}", blob_root.display()))?;
     }
 
-    Ok(())
-}
-
-fn ensure_default_store_directories(repo_root: &Path) -> Result<()> {
-    for dir in [
-        repo_root.join(paths::BITLOOPS_RELATIONAL_STORE_DIR),
-        repo_root.join(paths::BITLOOPS_EVENT_STORE_DIR),
-        repo_root.join(paths::BITLOOPS_BLOB_STORE_DIR),
-    ] {
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("creating store directory {}", dir.display()))?;
-    }
     Ok(())
 }

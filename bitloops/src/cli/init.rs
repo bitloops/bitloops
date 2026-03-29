@@ -6,6 +6,7 @@ use clap::Args;
 
 mod agent_hooks;
 mod agent_selection;
+mod store_backends;
 mod telemetry;
 use crate::config::ensure_daemon_config_exists;
 
@@ -44,6 +45,7 @@ fn run_with_writer(
 ) -> Result<()> {
     let config_path = ensure_daemon_config_exists()?;
     telemetry::maybe_capture_telemetry_consent(Path::new("."), args.telemetry, true, out)?;
+    store_backends::initialise_store_backends(Path::new("."))?;
 
     if args.force || args.agent.is_some() || args.skip_baseline {
         writeln!(

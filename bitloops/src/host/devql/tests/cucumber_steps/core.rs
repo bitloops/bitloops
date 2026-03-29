@@ -721,22 +721,12 @@ fn write_repo_sources(repo_root: &Path, world: &DevqlBddWorld) {
 }
 
 fn write_repo_config(repo_root: &Path, sqlite_path: &Path) {
-    let config_dir = repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create .bitloops config dir");
     std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
     )
     .expect("write config");
 }

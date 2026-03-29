@@ -5,84 +5,50 @@ title: FAQ
 
 # FAQ
 
-## Setup
+### Do I still run `bitloops init` inside every repo?
 
-### Can I use Bitloops with a monorepo?
+You can, but `init` now prepares the global daemon config rather than repo hooks. Run `bitloops enable` inside each repo to install hooks.
 
-Yes. Run `bitloops init` at the root of your git repository. DevQL will index all supported files in the repo.
+### Where does Bitloops keep its data now?
 
-### Can I initialize multiple agents in the same project?
+In platform app directories by default:
 
-Yes. Run `bitloops init --agent <name>` for each one. Sessions from each agent are tracked independently and each checkpoint records which agent was used.
+- config directory for `config.toml`
+- data directory for relational, event, and blob stores
+- cache directory for embedding downloads and dashboard bundle assets
+- state directory for daemon runtime metadata and hook scratch files
 
-### Does Bitloops modify my git history?
+### Do I need a repo config file?
 
-No. Bitloops adds data to the `.bitloops/` directory and installs git hooks (post-commit), but it never modifies existing commits, branches, or git objects.
+No. If no `.bitloops.toml` exists, Bitloops uses built-in thin-CLI defaults.
 
-### What happens if I don't enable Bitloops — does init do anything harmful?
+### What should go in `.bitloops.toml`?
 
-No. `bitloops init` creates the `.bitloops/` directory and installs hook scripts, but nothing is captured until you run `bitloops enable`.
+Repo capture policy such as:
 
-## Usage
+- `capture.enabled`
+- `capture.strategy`
+- watch settings
+- scope rules
+- imported knowledge references
 
-### How much disk space does Bitloops use?
+### What should go in the daemon config?
 
-It depends on your codebase size and session frequency. The SQLite and DuckDB databases are typically small (a few MB). Session transcripts are the largest component — a long Claude Code session can produce several hundred KB of transcript data.
+Machine-scoped settings such as:
 
-### Does Bitloops slow down git operations?
+- store paths and backends
+- provider credentials
+- dashboard defaults
+- daemon runtime defaults
 
-Negligibly. The post-commit hook runs asynchronously and typically completes in milliseconds. You won't notice a difference.
+### Does `bitloops dashboard` still run the server?
 
-### What happens to Bitloops data when I rebase or squash commits?
+No. It launches the browser and ensures the daemon is running.
 
-Checkpoints are linked to commit SHAs. If you rewrite history (rebase, squash, amend), the old checkpoints will reference commits that no longer exist. The data isn't lost — it's still in `.bitloops/checkpoints/` — but the link to the current git history is broken. We recommend creating checkpoints on stable commits.
+### What replaced `bitloops status` for repo capture status?
 
-### Can I exclude certain files or directories from DevQL ingestion?
+Use `bitloops checkpoints status`.
 
-DevQL currently indexes all supported files in the repository. File-level exclusion is on the roadmap.
+### Is there an automatic migration from the older JSON config?
 
-## Privacy & Security
-
-### Does Bitloops phone home?
-
-Only if you opt in to telemetry during `bitloops init`. When enabled, only anonymous command-level usage events are sent. No code, file names, or content is ever transmitted. Disable anytime in `.bitloops/settings.json`.
-
-### Is it safe to commit `.bitloops/config.json` to a public repo?
-
-Yes, as long as you use environment variable interpolation (`${GITHUB_TOKEN}`) for secrets instead of hardcoding them. The config file is designed to be committed safely.
-
-### Can my CI pipeline use Bitloops?
-
-Yes. Install Bitloops in CI, run `bitloops devql init && bitloops devql ingest`, and your pipeline can query the knowledge graph. For shared results, configure PostgreSQL or ClickHouse as backends.
-
-## Troubleshooting
-
-### `bitloops checkpoints status` shows "Session: active" but I'm not using an agent
-
-The session may be stuck. Run:
-
-```bash
-bitloops doctor
-```
-
-If doctor confirms a stuck session:
-
-```bash
-bitloops reset
-```
-
-### Hooks don't seem to fire for my agent
-
-1. Verify capture is enabled: `bitloops checkpoints status`
-2. Reinstall hooks: `bitloops init --agent <name> --force`
-3. Check that the agent is actually using its hook system (some agents require specific configuration)
-
-### DevQL queries return empty results
-
-Make sure you've ingested:
-
-```bash
-bitloops devql ingest
-```
-
-If ingestion succeeds but queries are empty, check the language — DevQL currently supports Rust, TypeScript, and JavaScript only.
+No. The change is a hard break. See the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).

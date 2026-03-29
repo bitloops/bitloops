@@ -197,7 +197,9 @@ pub async fn run(args: StatusArgs) -> Result<()> {
 #[allow(non_snake_case)]
 mod tests {
     use super::{ActiveSession, run_status, time_ago, write_active_sessions};
+    use crate::config::settings::{self, BitloopsSettings};
     use crate::test_support::process_state::with_cwd;
+    use serde_json::json;
     use std::fs;
     use std::io::Cursor;
     use std::path::Path;
@@ -244,16 +246,50 @@ mod tests {
         dir
     }
 
-    fn write_project_settings(repo_root: &Path, json: &str) {
-        let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("config dir");
-        fs::write(settings_dir.join("config.json"), json).expect("shared config");
+    fn settings_from_json(raw: &str) -> BitloopsSettings {
+        let value = serde_json::from_str::<serde_json::Value>(raw).expect("settings JSON");
+        let strategy_options = value
+            .as_object()
+            .map(|map| {
+                map.iter()
+                    .filter(|(key, _)| *key != "strategy" && *key != "enabled")
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        BitloopsSettings {
+            strategy: value
+                .get("strategy")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("manual-commit")
+                .to_string(),
+            enabled: value
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            strategy_options,
+            ..Default::default()
+        }
     }
 
-    fn write_local_settings(repo_root: &Path, json: &str) {
-        let settings_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("config dir");
-        fs::write(settings_dir.join("config.local.json"), json).expect("local config");
+    fn canonical_display(path: &Path) -> String {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    }
+
+    fn write_project_settings(repo_root: &Path, raw: &str) {
+        let settings = settings_from_json(raw);
+        settings::save_settings(&settings, &settings::settings_path(repo_root))
+            .expect("shared config");
+    }
+
+    fn write_local_settings(repo_root: &Path, raw: &str) {
+        let settings = settings_from_json(raw);
+        settings::save_settings(&settings, &settings::settings_local_path(repo_root))
+            .expect("local config");
     }
 
     // CLI-576
@@ -307,12 +343,8 @@ mod tests {
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
-            output.contains("not set up"),
-            "expected not set up message, got: {output}"
-        );
-        assert!(
-            output.contains("bitloops enable"),
-            "expected enable hint, got: {output}"
+            output.contains("Enabled (manual-commit)"),
+            "expected built-in defaults, got: {output}"
         );
     }
 
@@ -346,16 +378,16 @@ mod tests {
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
-            output.contains("Enabled (auto-commit)"),
-            "expected effective Enabled (auto-commit), got: {output}"
+            output.contains("Enabled (manual-commit)"),
+            "expected local-only override to be ignored without shared policy root, got: {output}"
         );
         assert!(
-            output.contains("Local, enabled"),
-            "expected local detail line, got: {output}"
+            output.contains("Policy Root: built-in defaults"),
+            "expected built-in default policy root, got: {output}"
         );
         assert!(
-            !output.contains("Project,"),
-            "should not show project settings when only local exists, got: {output}"
+            output.contains("Config Fingerprint:"),
+            "expected config fingerprint, got: {output}"
         );
     }
 
@@ -379,12 +411,12 @@ mod tests {
             "expected effective local override status, got: {output}"
         );
         assert!(
-            output.contains("Project, enabled (manual-commit)"),
-            "expected project detail line, got: {output}"
+            output.contains(&format!("Policy Root: {}", canonical_display(repo.path()))),
+            "expected policy root line, got: {output}"
         );
         assert!(
-            output.contains("Local, disabled (auto-commit)"),
-            "expected local detail line, got: {output}"
+            output.contains("Config Fingerprint:"),
+            "expected config fingerprint line, got: {output}"
         );
     }
 
@@ -445,8 +477,8 @@ mod tests {
             "expected effective manual-commit status, got: {output}"
         );
         assert!(
-            output.contains("Project, disabled (manual-commit)"),
-            "expected project detail manual-commit status, got: {output}"
+            output.contains(&format!("Policy Root: {}", canonical_display(repo.path()))),
+            "expected policy root detail, got: {output}"
         );
     }
 
@@ -630,20 +662,20 @@ mod tests {
 
     // ── CLI-1469: unified config file pair ──────────────────────────────
 
-    fn write_config(repo_root: &Path, json: &str) {
-        let dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&dir).expect("config dir");
-        fs::write(dir.join("config.json"), json).expect("shared config");
+    fn write_config(repo_root: &Path, raw: &str) {
+        let settings = settings_from_json(raw);
+        settings::save_settings(&settings, &settings::settings_path(repo_root))
+            .expect("shared config");
     }
 
-    fn write_local_config(repo_root: &Path, json: &str) {
-        let dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&dir).expect("config dir");
-        fs::write(dir.join("config.local.json"), json).expect("local config");
+    fn write_local_config(repo_root: &Path, raw: &str) {
+        let settings = settings_from_json(raw);
+        settings::save_settings(&settings, &settings::settings_local_path(repo_root))
+            .expect("local config");
     }
 
     #[test]
-    fn unified_config_status_reads_config_json() {
+    fn repo_policy_status_reads_bitloops_toml() {
         let repo = setup_status_test_repo();
         write_config(
             repo.path(),
@@ -657,12 +689,12 @@ mod tests {
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
             output.contains("Enabled"),
-            "status should read config.json and show Enabled, got: {output}"
+            "status should read .bitloops.toml and show Enabled, got: {output}"
         );
     }
 
     #[test]
-    fn unified_config_status_reads_config_local_json() {
+    fn repo_policy_status_reads_bitloops_local_toml() {
         let repo = setup_status_test_repo();
         write_config(
             repo.path(),
@@ -677,19 +709,18 @@ mod tests {
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
             output.contains("Disabled (auto-commit)"),
-            "status should read config.local.json override and show Disabled, got: {output}"
+            "status should read .bitloops.local.toml override and show Disabled, got: {output}"
         );
     }
 
     #[test]
     fn unified_config_status_ignores_legacy_settings_json() {
         let repo = setup_status_test_repo();
-        // Write directly to legacy settings.json — status should NOT find it
         let settings_dir = repo.path().join(".bitloops");
         fs::create_dir_all(&settings_dir).expect("dir");
         fs::write(
             settings_dir.join("settings.json"),
-            r#"{"strategy":"manual-commit","enabled":true}"#,
+            json!({"strategy": "auto-commit", "enabled": false}).to_string(),
         )
         .expect("legacy file");
 
@@ -699,8 +730,8 @@ mod tests {
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
-            output.contains("not set up"),
-            "status must not read legacy settings.json; should show 'not set up', got: {output}"
+            output.contains("Enabled (manual-commit)"),
+            "status must ignore legacy settings.json and use built-in defaults, got: {output}"
         );
     }
 }

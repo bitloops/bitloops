@@ -5,143 +5,201 @@ title: Configuration
 
 # Configuration Reference
 
-Bitloops uses two configuration files in the `.bitloops/` directory of your project.
+Bitloops now uses two separate TOML configuration surfaces:
 
-## `config.json` — Project Configuration
+- A global daemon config in the platform config directory.
+- An optional repo policy file discovered by walking upwards to the nearest `.bitloops.toml`.
 
-The main configuration file for stores, knowledge providers, and project-level settings. This file can be committed to git to share settings across the team.
+This is a hard break from the older JSON model. There is no automatic migration or legacy fallback. See the [upgrade note](./upgrading-to-the-daemon-architecture.md).
 
-### Full Schema
+## Global Daemon Config
 
-```json
-{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {
-    "stores": {
-      "relational": {
-        "provider": "sqlite | postgres",
-        "sqlite_path": ".bitloops/stores/relational/relational.db",
-        "postgres_dsn": "postgres://user:pass@host:5432/db"
-      },
-      "event": {
-        "provider": "duckdb | clickhouse",
-        "duckdb_path": ".bitloops/stores/event/events.duckdb",
-        "clickhouse_url": "http://localhost:8123"
-      },
-      "blob": {
-        "provider": "local | s3 | gcs",
-        "local_path": ".bitloops/stores/blob",
-        "s3_bucket": "bucket-name",
-        "s3_region": "us-east-1",
-        "gcs_bucket": "bucket-name"
-      }
-    },
-    "knowledge": {
-      "providers": {
-        "github": {
-          "token": "${GITHUB_TOKEN}"
-        },
-        "jira": {
-          "site_url": "https://org.atlassian.net",
-          "email": "${ATLASSIAN_EMAIL}",
-          "token": "${ATLASSIAN_TOKEN}"
-        },
-        "confluence": {
-          "site_url": "https://org.atlassian.net",
-          "email": "${ATLASSIAN_EMAIL}",
-          "token": "${ATLASSIAN_TOKEN}"
-        }
-      }
-    },
-    "semantic": {
-      "provider": "openai",
-      "model": "gpt-4.1-mini",
-      "api_key": "${OPENAI_API_KEY}"
-    },
-    "dashboard": {
-      "local_dashboard": {
-        "tls": true
-      }
-    }
-  }
-}
+Bitloops stores daemon configuration at:
+
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/bitloops/config.toml`
+- macOS and Windows: the platform-equivalent config directory returned by the OS
+
+Create it with:
+
+```bash
+bitloops init
 ```
 
-### Dashboard Local TLS Hints
+The daemon config owns:
 
-`dashboard.local_dashboard` stores local HTTPS hints for daemon startup and the dashboard launcher.
+- Store backends and custom store paths
+- Provider credentials
+- Dashboard defaults
+- Daemon runtime defaults such as `local_dev`, logging, and telemetry
 
-| Field                                      | Type    | Default | Description                                                                                  |
-| ------------------------------------------ | ------- | ------- | -------------------------------------------------------------------------------------------- |
-| `dashboard.local_dashboard.tls`            | boolean | unset   | When `true`, dashboard fast-path assumes local TLS material is already available.            |
+Example:
 
-Notes:
+```toml title="config.toml"
+[runtime]
+local_dev = false
 
-- These are local TLS hints for `bitloops daemon start` and `bitloops dashboard`.
-- To force a full recheck of local dashboard TLS setup, run `bitloops daemon start --recheck-local-dashboard-net`.
-- To force loopback HTTP without TLS, run `bitloops daemon start --http --host 127.0.0.1`.
+[telemetry]
+enabled = true
 
-### Environment Variable Interpolation
+[logging]
+level = "info"
 
-Use `${VAR_NAME}` syntax to reference environment variables. This keeps secrets out of committed config files.
+[stores]
+embedding_provider = "local"
+embedding_model = "jinaai/jina-embeddings-v2-base-code"
+embedding_cache_dir = "/Users/alex/Library/Caches/bitloops/embeddings/models"
 
-```json
-{
-  "knowledge": {
-    "providers": {
-      "github": {
-        "token": "${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
+[stores.relational]
+sqlite_path = "/Users/alex/.local/share/bitloops/stores/relational/relational.db"
+
+[stores.events]
+duckdb_path = "/Users/alex/.local/share/bitloops/stores/event/events.duckdb"
+
+[stores.blob]
+local_path = "/Users/alex/.local/share/bitloops/stores/blob"
+
+[knowledge.providers.github]
+token = "${GITHUB_TOKEN}"
+
+[knowledge.providers.atlassian]
+site_url = "https://example.atlassian.net"
+email = "${ATLASSIAN_EMAIL}"
+token = "${ATLASSIAN_TOKEN}"
+
+[semantic]
+provider = "openai_compatible"
+model = "qwen2.5-coder"
+api_key = "${OPENAI_API_KEY}"
+base_url = "https://api.openai.com/v1"
+
+[dashboard]
+bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
+
+[dashboard.local_dashboard]
+tls = true
 ```
 
-Bitloops resolves these at runtime from your shell environment.
+### Default Path Categories
 
-## `settings.json` — Project Settings
+Bitloops uses platform app directories by default:
 
-Controls runtime behavior. Can be committed to git for shared settings.
+| Category | Linux example | Purpose |
+| --- | --- | --- |
+| Config | `${XDG_CONFIG_HOME:-~/.config}/bitloops/` | `config.toml` |
+| Data | `${XDG_DATA_HOME:-~/.local/share}/bitloops/` | SQLite, DuckDB, blob store |
+| Cache | `${XDG_CACHE_HOME:-~/.cache}/bitloops/` | Embedding model downloads, dashboard bundle |
+| State | `${XDG_STATE_HOME:-~/.local/state}/bitloops/` | Daemon runtime metadata, supervisor state, hook scratch |
 
-```json
-{
-  "strategy": "manual_commit",
-  "enabled": true,
-  "telemetry": true
-}
+The default repo footprint is now limited to optional policy files at the repo root. Bitloops no longer uses repo-local runtime storage by default.
+
+## Repo Policy
+
+The thin CLI and hook layer look for repo policy by walking upwards until they find the nearest `.bitloops.toml`.
+
+Resolution rules:
+
+- Load the nearest `.bitloops.toml`.
+- If a sibling `.bitloops.local.toml` exists in the same directory, load it as the only higher-precedence local override.
+- Stop at the first matching directory. Bitloops does not merge policy files from multiple ancestors.
+- If no `.bitloops.toml` exists, the CLI uses built-in defaults.
+
+Repo policy controls what the slim CLI and hooks send to the daemon. It does not configure store backends or daemon runtime paths.
+
+Example shared policy:
+
+```toml title=".bitloops.toml"
+[capture]
+enabled = true
+strategy = "manual-commit"
+
+[capture.summarize]
+enabled = true
+
+[watch]
+watch_debounce_ms = 750
+watch_poll_fallback_ms = 2500
+
+[scope]
+project_root = "packages/app"
+include = ["src/**", "tests/**"]
+exclude = ["dist/**", "coverage/**"]
+
+[agents]
+default = "claude-code"
+allowed = ["claude-code", "cursor", "codex"]
+normalise_branches = true
+
+[imports]
+knowledge = ["bitloops/knowledge.toml"]
 ```
 
-| Field       | Values          | Description                                           |
-| ----------- | --------------- | ----------------------------------------------------- |
-| `strategy`  | `manual_commit` | When checkpoints are created (default: on git commit) |
-| `enabled`   | `true \| false` | Whether capture is active                             |
-| `telemetry` | `true \| false` | Whether anonymous telemetry is sent                   |
+Example local override:
 
-## `settings.local.json` — Local Settings
+```toml title=".bitloops.local.toml"
+[capture]
+enabled = false
 
-Personal settings that override `settings.json`. This file is gitignored and never shared.
+[watch]
+watch_debounce_ms = 1500
+```
 
-Use this for:
+## Knowledge Imports
 
-- Enabling/disabling capture without affecting teammates
-- Personal telemetry preferences
-- Local-only configuration overrides
+Knowledge source references belong in separate TOML files that are imported from repo policy:
 
-Created when you run `bitloops enable --local`.
+```toml title="bitloops/knowledge.toml"
+[sources.github]
+repositories = ["bitloops/bitloops"]
+labels = ["documentation", "devql"]
 
-## Configuration Precedence
+[sources.atlassian]
+spaces = ["ENG", "DOCS"]
+projects = ["BIT"]
+```
 
-1. `settings.local.json` (highest priority, personal)
-2. `settings.json` (project-level, shared)
-3. Built-in defaults (lowest priority)
+Imported knowledge files:
 
-## Defaults
+- Resolve relative to the repo policy file that declares them
+- Affect the repo policy fingerprint
+- Describe what the thin CLI should reference when talking to the daemon
 
-If no `config.json` exists, Bitloops uses these defaults:
+Provider authentication still belongs in the global daemon config.
 
-| Store      | Default Provider | Default Path                                |
-| ---------- | ---------------- | ------------------------------------------- |
-| Relational | SQLite           | `.bitloops/stores/relational/relational.db` |
-| Event      | DuckDB           | `.bitloops/stores/event/events.duckdb`      |
-| Blob       | Local            | `.bitloops/stores/blob/`                    |
+## Precedence
+
+Daemon config precedence:
+
+1. Explicit CLI flags such as `bitloops daemon start --bundle-dir`
+2. Global daemon config `config.toml`
+3. Platform default paths and built-in defaults
+
+Repo policy precedence:
+
+1. `.bitloops.local.toml`
+2. `.bitloops.toml`
+3. Built-in thin-CLI defaults
+
+Arrays replace lower-precedence arrays. They are not deep-merged.
+
+## What Belongs Where
+
+Use the global daemon config for:
+
+- SQLite, DuckDB, ClickHouse, PostgreSQL, blob, and embedding cache paths
+- Provider credentials and service defaults
+- Dashboard bundle overrides and TLS hints
+
+Use repo policy for:
+
+- Capture enablement and checkpoint strategy
+- Watch behaviour
+- Monorepo scope rules
+- Agent-side policy and knowledge imports
+
+Do not put the following in repo policy:
+
+- Store paths
+- Dashboard runtime paths
+- Provider secrets
+- Telemetry settings
+- Daemon lifecycle state

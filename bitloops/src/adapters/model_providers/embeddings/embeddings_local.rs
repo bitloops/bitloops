@@ -19,11 +19,12 @@ pub(super) fn build(
     provider: &str,
     model: String,
     repo_root: Option<&Path>,
+    cache_dir: Option<&Path>,
 ) -> Result<Box<dyn EmbeddingProvider>> {
     let resolved_model = resolve_local_embedding_model(&model)?;
     let repo_root =
         repo_root.ok_or_else(|| anyhow!("local embedding provider requires repo root"))?;
-    let init_options = build_init_options(resolved_model, repo_root)?;
+    let init_options = build_init_options(resolved_model, repo_root, cache_dir)?;
     let embedder = guard_ort_panic(
         || TextEmbedding::try_new(init_options),
         &format!("loading local embedding model `{model}`"),
@@ -96,8 +97,14 @@ fn resolve_local_embedding_model(model: &str) -> Result<EmbeddingModel> {
     }
 }
 
-fn build_init_options(model: EmbeddingModel, repo_root: &Path) -> Result<InitOptions> {
-    let cache_dir = default_local_embedding_cache_dir(repo_root);
+fn build_init_options(
+    model: EmbeddingModel,
+    repo_root: &Path,
+    cache_dir: Option<&Path>,
+) -> Result<InitOptions> {
+    let cache_dir = cache_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_local_embedding_cache_dir(repo_root));
     fs::create_dir_all(&cache_dir)
         .with_context(|| format!("creating local embedding cache at {}", cache_dir.display()))?;
     Ok(InitOptions::new(model)
@@ -179,7 +186,7 @@ mod tests {
 
     #[test]
     fn local_provider_build_rejects_unknown_model_before_loading_runtime() {
-        let err = build("local", "voyage-code-3".to_string(), None)
+        let err = build("local", "voyage-code-3".to_string(), None, None)
             .err()
             .expect("unsupported model should fail before loading embedder");
         assert!(
@@ -203,6 +210,7 @@ mod tests {
             "local",
             "jinaai/jina-embeddings-v2-base-code".to_string(),
             None,
+            None,
         )
         .err()
         .expect("local provider should require repo root");
@@ -212,8 +220,9 @@ mod tests {
     #[test]
     fn local_provider_build_init_options_use_bitloops_cache_dir_when_repo_is_known() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let options = build_init_options(EmbeddingModel::JinaEmbeddingsV2BaseCode, temp.path())
-            .expect("init options");
+        let options =
+            build_init_options(EmbeddingModel::JinaEmbeddingsV2BaseCode, temp.path(), None)
+                .expect("init options");
 
         assert_eq!(
             options.cache_dir,

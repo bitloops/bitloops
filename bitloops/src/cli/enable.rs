@@ -53,36 +53,6 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Entries that must be present in `.bitloops/.gitignore`.
-const GITIGNORE_ENTRIES: &[&str] = &["tmp/", "metadata/", "logs/"];
-
-/// Ensures the `.bitloops/` directory and its `.gitignore` exist.
-fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
-    let dir = repo_root.join(SETTINGS_DIR);
-    fs::create_dir_all(&dir).with_context(|| format!("creating {SETTINGS_DIR}/ directory"))?;
-
-    let gitignore = dir.join(".gitignore");
-    let mut content = fs::read_to_string(&gitignore).unwrap_or_default();
-
-    let mut changed = false;
-    for entry in GITIGNORE_ENTRIES {
-        if !content.contains(entry) {
-            if !content.ends_with('\n') && !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(entry);
-            content.push('\n');
-            changed = true;
-        }
-    }
-
-    if changed || !gitignore.exists() {
-        fs::write(&gitignore, &content).context("writing .bitloops/.gitignore")?;
-    }
-
-    Ok(())
-}
-
 fn ensure_repo_local_policy_excluded(repo_root: &Path) -> Result<()> {
     let exclude_path = repo_root.join(".git").join("info").join("exclude");
     if let Some(parent) = exclude_path.parent() {
@@ -91,19 +61,26 @@ fn ensure_repo_local_policy_excluded(repo_root: &Path) -> Result<()> {
     }
 
     let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
-    if !content
-        .lines()
-        .any(|line| line.trim() == REPO_POLICY_LOCAL_FILE_NAME)
-    {
+    for entry in [REPO_POLICY_LOCAL_FILE_NAME, ".bitloops/"] {
+        if content.lines().any(|line| line.trim() == entry) {
+            continue;
+        }
         if !content.is_empty() && !content.ends_with('\n') {
             content.push('\n');
         }
-        content.push_str(REPO_POLICY_LOCAL_FILE_NAME);
+        content.push_str(entry);
         content.push('\n');
-        fs::write(&exclude_path, content)
-            .with_context(|| format!("writing {}", exclude_path.display()))?;
     }
+    fs::write(&exclude_path, content)
+        .with_context(|| format!("writing {}", exclude_path.display()))?;
 
+    Ok(())
+}
+
+#[cfg(test)]
+fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
+    fs::create_dir_all(repo_root.join(SETTINGS_DIR))
+        .with_context(|| format!("creating {SETTINGS_DIR}/ directory"))?;
     Ok(())
 }
 
@@ -135,7 +112,6 @@ pub async fn run(args: EnableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let repo_root = find_repo_root(&cwd)?;
 
-    setup_bitloops_dir(&repo_root)?;
     ensure_repo_local_policy_excluded(&repo_root)?;
 
     if args.local || args.project {
