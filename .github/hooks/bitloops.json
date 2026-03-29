@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "agentStop": [
+      {
+        "bash": "bitloops hooks copilot agent-stop",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "errorOccurred": [
+      {
+        "bash": "bitloops hooks copilot error-occurred",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "postToolUse": [
+      {
+        "bash": "bitloops hooks copilot post-tool-use",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "preToolUse": [
+      {
+        "bash": "bitloops hooks copilot pre-tool-use",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "bash": "bitloops hooks copilot session-end",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "sessionStart": [
+      {
+        "bash": "bitloops hooks copilot session-start",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "subagentStop": [
+      {
+        "bash": "bitloops hooks copilot subagent-stop",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "bash": "bitloops hooks copilot user-prompt-submitted",
+        "comment": "Bitloops CLI",
+        "type": "command"
+      }
+    ]
+  },
+  "version": 1
+}
