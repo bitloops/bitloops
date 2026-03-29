@@ -1,4 +1,7 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::SqliteConnectionPool;
 use super::current_state::{
@@ -19,6 +22,11 @@ CREATE TABLE IF NOT EXISTS repositories (
 
 impl SqliteConnectionPool {
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
+        let schema_lock = checkpoint_schema_lock_for(self.db_path());
+        let _guard = schema_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         self.execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
             .context("initialising SQLite checkpoint schema")?;
         self.with_connection(|conn| {
@@ -129,4 +137,20 @@ ON workspace_revisions (repo_id, tree_hash);
             Ok(())
         })
     }
+}
+
+fn checkpoint_schema_lock_for(db_path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let canonical = db_path
+        .canonicalize()
+        .unwrap_or_else(|_| db_path.to_path_buf());
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(
+        locks
+            .entry(canonical)
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
 }
