@@ -6,6 +6,17 @@ use super::current_state::{
 };
 use super::introspection::sqlite_table_exists;
 
+const DEVQL_LEGACY_BOOTSTRAP_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS repositories (
+    repo_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    organization TEXT NOT NULL,
+    name TEXT NOT NULL,
+    default_branch TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"#;
+
 impl SqliteConnectionPool {
     pub fn initialise_checkpoint_schema(&self) -> Result<()> {
         self.execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
@@ -23,12 +34,14 @@ impl SqliteConnectionPool {
     pub fn initialise_devql_schema(&self) -> Result<()> {
         self.migrate_workspace_revisions_uniqueness()
             .context("migrating SQLite workspace_revisions uniqueness (pre-schema)")?;
-        self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
-            .context("initialising SQLite DevQL schema")?;
+        self.execute_batch(DEVQL_LEGACY_BOOTSTRAP_SQL)
+            .context("bootstrapping SQLite DevQL catalog tables")?;
         self.migrate_devql_checkpoint_columns()
             .context("migrating SQLite DevQL checkpoint columns")?;
         self.migrate_devql_branch_scope_current_tables()
             .context("migrating SQLite DevQL current-state branch scope")?;
+        self.execute_batch(crate::host::devql::devql_schema_sql_sqlite())
+            .context("initialising SQLite DevQL schema")?;
         self.migrate_workspace_revisions_uniqueness()
             .context("migrating SQLite workspace_revisions uniqueness")
     }
@@ -67,7 +80,10 @@ impl SqliteConnectionPool {
             ),
         ];
         self.with_connection(|conn| {
-            for (_table, column, sql) in migrations {
+            for (table, column, sql) in migrations {
+                if !sqlite_table_exists(conn, table)? {
+                    continue;
+                }
                 match conn.execute_batch(sql) {
                     Ok(()) => {}
                     Err(err)

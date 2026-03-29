@@ -416,6 +416,7 @@ mod tests {
             vec![
                 "Bitloops daemon: stopped".to_string(),
                 "Mode: always-on service".to_string(),
+                "Config: /tmp/.bitloops/config.json".to_string(),
                 "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
                 "Supervisor state: stopped".to_string(),
                 "Last URL: https://127.0.0.1:5173".to_string(),

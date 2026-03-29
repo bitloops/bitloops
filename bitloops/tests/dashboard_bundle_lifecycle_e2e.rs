@@ -37,7 +37,23 @@ fn init_repo(repo: &Path) {
     fs::write(repo.join("README.md"), "dashboard e2e\n").expect("write readme");
     run_git(repo, &["add", "README.md"]);
     run_git(repo, &["commit", "-m", "init"]);
+    write_local_bitloops_config(repo);
     ensure_dashboard_store_files(repo);
+}
+
+fn write_local_bitloops_config(repo_root: &Path) {
+    let config_dir = repo_root.join(".bitloops");
+    fs::create_dir_all(&config_dir).expect("create local bitloops config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": "1.0",
+            "scope": "project",
+            "settings": {}
+        }))
+        .expect("serialise local bitloops config"),
+    )
+    .expect("write local bitloops config");
 }
 
 fn ensure_dashboard_store_files(repo_root: &Path) {

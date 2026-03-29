@@ -218,6 +218,13 @@ fn resolve_repo_root_from_cwd(cwd: &Path) -> Result<PathBuf> {
 }
 
 fn resolve_active_branch_name(repo_root: &Path) -> Result<String> {
+    if let Ok(branch) = run_git(repo_root, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        let branch = branch.trim();
+        if !branch.is_empty() {
+            return Ok(branch.to_string());
+        }
+    }
+
     let branch = run_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
         .context("reading active git branch for DevQL scope")?;
     let branch = branch.trim();
@@ -384,6 +391,17 @@ mod tests {
 
         let err = discover_slim_cli_repo_scope(Some(repo.path())).expect_err("detached HEAD");
         assert!(format!("{err:#}").contains("detached HEAD"));
+    }
+
+    #[test]
+    fn discover_slim_cli_repo_scope_handles_unborn_head_branches() {
+        let repo = TempDir::new().expect("temp dir");
+        init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+
+        let scope = discover_slim_cli_repo_scope(Some(repo.path())).expect("discover slim scope");
+
+        assert_eq!(scope.branch_name, "main");
+        assert_eq!(scope.project_path, None);
     }
 
     #[test]

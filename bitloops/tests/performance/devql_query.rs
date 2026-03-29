@@ -28,16 +28,12 @@ fn latency_budget_from_env(var: &str, default_ms: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
-fn sample_query(repo_name: &str) -> String {
-    format!(
-        r#"query ListCheckpoints {{
-  repo(name: "{repo_name}") {{
-    file(path: "./src/repositories/user_repository.rs") {{
-      language
-    }}
-  }}
-}}"#
-    )
+fn sample_query() -> &'static str {
+    r#"query ListCheckpoints {
+  file(path: "./src/repositories/user_repository.rs") {
+    language
+  }
+}"#
 }
 
 fn assert_latency_within_budget(label: &str, elapsed: Duration, latency_budget: Duration) {
@@ -55,19 +51,19 @@ fn assert_latency_within_budget(label: &str, elapsed: Duration, latency_budget: 
 fn bitloops_devql_first_query_stays_within_latency_budget_end_to_end() {
     let _guard = performance_suite_lock();
     let seeded = seeded_rust_graphql_workspace("perf-devql-first-query");
-    let query = sample_query(&seeded.repo_name);
+    let query = sample_query();
     let latency_budget =
         latency_budget_from_env(FIRST_QUERY_BUDGET_ENV, DEFAULT_FIRST_QUERY_BUDGET_MS);
 
     let started = Instant::now();
     let output = run_query_json(
-        &seeded.workspace,
-        &["devql", "query", "--compact", query.as_str()],
+        &seeded,
+        &["devql", "query", "--compact", query],
     );
     let elapsed = started.elapsed();
 
     assert!(
-        output["repo"]["file"]["language"].as_str().is_some(),
+        output["file"]["language"].as_str().is_some(),
         "expected seeded first-query latency check to resolve file language"
     );
     assert_latency_within_budget("first query", elapsed, latency_budget);
@@ -78,28 +74,28 @@ fn bitloops_devql_first_query_stays_within_latency_budget_end_to_end() {
 fn bitloops_devql_warm_query_stays_within_latency_budget_end_to_end() {
     let _guard = performance_suite_lock();
     let seeded = seeded_rust_graphql_workspace("perf-devql-warm-query");
-    let query = sample_query(&seeded.repo_name);
+    let query = sample_query();
     let latency_budget =
         latency_budget_from_env(WARM_QUERY_BUDGET_ENV, DEFAULT_WARM_QUERY_BUDGET_MS);
 
     let first_output = run_query_json(
-        &seeded.workspace,
-        &["devql", "query", "--compact", query.as_str()],
+        &seeded,
+        &["devql", "query", "--compact", query],
     );
     assert!(
-        first_output["repo"]["file"]["language"].as_str().is_some(),
+        first_output["file"]["language"].as_str().is_some(),
         "expected seeded warmup query to resolve file language"
     );
 
     let started = Instant::now();
     let warm_output = run_query_json(
-        &seeded.workspace,
-        &["devql", "query", "--compact", query.as_str()],
+        &seeded,
+        &["devql", "query", "--compact", query],
     );
     let elapsed = started.elapsed();
 
     assert!(
-        warm_output["repo"]["file"]["language"].as_str().is_some(),
+        warm_output["file"]["language"].as_str().is_some(),
         "expected seeded warm-query latency check to resolve file language"
     );
     assert_latency_within_budget("warm query", elapsed, latency_budget);
