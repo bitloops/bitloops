@@ -530,7 +530,10 @@ async fn devql_repository_branch_selector_applies_live_branch_scope() {
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["repo"]["branch"]["defaultBranch"], "main");
     assert_eq!(json["repo"]["branch"]["commits"]["totalCount"], 2);
-    assert_eq!(json["repo"]["branch"]["commits"]["edges"][0]["node"]["branch"], "main");
+    assert_eq!(
+        json["repo"]["branch"]["commits"]["edges"][0]["node"]["branch"],
+        "main"
+    );
 }
 
 #[tokio::test]
@@ -562,9 +565,7 @@ async fn devql_global_queries_fail_cleanly_when_repo_checkout_is_unknown() {
 
     assert_eq!(response.errors.len(), 1, "expected one graphql error");
     assert!(
-        response.errors[0]
-            .message
-            .contains("repo checkout unknown"),
+        response.errors[0].message.contains("repo checkout unknown"),
         "unexpected graphql errors: {:?}",
         response.errors
     );

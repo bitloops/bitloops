@@ -69,7 +69,9 @@ pub(super) async fn execute_devql_graphql<T: DeserializeOwned>(
     variables: serde_json::Value,
 ) -> Result<T> {
     #[cfg(test)]
-    if let Some(data) = maybe_execute_devql_graphql_via_hook(scope.repo_root.as_path(), query, &variables) {
+    if let Some(data) =
+        maybe_execute_devql_graphql_via_hook(scope.repo_root.as_path(), query, &variables)
+    {
         return Ok(serde_json::from_value(data?)?);
     }
 
@@ -110,17 +112,17 @@ pub(super) fn with_graphql_executor_hook<T>(
 ) -> T {
     GRAPHQL_EXECUTOR_HOOK.with(
         |cell: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-        assert!(
-            cell.borrow().is_none(),
-            "graphql executor hook already installed"
-        );
-        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+            assert!(
+                cell.borrow().is_none(),
+                "graphql executor hook already installed"
+            );
+            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
         },
     );
     let result = f();
     GRAPHQL_EXECUTOR_HOOK.with(
         |cell: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-        *cell.borrow_mut() = None;
+            *cell.borrow_mut() = None;
         },
     );
     result
@@ -134,9 +136,9 @@ fn maybe_execute_devql_graphql_via_hook(
 ) -> Option<Result<serde_json::Value>> {
     GRAPHQL_EXECUTOR_HOOK.with(
         |hook: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
-        hook.borrow()
-            .as_ref()
-            .map(|hook| hook(repo_root, query, variables))
+            hook.borrow()
+                .as_ref()
+                .map(|hook| hook(repo_root, query, variables))
         },
     )
 }

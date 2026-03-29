@@ -205,9 +205,7 @@ impl MutationRoot {
     ) -> Result<AddKnowledgeMutationResult> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
             .require_repo_write_scope()
-            .map_err(|err| {
-                operation_error("BAD_USER_INPUT", "validation", "addKnowledge", err)
-            })?;
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "addKnowledge", err))?;
         let url = require_non_empty_input(input.url, "url", "addKnowledge")?;
         let commit_ref = normalise_optional_input(input.commit_ref, "commitRef", "addKnowledge")?;
         let payload: AddKnowledgeIngesterPayload = execute_knowledge_ingester(

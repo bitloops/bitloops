@@ -89,7 +89,8 @@ async fn devql_global_routes_serve_full_schema_and_playground() {
         temp.path().to_path_buf(),
     ));
 
-    let (playground_status, playground_body) = request_text(app.clone(), "/devql/global/playground").await;
+    let (playground_status, playground_body) =
+        request_text(app.clone(), "/devql/global/playground").await;
     assert_eq!(playground_status, StatusCode::OK);
     assert!(playground_body.contains("DevQL Global Explorer"));
     assert!(playground_body.contains("/devql/global"));
@@ -230,9 +231,7 @@ async fn devql_post_route_executes_graphql_requests() {
         "/devql",
         "application/json",
         &slim_headers_ref,
-        Body::from(
-            r#"{"query":"{ defaultBranch health { blob { backend connected } } }"}"#,
-        ),
+        Body::from(r#"{"query":"{ defaultBranch health { blob { backend connected } } }"}"#),
     )
     .await;
 

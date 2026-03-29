@@ -73,7 +73,9 @@ impl DevqlGraphqlContext {
             .iter()
             .map(|path| (path.clone(), build_path_candidates(path)))
             .collect::<HashMap<_, _>>();
-        let events = self.list_chat_history_events(scope, &path_candidates).await?;
+        let events = self
+            .list_chat_history_events(scope, &path_candidates)
+            .await?;
 
         let mut entries_by_path = unique_paths
             .iter()

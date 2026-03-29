@@ -301,9 +301,15 @@ mod tests {
         assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx"));
         assert!(sql.contains("ON artefacts_current (repo_id, branch, symbol_fqn);"));
         assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx"));
-        assert!(sql.contains("ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);"));
+        assert!(
+            sql.contains("ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);")
+        );
         assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx"));
-        assert!(sql.contains("ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);"));
-        assert!(sql.contains("ON artefact_edges_current (\n    repo_id,\n    branch,\n    from_symbol_id,"));
+        assert!(
+            sql.contains("ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);")
+        );
+        assert!(sql.contains(
+            "ON artefact_edges_current (\n    repo_id,\n    branch,\n    from_symbol_id,"
+        ));
     }
 }

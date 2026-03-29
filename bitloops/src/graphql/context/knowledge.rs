@@ -45,10 +45,7 @@ LIMIT 1",
     ) -> Result<Vec<KnowledgeItem>> {
         let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
         let repo_id = self.repo_id_for_scope(scope)?;
-        let mut conditions = vec![format!(
-            "i.repo_id = '{}'",
-            esc_pg(&repo_id)
-        )];
+        let mut conditions = vec![format!("i.repo_id = '{}'", esc_pg(&repo_id))];
         if let Some(provider) = provider {
             conditions.push(format!(
                 "s.provider = '{}'",

@@ -199,7 +199,10 @@ impl DevqlGraphqlContext {
     }
 
     pub(crate) fn repo_id_for_scope(&self, scope: &super::ResolverScope) -> Result<String> {
-        Ok(self.repository_selection_for_scope(scope)?.repo_id().to_string())
+        Ok(self
+            .repository_selection_for_scope(scope)?
+            .repo_id()
+            .to_string())
     }
 
     pub(crate) fn repo_root_for_scope(&self, scope: &super::ResolverScope) -> Result<PathBuf> {
@@ -213,7 +216,10 @@ impl DevqlGraphqlContext {
     }
 
     pub(crate) fn repo_name_for_scope(&self, scope: &super::ResolverScope) -> Result<String> {
-        Ok(self.repository_selection_for_scope(scope)?.name().to_string())
+        Ok(self
+            .repository_selection_for_scope(scope)?
+            .name()
+            .to_string())
     }
 
     pub(crate) fn repo_registry_path(&self) -> Option<&Path> {

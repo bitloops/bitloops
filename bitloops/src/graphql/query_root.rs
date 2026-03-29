@@ -1,5 +1,5 @@
-use super::context::DevqlGraphqlContext;
 use super::backend_error;
+use super::context::DevqlGraphqlContext;
 use super::types::{HealthStatus, Repository};
 use async_graphql::{Context, Object, Result};
 

@@ -664,11 +664,11 @@ pub(crate) use self::ingestion_types::{
     IngestedCheckpointNotification, IngestionCounters, IngestionObserver, IngestionProgressPhase,
     IngestionProgressUpdate,
 };
-use self::query_executor::*;
+pub(crate) use self::query_dsl_compiler::GraphqlCompileMode;
 pub(crate) use self::query_dsl_compiler::compile_devql_to_graphql_with_mode;
+use self::query_executor::*;
 pub(crate) use self::query_parser::parse_devql_query;
 use self::query_parser::*;
-pub(crate) use self::query_dsl_compiler::GraphqlCompileMode;
 pub(crate) use self::query_parser::{AsOfSelector as DevqlAsOfSelector, ParsedDevqlQuery};
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;

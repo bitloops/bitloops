@@ -53,9 +53,7 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
         Some(path) => path.to_path_buf(),
         None => env::current_dir().context("resolving current directory for DevQL scope")?,
     };
-    let cwd = cwd
-        .canonicalize()
-        .unwrap_or_else(|_| cwd.clone());
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
     let repo_root = resolve_repo_root_from_cwd(&cwd)?;
     let repo = resolve_repo_identity(&repo_root)?;
     let branch_name = resolve_active_branch_name(&repo_root)?;
@@ -102,7 +100,9 @@ pub(crate) fn attach_slim_cli_scope_headers(
     }
 }
 
-pub(crate) fn parse_slim_cli_scope_headers(headers: &HeaderMap) -> Result<Option<SlimCliRepoScope>> {
+pub(crate) fn parse_slim_cli_scope_headers(
+    headers: &HeaderMap,
+) -> Result<Option<SlimCliRepoScope>> {
     let Some(repo_root) = header_value(headers, HEADER_SCOPE_REPO_ROOT)? else {
         return Ok(None);
     };
@@ -135,8 +135,8 @@ pub(crate) fn load_repo_path_registry(path: &Path) -> Result<RepoPathRegistry> {
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
-    let mut registry: RepoPathRegistry = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let mut registry: RepoPathRegistry =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
     if registry.version == 0 {
         registry.version = 1;
     }
@@ -180,7 +180,9 @@ pub(crate) fn upsert_repo_path_registry_scope(path: &Path, scope: &SlimCliRepoSc
     } else {
         registry.entries.push(new_entry);
     }
-    registry.entries.sort_by(|left, right| left.name.cmp(&right.name));
+    registry
+        .entries
+        .sort_by(|left, right| left.name.cmp(&right.name));
     persist_repo_path_registry(path, &registry)
 }
 
@@ -356,7 +358,13 @@ mod tests {
         let worktree_root_str = worktree_root.to_string_lossy().to_string();
         git_ok(
             repo.path(),
-            &["worktree", "add", "-b", "feature/worktree", &worktree_root_str],
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/worktree",
+                &worktree_root_str,
+            ],
         );
         let nested = worktree_root.join("nested");
         fs::create_dir_all(&nested).expect("create nested worktree directory");
@@ -414,7 +422,13 @@ mod tests {
 
         let registry = load_repo_path_registry(&registry_path).expect("load registry");
         assert_eq!(registry.entries.len(), 1);
-        assert_eq!(registry.entries[0].last_branch.as_deref(), Some("feature/refactor"));
-        assert_eq!(registry.entries[0].git_dir_relative_path.as_deref(), Some(".git"));
+        assert_eq!(
+            registry.entries[0].last_branch.as_deref(),
+            Some("feature/refactor")
+        );
+        assert_eq!(
+            registry.entries[0].git_dir_relative_path.as_deref(),
+            Some(".git")
+        );
     }
 }

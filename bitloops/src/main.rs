@@ -104,9 +104,7 @@ mod tests {
 
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-            })
+            Some(DashboardLocalDashboardConfig { tls: Some(true) })
         );
     }
 

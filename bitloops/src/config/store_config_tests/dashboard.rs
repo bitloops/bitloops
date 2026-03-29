@@ -18,9 +18,7 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
 
     assert_eq!(
         resolve_dashboard_config().local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
@@ -46,9 +44,7 @@ fn dashboard_file_config_reads_local_dashboard_flags() {
     let cfg = DashboardFileConfig::from_json_value(&value);
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
@@ -79,9 +75,7 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
     let cfg = DashboardFileConfig::from_json_value(&value);
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
@@ -103,9 +97,7 @@ fn dashboard_file_config_load_reads_repo_config_file() {
         let cfg = DashboardFileConfig::load();
         assert_eq!(
             cfg.local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-            })
+            Some(DashboardLocalDashboardConfig { tls: Some(true) })
         );
     });
 }
@@ -127,9 +119,7 @@ fn resolve_dashboard_config_reads_repo_config_file() {
     with_cwd(temp.path(), || {
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-            })
+            Some(DashboardLocalDashboardConfig { tls: Some(true) })
         );
     });
 }

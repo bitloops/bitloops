@@ -8,8 +8,8 @@ use crate::graphql::types::{HealthBackendStatus, HealthStatus, Repository};
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, build_capability_host, deterministic_uuid, resolve_repo_identity,
 };
-use anyhow::{Result, bail};
 use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
+use anyhow::{Result, bail};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -81,15 +81,17 @@ impl DevqlGraphqlContext {
         db: DashboardDbPools,
     ) -> Self {
         let backend_config = resolve_store_backend_config_for_repo(&config_root).ok();
-        let repo_identity =
-            resolve_repo_identity(&repo_root).unwrap_or_else(|_| fallback_repo_identity(repo_root.as_path()));
+        let repo_identity = resolve_repo_identity(&repo_root)
+            .unwrap_or_else(|_| fallback_repo_identity(repo_root.as_path()));
         let default_repository = SelectedRepository::new(
             repo_identity.repo_id.clone(),
             repo_identity.provider.clone(),
             repo_identity.organization.clone(),
             repo_identity.name.clone(),
             repo_identity.identity.clone(),
-            Some(super::git_history::git_default_branch_name(repo_root.as_path())),
+            Some(super::git_history::git_default_branch_name(
+                repo_root.as_path(),
+            )),
             Some(repo_root.clone()),
         );
         let (config, config_error) = match DevqlConfig::from_roots(

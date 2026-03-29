@@ -109,7 +109,8 @@ impl Extension for LoaderRegistryRequestExtension {
                     None,
                 )
             })?;
-        next.run(ctx, request.data(DataLoaders::new(&context))).await
+        next.run(ctx, request.data(DataLoaders::new(&context)))
+            .await
     }
 }
 

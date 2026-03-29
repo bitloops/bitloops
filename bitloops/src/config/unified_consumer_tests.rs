@@ -283,9 +283,7 @@ fn dashboard_from_unified_reads_local_dashboard_flags() {
     let cfg = resolve_dashboard_from_unified(&settings);
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 

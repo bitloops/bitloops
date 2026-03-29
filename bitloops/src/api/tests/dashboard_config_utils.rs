@@ -41,9 +41,7 @@ fn startup_mode_uses_configured_https_fast_path() {
         recheck_local_dashboard_net: false,
         bundle_dir: None,
     };
-    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
-        tls: Some(true),
-    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig { tls: Some(true) };
 
     let mode =
         select_startup_mode(&config, Some(&local_dashboard), None).expect("configured https mode");
@@ -60,9 +58,7 @@ fn startup_mode_recheck_flag_forces_slow_probe() {
         recheck_local_dashboard_net: true,
         bundle_dir: None,
     };
-    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
-        tls: Some(true),
-    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig { tls: Some(true) };
 
     let mode = select_startup_mode(&config, Some(&local_dashboard), None).expect("slow probe");
     assert_eq!(mode, DashboardStartupMode::SlowProbe);

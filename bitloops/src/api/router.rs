@@ -179,7 +179,10 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
     Router::new()
         .route("/api/", get(handle_api_root))
         .nest("/api", build_dashboard_api_router())
-        .route("/devql", post(slim_graphql_handler).get(slim_graphql_playground_handler))
+        .route(
+            "/devql",
+            post(slim_graphql_handler).get(slim_graphql_playground_handler),
+        )
         .route("/devql/playground", get(slim_graphql_playground_handler))
         .route("/devql/sdl", get(slim_graphql_sdl_handler))
         .route("/devql/ws", get(slim_graphql_ws_handler))

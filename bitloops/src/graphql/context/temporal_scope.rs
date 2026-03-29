@@ -35,7 +35,9 @@ impl DevqlGraphqlContext {
                 TemporalAccessMode::SaveCurrent,
             )),
             AsOfSelector::SaveRevision(revision_id) => {
-                let resolved_commit = self.resolve_save_revision_commit(scope, revision_id).await?;
+                let resolved_commit = self
+                    .resolve_save_revision_commit(scope, revision_id)
+                    .await?;
                 Ok(ResolvedTemporalScope::new(
                     resolved_commit,
                     TemporalAccessMode::SaveRevision(revision_id.to_string()),

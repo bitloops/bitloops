@@ -36,7 +36,11 @@ impl DevqlConfig {
         Self::from_roots(repo_root.clone(), repo_root, repo)
     }
 
-    pub fn from_roots(config_root: PathBuf, repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
+    pub fn from_roots(
+        config_root: PathBuf,
+        repo_root: PathBuf,
+        repo: RepoIdentity,
+    ) -> Result<Self> {
         let backend_cfg = resolve_store_backend_config_for_repo(&config_root)
             .context("resolving backend config for DevQL runtime")?;
         let semantic_cfg = resolve_store_semantic_config_for_repo(&config_root);

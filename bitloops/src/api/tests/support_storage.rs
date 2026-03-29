@@ -52,11 +52,7 @@ pub(super) fn write_envelope_config(repo_root: &Path, settings: serde_json::Valu
     .expect("write config");
 }
 
-pub(super) fn seed_repository_catalog_row(
-    repo_root: &Path,
-    repo_name: &str,
-    default_branch: &str,
-) {
+pub(super) fn seed_repository_catalog_row(repo_root: &Path, repo_name: &str, default_branch: &str) {
     let head_commit = git_ok(repo_root, &["rev-parse", "HEAD"]);
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     crate::storage::init::init_database(&sqlite_path, false, &head_commit)

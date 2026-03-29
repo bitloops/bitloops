@@ -8,11 +8,11 @@ use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_u
 use super::types::{
     Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, Branch,
     CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput,
-    CommitConnection, CommitEdge, DateTimeScalar, DepsFilterInput, DependencyConnectionEdge,
-    DependencyEdgeConnection, FileContext, HealthStatus, JsonScalar, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection, TelemetryEventEdge,
-    TemporalScope, TestHarnessCoverageResult, TestHarnessTestsResult, connection::PageInfo,
-    paginate_items,
+    CommitConnection, CommitEdge, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, JsonScalar,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection,
+    TelemetryEventEdge, TemporalScope, TestHarnessCoverageResult, TestHarnessTestsResult,
+    connection::PageInfo, paginate_items,
 };
 
 #[derive(Default)]
@@ -33,16 +33,19 @@ impl SlimQueryRoot {
             .require_slim_request_scope()
             .map_err(|err| bad_user_input_error(err.to_string()))?;
         let scope = context.slim_root_scope();
-        let temporal_scope = context.resolve_temporal_scope(&scope, &input).await.map_err(|err| {
-            let message = format!("{err:#}");
-            if context.is_unknown_revision_error(&err)
-                || message.contains("asOf(input:")
-                || message.contains("unknown save revision")
-            {
-                return bad_user_input_error(message);
-            }
-            backend_error(format!("failed to resolve temporal scope: {message}"))
-        })?;
+        let temporal_scope = context
+            .resolve_temporal_scope(&scope, &input)
+            .await
+            .map_err(|err| {
+                let message = format!("{err:#}");
+                if context.is_unknown_revision_error(&err)
+                    || message.contains("asOf(input:")
+                    || message.contains("unknown save revision")
+                {
+                    return bad_user_input_error(message);
+                }
+                backend_error(format!("failed to resolve temporal scope: {message}"))
+            })?;
 
         Ok(TemporalScope::new(
             &temporal_scope,
@@ -146,7 +149,9 @@ impl SlimQueryRoot {
         #[graphql(default = 50)] first: i32,
         after: Option<String>,
     ) -> Result<CheckpointConnection> {
-        let scope = ctx.data_unchecked::<DevqlGraphqlContext>().slim_root_scope();
+        let scope = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .slim_root_scope();
         let checkpoints = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_checkpoints(&scope, agent.as_deref(), since.as_ref())
@@ -171,10 +176,17 @@ impl SlimQueryRoot {
         #[graphql(default = 50)] first: i32,
         after: Option<String>,
     ) -> Result<TelemetryEventConnection> {
-        let scope = ctx.data_unchecked::<DevqlGraphqlContext>().slim_root_scope();
+        let scope = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .slim_root_scope();
         let telemetry = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_telemetry_events(&scope, event_type.as_deref(), agent.as_deref(), since.as_ref())
+            .list_telemetry_events(
+                &scope,
+                event_type.as_deref(),
+                agent.as_deref(),
+                since.as_ref(),
+            )
             .await
             .map_err(|err| backend_error(format!("failed to query telemetry: {err:#}")))?;
         let page = paginate_items(&telemetry, first, after.as_deref(), |event| event.cursor())?;
@@ -221,7 +233,9 @@ impl SlimQueryRoot {
         context
             .resolve_file_context(&normalized, &scope)
             .await
-            .map_err(|err| backend_error(format!("failed to resolve file `{normalized}`: {err:#}")))?
+            .map_err(|err| {
+                backend_error(format!("failed to resolve file `{normalized}`: {err:#}"))
+            })?
             .ok_or_else(|| bad_user_input_error(format!("unknown path `{normalized}`")))
     }
 
@@ -234,7 +248,9 @@ impl SlimQueryRoot {
         context
             .list_file_contexts(&normalized, &scope)
             .await
-            .map_err(|err| backend_error(format!("failed to resolve files `{normalized}`: {err:#}")))
+            .map_err(|err| {
+                backend_error(format!("failed to resolve files `{normalized}`: {err:#}"))
+            })
     }
 
     async fn artefacts(
@@ -271,7 +287,13 @@ impl SlimQueryRoot {
         }
 
         let mut artefacts = context
-            .list_artefacts_window(None, filter.as_ref(), &scope, after.as_deref(), first as usize + 1)
+            .list_artefacts_window(
+                None,
+                filter.as_ref(),
+                &scope,
+                after.as_deref(),
+                first as usize + 1,
+            )
             .await
             .map_err(|err| backend_error(format!("failed to query artefacts: {err:#}")))?;
         let has_next_page = artefacts.len() > first as usize;
@@ -322,7 +344,9 @@ impl SlimQueryRoot {
         #[graphql(default = 25)] first: i32,
         after: Option<String>,
     ) -> Result<KnowledgeItemConnection> {
-        let scope = ctx.data_unchecked::<DevqlGraphqlContext>().slim_root_scope();
+        let scope = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .slim_root_scope();
         let items = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_knowledge_items(provider, &scope)
@@ -394,7 +418,10 @@ impl SlimQueryRoot {
             StageResolverAdapter::new(context.clone(), "tests")
                 .resolve(
                     &scope,
-                    artefacts.iter().map(project_stage_row_from_artefact).collect(),
+                    artefacts
+                        .iter()
+                        .map(project_stage_row_from_artefact)
+                        .collect(),
                     Some(args),
                     stage_limit(first)?,
                 )
@@ -424,7 +451,10 @@ impl SlimQueryRoot {
             StageResolverAdapter::new(context.clone(), "coverage")
                 .resolve(
                     &scope,
-                    artefacts.iter().map(project_stage_row_from_artefact).collect(),
+                    artefacts
+                        .iter()
+                        .map(project_stage_row_from_artefact)
+                        .collect(),
                     None,
                     stage_limit(first)?,
                 )
@@ -449,7 +479,10 @@ impl SlimQueryRoot {
         let rows = StageResolverAdapter::new(context.clone(), stage.as_str())
             .resolve(
                 &scope,
-                artefacts.iter().map(project_stage_row_from_artefact).collect(),
+                artefacts
+                    .iter()
+                    .map(project_stage_row_from_artefact)
+                    .collect(),
                 args.map(|value| value.0),
                 stage_limit(first)?,
             )

@@ -35,9 +35,7 @@ use self::subscription_root::SubscriptionRoot;
 use anyhow::{Result, anyhow};
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, GraphQLPlaygroundConfig, playground_source};
 use async_graphql::{Pos, Request, Response, Schema, ServerError, Variables};
-use async_graphql_axum::{
-    GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket,
-};
+use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket};
 use axum::{
     extract::State,
     extract::WebSocketUpgrade,
@@ -167,12 +165,7 @@ pub(crate) async fn slim_graphql_handler(
         state.db.clone(),
     )
     .with_subscription_hub(state.subscription_hub());
-    execute_graphql_request(
-        state.devql_slim_schema(),
-        request.data(context),
-        &headers,
-    )
-    .await
+    execute_graphql_request(state.devql_slim_schema(), request.data(context), &headers).await
 }
 
 pub(crate) async fn global_graphql_handler(
@@ -188,12 +181,7 @@ pub(crate) async fn global_graphql_handler(
         state.db.clone(),
     )
     .with_subscription_hub(state.subscription_hub());
-    execute_graphql_request(
-        state.devql_global_schema(),
-        request.data(context),
-        &headers,
-    )
-    .await
+    execute_graphql_request(state.devql_global_schema(), request.data(context), &headers).await
 }
 
 pub(crate) async fn slim_graphql_ws_handler(
@@ -297,11 +285,7 @@ pub(crate) async fn slim_graphql_playground_handler() -> impl IntoResponse {
 }
 
 pub(crate) async fn global_graphql_playground_handler() -> impl IntoResponse {
-    graphql_playground_response(
-        "/devql/global",
-        "/devql/global/ws",
-        "DevQL Global Explorer",
-    )
+    graphql_playground_response("/devql/global", "/devql/global/ws", "DevQL Global Explorer")
 }
 
 fn graphql_playground_response(

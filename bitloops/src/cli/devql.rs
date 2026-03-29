@@ -6,8 +6,8 @@ use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
-    compile_devql_to_graphql_with_mode, compile_query_document, parse_devql_query,
-    format_query_output, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
+    compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
+    parse_devql_query, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
     use_raw_graphql_mode,
 };
 
@@ -44,12 +44,8 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     if let DevqlCommand::Knowledge(args) = command {
         return match args.command {
             DevqlKnowledgeCommand::Add(add) => {
-                knowledge::run_knowledge_add_via_graphql(
-                    &scope,
-                    &add.url,
-                    add.commit.as_deref(),
-                )
-                .await
+                knowledge::run_knowledge_add_via_graphql(&scope, &add.url, add.commit.as_deref())
+                    .await
             }
             DevqlKnowledgeCommand::Associate(associate) => {
                 knowledge::run_knowledge_associate_via_graphql(
@@ -60,8 +56,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
                 .await
             }
             DevqlKnowledgeCommand::Refresh(refresh) => {
-                knowledge::run_knowledge_refresh_via_graphql(&scope, &refresh.knowledge_ref)
-                    .await
+                knowledge::run_knowledge_refresh_via_graphql(&scope, &refresh.knowledge_ref).await
             }
             DevqlKnowledgeCommand::Versions(versions) => {
                 run_knowledge_versions_via_host(&repo_root, &repo, &versions.knowledge_ref).await

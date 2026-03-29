@@ -17,6 +17,7 @@ use crate::models::{
     TestRunRecord,
 };
 
+#[allow(clippy::items_after_test_module)]
 mod devql_schema {
     include!("../../../../host/devql/ingestion/schema/relational_postgres_schema.rs");
 

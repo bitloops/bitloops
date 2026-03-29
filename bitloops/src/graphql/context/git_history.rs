@@ -16,7 +16,10 @@ use std::path::Path;
 use tokio::task;
 
 impl DevqlGraphqlContext {
-    pub(crate) async fn default_branch_name_for_scope(&self, scope: &crate::graphql::ResolverScope) -> String {
+    pub(crate) async fn default_branch_name_for_scope(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> String {
         let repo_root = match self.repo_root_for_scope(scope) {
             Ok(repo_root) => repo_root,
             Err(_) => {
@@ -146,7 +149,10 @@ impl DevqlGraphqlContext {
         .context("joining branch query task")?
     }
 
-    pub(crate) async fn list_users(&self, scope: &crate::graphql::ResolverScope) -> Result<Vec<String>> {
+    pub(crate) async fn list_users(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> Result<Vec<String>> {
         let repo_root = self.repo_root_for_scope(scope)?;
 
         task::spawn_blocking(move || -> Result<Vec<String>> {
@@ -191,7 +197,10 @@ impl DevqlGraphqlContext {
         .context("joining users query task")?
     }
 
-    pub(crate) async fn list_agents(&self, scope: &crate::graphql::ResolverScope) -> Result<Vec<String>> {
+    pub(crate) async fn list_agents(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> Result<Vec<String>> {
         let repo_root = self.repo_root_for_scope(scope)?;
 
         task::spawn_blocking(move || -> Result<Vec<String>> {
