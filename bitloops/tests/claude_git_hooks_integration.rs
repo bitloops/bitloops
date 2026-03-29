@@ -412,7 +412,6 @@ fn hook_logging_writes_to_session_log_file() {
 
     let session_id = "test-logging-session-123";
     write_test_session_state_for_logging(dir.path(), session_id);
-    fs::create_dir_all(dir.path().join(".bitloops/logs")).unwrap();
     let commit_msg_file = dir.path().join(".git/COMMIT_EDITMSG");
     fs::write(&commit_msg_file, "test commit\n").unwrap();
 
@@ -430,7 +429,9 @@ fn hook_logging_writes_to_session_log_file() {
     );
     assert_success(&out, "hooks git prepare-commit-msg");
 
-    let log_file = dir.path().join(".bitloops/logs/bitloops.log");
+    let log_file = test_command_support::with_repo_app_env(dir.path(), || {
+        bitloops::telemetry::logging::log_file_path()
+    });
     assert!(
         log_file.exists(),
         "expected log file at {}",
@@ -476,7 +477,9 @@ fn hook_logging_writes_without_session() {
     );
     assert_success(&out, "hooks git prepare-commit-msg");
 
-    let log_file = dir.path().join(".bitloops/logs/bitloops.log");
+    let log_file = test_command_support::with_repo_app_env(dir.path(), || {
+        bitloops::telemetry::logging::log_file_path()
+    });
     let content = fs::read_to_string(&log_file)
         .expect("expected bitloops.log to be created even without session");
     assert!(

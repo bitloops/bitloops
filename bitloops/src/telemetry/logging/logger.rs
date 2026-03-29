@@ -3,12 +3,13 @@ use anyhow::Result;
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::process::Command;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const LOG_LEVEL_ENV_VAR: &str = "BITLOOPS_LOG_LEVEL";
-pub const LOGS_DIR: &str = ".bitloops/logs";
+pub const LOGS_DIR: &str = "logs";
+pub const LOG_FILE_NAME: &str = "bitloops.log";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LogLevel {
@@ -105,15 +106,14 @@ pub fn init(session_id: &str) -> Result<()> {
         );
     }
 
-    let repo_root = repo_root();
-    let logs_dir = std::path::Path::new(&repo_root).join(LOGS_DIR);
+    let logs_dir = logs_dir_path();
     if std::fs::create_dir_all(&logs_dir).is_err() {
         state.output = OutputSink::Stderr;
         state.current_session_id.clear();
         return Ok(());
     }
 
-    let log_path = logs_dir.join("bitloops.log");
+    let log_path = log_file_path();
     match OpenOptions::new().create(true).append(true).open(&log_path) {
         Ok(file) => {
             state.output = OutputSink::File(BufWriter::with_capacity(8192, file));
@@ -309,19 +309,14 @@ fn validate_session_id(session_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn repo_root() -> String {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output();
-    if let Ok(output) = output
-        && output.status.success()
-    {
-        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !root.is_empty() {
-            return root;
-        }
-    }
-    ".".to_string()
+pub fn logs_dir_path() -> PathBuf {
+    crate::utils::platform_dirs::bitloops_state_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("bitloops").join("state"))
+        .join(LOGS_DIR)
+}
+
+pub fn log_file_path() -> PathBuf {
+    logs_dir_path().join(LOG_FILE_NAME)
 }
 
 fn is_valid_log_level(value: &str) -> bool {

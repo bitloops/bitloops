@@ -145,7 +145,8 @@ impl DevqlBddWorld {
         let workspace = tempfile::tempdir().expect("create temp logger workspace");
         let log_file_path = workspace
             .path()
-            .join(".bitloops")
+            .join("state-root")
+            .join("bitloops")
             .join("logs")
             .join("bitloops.log");
         self.log_file_path = Some(log_file_path);
