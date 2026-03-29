@@ -77,7 +77,9 @@ fn daemon_command(workdir: &Path) -> Command {
 }
 
 fn candidate_ports(workdir: &Path) -> Vec<u16> {
-    let canonical = workdir.canonicalize().unwrap_or_else(|_| workdir.to_path_buf());
+    let canonical = workdir
+        .canonicalize()
+        .unwrap_or_else(|_| workdir.to_path_buf());
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     let seed = hasher.finish();
