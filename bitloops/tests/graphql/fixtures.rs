@@ -98,7 +98,7 @@ pub fn run_query_json(seeded: &SeededGraphqlWorkspace, args: &[&str]) -> Value {
         seeded._daemon._home.path(),
         &seeded._daemon.xdg_config_home,
     ))
-        .expect("bitloops output should be valid JSON")
+    .expect("bitloops output should be valid JSON")
 }
 
 fn run_bitloops_with_daemon_home_or_panic(

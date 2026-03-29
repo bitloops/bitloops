@@ -34,8 +34,7 @@ fn bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end() {
     let seeded = seeded_rust_graphql_workspace("graphql-cli-default");
     let query = r#"{ artefacts(first: 2) { edges { node { path symbolFqn canonicalKind } } } }"#;
 
-    let default_output =
-        run_query_json(&seeded, &["devql", "query", "--compact", query]);
+    let default_output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
     let explicit_output = run_query_json(
         &seeded,
         &["devql", "query", "--graphql", "--compact", query],

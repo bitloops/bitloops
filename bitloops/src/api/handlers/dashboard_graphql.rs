@@ -237,7 +237,9 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
     Ok(rows)
 }
 
-fn dashboard_graphql_repo_selector(state: &DashboardState) -> std::result::Result<String, ApiError> {
+fn dashboard_graphql_repo_selector(
+    state: &DashboardState,
+) -> std::result::Result<String, ApiError> {
     crate::host::devql::resolve_repo_identity(&state.repo_root)
         .map(|repo| repo.repo_id)
         .map_err(|err| {

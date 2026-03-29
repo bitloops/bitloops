@@ -56,10 +56,7 @@ fn bitloops_devql_first_query_stays_within_latency_budget_end_to_end() {
         latency_budget_from_env(FIRST_QUERY_BUDGET_ENV, DEFAULT_FIRST_QUERY_BUDGET_MS);
 
     let started = Instant::now();
-    let output = run_query_json(
-        &seeded,
-        &["devql", "query", "--compact", query],
-    );
+    let output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
     let elapsed = started.elapsed();
 
     assert!(
@@ -78,20 +75,14 @@ fn bitloops_devql_warm_query_stays_within_latency_budget_end_to_end() {
     let latency_budget =
         latency_budget_from_env(WARM_QUERY_BUDGET_ENV, DEFAULT_WARM_QUERY_BUDGET_MS);
 
-    let first_output = run_query_json(
-        &seeded,
-        &["devql", "query", "--compact", query],
-    );
+    let first_output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
     assert!(
         first_output["file"]["language"].as_str().is_some(),
         "expected seeded warmup query to resolve file language"
     );
 
     let started = Instant::now();
-    let warm_output = run_query_json(
-        &seeded,
-        &["devql", "query", "--compact", query],
-    );
+    let warm_output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
     let elapsed = started.elapsed();
 
     assert!(
