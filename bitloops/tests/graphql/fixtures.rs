@@ -34,7 +34,7 @@ impl DaemonGuard {
                     "--host",
                     "127.0.0.1",
                     "--port",
-                    &port.to_string(),
+                    port.as_str(),
                 ])
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -76,7 +76,7 @@ fn daemon_command(workdir: &Path) -> Command {
     command
 }
 
-fn candidate_ports(workdir: &Path) -> Vec<u16> {
+fn candidate_ports(workdir: &Path) -> Vec<String> {
     let canonical = workdir
         .canonicalize()
         .unwrap_or_else(|_| workdir.to_path_buf());
@@ -84,9 +84,16 @@ fn candidate_ports(workdir: &Path) -> Vec<u16> {
     canonical.hash(&mut hasher);
     let seed = hasher.finish();
 
-    (0..8)
-        .map(|offset| 32000 + (((seed as u16).wrapping_add((offset * 983) as u16)) % 20000))
-        .collect()
+    let mut ports = Vec::new();
+    #[cfg(not(target_os = "macos"))]
+    ports.push("0".to_string());
+
+    ports.extend(
+        (0..8)
+            .map(|offset| 32000 + (((seed as u16).wrapping_add((offset * 983) as u16)) % 20000))
+            .map(|port| port.to_string()),
+    );
+    ports
 }
 
 fn read_child_stderr(child: &mut Child) -> String {

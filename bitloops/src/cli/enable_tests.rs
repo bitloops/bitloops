@@ -923,6 +923,25 @@ fn initialized_agents_detects_claude_and_cursor() {
 }
 
 #[test]
+fn initialized_agents_detects_installed_hooks_without_repo_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    with_repo_cwd(dir.path(), || {
+        claude_hooks::install_hooks(dir.path(), false).unwrap();
+        HookSupport::install_hooks(&CursorAgent, false, false).unwrap();
+        codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+    });
+
+    with_cwd(other.path(), || {
+        let agents = initialized_agents(dir.path());
+        assert!(agents.contains(&"claude-code".to_string()));
+        assert!(agents.contains(&"codex".to_string()));
+        assert!(agents.contains(&"cursor".to_string()));
+    });
+}
+
+#[test]
 fn initialized_agents_detects_copilot() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value, json};
@@ -107,11 +107,15 @@ fn hook_commands(local_dev: bool) -> [(&'static str, String); 9] {
     ]
 }
 
+fn hooks_file_path_at(repo_root: &Path) -> PathBuf {
+    repo_root.join(".cursor").join(HOOKS_FILE_NAME)
+}
+
 fn hooks_file_path() -> Result<PathBuf> {
     let repo_root = crate::utils::paths::repo_root().or_else(|_| {
         std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
     })?;
-    Ok(repo_root.join(".cursor").join(HOOKS_FILE_NAME))
+    Ok(hooks_file_path_at(&repo_root))
 }
 
 fn parse_top_level_map(data: &[u8]) -> Result<Map<String, Value>> {
@@ -203,7 +207,15 @@ fn marshal_hook_entries(raw_hooks: &mut Map<String, Value>, hook_type: &str, ent
 
 pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     let path = hooks_file_path()?;
-    let existing_data = fs::read(&path).ok();
+    install_hooks_at_path(&path, local_dev, force)
+}
+
+pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    install_hooks_at_path(&hooks_file_path_at(repo_root), local_dev, force)
+}
+
+fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    let existing_data = fs::read(path).ok();
 
     let mut raw_file = match existing_data {
         Some(data) => parse_top_level_map(&data)?,
@@ -247,13 +259,21 @@ pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     let mut output = serde_json::to_string_pretty(&Value::Object(raw_file))
         .map_err(|err| anyhow!("failed to marshal hooks.json: {err}"))?;
     output.push('\n');
-    fs::write(&path, output).map_err(|err| anyhow!("failed to write hooks.json: {err}"))?;
+    fs::write(path, output).map_err(|err| anyhow!("failed to write hooks.json: {err}"))?;
     Ok(installed)
 }
 
 pub fn uninstall_hooks() -> Result<()> {
     let path = hooks_file_path()?;
-    let data = match fs::read(&path) {
+    uninstall_hooks_at_path(&path)
+}
+
+pub fn uninstall_hooks_at(repo_root: &Path) -> Result<()> {
+    uninstall_hooks_at_path(&hooks_file_path_at(repo_root))
+}
+
+fn uninstall_hooks_at_path(path: &Path) -> Result<()> {
+    let data = match fs::read(path) {
         Ok(data) => data,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(anyhow!("failed to read hooks.json: {err}")),
@@ -289,7 +309,15 @@ pub fn are_hooks_installed() -> bool {
         Ok(path) => path,
         Err(_) => return false,
     };
-    let Ok(data) = fs::read(&path) else {
+    are_hooks_installed_at_path(&path)
+}
+
+pub fn are_hooks_installed_at(repo_root: &Path) -> bool {
+    are_hooks_installed_at_path(&hooks_file_path_at(repo_root))
+}
+
+fn are_hooks_installed_at_path(path: &Path) -> bool {
+    let Ok(data) = fs::read(path) else {
         return false;
     };
     let Ok(parsed) = serde_json::from_slice::<super::types::CursorHooksFile>(&data) else {
