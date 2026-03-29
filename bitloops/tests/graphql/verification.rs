@@ -1,5 +1,7 @@
-use crate::fixtures::{extract_connection_nodes, run_query_json, seeded_rust_graphql_workspace};
+use crate::fixtures::{run_query_json, seeded_rust_graphql_workspace};
 use serde_json::Value;
+
+const FIXTURE_FILE_PATH: &str = "src/repositories/user_repository.rs";
 
 #[test]
 fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
@@ -10,18 +12,31 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
             "devql",
             "query",
             "--compact",
-            r#"repo("graphql-cli-parity")->artefacts()->select(path,canonical_kind,symbol_fqn)->limit(10)"#,
+            r#"file("src/repositories/user_repository.rs")->artefacts()->select(path,canonical_kind,symbol_fqn)->limit(10)"#,
         ],
     );
 
-    let raw_query =
-        r#"{ artefacts(first: 10) { edges { node { path canonicalKind symbolFqn } } } }"#;
+    let raw_query = r#"
+        {
+          file(path: "src/repositories/user_repository.rs") {
+            artefacts(first: 10) {
+              edges {
+                node {
+                  path
+                  canonicalKind
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+    "#;
     let raw_output = run_query_json(
         &seeded,
         &["devql", "query", "--graphql", "--compact", raw_query],
     );
 
-    let raw_nodes = Value::Array(extract_connection_nodes(&raw_output));
+    let raw_nodes = Value::Array(extract_file_connection_nodes(&raw_output));
     assert!(
         raw_nodes.as_array().is_some_and(|rows| !rows.is_empty()),
         "expected seeded GraphQL query to return artefacts"
@@ -35,7 +50,21 @@ fn bitloops_devql_query_dsl_matches_raw_graphql_output_end_to_end() {
 #[test]
 fn bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end() {
     let seeded = seeded_rust_graphql_workspace("graphql-cli-default");
-    let query = r#"{ artefacts(first: 2) { edges { node { path symbolFqn canonicalKind } } } }"#;
+    let query = r#"
+        {
+          file(path: "src/repositories/user_repository.rs") {
+            artefacts(first: 2) {
+              edges {
+                node {
+                  path
+                  symbolFqn
+                  canonicalKind
+                }
+              }
+            }
+          }
+        }
+    "#;
 
     let default_output = run_query_json(&seeded, &["devql", "query", "--compact", query]);
     let explicit_output = run_query_json(
@@ -43,7 +72,21 @@ fn bitloops_devql_query_accepts_graphql_as_default_input_mode_end_to_end() {
         &["devql", "query", "--graphql", "--compact", query],
     );
 
+    let default_nodes = extract_file_connection_nodes(&default_output);
+    assert!(
+        !default_nodes.is_empty(),
+        "expected seeded GraphQL default-input query to return artefacts for {FIXTURE_FILE_PATH}"
+    );
     assert_eq!(default_output, explicit_output);
+}
+
+fn extract_file_connection_nodes(payload: &Value) -> Vec<Value> {
+    payload["file"]["artefacts"]["edges"]
+        .as_array()
+        .expect("file artefact connection edges")
+        .iter()
+        .map(|edge| edge["node"].clone())
+        .collect()
 }
 
 fn normalise_artefact_rows(value: &Value) -> Vec<Value> {

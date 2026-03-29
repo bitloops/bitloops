@@ -203,16 +203,3 @@ fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
     }
     String::from_utf8(output.stdout).expect("stdout should be valid utf-8")
 }
-
-pub fn extract_connection_nodes(payload: &Value) -> Vec<Value> {
-    let connection = payload
-        .get("repo")
-        .and_then(|repo| repo.get("artefacts"))
-        .unwrap_or_else(|| &payload["artefacts"]);
-    connection["edges"]
-        .as_array()
-        .expect("artefact connection edges")
-        .iter()
-        .map(|edge| edge["node"].clone())
-        .collect()
-}
