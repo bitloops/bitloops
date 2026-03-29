@@ -1,10 +1,19 @@
 use super::*;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 
+fn isolated_executor_repo_root() -> PathBuf {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create isolated executor repo root");
+    std::mem::forget(temp);
+    repo_root
+}
+
 fn executor_test_cfg() -> DevqlConfig {
+    let repo_root = isolated_executor_repo_root();
     DevqlConfig {
-        config_root: PathBuf::from("."),
-        repo_root: PathBuf::from("."),
+        config_root: repo_root.clone(),
+        repo_root,
         repo: RepoIdentity {
             provider: "local".to_string(),
             organization: "bitloops".to_string(),

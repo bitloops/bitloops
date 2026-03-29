@@ -1,12 +1,17 @@
 use crate::test_harness_support::{
     Workspace, apply_repo_app_env, prepare_graphql_workspace, seed_production_artefacts,
-    write_rust_static_link_fixture,
+    with_repo_app_env, write_rust_static_link_fixture,
 };
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
+use bitloops::daemon::DaemonRuntimeState;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::io::Read;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::time::Duration;
 
 pub struct SeededGraphqlWorkspace {
     pub workspace: Workspace,
@@ -14,41 +19,50 @@ pub struct SeededGraphqlWorkspace {
 }
 
 struct DaemonGuard {
-    workdir: PathBuf,
+    child: Child,
 }
 
 impl DaemonGuard {
     fn start(workdir: &Path) -> Self {
-        let status = daemon_command(workdir)
-            .args([
-                "daemon",
-                "start",
-                "-d",
-                "--http",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ])
-            .status()
-            .expect("start GraphQL test daemon");
-        assert!(status.success(), "daemon start should succeed");
+        let mut last_error = None;
+        for port in candidate_ports(workdir) {
+            let child = daemon_command(workdir)
+                .args([
+                    "daemon",
+                    "start",
+                    "--http",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    &port.to_string(),
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("start GraphQL test daemon");
 
-        Self {
-            workdir: workdir.to_path_buf(),
+            let mut guard = Self { child };
+            match wait_until_ready(workdir, &mut guard.child) {
+                Ok(()) => return guard,
+                Err(err) => {
+                    last_error = Some(format!("port {port}: {err}"));
+                    let _ = guard.child.kill();
+                    let _ = guard.child.wait();
+                }
+            }
         }
-    }
 
-    fn stop(&self) {
-        let _ = daemon_command(&self.workdir)
-            .args(["daemon", "stop"])
-            .status();
+        panic!(
+            "start GraphQL test daemon failed: {}",
+            last_error.unwrap_or_else(|| "no candidate ports attempted".to_string())
+        );
     }
 }
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -60,6 +74,90 @@ fn daemon_command(workdir: &Path) -> Command {
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1");
     command
+}
+
+fn candidate_ports(workdir: &Path) -> Vec<u16> {
+    let canonical = workdir.canonicalize().unwrap_or_else(|_| workdir.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let seed = hasher.finish();
+
+    (0..8)
+        .map(|offset| 32000 + (((seed as u16).wrapping_add((offset * 983) as u16)) % 20000))
+        .collect()
+}
+
+fn read_child_stderr(child: &mut Child) -> String {
+    let Some(mut stderr) = child.stderr.take() else {
+        return "<stderr unavailable>".to_string();
+    };
+
+    let mut output = String::new();
+    match stderr.read_to_string(&mut output) {
+        Ok(_) if output.trim().is_empty() => "<no stderr output>".to_string(),
+        Ok(_) => output,
+        Err(err) => format!("<failed reading stderr: {err}>"),
+    }
+}
+
+fn wait_until_ready(workdir: &Path, child: &mut Child) -> Result<(), String> {
+    let runtime_path = with_repo_app_env(workdir, || {
+        bitloops::daemon::runtime_state_path(Path::new("."))
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for GraphQL daemon guard");
+    runtime.block_on(async move {
+        let client = reqwest::Client::new();
+        for _ in 0..600 {
+            if let Ok(bytes) = std::fs::read(&runtime_path)
+                && let Ok(state) = serde_json::from_slice::<DaemonRuntimeState>(&bytes)
+            {
+                let url = format!("{}/devql/sdl", state.url.trim_end_matches('/'));
+                if let Ok(response) = client.get(&url).send().await
+                    && response.status().is_success()
+                {
+                    return Ok(());
+                }
+            }
+
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let stderr = read_child_stderr(child);
+                    return Err(format!(
+                        "daemon process exited before readiness check succeeded using runtime state {}\nchild status: {status}\nchild stderr:\n{stderr}",
+                        runtime_path.display()
+                    ));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect daemon process status while waiting for {}: {err}",
+                        runtime_path.display()
+                    ));
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let (child_status, child_stderr) = match child.try_wait() {
+            Ok(Some(status)) => (status.to_string(), read_child_stderr(child)),
+            Ok(None) => (
+                "still running".to_string(),
+                "<child still running; stderr cannot be drained without stopping it>".to_string(),
+            ),
+            Err(err) => (
+                format!("<failed to inspect status: {err}>"),
+                "<stderr unavailable>".to_string(),
+            ),
+        };
+        Err(format!(
+            "daemon server did not become ready using runtime state {}\nchild status: {child_status}\nchild stderr:\n{child_stderr}",
+            runtime_path.display()
+        ))
+    })
 }
 
 pub fn seeded_rust_graphql_workspace(name: &str) -> SeededGraphqlWorkspace {
