@@ -1,4 +1,4 @@
-pub const BITLOOPS_CONFIG_RELATIVE_PATH: &str = ".bitloops/config.json";
+pub const BITLOOPS_CONFIG_RELATIVE_PATH: &str = "config.toml";
 
 pub(crate) const STORES_CONFIG_KEY: &str = "stores";
 pub(crate) const RELATIONAL_CONFIG_KEY: &str = "relational";

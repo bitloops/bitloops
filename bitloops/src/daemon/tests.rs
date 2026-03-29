@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::test_support::process_state::enter_process_state;
 use serde_json::json;
 use tempfile::TempDir;

@@ -5,7 +5,6 @@ pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
 pub(super) const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
 pub(super) const INTERNAL_SUPERVISOR_COMMAND_NAME: &str = "__daemon-supervisor";
 pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
-pub(super) const GLOBAL_DAEMON_DIR: &str = ".bitloops/daemon";
 pub(super) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
 pub(super) const SUPERVISOR_SERVICE_STATE_FILE_NAME: &str = "supervisor-service.json";
 pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -269,13 +268,13 @@ pub fn service_metadata_path(repo_root: &Path) -> PathBuf {
 }
 
 pub(super) fn global_daemon_dir() -> Result<PathBuf> {
-    Ok(user_home_dir()?.join(GLOBAL_DAEMON_DIR))
+    crate::utils::platform_dirs::bitloops_state_dir().map(|dir| dir.join("daemon"))
 }
 
 pub(super) fn global_daemon_dir_fallback() -> PathBuf {
-    user_home_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(GLOBAL_DAEMON_DIR)
+    crate::utils::platform_dirs::bitloops_state_dir()
+        .unwrap_or_else(|_| PathBuf::from(".bitloops"))
+        .join("daemon")
 }
 
 pub(super) fn supervisor_runtime_state_path() -> Result<PathBuf> {

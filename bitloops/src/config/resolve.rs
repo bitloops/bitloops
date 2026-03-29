@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 use crate::utils::paths;
 
 use super::constants::*;
+use super::daemon_config::load_daemon_settings;
+use super::repo_policy::discover_repo_policy;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_non_empty_env, resolve_configured_path,
-    resolve_required_provider_string, user_home_dir,
+    resolve_required_provider_string,
 };
 use super::types::{
     AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
@@ -18,14 +20,33 @@ use super::types::{
     WatchRuntimeConfig,
 };
 use super::unified_config::{
-    UnifiedSettings, load_effective_config, resolve_dashboard_from_unified,
-    resolve_embedding_from_unified, resolve_provider_from_unified, resolve_semantic_from_unified,
+    UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_from_unified,
+    resolve_provider_from_unified, resolve_semantic_from_unified,
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 
-fn effective_settings_for_repo(repo_root: &Path) -> Result<UnifiedSettings> {
-    let global_dir = user_home_dir();
-    load_effective_config(global_dir.as_deref(), repo_root)
+#[cfg(not(test))]
+fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    let _ = repo_root;
+    let loaded = load_daemon_settings(None)?;
+    Ok((loaded.root, loaded.settings))
+}
+
+#[cfg(test)]
+fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSettings)> {
+    let repo_toml = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if repo_toml.is_file() {
+        let loaded = load_daemon_settings(Some(&repo_toml))?;
+        return Ok((loaded.root, loaded.settings));
+    }
+
+    let legacy_json = repo_root.join(".bitloops").join("config.json");
+    if legacy_json.is_file() {
+        let loaded = load_daemon_settings(Some(&legacy_json))?;
+        return Ok((loaded.root, loaded.settings));
+    }
+
+    Ok((repo_root.to_path_buf(), UnifiedSettings::default()))
 }
 
 pub fn resolve_dashboard_config() -> DashboardFileConfig {
@@ -34,12 +55,19 @@ pub fn resolve_dashboard_config() -> DashboardFileConfig {
 }
 
 pub fn resolve_dashboard_config_for_repo(repo_root: &Path) -> DashboardFileConfig {
-    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
+    let settings = daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
     resolve_dashboard_from_unified(&settings)
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {
-    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
+    let settings = discover_repo_policy(repo_root)
+        .map(|snapshot| UnifiedSettings {
+            watch: Some(snapshot.watch),
+            ..UnifiedSettings::default()
+        })
+        .unwrap_or_default();
     resolve_watch_from_unified(&settings, |key| env::var(key).ok())
 }
 
@@ -49,8 +77,8 @@ pub fn resolve_store_backend_config() -> Result<StoreBackendConfig> {
 }
 
 pub fn resolve_store_backend_config_for_repo(repo_root: &Path) -> Result<StoreBackendConfig> {
-    let settings = effective_settings_for_repo(repo_root)?;
-    resolve_store_backend_from_unified(&settings, repo_root)
+    let (config_root, settings) = daemon_settings_for_repo(repo_root)?;
+    resolve_store_backend_from_unified(&settings, &config_root)
 }
 
 pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
@@ -59,7 +87,9 @@ pub fn resolve_store_semantic_config() -> StoreSemanticConfig {
 }
 
 pub fn resolve_store_semantic_config_for_repo(repo_root: &Path) -> StoreSemanticConfig {
-    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
+    let settings = daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
     resolve_semantic_from_unified(&settings, |key| env::var(key).ok())
 }
 
@@ -69,7 +99,7 @@ pub fn resolve_provider_config() -> Result<ProviderConfig> {
 }
 
 pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConfig> {
-    let settings = effective_settings_for_repo(repo_root)?;
+    let settings = daemon_settings_for_repo(repo_root)?.1;
     resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
 
@@ -79,7 +109,9 @@ pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
 }
 
 pub fn resolve_store_embedding_config_for_repo(repo_root: &Path) -> StoreEmbeddingConfig {
-    let settings = effective_settings_for_repo(repo_root).unwrap_or_default();
+    let settings = daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
     resolve_embedding_from_unified(&settings, |key| env::var(key).ok())
 }
 

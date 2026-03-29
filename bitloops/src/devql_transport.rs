@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::config::discover_repo_policy;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{RepoIdentity, resolve_repo_identity};
 
@@ -19,6 +20,7 @@ pub(crate) const HEADER_SCOPE_REPO_ROOT: &str = "x-bitloops-cli-repo-root";
 pub(crate) const HEADER_SCOPE_BRANCH: &str = "x-bitloops-cli-branch";
 pub(crate) const HEADER_SCOPE_PROJECT_PATH: &str = "x-bitloops-cli-project-path";
 pub(crate) const HEADER_SCOPE_GIT_DIR_RELATIVE_PATH: &str = "x-bitloops-cli-git-dir-relative-path";
+pub(crate) const HEADER_SCOPE_CONFIG_FINGERPRINT: &str = "x-bitloops-cli-config-fingerprint";
 
 #[derive(Debug, Clone)]
 pub(crate) struct SlimCliRepoScope {
@@ -27,6 +29,7 @@ pub(crate) struct SlimCliRepoScope {
     pub(crate) branch_name: String,
     pub(crate) project_path: Option<String>,
     pub(crate) git_dir_relative_path: String,
+    pub(crate) config_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +64,7 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
     let git_dir_relative_path = relative_path(&cwd, &repo_root.join(".git"))
         .to_string_lossy()
         .replace('\\', "/");
+    let config_fingerprint = discover_repo_policy(&cwd)?.fingerprint;
 
     Ok(SlimCliRepoScope {
         repo,
@@ -68,6 +72,7 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
         branch_name,
         project_path,
         git_dir_relative_path,
+        config_fingerprint,
     })
 }
 
@@ -89,6 +94,10 @@ pub(crate) fn attach_slim_cli_scope_headers(
             scope.repo_root.to_string_lossy().to_string(),
         )
         .header(HEADER_SCOPE_BRANCH, scope.branch_name.as_str())
+        .header(
+            HEADER_SCOPE_CONFIG_FINGERPRINT,
+            scope.config_fingerprint.as_str(),
+        )
         .header(
             HEADER_SCOPE_GIT_DIR_RELATIVE_PATH,
             scope.git_dir_relative_path.as_str(),
@@ -121,6 +130,7 @@ pub(crate) fn parse_slim_cli_scope_headers(
         branch_name: required_header_value(headers, HEADER_SCOPE_BRANCH)?,
         project_path: header_value(headers, HEADER_SCOPE_PROJECT_PATH)?,
         git_dir_relative_path: required_header_value(headers, HEADER_SCOPE_GIT_DIR_RELATIVE_PATH)?,
+        config_fingerprint: required_header_value(headers, HEADER_SCOPE_CONFIG_FINGERPRINT)?,
     }))
 }
 
@@ -424,6 +434,7 @@ mod tests {
             branch_name: "main".to_string(),
             project_path: Some("packages/api".to_string()),
             git_dir_relative_path: "../../.git".to_string(),
+            config_fingerprint: "fingerprint-a".to_string(),
         };
         upsert_repo_path_registry_scope(&registry_path, &initial_scope)
             .expect("write initial registry scope");
@@ -434,6 +445,7 @@ mod tests {
             branch_name: "feature/refactor".to_string(),
             project_path: None,
             git_dir_relative_path: ".git".to_string(),
+            config_fingerprint: "fingerprint-b".to_string(),
         };
         upsert_repo_path_registry_scope(&registry_path, &updated_scope)
             .expect("write updated registry scope");

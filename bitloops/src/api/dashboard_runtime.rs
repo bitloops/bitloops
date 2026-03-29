@@ -3,13 +3,12 @@ use super::{
     DashboardState, DashboardTransport, FALLBACK_LOCAL_HOST, LocalDashboardDiscovery, ServeMode,
     db, router, tls,
 };
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config_for_repo};
+use crate::config::{persist_dashboard_tls_hint, resolve_dashboard_config_for_repo};
 use crate::graphql;
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
 use crate::utils::paths;
 use anyhow::{Context, Result, anyhow, bail};
 use std::env;
-use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -259,79 +258,11 @@ fn persist_local_dashboard_discovery(
     repo_root: &Path,
     discovery: LocalDashboardDiscovery,
 ) -> Result<()> {
+    let _ = repo_root;
     if !discovery.tls {
         return Ok(());
     }
-
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating config directory {}", parent.display()))?;
-    }
-
-    let mut root = if config_path.is_file() {
-        let data = fs::read(&config_path)
-            .with_context(|| format!("reading config file {}", config_path.display()))?;
-        serde_json::from_slice::<serde_json::Value>(&data)
-            .with_context(|| format!("parsing config file {}", config_path.display()))?
-    } else {
-        serde_json::json!({})
-    };
-
-    let Some(root_obj) = root.as_object_mut() else {
-        bail!(
-            "config file {} must be a JSON object",
-            config_path.display()
-        );
-    };
-    root_obj.insert(
-        "version".to_string(),
-        serde_json::Value::String("1.0".to_string()),
-    );
-    root_obj.insert(
-        "scope".to_string(),
-        serde_json::Value::String("project".to_string()),
-    );
-
-    let settings = root_obj
-        .entry("settings".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(settings_obj) = settings.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings` field",
-            config_path.display()
-        );
-    };
-    let dashboard = settings_obj
-        .entry("dashboard".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(dashboard_obj) = dashboard.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings.dashboard` field",
-            config_path.display()
-        );
-    };
-    let local_dashboard = dashboard_obj
-        .entry("local_dashboard".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(local_dashboard_obj) = local_dashboard.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings.dashboard.local_dashboard` field",
-            config_path.display()
-        );
-    };
-
-    if discovery.tls {
-        local_dashboard_obj.insert("tls".to_string(), serde_json::Value::Bool(true));
-    }
-
-    let mut serialized =
-        serde_json::to_string_pretty(&root).context("serialising dashboard discovery config")?;
-    serialized.push('\n');
-    fs::write(&config_path, serialized)
-        .with_context(|| format!("writing config file {}", config_path.display()))?;
-
-    Ok(())
+    persist_dashboard_tls_hint(true).map(|_| ())
 }
 
 async fn serve_until_shutdown_tls(

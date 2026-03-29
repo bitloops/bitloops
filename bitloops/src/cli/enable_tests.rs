@@ -5,7 +5,7 @@ use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
 use crate::cli::{Cli, Commands};
-use crate::config::settings::{SETTINGS_DIR, settings_local_path, settings_path};
+use crate::config::settings::{SETTINGS_DIR, save_settings, settings_local_path, settings_path};
 use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
 use clap::Parser;
 use tempfile::TempDir;

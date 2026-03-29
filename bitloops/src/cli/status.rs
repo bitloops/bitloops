@@ -1,11 +1,9 @@
 use crate::adapters::agents::agent_display_name;
+use crate::config::settings;
 use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;
-use serde_json::Value;
-use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::process::Command;
 use std::time::SystemTime;
 
@@ -42,56 +40,31 @@ impl Default for CliSettings {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-struct PartialSettings {
-    strategy: Option<String>,
-    enabled: Option<bool>,
-}
-
 pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
     if !is_git_repository() {
         writeln!(w, "✕ not a git repository")?;
         return Ok(());
     }
 
-    let project_path = Path::new(".bitloops").join("config.json");
-    let local_path = Path::new(".bitloops").join("config.local.json");
-    let project_exists = project_path.exists();
-    let local_exists = local_path.exists();
-
-    if !project_exists && !local_exists {
-        writeln!(w, "○ not set up (run `bitloops enable` to get started)")?;
-        return Ok(());
-    }
-
-    let project_partial = if project_exists {
-        Some(load_partial_settings(&project_path)?)
-    } else {
-        None
+    let repo_root = crate::utils::paths::repo_root()?;
+    let effective = settings::load_settings(&repo_root)?;
+    let effective_cli = CliSettings {
+        strategy: effective.strategy.clone(),
+        enabled: effective.enabled,
     };
-    let local_partial = if local_exists {
-        Some(load_partial_settings(&local_path)?)
-    } else {
-        None
-    };
-
-    let effective = merged_settings(project_partial.as_ref(), local_partial.as_ref());
+    let policy_root = settings::current_policy_root(&repo_root)?;
+    let fingerprint = settings::current_config_fingerprint(&repo_root)?;
 
     if detailed {
-        writeln!(w, "{}", format_settings_status_short(&effective))?;
+        writeln!(w, "{}", format_settings_status_short(&effective_cli))?;
         writeln!(w)?;
-
-        if let Some(partial) = &project_partial {
-            let settings = settings_from_partial(partial);
-            writeln!(w, "{}", format_settings_status("Project", &settings))?;
+        match policy_root {
+            Some(root) => writeln!(w, "Policy Root: {}", root.display())?,
+            None => writeln!(w, "Policy Root: built-in defaults")?,
         }
-
-        if let Some(partial) = &local_partial {
-            let settings = settings_from_partial(partial);
-            writeln!(w, "{}", format_settings_status("Local", &settings))?;
-        }
+        writeln!(w, "Config Fingerprint: {fingerprint}")?;
     } else {
-        writeln!(w, "{}", format_settings_status_short(&effective))?;
+        writeln!(w, "{}", format_settings_status_short(&effective_cli))?;
     }
 
     if effective.enabled {
@@ -199,66 +172,11 @@ fn is_git_repository() -> bool {
     )
 }
 
-fn load_partial_settings(path: &Path) -> Result<PartialSettings> {
-    let raw = fs::read_to_string(path)?;
-    let value: Value = serde_json::from_str(&raw)?;
-    let strategy = value
-        .get("strategy")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned);
-    let enabled = value.get("enabled").and_then(Value::as_bool);
-    Ok(PartialSettings { strategy, enabled })
-}
-
-fn settings_from_partial(partial: &PartialSettings) -> CliSettings {
-    let mut settings = CliSettings::default();
-    if let Some(strategy) = &partial.strategy {
-        settings.strategy = strategy.clone();
-    }
-    if let Some(enabled) = partial.enabled {
-        settings.enabled = enabled;
-    }
-    settings
-}
-
-fn merged_settings(
-    project: Option<&PartialSettings>,
-    local: Option<&PartialSettings>,
-) -> CliSettings {
-    let mut settings = CliSettings::default();
-    if let Some(project) = project {
-        if let Some(strategy) = &project.strategy {
-            settings.strategy = strategy.clone();
-        }
-        if let Some(enabled) = project.enabled {
-            settings.enabled = enabled;
-        }
-    }
-    if let Some(local) = local {
-        if let Some(strategy) = &local.strategy {
-            settings.strategy = strategy.clone();
-        }
-        if let Some(enabled) = local.enabled {
-            settings.enabled = enabled;
-        }
-    }
-    settings
-}
-
 fn format_settings_status_short(settings: &CliSettings) -> String {
     if settings.enabled {
         format!("Enabled ({})", settings.strategy)
     } else {
         format!("Disabled ({})", settings.strategy)
-    }
-}
-
-fn format_settings_status(prefix: &str, settings: &CliSettings) -> String {
-    if settings.enabled {
-        format!("{prefix}, enabled ({})", settings.strategy)
-    } else {
-        format!("{prefix}, disabled ({})", settings.strategy)
     }
 }
 

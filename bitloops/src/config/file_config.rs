@@ -1,11 +1,12 @@
 use serde_json::Value;
-use std::fs;
 use std::path::Path;
 
 use super::constants::*;
+use super::daemon_config::load_daemon_settings;
+use super::repo_policy::discover_repo_policy;
 use super::store_config_utils::{
-    current_repo_root_or_cwd, load_repo_config_value, read_any_bool, read_any_string,
-    read_any_string_opt, read_any_u64, read_any_u64_opt,
+    current_repo_root_or_cwd, read_any_bool, read_any_string, read_any_string_opt, read_any_u64,
+    read_any_u64_opt,
 };
 use super::types::{
     DashboardFileConfig, DashboardLocalDashboardConfig, StoreFileConfig, WatchFileConfig,
@@ -15,13 +16,14 @@ impl StoreFileConfig {
     /// Load config from `<repo>/.bitloops/config.json`.
     /// Returns default if the file is missing or invalid.
     pub fn load() -> Self {
-        let repo_root = current_repo_root_or_cwd();
-        Self::load_for_repo(&repo_root)
+        Self::load_for_repo(&current_repo_root_or_cwd())
     }
 
-    /// Load config from `<repo_root>/.bitloops/config.json`.
-    pub fn load_for_repo(repo_root: &Path) -> Self {
-        load_repo_config_value(repo_root)
+    /// Load global daemon store config.
+    pub fn load_for_repo(_repo_root: &Path) -> Self {
+        load_daemon_settings(None)
+            .ok()
+            .and_then(|loaded| loaded.settings.stores)
             .map(|value| Self::from_json_value(&value))
             .unwrap_or_default()
     }
@@ -99,8 +101,9 @@ impl DashboardFileConfig {
     /// Load dashboard config from `<repo>/.bitloops/config.json`.
     /// Returns default if the file is missing or invalid.
     pub fn load() -> Self {
-        let repo_root = current_repo_root_or_cwd();
-        load_repo_config_value(&repo_root)
+        load_daemon_settings(None)
+            .ok()
+            .and_then(|loaded| loaded.settings.dashboard)
             .map(|value| Self::from_json_value(&value))
             .unwrap_or_default()
     }
@@ -126,14 +129,14 @@ impl DashboardFileConfig {
 
 impl WatchFileConfig {
     pub fn load_for_repo(repo_root: &Path) -> Self {
-        let json_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-        if let Ok(data) = fs::read(&json_path)
-            && let Ok(value) = serde_json::from_slice::<Value>(&data)
-        {
-            return Self::from_json_value(&value);
-        }
-
-        Self::default()
+        discover_repo_policy(repo_root)
+            .ok()
+            .map(|policy| {
+                let mut map = serde_json::Map::new();
+                map.insert(WATCH_CONFIG_KEY.into(), policy.watch);
+                Self::from_json_value(&Value::Object(map))
+            })
+            .unwrap_or_default()
     }
 
     pub fn from_json_value(value: &Value) -> Self {

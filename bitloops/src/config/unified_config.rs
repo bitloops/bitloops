@@ -246,14 +246,44 @@ use super::types::{
 /// [`UnifiedSettings`]. Applies defaults and resolves paths relative to `repo_root`.
 pub fn resolve_store_backend_from_unified(
     settings: &UnifiedSettings,
-    _repo_root: &Path,
+    repo_root: &Path,
 ) -> Result<StoreBackendConfig> {
     let stores_value = settings
         .stores
         .clone()
         .unwrap_or(Value::Object(Default::default()));
     let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
-    resolve_store_backend_config_with(file_cfg)
+    let mut config = resolve_store_backend_config_with(file_cfg.clone())?;
+
+    config.relational.sqlite_path = Some(
+        file_cfg
+            .sqlite_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_relational_db_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+    config.events.duckdb_path = Some(
+        file_cfg
+            .duckdb_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_events_db_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+    config.blobs.local_path = Some(
+        file_cfg
+            .blob_local_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_blob_store_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    Ok(config)
 }
 
 /// Resolve semantic search configuration from merged [`UnifiedSettings`],

@@ -22,10 +22,6 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, resolve_blob_local_path_for_repo,
-    resolve_store_backend_config_for_repo,
-};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
 #[path = "daemon/config.rs"]
