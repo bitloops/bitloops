@@ -794,7 +794,7 @@ Expected: QAT tests are ignored (they have `#[ignore]`). Only fast unit tests ru
 
 Observed on 2026-03-30: `cargo test --test qat_acceptance` confirms all three QAT entry points are `ignored` by default.
 
-- [ ] **Step 6: Final commit (if any fixups needed)**
+- [x] **Step 6: Final commit (if any fixups needed)**
 
 If any adjustments were needed during verification, commit them.
 
