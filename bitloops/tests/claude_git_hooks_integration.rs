@@ -138,11 +138,6 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["commit", "-m", "initial"]);
 }
 
-fn enable_claude(repo: &Path) {
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
-}
-
 fn init(repo: &Path) {
     test_command_support::with_repo_app_env(repo, || {
         ensure_relational_store_file(repo);
@@ -163,7 +158,6 @@ fn init(repo: &Path) {
 
 fn setup_claude_and_enable(repo: &Path) {
     init(repo);
-    enable_claude(repo);
 }
 
 fn hook_command_exists(settings: &Value, hook_type: &str, matcher: &str, command: &str) -> bool {

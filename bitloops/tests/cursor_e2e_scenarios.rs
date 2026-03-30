@@ -169,14 +169,8 @@ fn init_cursor(repo: &Path) {
     });
 }
 
-fn enable(repo: &Path) {
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
-}
-
 fn init_and_enable_cursor(repo: &Path) {
     init_cursor(repo);
-    enable(repo);
 
     run_git_expect_success(
         repo,

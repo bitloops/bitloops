@@ -335,9 +335,6 @@ fn copilot_basic_workflow() {
 
     init(dir.path(), home.path());
 
-    let enable_out = run_cmd_with_home(dir.path(), home.path(), &["enable"], None);
-    assert_success(&enable_out, "bitloops enable");
-
     run_git_expect_success(
         dir.path(),
         home.path(),
@@ -491,11 +488,6 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
     init_repo(dir.path(), home.path());
 
     init(dir.path(), home.path());
-    assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
-    );
-
     run_git_expect_success(
         dir.path(),
         home.path(),
@@ -597,11 +589,6 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
     init_repo(dir.path(), home.path());
 
     init(dir.path(), home.path());
-    assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
-    );
-
     run_git_expect_success(
         dir.path(),
         home.path(),
@@ -643,11 +630,6 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
     init_repo(dir.path(), home.path());
 
     init(dir.path(), home.path());
-    assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
-    );
-
     run_git_expect_success(
         dir.path(),
         home.path(),

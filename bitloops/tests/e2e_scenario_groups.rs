@@ -278,14 +278,8 @@ fn init_claude(repo: &Path) {
     });
 }
 
-fn enable(repo: &Path) {
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
-}
-
 fn init_and_enable(repo: &Path) {
     init_claude(repo);
-    enable(repo);
 
     // Keep agent infrastructure tracked so stash/pop scenarios do not conflict
     // on .claude control files. Repo-local runtime state is no longer part of

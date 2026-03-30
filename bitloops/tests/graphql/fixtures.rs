@@ -31,6 +31,7 @@ impl DaemonGuard {
                     "daemon",
                     "start",
                     "--create-default-config",
+                    "--no-telemetry",
                     "--http",
                     "--host",
                     "127.0.0.1",
