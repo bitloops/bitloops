@@ -1,12 +1,10 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::capability_packs::test_harness::ingest::coverage;
-use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
@@ -25,7 +23,7 @@ struct CoverageIngestPayload {
     format: String,
 }
 
-pub struct CoverageIngestIngester(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
+pub struct CoverageIngestIngester;
 
 impl IngesterHandler for CoverageIngestIngester {
     fn ingest<'a>(
@@ -33,9 +31,8 @@ impl IngesterHandler for CoverageIngestIngester {
         request: IngestRequest,
         ctx: &'a mut dyn CapabilityIngestContext,
     ) -> BoxFuture<'a, Result<IngestResult>> {
-        let store = self.0.clone();
         Box::pin(async move {
-            let Some(store) = store else {
+            let Some(store) = ctx.test_harness_store() else {
                 return Ok(IngestResult::new(
                     json!({
                         "capability": "test_harness",

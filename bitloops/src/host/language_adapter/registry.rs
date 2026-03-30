@@ -15,7 +15,7 @@ use super::{
     LanguageAdapterMigrationDescriptor, LanguageAdapterMigrationExecution,
     LanguageAdapterMigrationFailure, LanguageAdapterMigrationRunReport,
     LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep, LanguageAdapterPack,
-    LanguageArtefact,
+    LanguageArtefact, LanguageTestSupport,
 };
 
 #[derive(Debug, Default)]
@@ -115,6 +115,23 @@ impl LanguageAdapterRegistry {
         let mut ids: Vec<&str> = self.packs.keys().map(String::as_str).collect();
         ids.sort();
         ids
+    }
+
+    pub(crate) fn test_support_for_pack(
+        &self,
+        pack_id: &str,
+    ) -> Option<Arc<dyn LanguageTestSupport>> {
+        self.packs.get(pack_id)?.test_support()
+    }
+
+    pub(crate) fn all_test_supports(&self) -> Vec<Arc<dyn LanguageTestSupport>> {
+        let mut supports = self
+            .registered_pack_ids()
+            .into_iter()
+            .filter_map(|pack_id| self.test_support_for_pack(pack_id))
+            .collect::<Vec<_>>();
+        supports.sort_by_key(|support| support.priority());
+        supports
     }
 
     pub(crate) fn migration_count_for(&self, pack_id: &str) -> usize {

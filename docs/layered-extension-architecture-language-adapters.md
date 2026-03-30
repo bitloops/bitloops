@@ -1,112 +1,147 @@
 # Bitloops language-adapter architecture
 
-This document describes the current layered language-adapter implementation.
+This document describes the host-owned language-adapter runtime implemented under:
+
+- `bitloops/src/host/language_adapter`
+- `bitloops/src/adapters/languages`
 
 Contributor onboarding guide:
 
 - `docs/language-adapter-contributing.md`
 
+## Summary
+
+Language adapters are no longer just artefact extractors for DevQL ingestion.
+
+They are now the shared source of language semantics for the rest of the system. The first reusable semantic facet is `LanguageTestSupport`, which allows `test_harness` to consume language-specific test discovery through the host rather than through a pack-local parser registry.
+
 ## Module layout
-
-There is now a dedicated language-adapter runtime layer:
-
-- `bitloops/src/host/language_adapter.rs` + `bitloops/src/host/language_adapter/`
-- `bitloops/src/adapters/languages.rs` + `bitloops/src/adapters/languages/`
-
-The module roots follow the sibling file+folder pattern (`languages.rs` with `languages/`, `language_adapter.rs` with `language_adapter/`), not `mod.rs` roots.
-
-## Architecture overview
 
 ```mermaid
 flowchart TD
     INPUT["File path or language hint"]
-    PACKREG["LanguagePackRegistry (descriptor resolution)"]
-    CTX["LanguagePackContext"]
-    ADAPTERREG["LanguageAdapterRegistry"]
-    TRAIT["LanguageAdapterPack trait"]
-    RUST["RustLanguageAdapterPack"]
-    TSJS["TsJsLanguageAdapterPack"]
-    PERSIST["DevQL artefact persistence"]
+    EXTHOST["CoreExtensionHost language resolution"]
+    REG["LanguageAdapterRegistry"]
+    PACK["LanguageAdapterPack"]
+    TEST["LanguageTestSupport facet"]
+    DEVQL["DevQL ingestion"]
+    HARNESS["test_harness"]
 
-    INPUT --> PACKREG
-    PACKREG --> CTX
-    PACKREG --> ADAPTERREG
-    ADAPTERREG --> TRAIT
-    TRAIT --> RUST
-    TRAIT --> TSJS
-    RUST --> PERSIST
-    TSJS --> PERSIST
+    INPUT --> EXTHOST
+    EXTHOST --> REG
+    REG --> PACK
+    PACK --> DEVQL
+    PACK --> TEST
+    TEST --> HARNESS
 ```
 
-## Layer 1: descriptor and profile resolution
+The runtime is split into two layers:
 
-`host/extension_host/language` remains the metadata layer.
+- `host/extension_host/language`
+  - descriptor resolution and profile ownership
+- `host/language_adapter` plus `adapters/languages`
+  - executable language semantics
 
-It is the chooser layer: it resolves language-pack ownership from language hints, profile inputs, file extension/path, and optional dialect/source-version context, then returns a stable pack id such as:
+## Base runtime contract
 
-- `rust-language-pack`
-- `ts-js-language-pack`
+`LanguageAdapterPack` remains the host-owned runtime contract.
 
-That pack id is the bridge to runtime execution.
+It provides:
 
-## Layer 2: runtime adapter contract
-
-`host/language_adapter` defines the runtime contract and shared types:
-
-- `LanguageAdapterPack` trait (`pack.rs`)
-- `LanguageAdapterRegistry` (`registry.rs`)
-- shared artefact/edge types (`types.rs`)
-- canonical mapping model and resolver (`canonical.rs`)
-- adapter errors and execution context (`errors.rs`, `context.rs`)
-- shared edge builders (`edges_shared.rs`, `edges_export.rs`, `edges_inherits.rs`, `edges_reference.rs`)
-
-The trait contract provides:
-
-- descriptor identity (`descriptor`)
-- canonical mappings and supported kinds
+- descriptor identity
+- canonical mappings
+- supported language kinds
 - artefact extraction
 - dependency-edge extraction
 - optional file-docstring extraction
+- optional reusable facets such as `test_support()`
 
-## Built-in adapter packs
+Built-in packs live under `bitloops/src/adapters/languages`.
 
-Built-ins now live under `adapters/languages`:
+Current built-ins:
 
-- `bitloops/src/adapters/languages/rust.rs` with implementation in `.../rust/{pack,extraction,edges,canonical}.rs`
-- `bitloops/src/adapters/languages/ts_js.rs` with implementation in `.../ts_js/{pack,extraction,edges,canonical}.rs`
+- Rust
+- TypeScript/JavaScript
+- Python
 
-`bitloops/src/adapters/languages.rs` exports `builtin_language_adapter_packs()` and registers both packs.
+## Shared test-support facet
 
-## Runtime flow during ingestion
+`LanguageTestSupport` is now part of the host language-adapter API.
 
-1. DevQL determines language from file path or explicit input.
-2. `CoreExtensionHost` resolves the owning language pack id and profile.
-3. DevQL gets the global `LanguageAdapterRegistry` (lazy-initialized in `host/devql.rs`).
-4. DevQL looks up the pack by resolved pack id.
-5. The pack extracts artefacts, dependency edges, and optional file docstring.
-6. DevQL persists results into current-state tables.
+It exposes language-specific test behaviour through a reusable contract:
 
-## Design strengths
+- `supports_path(...)`
+- `discover_tests(...)`
+- `enumerate_tests(...)`
+- `reconcile(...)`
 
-- descriptor and runtime concerns are separated cleanly
-- runtime dispatch is trait-based, not a hard-coded function-pointer table
-- canonical mapping is table-driven per adapter pack
-- extraction logic is colocated with each language pack
+Shared model types also live in `host/language_adapter`, including:
 
-## Current limitations
+- `DiscoveredTestFile`
+- `DiscoveredTestSuite`
+- `DiscoveredTestScenario`
+- `ReferenceCandidate`
+- `EnumerationResult`
+- `ReconciledDiscovery`
+- `StructuralMappingOutput`
 
-### 1. Runtime registration is still built-in at startup
+## Host-owned execution context
 
-`builtin_language_adapter_packs()` currently registers only compiled built-ins. The contract is extensible, but external runtime pack loading is not implemented yet.
+`LanguageAdapterContext` is host-owned and now includes command execution support for best-effort runtime enumeration.
 
-### 2. Descriptor metadata and runtime execution are split by design
+That matters because:
 
-`host/extension_host/language` contains descriptor metadata and resolution rules (pack ids, aliases, profiles, file extensions, source-version compatibility). It answers: "which pack should own this input?"
+- adapters may request commands such as `cargo test -- --list`
+- adapters do not spawn commands directly
+- the host controls timeout, repo root, and diagnostics
 
-`host/language_adapter` plus `adapters/languages` contain runtime extraction behavior. They answer: "how does the selected pack extract artefacts and edges?"
+This keeps language adapters inside the same isolation model as capability packs.
 
-This keeps pack-selection/validation separate from runtime parsing code, with the tradeoff that contributors need to understand both layers.
+## `test_harness` integration
 
-## Related but separate code
+`test_harness` now consumes language semantics through `LanguageServicesGateway`.
 
-`capability_packs/test_harness/mapping/languages` is test-harness-specific language logic and is not part of the host language-adapter runtime layer.
+The current flow is:
+
+1. resolve the owning language support for a candidate path
+2. discover tests through the adapter facet
+3. optionally enumerate tests through the adapter facet
+4. reconcile source and enumerated results
+5. perform linkage/materialisation in `test_harness`
+
+This is a deliberate change from the older design where `test_harness` carried its own runtime registry under `capability_packs/test_harness/mapping/languages`.
+
+## Current implementation notes
+
+The host-facing architecture is in place, but the implementation is still being simplified internally.
+
+Today:
+
+- `test_harness` executes through the host language service
+- adapter packs expose `LanguageTestSupport`
+- Rust runtime enumeration uses the host-owned command runner
+
+Still transitional:
+
+- some adapter-side test-support wrappers reuse the older `test_harness` language-provider code behind the new facet
+- that scaffolding exists to preserve behaviour while the logic is moved fully into adapter-owned modules
+
+## Design rules for future work
+
+- reusable language semantics belong in `host/language_adapter` and `adapters/languages`
+- pack-specific business rules belong in the consuming capability pack
+- new capability-pack features should ask whether they need a reusable language facet before introducing another pack-local parser
+
+Examples of good facet candidates:
+
+- test discovery
+- runtime enumeration
+- framework-specific file classification
+- reference extraction that is reusable across packs
+
+Examples of concerns that should stay in capability packs:
+
+- confidence scoring
+- linkage policy
+- materialisation rules
+- pack-specific persistence

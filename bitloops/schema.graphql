@@ -44,7 +44,6 @@ type Artefact {
 	chatHistory(first: Int! = 10, after: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
-	extension(stage: String!, args: JSON, first: Int! = 100): [JSON!]!
 }
 
 type ArtefactConnection {
@@ -489,7 +488,7 @@ type Project {
 	clones(filter: ClonesFilterInput, first: Int! = 50, after: String): CloneConnection!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
-	extension(stage: String!, args: JSON, first: Int! = 100): [JSON!]!
+	testsSummary: TestHarnessCommitSummary!
 }
 
 type QueryRoot {
@@ -576,6 +575,23 @@ type TestHarnessArtefactRef {
 	filePath: String!
 	startLine: Int!
 	endLine: Int!
+}
+
+type TestHarnessCommitCounts {
+	testArtefacts: Int!
+	testArtefactEdges: Int!
+	testClassifications: Int!
+	coverageCaptures: Int!
+	coverageHits: Int!
+}
+
+type TestHarnessCommitSummary {
+	capability: String!
+	stage: String!
+	status: String!
+	commitSha: String!
+	counts: TestHarnessCommitCounts!
+	coveragePresent: Boolean!
 }
 
 type TestHarnessCoverage {

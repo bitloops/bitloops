@@ -5,6 +5,20 @@ use super::document_builder::{GraphqlArgument, GraphqlField, GraphqlSelection};
 use super::*;
 
 pub(super) const KNOWLEDGE_STAGE_NAME: &str = "knowledge";
+pub(super) const TESTS_SUMMARY_STAGE_NAME: &str =
+    crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_SUMMARY_STAGE_ID;
+
+pub(super) fn is_tests_stage_name(stage_name: &str) -> bool {
+    stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ID
+        || stage_name
+            == crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_STAGE_ALIAS_ID
+}
+
+pub(super) fn is_coverage_stage_name(stage_name: &str) -> bool {
+    stage_name == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ID
+        || stage_name
+            == crate::capability_packs::test_harness::types::TEST_HARNESS_COVERAGE_STAGE_ALIAS_ID
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectableLeaf {
@@ -52,35 +66,8 @@ pub(super) fn compile_datetime_literal(input: &str) -> Result<String> {
     bail!("invalid datetime value `{input}`")
 }
 
-pub(super) fn compile_stage_json_literal(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("true") {
-        return "true".to_string();
-    }
-    if trimmed.eq_ignore_ascii_case("false") {
-        return "false".to_string();
-    }
-    if trimmed.parse::<i64>().is_ok() || trimmed.parse::<f64>().is_ok() {
-        return trimmed.to_string();
-    }
-    quote_graphql_string(trimmed)
-}
-
 pub(super) fn enum_literal(value: &str) -> String {
     value.trim().to_ascii_uppercase().replace('-', "_")
-}
-
-pub(super) fn classify_registered_stage(stage: &RegisteredStageCall) -> RegisteredStageKind<'_> {
-    if is_tests_stage_name(&stage.stage_name) {
-        return RegisteredStageKind::Tests(stage);
-    }
-    if is_coverage_stage_name(&stage.stage_name) {
-        return RegisteredStageKind::Coverage;
-    }
-    if stage.stage_name == KNOWLEDGE_STAGE_NAME {
-        return RegisteredStageKind::Knowledge(stage);
-    }
-    RegisteredStageKind::Extension(stage)
 }
 
 pub(super) fn scalar_selections_for_leaf(
@@ -199,6 +186,28 @@ pub(super) fn coverage_result_selections() -> Vec<GraphqlSelection> {
             ],
         )
         .into(),
+    ]
+}
+
+pub(super) fn tests_summary_result_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("capability"),
+        GraphqlSelection::scalar("stage"),
+        GraphqlSelection::scalar("status"),
+        GraphqlSelection::scalar("commitSha"),
+        GraphqlField::new(
+            "counts",
+            Vec::new(),
+            vec![
+                GraphqlSelection::scalar("testArtefacts"),
+                GraphqlSelection::scalar("testArtefactEdges"),
+                GraphqlSelection::scalar("testClassifications"),
+                GraphqlSelection::scalar("coverageCaptures"),
+                GraphqlSelection::scalar("coverageHits"),
+            ],
+        )
+        .into(),
+        GraphqlSelection::scalar("coveragePresent"),
     ]
 }
 

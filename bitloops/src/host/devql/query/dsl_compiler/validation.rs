@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
 
-use super::field_mapping::classify_registered_stage;
+use super::field_mapping::{
+    KNOWLEDGE_STAGE_NAME, TESTS_SUMMARY_STAGE_NAME, is_coverage_stage_name, is_tests_stage_name,
+};
 use super::{GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageKind};
 
 pub(super) fn resolve_registered_stage(
@@ -12,10 +14,27 @@ pub(super) fn resolve_registered_stage(
         );
     }
 
-    Ok(parsed
-        .registered_stages
-        .first()
-        .map(classify_registered_stage))
+    let Some(stage) = parsed.registered_stages.first() else {
+        return Ok(None);
+    };
+
+    if is_tests_stage_name(&stage.stage_name) {
+        return Ok(Some(RegisteredStageKind::Tests(stage)));
+    }
+    if is_coverage_stage_name(&stage.stage_name) {
+        return Ok(Some(RegisteredStageKind::Coverage));
+    }
+    if stage.stage_name == TESTS_SUMMARY_STAGE_NAME {
+        return Ok(Some(RegisteredStageKind::TestsSummary));
+    }
+    if stage.stage_name == KNOWLEDGE_STAGE_NAME {
+        return Ok(Some(RegisteredStageKind::Knowledge(stage)));
+    }
+
+    bail!(
+        "the GraphQL compiler does not support capability-pack stage `{}`; register an explicit typed GraphQL/DSL contribution",
+        stage.stage_name
+    )
 }
 
 pub(super) fn validate_graphql_compiler_support(
@@ -66,6 +85,8 @@ pub(super) fn validate_graphql_compiler_support(
 
     let has_tests_stage = matches!(registered_stage, Some(RegisteredStageKind::Tests(_)));
     let has_coverage_stage = matches!(registered_stage, Some(RegisteredStageKind::Coverage));
+    let has_tests_summary_stage =
+        matches!(registered_stage, Some(RegisteredStageKind::TestsSummary));
 
     if has_tests_stage && !parsed.has_artefacts_stage {
         bail!("tests() requires an artefacts() stage in the query");
@@ -101,6 +122,26 @@ pub(super) fn validate_graphql_compiler_support(
 
     if has_coverage_stage && parsed.has_chat_history_stage {
         bail!("coverage() cannot be combined with chatHistory() stage");
+    }
+
+    if has_tests_summary_stage && parsed.has_artefacts_stage {
+        bail!("test_harness_tests_summary() does not support artefacts() traversal");
+    }
+
+    if has_tests_summary_stage && parsed.has_deps_stage {
+        bail!("test_harness_tests_summary() cannot be combined with deps() stage");
+    }
+
+    if has_tests_summary_stage && parsed.has_clones_stage {
+        bail!("test_harness_tests_summary() cannot be combined with clones() stage");
+    }
+
+    if has_tests_summary_stage && parsed.has_chat_history_stage {
+        bail!("test_harness_tests_summary() cannot be combined with chatHistory() stage");
+    }
+
+    if has_tests_summary_stage && (parsed.file.is_some() || parsed.files_path.is_some()) {
+        bail!("test_harness_tests_summary() does not support file() or files() scopes");
     }
 
     if parsed.has_deps_stage && parsed.has_artefacts_stage {
@@ -162,31 +203,13 @@ pub(super) fn validate_graphql_compiler_support(
         );
     }
 
-    if matches!(registered_stage, Some(RegisteredStageKind::Extension(_)))
-        && !parsed.has_artefacts_stage
-        && parsed.project_path.is_none()
-    {
-        bail!(
-            "registered capability-pack stages require artefacts() or project() when compiling to GraphQL"
-        );
-    }
-
-    if matches!(registered_stage, Some(RegisteredStageKind::Extension(_)))
-        && !parsed.has_artefacts_stage
-        && (parsed.as_of.is_some() || parsed.file.is_some() || parsed.files_path.is_some())
-    {
-        bail!(
-            "project-level capability-pack stages do not support asOf(...), file(), or files() scopes in the GraphQL compiler"
-        );
-    }
-
     if parsed.has_artefacts_stage
         || parsed.has_checkpoints_stage
         || parsed.has_telemetry_stage
         || parsed.has_deps_stage
         || matches!(
             registered_stage,
-            Some(RegisteredStageKind::Knowledge(_)) | Some(RegisteredStageKind::Extension(_))
+            Some(RegisteredStageKind::Knowledge(_)) | Some(RegisteredStageKind::TestsSummary)
         )
     {
         return Ok(());
@@ -217,7 +240,7 @@ pub(super) fn should_compile_project_stage(
     match registered_stage {
         RegisteredStageKind::Tests(_)
         | RegisteredStageKind::Coverage
-        | RegisteredStageKind::Extension(_) => parsed.project_path.is_some(),
+        | RegisteredStageKind::TestsSummary => parsed.project_path.is_some(),
         RegisteredStageKind::Knowledge(_) => false,
     }
 }

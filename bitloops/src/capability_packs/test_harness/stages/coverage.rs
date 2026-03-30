@@ -1,12 +1,8 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::anyhow;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 
-use crate::capability_packs::test_harness::storage::{
-    BitloopsTestHarnessRepository, TestHarnessQueryRepository,
-};
+use crate::capability_packs::test_harness::storage::TestHarnessQueryRepository;
 use crate::capability_packs::test_harness::types::test_harness_relational_store_unavailable_stage_response;
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
@@ -27,12 +23,12 @@ struct CoverageQueryContext {
     resolved_commit_sha: Option<String>,
 }
 
-pub struct CoverageStageHandler(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
+pub struct CoverageStageHandler;
 
 fn execute_coverage_stage<R: TestHarnessQueryRepository + ?Sized>(
     store: &R,
     request: StageRequest,
-    ctx: &mut dyn CapabilityExecutionContext,
+    ctx: &dyn CapabilityExecutionContext,
 ) -> anyhow::Result<StageResponse> {
     let payload: CoverageStagePayload = request.parse_json()?;
     let _ = payload.args;
@@ -155,9 +151,8 @@ impl StageHandler for CoverageStageHandler {
         request: StageRequest,
         ctx: &'a mut dyn CapabilityExecutionContext,
     ) -> BoxFuture<'a, anyhow::Result<StageResponse>> {
-        let store = self.0.clone();
         Box::pin(async move {
-            let Some(store) = store else {
+            let Some(store) = ctx.test_harness_store() else {
                 return Ok(test_harness_relational_store_unavailable_stage_response());
             };
 
@@ -410,11 +405,11 @@ mod tests {
     }
 
     async fn execute(repo: &FakeRepo, payload: Value) -> StageResponse {
-        let mut ctx = DummyExecCtx {
+        let ctx = DummyExecCtx {
             repo: test_repo(),
             graph: LocalCanonicalGraphGateway,
         };
-        execute_coverage_stage(repo, StageRequest::new(payload), &mut ctx).expect("stage execution")
+        execute_coverage_stage(repo, StageRequest::new(payload), &ctx).expect("stage execution")
     }
 
     #[tokio::test]

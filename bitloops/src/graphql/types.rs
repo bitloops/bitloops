@@ -41,4 +41,6 @@ pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
-pub use test_harness::{TestHarnessCoverageResult, TestHarnessTestsResult};
+pub use test_harness::{
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+};

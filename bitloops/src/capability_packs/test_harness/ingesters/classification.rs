@@ -1,10 +1,7 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::Context;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
@@ -17,17 +14,16 @@ struct ClassificationIngestPayload {
     commit_sha: String,
 }
 
-pub struct ClassificationIngester(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
+pub struct ClassificationIngester;
 
 impl IngesterHandler for ClassificationIngester {
     fn ingest<'a>(
         &'a self,
         request: IngestRequest,
-        _ctx: &'a mut dyn CapabilityIngestContext,
+        ctx: &'a mut dyn CapabilityIngestContext,
     ) -> BoxFuture<'a, anyhow::Result<IngestResult>> {
-        let store = self.0.clone();
         Box::pin(async move {
-            let Some(store) = store else {
+            let Some(store) = ctx.test_harness_store() else {
                 return Ok(IngestResult::new(
                     json!({
                         "capability": "test_harness",

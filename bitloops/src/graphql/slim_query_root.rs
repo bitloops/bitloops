@@ -9,9 +9,9 @@ use super::types::{
     Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, Branch,
     CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput,
     CommitConnection, CommitEdge, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, JsonScalar,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection,
-    TelemetryEventEdge, TemporalScope, TestHarnessCoverageResult, TestHarnessTestsResult,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection, TelemetryEventEdge,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
     connection::PageInfo, paginate_items,
 };
 
@@ -463,32 +463,27 @@ impl SlimQueryRoot {
         )
     }
 
-    async fn extension(
-        &self,
-        ctx: &Context<'_>,
-        stage: String,
-        args: Option<JsonScalar>,
-        #[graphql(default = 100)] first: i32,
-    ) -> Result<Vec<JsonScalar>> {
+    #[graphql(name = "testsSummary")]
+    async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let scope = context.slim_root_scope();
         let artefacts = context
             .list_artefacts(None, None, &scope)
             .await
             .map_err(|err| backend_error(format!("failed to query artefacts: {err:#}")))?;
-        let rows = StageResolverAdapter::new(context.clone(), stage.as_str())
+        let rows = StageResolverAdapter::new(context.clone(), "test_harness_tests_summary")
             .resolve(
                 &scope,
                 artefacts
                     .iter()
                     .map(project_stage_row_from_artefact)
                     .collect(),
-                args.map(|value| value.0),
-                stage_limit(first)?,
+                None,
+                1,
             )
             .await
-            .map_err(|err| map_stage_adapter_error(&format!("stage `{stage}`"), err))?;
-        Ok(rows.into_iter().map(async_graphql::types::Json).collect())
+            .map_err(|err| map_stage_adapter_error("tests summary", err))?;
+        decode_stage_single("test_harness_tests_summary", rows)
     }
 }
 
@@ -550,11 +545,25 @@ fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Resu
         .collect()
 }
 
+fn decode_stage_single<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<T> {
+    let Some(row) = rows.into_iter().next() else {
+        return Err(backend_error(format!(
+            "failed to decode `{stage}` stage payload: empty result"
+        )));
+    };
+    serde_json::from_value(row).map_err(|err| {
+        backend_error(format!(
+            "failed to decode `{stage}` stage payload into typed GraphQL result: {err}"
+        ))
+    })
+}
+
 fn map_stage_adapter_error(scope: &str, err: anyhow::Error) -> async_graphql::Error {
     let message = format!("{err:#}");
     if message.contains("unsupported DevQL stage")
         || message.contains("ambiguous DevQL stage")
         || message.contains("extension args must")
+        || message.contains("requires a resolved commit")
     {
         return bad_user_input_error(message);
     }
