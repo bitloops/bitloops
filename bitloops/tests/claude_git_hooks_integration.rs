@@ -109,16 +109,14 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
 }
 
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    test_command_support::with_repo_app_env(repo_root, || {
-        let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
-            .expect("resolve backend config");
-        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-                .expect("resolve configured sqlite path")
-        } else {
-            bitloops::utils::paths::default_relational_db_path(repo_root)
-        }
-    })
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        bitloops::utils::paths::default_relational_db_path(repo_root)
+    }
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {
@@ -141,13 +139,26 @@ fn init_repo(repo: &Path) {
 }
 
 fn enable_claude(repo: &Path) {
-    let out = run_cmd(repo, &["enable", "--agent", "claude-code"], None);
-    assert_success(&out, "bitloops enable --agent claude-code");
+    let out = run_cmd(repo, &["enable"], None);
+    assert_success(&out, "bitloops enable");
 }
 
 fn init(repo: &Path) {
-    let out = run_cmd(repo, &["init", "--agent", "claude-code"], None);
-    assert_success(&out, "bitloops init --agent claude-code");
+    test_command_support::with_repo_app_env(repo, || {
+        ensure_relational_store_file(repo);
+        let policy_path = repo.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
+        bitloops::config::settings::write_project_bootstrap_settings(
+            &policy_path,
+            bitloops::config::settings::DEFAULT_STRATEGY,
+            &[String::from("claude-code")],
+        )
+        .expect("write project bootstrap settings");
+        bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo, false)
+            .expect("install git hooks");
+        bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+            .install_agent_hooks(repo, "claude-code", false, false)
+            .expect("install Claude hooks");
+    });
 }
 
 fn setup_claude_and_enable(repo: &Path) {
@@ -275,12 +286,11 @@ fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {
 }
 
 #[test]
-fn enable_adds_all_required_claude_hooks() {
+fn init_adds_all_required_claude_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
     init(dir.path());
-    enable_claude(dir.path());
 
     let settings = read_json(&dir.path().join(".claude/settings.json"));
     assert!(hook_command_exists(
@@ -328,7 +338,7 @@ fn enable_adds_all_required_claude_hooks() {
 }
 
 #[test]
-fn enable_preserves_existing_claude_settings_and_user_hooks() {
+fn init_preserves_existing_claude_settings_and_user_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
@@ -354,7 +364,6 @@ fn enable_preserves_existing_claude_settings_and_user_hooks() {
     .unwrap();
 
     init(dir.path());
-    enable_claude(dir.path());
 
     let settings = read_json(&dir.path().join(".claude/settings.json"));
     assert_eq!(
@@ -392,16 +401,27 @@ fn enable_preserves_existing_claude_settings_and_user_hooks() {
 }
 
 #[test]
-fn init_does_not_add_claude_hooks() {
+fn enable_without_init_does_not_add_claude_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
-    init(dir.path());
+    let out = run_cmd(dir.path(), &["enable"], None);
+    assert!(
+        !out.status.success(),
+        "enable should fail before project init\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("bitloops init"),
+        "enable should direct the user to `bitloops init`; stderr:\n{stderr}"
+    );
 
     let claude_settings = dir.path().join(".claude/settings.json");
     assert!(
         !claude_settings.exists(),
-        "init should not install Claude hooks"
+        "enable should not install Claude hooks before init"
     );
 }
 
@@ -409,6 +429,7 @@ fn init_does_not_add_claude_hooks() {
 fn hook_logging_writes_to_session_log_file() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
+    setup_claude_and_enable(dir.path());
 
     let session_id = "test-logging-session-123";
     write_test_session_state_for_logging(dir.path(), session_id);
@@ -460,6 +481,7 @@ fn hook_logging_writes_to_session_log_file() {
 fn hook_logging_writes_without_session() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
+    setup_claude_and_enable(dir.path());
     let commit_msg_file = dir.path().join(".git/COMMIT_EDITMSG");
     fs::write(&commit_msg_file, "test commit\n").unwrap();
 
