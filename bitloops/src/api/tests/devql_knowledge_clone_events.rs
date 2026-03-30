@@ -644,7 +644,7 @@ async fn devql_graphql_clone_source_target_loader_caches_within_a_request_and_re
 }
 
 #[tokio::test]
-async fn devql_graphql_test_harness_pack_fields_resolve_typed_and_generic_results() {
+async fn devql_graphql_test_harness_pack_fields_resolve_typed_results() {
     let repo = seed_graphql_devql_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     seed_graphql_test_harness_stage_data(
@@ -699,14 +699,26 @@ async fn devql_graphql_test_harness_pack_fields_resolve_typed_and_generic_result
                             uncoveredLineCount
                           }}
                         }}
-                        extension(stage: "coverage", first: 5)
                       }}
                     }}
                   }}
                 }}
                 asOf(input: {{ commit: "{commit_sha}" }}) {{
                   project(path: "src") {{
-                    extension(stage: "test_harness_tests_summary", first: 5)
+                    testsSummary {{
+                      capability
+                      stage
+                      status
+                      commitSha
+                      coveragePresent
+                      counts {{
+                        testArtefacts
+                        testArtefactEdges
+                        testClassifications
+                        coverageCaptures
+                        coverageHits
+                      }}
+                    }}
                   }}
                 }}
               }}
@@ -761,21 +773,29 @@ async fn devql_graphql_test_harness_pack_fields_resolve_typed_and_generic_result
         json!(1)
     );
     assert_eq!(
-        node["extension"][0]["coverage"]["coverage_source"],
-        json!("lcov")
-    );
-    assert_eq!(
-        json["repo"]["asOf"]["project"]["extension"][0]["commit_sha"],
+        json["repo"]["asOf"]["project"]["testsSummary"]["commitSha"],
         json!(commit_sha)
     );
     assert_eq!(
-        json["repo"]["asOf"]["project"]["extension"][0]["coverage_present"],
+        json["repo"]["asOf"]["project"]["testsSummary"]["coveragePresent"],
         json!(true)
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["testsSummary"]["stage"],
+        json!("test_harness_tests_summary")
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["testsSummary"]["counts"]["testArtefacts"],
+        json!(2)
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["testsSummary"]["counts"]["coverageCaptures"],
+        json!(1)
     );
 }
 
 #[tokio::test]
-async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors() {
+async fn devql_graphql_project_typed_fields_respect_scope_and_extension_is_removed() {
     let repo = seed_graphql_monorepo_repo();
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     seed_graphql_test_harness_stage_data(
@@ -808,7 +828,18 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
               repo(name: "demo") {{
                 asOf(input: {{ commit: "{commit_sha}" }}) {{
                   project(path: "packages/api") {{
-                    extension(stage: "coverage", first: 10)
+                    coverage(first: 10) {{
+                      artefact {{
+                        filePath
+                      }}
+                      coverage {{
+                        coverageSource
+                      }}
+                    }}
+                    testsSummary {{
+                      commitSha
+                      coveragePresent
+                    }}
                   }}
                 }}
               }}
@@ -824,18 +855,26 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
     );
 
     let json = response.data.into_json().expect("graphql data to json");
-    let rows = json["repo"]["asOf"]["project"]["extension"]
+    let rows = json["repo"]["asOf"]["project"]["coverage"]
         .as_array()
-        .expect("extension rows");
+        .expect("coverage rows");
     assert_eq!(rows.len(), 4);
     assert!(
         rows.iter().all(|row| {
-            row["artefact"]["file_path"]
+            row["artefact"]["filePath"]
                 .as_str()
                 .unwrap_or_default()
                 .starts_with("packages/api/")
         }),
         "expected only project-scoped rows, got {rows:?}"
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["testsSummary"]["commitSha"],
+        json!(commit_sha)
+    );
+    assert_eq!(
+        json["repo"]["asOf"]["project"]["testsSummary"]["coveragePresent"],
+        json!(true)
     );
 
     let bad_stage = schema
@@ -852,19 +891,11 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
         ))
         .await;
 
-    assert_eq!(bad_stage.errors.len(), 1, "expected one graphql error");
-    let extensions = bad_stage.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
-    );
     assert!(
-        bad_stage.errors[0]
-            .message
-            .contains("unsupported DevQL stage"),
+        bad_stage
+            .errors
+            .iter()
+            .any(|error| error.message.contains("Unknown field \"extension\"")),
         "unexpected error: {:?}",
         bad_stage.errors
     );
@@ -875,7 +906,9 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
             {
               repo(name: "demo") {
                 project(path: "packages/api") {
-                  extension(stage: "coverage", args: { nested: { enabled: true } }, first: 10)
+                  testsSummary {
+                    commitSha
+                  }
                 }
               }
             }
@@ -884,18 +917,10 @@ async fn devql_graphql_project_extension_respects_scope_and_unknown_stage_errors
         .await;
 
     assert_eq!(bad_args.errors.len(), 1, "expected one graphql error");
-    let extensions = bad_args.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        extensions.get("code"),
-        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
-    );
     assert!(
         bad_args.errors[0]
             .message
-            .contains("extension args must contain only string, number, boolean, or null values"),
+            .contains("requires a resolved commit"),
         "unexpected error: {:?}",
         bad_args.errors
     );

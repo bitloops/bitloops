@@ -8,6 +8,6 @@ pub(crate) enum GraphqlCompileMode {
 pub(super) enum RegisteredStageKind<'a> {
     Tests(&'a super::RegisteredStageCall),
     Coverage,
+    TestsSummary,
     Knowledge(&'a super::RegisteredStageCall),
-    Extension(&'a super::RegisteredStageCall),
 }

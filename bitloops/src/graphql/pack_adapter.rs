@@ -41,6 +41,10 @@ impl StageResolverAdapter {
             )
             .await?;
 
+        if response.payload.get("status").and_then(Value::as_str) == Some("failed") {
+            bail!(response.human_output);
+        }
+
         Ok(match response.payload {
             Value::Array(rows) => rows,
             value => vec![value],

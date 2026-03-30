@@ -19,8 +19,11 @@ A new pack must implement:
 Optional lifecycle hooks:
 
 - `extract_file_docstring(content)` (default `None`)
+- `test_support()` (default `None`)
 - `migrations()` (default `[]`)
 - `health_checks()` (default `[]`)
+
+If the language pack should support `test_harness`, implement the reusable `LanguageTestSupport` facet under the adapter pack instead of adding language-specific code under `capability_packs/test_harness`.
 
 ## 2) Canonical mapping rules and projections
 
@@ -107,17 +110,23 @@ Runtime registry initialization is in:
 
 `devql packs` language-adapter lifecycle/reporting is also assembled in `host/devql.rs`.
 
-## 7) Related but separate (current state)
+## 7) Optional test-support facet
 
-The test-harness capability keeps its own language-specific mapping code under:
+If the language pack needs to support structural test discovery, add a `test_support.rs` implementation under the adapter pack and return it from `test_support()`.
 
-- `bitloops/src/capability_packs/test_harness/mapping/languages`
+Recommended shape:
 
-That path is currently separate from the host language-adapter runtime in this guide.
+- `bitloops/src/adapters/languages/<your_language>/test_support.rs`
 
-Future improvement direction:
+The shared contract lives under:
 
-- move test-harness mapping into a capability-side projection layer that consumes
-  `LanguageArtefact` / `DependencyEdge` outputs from `LanguageAdapterPack`
-- keep `LanguageAdapterPack` generic and closed to capability-specific domain semantics
-- reduce duplicate language-logic maintenance across host and capability code
+- `bitloops/src/host/language_adapter/test_support.rs`
+
+Use that facet for:
+
+- test-file classification
+- source discovery
+- optional runtime enumeration
+- reconciliation of source and enumerated scenarios
+
+Do not add new language-specific parsers under `capability_packs/test_harness` for new language work.

@@ -12,13 +12,12 @@ use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
     ScenarioDiscoverySource,
 };
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
-pub(crate) struct PythonLanguageProvider {
+pub(crate) struct PythonTestMappingHelper {
     parser: Parser,
 }
 
-impl PythonLanguageProvider {
+impl PythonTestMappingHelper {
     pub(crate) fn new() -> Result<Self> {
         let mut parser = Parser::new();
         parser
@@ -26,18 +25,8 @@ impl PythonLanguageProvider {
             .context("failed to load Python parser")?;
         Ok(Self { parser })
     }
-}
 
-impl LanguageProvider for PythonLanguageProvider {
-    fn language_id(&self) -> &'static str {
-        "python"
-    }
-
-    fn priority(&self) -> u8 {
-        2
-    }
-
-    fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
         let file_name = Path::new(relative_path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -49,7 +38,7 @@ impl LanguageProvider for PythonLanguageProvider {
                 || relative_path.contains("/tests/"))
     }
 
-    fn discover_tests(
+    pub(crate) fn discover_tests(
         &mut self,
         absolute_path: &Path,
         relative_path: &str,
@@ -69,7 +58,7 @@ impl LanguageProvider for PythonLanguageProvider {
 
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
-            language: self.language_id().to_string(),
+            language: "python".to_string(),
             reference_candidates,
             suites: collect_python_suites(root, bytes, relative_path),
         })

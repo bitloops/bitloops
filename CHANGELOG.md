@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Host-owned language test-support runtime**: added `LanguageTestSupport` and shared test-discovery/enumeration models under `host/language_adapter`, plus host-managed `LanguageServicesGateway` access from capability contexts. Built-in Rust, TypeScript/JavaScript, and Python language adapters now expose reusable test-support facets, and Rust test enumeration now runs through a host-owned command runner rather than pack-local process execution.
+- **Typed test-harness GraphQL summary fields**: added typed `testsSummary` GraphQL fields for project and slim DevQL scopes together with `TestHarnessCommitSummary` / `TestHarnessCommitCounts` types, replacing the need to expose test-harness commit snapshots through generic stage payloads.
+- **Architecture decision and guide refresh**: added the ADR `docs/adr-graphql-first-devql-host-runtime.md` and updated the layered architecture and language-adapter guides to document the GraphQL-first DevQL contract, host-owned capability isolation, and the new language-facet model.
+
 - **Daemon lifecycle commands and global supervisor** (`CLI-1539`): added `bitloops daemon start`, `stop`, `status`, and `restart` together with top-level `bitloops start`, `stop`, `status`, and `restart` aliases. Added detached start support, user-scoped always-on service management, the global `com.bitloops.daemon` supervisor, repo-scoped runtime registration, and the internal supervisor/client plumbing needed for the thin CLI to control daemon lifecycle without launching the dashboard UI.
 - **Slim DevQL GraphQL surface and schema export**: added the slim GraphQL query/subscription roots, generated `bitloops/schema.slim.graphql`, and added an `export-slim-schema` example so the thin CLI and future daemon clients can target a narrower SDL surface while reusing the existing DevQL repository-graph resolvers and transport.
 - **Repo policy TOML discovery and imports**: added upward-discovered `.bitloops.toml` repo policy loading with optional sibling `.bitloops.local.toml` overrides, explicit knowledge-config imports, config fingerprinting for thin-client observability, and request metadata propagation over the local daemon transport.
@@ -97,6 +101,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **DevQL GraphQL subscription repo scoping**: `checkpointIngested(repoName:)` and `ingestionProgress(repoName:)` now carry the published repository name through the in-process broadcast hub and filter delivered events by the requested `repoName`, instead of accepting the argument and ignoring it.
 
 ### Changed
+
+- **Breaking — typed GraphQL capability fields replace `extension(stage: ...)` for migrated test-harness reads**: removed the public GraphQL `extension(stage: ...)` field from the slim and global DevQL schemas for the migrated test-harness paths. `tests`, `coverage`, and `testsSummary` are now the canonical public fields, the checked-in SDL snapshots were regenerated, and the DevQL DSL compiler now fails unknown capability stages unless they are explicitly mapped to typed GraphQL fields.
+- **Test Harness and Semantic Clones now consume narrower host-owned gateways**: `test_harness` no longer opens its repository during pack construction and instead resolves repository/language services from the host runtime context, while `semantic_clones` now uses the dedicated clone-rebuild relational gateway instead of capability-scoped raw relational access.
 
 - **Breaking — Test Harness (`CLI-1454`):** Removed the read-only **`test_harness.summaries`** ingester. Per-commit test-harness row counts and coverage presence are available from the DevQL stage **`test_harness_tests_summary()`** when the query resolves a commit (e.g. **`asOf(ref:...)`** / **`asOf(commit:...)`**). Ingesters remain for state-changing ingest only (linkage, coverage, classification).
 

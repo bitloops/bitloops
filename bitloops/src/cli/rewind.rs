@@ -541,6 +541,7 @@ mod tests {
     use super::*;
     use crate::cli::explain::RewindPoint;
     use crate::config::settings::{self, BitloopsSettings};
+    use crate::test_support::process_state::with_env_var;
     use tempfile::TempDir;
 
     fn write_strategy_config(repo_root: &Path, strategy: &str) {
@@ -564,6 +565,41 @@ mod tests {
             is_task_checkpoint: false,
             tool_use_id: String::new(),
         }
+    }
+
+    fn git_ok(repo_root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn init_git_repo() -> TempDir {
+        let dir = TempDir::new().expect("tempdir");
+        git_ok(dir.path(), &["init"]);
+        git_ok(dir.path(), &["checkout", "-B", "main"]);
+        git_ok(dir.path(), &["config", "user.name", "Rewind Test"]);
+        git_ok(
+            dir.path(),
+            &["config", "user.email", "rewind-test@example.com"],
+        );
+        dir
+    }
+
+    fn commit_file(repo_root: &Path, file_path: &str, content: &str, message: &str) -> String {
+        std::fs::write(repo_root.join(file_path), content).expect("write file");
+        git_ok(repo_root, &["add", file_path]);
+        git_ok(repo_root, &["commit", "-m", message]);
+        git_ok(repo_root, &["rev-parse", "HEAD"])
     }
 
     #[test]
@@ -626,5 +662,220 @@ mod tests {
         let auto = TempDir::new().expect("tempdir");
         write_strategy_config(auto.path(), "auto-commit");
         assert!(requires_clean_worktree_for_rewind(auto.path()));
+    }
+
+    #[test]
+    fn empty_fallback_returns_fallback_only_for_empty_strings() {
+        assert_eq!(String::new().if_empty_then("fallback"), "fallback");
+        assert_eq!("value".to_string().if_empty_then("fallback"), "value");
+    }
+
+    #[test]
+    fn sha256_and_shadow_branch_helpers_use_expected_prefixes() {
+        let digest = sha256_hex(b"worktree-alpha");
+        assert_eq!(digest.len(), 64);
+
+        let state = SessionState {
+            base_commit: "abcdef1234567890".to_string(),
+            worktree_id: "worktree-alpha".to_string(),
+            ..Default::default()
+        };
+        let shadow_ref = shadow_branch_ref_for_session_state(&state);
+        assert!(shadow_ref.starts_with("refs/heads/bitloops/abcdef1-"));
+        assert!(shadow_ref.ends_with(&digest[..6]));
+    }
+
+    #[test]
+    fn resolve_point_session_id_prefers_embedded_session_id() {
+        let repo = TempDir::new().expect("tempdir");
+        let point = RewindPoint {
+            session_id: "session-123".to_string(),
+            ..sample_point()
+        };
+        assert_eq!(
+            resolve_point_session_id(repo.path(), &point),
+            Some("session-123".to_string())
+        );
+    }
+
+    #[test]
+    fn restore_claude_transcript_writes_to_override_project_dir() {
+        let repo = TempDir::new().expect("tempdir");
+        let claude_dir = TempDir::new().expect("claude tempdir");
+        with_env_var(
+            "BITLOOPS_TEST_CLAUDE_PROJECT_DIR",
+            Some(claude_dir.path().to_string_lossy().as_ref()),
+            || {
+                restore_claude_transcript(repo.path(), "session-abc", b"{\"message\":\"hello\"}\n")
+                    .expect("restore transcript");
+            },
+        );
+
+        let transcript_path = claude_dir.path().join("sessions").join("session-abc.jsonl");
+        assert_eq!(
+            std::fs::read(&transcript_path).expect("read transcript"),
+            b"{\"message\":\"hello\"}\n"
+        );
+    }
+
+    #[test]
+    fn git_stdout_helpers_surface_failures() {
+        let repo = TempDir::new().expect("tempdir");
+        let err = git_stdout(repo.path(), &["status"]).expect_err("non-repo status must fail");
+        assert!(format!("{err:#}").contains("git status failed"));
+
+        let err = git_stdout_bytes(repo.path(), &["cat-file", "-p", "missing"])
+            .expect_err("non-repo cat-file must fail");
+        assert!(format!("{err:#}").contains("git cat-file -p missing failed"));
+    }
+
+    #[test]
+    fn git_tree_helpers_list_tracked_and_untracked_files() {
+        let repo = init_git_repo();
+        let _head = commit_file(repo.path(), "tracked.txt", "tracked", "initial commit");
+        std::fs::write(repo.path().join("notes.txt"), "notes").expect("write untracked file");
+        std::fs::create_dir_all(repo.path().join(".bitloops").join("metadata"))
+            .expect("create metadata dir");
+        std::fs::write(
+            repo.path()
+                .join(".bitloops")
+                .join("metadata")
+                .join("ignored.txt"),
+            "ignored",
+        )
+        .expect("write metadata file");
+
+        let tracked = list_head_tracked_files(repo.path()).expect("list tracked files");
+        assert!(tracked.contains("tracked.txt"));
+
+        let untracked = list_untracked_files(repo.path()).expect("list untracked files");
+        assert_eq!(untracked, vec!["notes.txt".to_string()]);
+    }
+
+    #[test]
+    fn list_checkpoint_tree_entries_filters_infrastructure_files() {
+        let repo = init_git_repo();
+        std::fs::write(repo.path().join("src.rs"), "fn main() {}\n").expect("write source");
+        std::fs::create_dir_all(repo.path().join(".bitloops").join("metadata"))
+            .expect("create metadata dir");
+        std::fs::write(
+            repo.path()
+                .join(".bitloops")
+                .join("metadata")
+                .join("ignored.txt"),
+            "ignored",
+        )
+        .expect("write metadata file");
+        git_ok(
+            repo.path(),
+            &["add", "src.rs", ".bitloops/metadata/ignored.txt"],
+        );
+        git_ok(repo.path(), &["commit", "-m", "seed tree"]);
+        let head = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+        let entries = list_checkpoint_tree_entries(repo.path(), &head).expect("list tree entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, "src.rs");
+        assert_eq!(entries[0].mode, "100644");
+        assert!(!entries[0].hash.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_checkpoint_entry_restores_content_and_permissions() {
+        let repo = init_git_repo();
+        let file_path = repo.path().join("script.sh");
+        std::fs::write(&file_path, "#!/bin/sh\necho old\n").expect("write script");
+        let mut perms = std::fs::metadata(&file_path)
+            .expect("stat script")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&file_path, perms).expect("chmod script");
+        git_ok(repo.path(), &["add", "script.sh"]);
+        git_ok(repo.path(), &["commit", "-m", "add script"]);
+        let head = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+
+        let entry = list_checkpoint_tree_entries(repo.path(), &head)
+            .expect("list tree entries")
+            .into_iter()
+            .find(|entry| entry.path == "script.sh")
+            .expect("script entry");
+
+        std::fs::write(&file_path, "#!/bin/sh\necho mutated\n").expect("mutate script");
+        let mut perms = std::fs::metadata(&file_path)
+            .expect("stat mutated script")
+            .permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&file_path, perms).expect("chmod mutated script");
+
+        restore_checkpoint_entry(repo.path(), &entry).expect("restore checkpoint entry");
+
+        assert_eq!(
+            std::fs::read_to_string(&file_path).expect("read restored script"),
+            "#!/bin/sh\necho old\n"
+        );
+        let restored_mode = std::fs::metadata(&file_path)
+            .expect("stat restored script")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(restored_mode, 0o755);
+    }
+
+    #[test]
+    fn helper_paths_tolerate_missing_session_state() {
+        let repo = init_git_repo();
+        let sqlite_path = crate::utils::paths::default_relational_db_path(repo.path());
+        let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path)
+            .expect("create sqlite database");
+        sqlite
+            .initialise_checkpoint_schema()
+            .expect("initialise checkpoint schema");
+
+        let point = RewindPoint {
+            session_id: "session-404".to_string(),
+            ..sample_point()
+        };
+
+        let preserved = load_preserved_untracked_files(repo.path(), &point);
+        assert!(preserved.is_empty());
+
+        reset_shadow_branch_to_checkpoint(repo.path(), &point)
+            .expect("missing session backend state should be a no-op");
+    }
+
+    #[test]
+    fn current_head_and_manual_commit_full_rewind_restore_checkpoint_tree() {
+        let repo = init_git_repo();
+        write_strategy_config(repo.path(), "manual-commit");
+
+        let original_sha = commit_file(repo.path(), "app.txt", "old\n", "original");
+        let head_sha = commit_file(repo.path(), "app.txt", "new\n", "updated");
+        std::fs::write(repo.path().join("scratch.txt"), "remove me").expect("write scratch file");
+
+        let point = RewindPoint {
+            id: original_sha.clone(),
+            checkpoint_id: String::new(),
+            session_id: String::new(),
+            session_prompt: String::new(),
+            is_logs_only: false,
+            ..sample_point()
+        };
+
+        perform_full_rewind(repo.path(), &point).expect("manual-commit rewind should succeed");
+
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("app.txt")).expect("read restored file"),
+            "old\n"
+        );
+        assert!(
+            !repo.path().join("scratch.txt").exists(),
+            "untracked file should be pruned during manual-commit rewind"
+        );
+        assert_eq!(
+            current_head(repo.path()).expect("resolve HEAD"),
+            head_sha,
+            "manual-commit rewind should not move HEAD"
+        );
     }
 }

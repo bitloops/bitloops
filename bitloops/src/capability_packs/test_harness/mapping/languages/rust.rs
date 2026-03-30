@@ -23,13 +23,12 @@ use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, EnumerationResult, ReconciledDiscovery, ReferenceCandidate,
     ScenarioDiscoverySource,
 };
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
-pub(crate) struct RustLanguageProvider {
+pub(crate) struct RustTestMappingHelper {
     parser: Parser,
 }
 
-impl RustLanguageProvider {
+impl RustTestMappingHelper {
     pub(crate) fn new() -> Result<Self> {
         let mut parser = Parser::new();
         parser
@@ -37,18 +36,8 @@ impl RustLanguageProvider {
             .context("failed to load Rust parser")?;
         Ok(Self { parser })
     }
-}
 
-impl LanguageProvider for RustLanguageProvider {
-    fn language_id(&self) -> &'static str {
-        "rust"
-    }
-
-    fn priority(&self) -> u8 {
-        0
-    }
-
-    fn supports_path(&self, absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(&self, absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.rs")
             || relative_path.ends_with(".spec.rs")
             || ((relative_path.starts_with("tests/") || relative_path.contains("/tests/"))
@@ -56,7 +45,7 @@ impl LanguageProvider for RustLanguageProvider {
             || looks_like_inline_rust_test_source(absolute_path, relative_path)
     }
 
-    fn discover_tests(
+    pub(crate) fn discover_tests(
         &mut self,
         absolute_path: &Path,
         relative_path: &str,
@@ -87,17 +76,13 @@ impl LanguageProvider for RustLanguageProvider {
 
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
-            language: self.language_id().to_string(),
+            language: "rust".to_string(),
             reference_candidates,
             suites: scenarios::collect_rust_suites(root, &source, relative_path),
         })
     }
 
-    fn enumerate_tests(&mut self, repo_dir: &Path) -> EnumerationResult {
-        enumeration::enumerate_rust_tests(repo_dir)
-    }
-
-    fn reconcile(
+    pub(crate) fn reconcile(
         &self,
         source_files: &[DiscoveredTestFile],
         enumeration: EnumerationResult,
@@ -106,7 +91,7 @@ impl LanguageProvider for RustLanguageProvider {
         let mut source_doctest_keys = std::collections::HashSet::new();
 
         for file in source_files {
-            if file.language != self.language_id() {
+            if file.language != "rust" {
                 continue;
             }
 

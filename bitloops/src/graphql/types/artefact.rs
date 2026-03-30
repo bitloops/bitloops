@@ -10,8 +10,8 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, ClonesFilterInput, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, JsonScalar, TestHarnessCoverageResult,
-    TestHarnessTestsResult, paginate_items,
+    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -335,28 +335,6 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
-
-    async fn extension(
-        &self,
-        ctx: &Context<'_>,
-        stage: String,
-        args: Option<JsonScalar>,
-        #[graphql(default = 100)] first: i32,
-    ) -> Result<Vec<JsonScalar>> {
-        let rows = StageResolverAdapter::new(
-            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
-            stage.as_str(),
-        )
-        .resolve(
-            &self.scope,
-            vec![artefact_stage_row(self)],
-            args.map(|value| value.0),
-            stage_limit(first)?,
-        )
-        .await
-        .map_err(|err| map_stage_adapter_error(self.id.as_ref(), &stage, err))?;
-        Ok(rows.into_iter().map(async_graphql::types::Json).collect())
-    }
 }
 
 fn stage_limit(first: i32) -> Result<usize> {
@@ -426,6 +404,7 @@ fn map_stage_adapter_error(
     if message.contains("unsupported DevQL stage")
         || message.contains("ambiguous DevQL stage")
         || message.contains("extension args must")
+        || message.contains("requires a resolved commit")
     {
         return bad_user_input_error(message);
     }

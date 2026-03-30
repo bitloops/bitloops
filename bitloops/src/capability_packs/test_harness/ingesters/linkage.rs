@@ -1,11 +1,8 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::Context;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::capability_packs::test_harness::ingest::tests;
-use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
 };
@@ -17,7 +14,7 @@ struct LinkageIngestPayload {
     commit_sha: String,
 }
 
-pub struct LinkageIngester(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
+pub struct LinkageIngester;
 
 impl IngesterHandler for LinkageIngester {
     fn ingest<'a>(
@@ -25,9 +22,8 @@ impl IngesterHandler for LinkageIngester {
         request: IngestRequest,
         ctx: &'a mut dyn CapabilityIngestContext,
     ) -> BoxFuture<'a, anyhow::Result<IngestResult>> {
-        let store = self.0.clone();
         Box::pin(async move {
-            let Some(store) = store else {
+            let Some(store) = ctx.test_harness_store() else {
                 return Ok(IngestResult::new(
                     json!({
                         "capability": "test_harness",
@@ -52,6 +48,7 @@ impl IngesterHandler for LinkageIngester {
                 relational,
                 ctx.repo_root(),
                 payload.commit_sha.as_str(),
+                ctx.languages(),
             )?;
 
             let human = tests::format_summary(&payload.commit_sha, &summary);

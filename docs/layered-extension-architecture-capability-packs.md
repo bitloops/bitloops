@@ -1,19 +1,23 @@
 # Bitloops capability-pack architecture
 
-This document describes the executable capability-pack system implemented under `bitloops/src/capability_packs` and `bitloops/src/host/capability_host`.
+This document describes the executable capability-pack system under `bitloops/src/capability_packs` and `bitloops/src/host/capability_host`.
 
-## What a capability pack is
+The important rule is simple:
 
-A capability pack is a repository-scoped feature module that can contribute one or more of the following to DevQL:
+- **capability packs own domain behaviour**
+- **the host owns infrastructure and integration seams**
+
+## What a capability pack can contribute
+
+A capability pack can contribute:
 
 - stages
 - ingesters
-- schema modules
-- query examples
 - migrations
 - health checks
+- schema metadata and query examples
 
-The executable contract is host-owned and pack-agnostic.
+The public GraphQL surface is typed. Packs no longer rely on the public `extension(stage: ...)` field.
 
 ## Shared contract
 
@@ -21,290 +25,167 @@ The executable contract is host-owned and pack-agnostic.
 flowchart TD
     PACK["CapabilityPack"]
     REG["CapabilityRegistrar"]
-    CORESTAGE["StageHandler"]
-    COREINGEST["IngesterHandler"]
+    STAGE["StageHandler"]
+    INGEST["IngesterHandler"]
     KSTAGE["KnowledgeStageHandler"]
     KINGEST["KnowledgeIngesterHandler"]
-    EXECCTX["CapabilityExecutionContext"]
-    INGESTCTX["CapabilityIngestContext"]
-    KEXECCTX["KnowledgeExecutionContext"]
-    KINGESTCTX["KnowledgeIngestContext"]
+    EXEC["CapabilityExecutionContext"]
+    ING["CapabilityIngestContext"]
+    KEXEC["KnowledgeExecutionContext"]
+    KING["KnowledgeIngestContext"]
     MIG["CapabilityMigration"]
-    KMIG["KnowledgeMigrationContext"]
     HEALTH["CapabilityHealthCheck"]
 
     PACK --> REG
-    REG --> CORESTAGE
-    REG --> COREINGEST
+    REG --> STAGE
+    REG --> INGEST
     REG --> KSTAGE
     REG --> KINGEST
+    STAGE --> EXEC
+    INGEST --> ING
+    KSTAGE --> KEXEC
+    KINGEST --> KING
     PACK --> MIG
     PACK --> HEALTH
-    CORESTAGE --> EXECCTX
-    COREINGEST --> INGESTCTX
-    KSTAGE --> KEXECCTX
-    KINGEST --> KINGESTCTX
-    MIG --> KMIG
 ```
 
 ## Registration lifecycle
 
-1. `DevqlCapabilityHost::builtin(...)` builds the host.
-2. `capability_packs::builtin_packs(...)` returns the built-in packs.
+1. `DevqlCapabilityHost::builtin(...)` constructs the runtime host.
+2. `capability_packs::builtin_packs(...)` returns built-in pack instances.
 3. Each pack exposes a `CapabilityDescriptor`.
-4. Each pack registers contributions through `CapabilityRegistrar`.
-5. Core/non-knowledge contributions use `register_stage` / `register_ingester`; knowledge contributions use `register_knowledge_stage` / `register_knowledge_ingester`.
-6. The host stores migrations and health checks alongside the registration.
-7. At runtime the host invokes stages or ingesters by `(capability_id, contribution_id)` with core or knowledge typed dispatch.
+4. Each pack registers runtime contributions through `CapabilityRegistrar`.
+5. The host stores stages, ingesters, migrations, health checks, schema metadata, and query examples.
+6. GraphQL resolvers delegate to host-owned stage resolution or pack-owned services through typed fields.
 
-## Common pack structure
+## Host-owned execution context
 
-Most packs follow this shape:
+Capability packs should treat the execution and ingest contexts as their only runtime integration surface.
 
-| File or module                | Role                                                       |
-| ----------------------------- | ---------------------------------------------------------- |
-| `descriptor.rs`               | Static pack descriptor and dependencies.                   |
-| `pack.rs`                     | `CapabilityPack` implementation.                           |
-| `register.rs`                 | Wiring of stages, ingesters, schema modules, and examples. |
-| `stages/`                     | Query-stage handlers.                                      |
-| `ingesters/`                  | Ingestion handlers.                                        |
-| `migrations/`                 | Pack-owned schema changes.                                 |
-| `health/`                     | Readiness and configuration checks.                        |
-| `storage/` or service modules | Pack-internal storage and service code.                    |
+The current core context surfaces include:
 
-## Built-in pack comparison
+- `graph()`
+- `host_relational()`
+- `languages()`
+- `test_harness_store()`
+- `blob_payloads()`
+- `connectors()`
+- `provenance()`
 
-| Pack              | Registered stages | Registered ingesters | Migrations | Health checks | Main storage surface                                                              |
-| ----------------- | ----------------- | -------------------- | ---------- | ------------- | --------------------------------------------------------------------------------- |
-| `knowledge`       | 1                 | 4                    | 1          | 3             | Host relational + knowledge relational/document repositories + blobs + connectors |
-| `test_harness`    | 5                 | 4                    | 1          | 3             | Optional test-harness repository plus DevQL relational                            |
-| `semantic_clones` | 0                 | 1                    | 1          | 1             | DevQL relational only                                                             |
+Pack-specific specialised access currently includes:
 
-The `semantic_clones` pack is worth calling out: it contributes an ingester and schema module, but it does not register a normal DevQL stage handler today.
+- `knowledge_relational()`
+- `knowledge_documents()`
+- `clone_rebuild_relational()`
 
-## Knowledge pack
+Two practical consequences follow from this:
 
-### Purpose
+- packs do not open their own repositories or stores
+- packs do not run external commands directly
 
-The Knowledge pack ingests repository-scoped external knowledge, versions it, stores the payload, and exposes query-time retrieval.
+## Pack isolation rules
 
-### Descriptor
+The intended pack boundary is:
 
-`knowledge/descriptor.rs` defines:
+- pack logic may call host-owned gateways and services
+- pack logic may not bootstrap storage backends
+- pack logic may not choose SQLite/Postgres/DuckDB implementations
+- pack logic may not talk to another pack’s store directly
 
-- id: `knowledge`
-- version: `0.0.11`
-- dependency: `test_harness >= 0.0.11`
+The codebase now reflects that boundary more strongly than before:
 
-### Contributions
+- `test_harness` receives its repository through `test_harness_store()` from the host
+- `test_harness` consumes language-aware behaviour through `languages()`
+- `semantic_clones` uses `clone_rebuild_relational()` rather than a capability-scoped raw relational escape hatch
 
-Registered contributions are:
+`CapabilityIngestContext::devql_relational_scoped(...)` still exists for legacy internal code paths, but it is no longer the preferred pattern and should not be used for new pack work.
 
-- stage: `knowledge`
-- ingesters:
-  - `knowledge.add`
-  - `knowledge.associate`
-  - `knowledge.refresh`
-  - `knowledge.versions`
-- schema module: `knowledge`
-- query examples: list, revision-scoped list, and field projection
+## Built-in packs
 
-### Runtime design
+| Pack | Runtime role | Current boundary shape |
+| --- | --- | --- |
+| `knowledge` | External knowledge ingestion, relation management, and retrieval | Service-driven and already host-oriented. |
+| `test_harness` | Test discovery, linkage, coverage, and classifications | Now uses host-owned language and repository services. |
+| `semantic_clones` | Embedding/clone-edge rebuild | Uses a dedicated clone-rebuild relational gateway. |
 
-The pack is service-driven:
+## `knowledge`
 
-- `KnowledgeIngestionService`
-- `KnowledgeRelationService`
-- `KnowledgeRetrievalService`
+The Knowledge pack remains the cleanest reference implementation.
 
-It relies on the host context for:
+It relies on the host for:
 
-- `knowledge_relational()` writes and reads
-- `knowledge_documents()` writes and reads
-- `host_relational()` for checkpoint and artefact resolution
-- blob payload persistence
-- external connector selection
-- provenance generation
-- config view access
-
-### Storage and connector boundaries
-
-Knowledge is the cleanest pack boundary in the current codebase:
-
-- host relational access stays pack-agnostic (`RelationalGateway`)
-- knowledge relational/document access lives behind `KnowledgeRelationalRepository` and `KnowledgeDocumentRepository`
-- payload blobs live behind the blob gateway
-- external fetches go through `adapters/connectors`
-
-### Migrations and health
-
-Its initial migration runs through `MigrationRunner::Knowledge` and initialises both knowledge relational and knowledge document schema via `KnowledgeMigrationContext`.
-
-Its health checks cover:
-
-- config
-- storage
+- relational access
+- document storage
+- blobs
 - connectors
-
-## Test Harness pack
-
-### Purpose
-
-The Test Harness pack manages verification data such as test discovery, coverage ingestion, linkage, and classification.
-
-### Descriptor
-
-`test_harness/descriptor.rs` defines:
-
-- id: `test_harness`
-- version: `0.0.11`
-- no declared pack dependencies
-
-### Contributions
-
-Registered stages are:
-
-- `tests`
-- `test_harness_tests`
-- `test_harness_tests_summary`
-- `coverage`
-- `test_harness_coverage`
-
-Registered ingesters are:
-
-- `test_harness.linkage`
-- `test_harness.coverage`
-- `test_harness.classification`
-
-It also contributes:
-
-- schema module: `test_harness`
-- query examples for tests, coverage, and commit-level test harness snapshot (`test_harness_tests_summary`)
-
-### Runtime design
-
-This pack uses an optional `BitloopsTestHarnessRepository` wrapped in `Arc<Mutex<...>>`.
-
-That tells you two things about the current implementation:
-
-1. the pack has a concrete repository implementation outside the generic DevQL relational surface
-2. the runtime must tolerate the repository being unavailable and return structured failures instead of panicking
-
-### Query-stage behaviour
-
-The stages are mixed in maturity:
-
-- `tests` and `coverage` are real stage handlers
-- they call back into DevQL through `execute_devql_subquery(...)`
-- those subqueries target core stages such as `__core_test_links` and coverage-related internal stages
-- `test_harness_tests_summary` returns a commit-scoped snapshot (row counts and coverage presence) from the test-harness relational store when `query_context.resolved_commit_sha` is set
-
-So this pack is executable and useful today, but it still depends on some core DevQL query surfaces rather than fully owning every query path.
-
-### Ingestion behaviour
-
-The ingesters cover:
-
-- test linkage and discovery
-- coverage ingestion from LCOV or LLVM JSON
-- coverage-derived classification rebuild
-
-When the repository store is unavailable, the ingesters return a structured failure such as `test_harness_relational_store_unavailable`.
-
-### Migrations and health
-
-Its migration applies test-domain DDL to the DevQL SQLite relational store.
-
-Its health checks cover:
-
+- provenance
 - config
-- storage
-- dependencies
 
-## Semantic Clones pack
+Its internal services still own Knowledge-specific business logic:
 
-### Purpose
+- ingestion
+- relation management
+- retrieval
 
-The Semantic Clones pack runs semantic feature extraction, embeddings, and clone-edge rebuild for symbols.
+## `test_harness`
 
-### Descriptor
+`test_harness` is where the isolation work changed the most.
 
-`semantic_clones/descriptor.rs` defines:
+### What changed
 
-- id: `semantic_clones`
-- version: `0.0.11`
-- no declared pack dependencies
+- the pack no longer opens `BitloopsTestHarnessRepository` during pack construction
+- stage handlers and ingesters now resolve the repository from the host context
+- structural mapping now resolves language support through `LanguageServicesGateway`
+- public GraphQL access is typed through `tests`, `coverage`, and `testsSummary`
 
-### Contributions
+### What stays in the pack
 
-Executable contributions registered on `DevqlCapabilityHost` are:
+The pack still owns:
 
-- ingester: `semantic_clones.rebuild`
-- schema module: `semantic_clones.schema`
-- query example for `clones(...)`
+- orchestration of repository scanning
+- linkage policy and confidence rules
+- materialisation into test artefacts and edges
+- coverage ingestion
+- classification rebuild
+- pack-owned persistence semantics
 
-Notably, it does **not** register a normal stage handler through `CapabilityRegistrar`.
+### What moved behind the host
 
-### Runtime design
+Language-specific discovery concerns now come from the language-adapter runtime through `LanguageTestSupport`.
 
-The key ingester uses `devql_relational_scoped("semantic_clones")`.
+That means:
 
-That matters because it means:
+- Rust, TypeScript/JavaScript, and Python test discovery support are accessed via the host
+- `test_harness` no longer needs a pack-owned registry to decide which language parser to call at runtime
 
-- the host explicitly binds the DevQL relational handle to the invoking capability id
-- the pack rebuilds clone edges against the shared DevQL relational store
-- the pack does not expose general relational access to unrelated pack invocations
+## `semantic_clones`
 
-### Internal pipeline
+`semantic_clones` still contributes one main ingester, but its boundary is narrower now.
 
-The pack still has a clear internal pipeline even though it only registers one ingester:
+The rebuild path uses a dedicated host gateway:
 
-- stage 1: semantic features
-- stage 2: embeddings
-- stage 3: clone-edge rebuild
+- `clone_rebuild_relational()`
 
-Those stages are internal pipeline phases, not host-registered DevQL stages.
+That keeps the capability-specific write path explicit and avoids treating the shared DevQL relational store as a generally pack-visible dependency.
 
-### Migrations and health
+## GraphQL and capability packs
 
-Its migration initialises `symbol_clone_edges` on DevQL SQLite.
+GraphQL is the canonical DevQL product contract, but packs do not own GraphQL execution directly.
 
-Its health surface is currently minimal:
+The flow is:
 
-- config availability only
+1. GraphQL resolves a typed field
+2. resolver code delegates into the host
+3. the host resolves the owning pack or host service
+4. the pack executes through host-owned contexts
 
-### Architectural nuance
+Today the typed GraphQL fields are still assembled statically in the GraphQL layer. The architectural direction is host-owned runtime composition from explicit capability contributions.
 
-The pack still ships an `extension_descriptor.rs` helper used by the metadata side and by provider-builder helpers, but the executable runtime is the `CapabilityPack` path.
+## Contributor guidance
 
-## Cross-pack rules
+For new pack work:
 
-`host/capability_host/policy.rs` defines the rules for cross-pack composition.
-
-A pack may invoke a registered stage owned by another pack when one of these is true:
-
-- it is invoking its own stage
-- it declares a descriptor dependency on the other pack
-- the repo config grants access through `host.cross_pack_access`
-
-This is how the host keeps composition explicit instead of allowing unrestricted pack-to-pack calls.
-
-## Why the capability-pack system works well
-
-The strong parts of this design are:
-
-- one executable host contract
-- explicit registration of contributions
-- host-owned timeouts and policy
-- host-owned migration and health orchestration
-- pack-local service code behind common contexts
-
-## Where the edges still show
-
-The main current imperfections are:
-
-- `test_harness` still leans on core DevQL internal stages for some query work
-- `semantic_clones` exposes an ingester and query example, but not a registered stage handler
-- `CoreExtensionHost` still tracks parallel descriptor metadata for some capability packs
-
-Those are manageable, but they should be documented accurately.
+- add typed stages and ingesters first
+- expose behaviour through typed GraphQL fields, not generic stage passthrough
+- inject stores and external services from the host
+- if a language-specific concern is reusable, extend the language-adapter runtime rather than embedding another pack-local parser

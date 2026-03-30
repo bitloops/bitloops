@@ -1,256 +1,217 @@
 # Bitloops layered extension architecture
 
-This document describes the architecture that is implemented in this repository today. It replaces the earlier simplified view with a description of the actual runtime seams, including the places where Bitloops uses more than one host or registry.
+This document describes the runtime architecture implemented in this repository today.
 
-The most important point is that Bitloops does **not** have one generic extension mechanism. It has several related mechanisms:
+The central rule is:
 
-- `DevqlCapabilityHost` runs executable capability packs.
-- `CoreExtensionHost` tracks extension metadata, compatibility, readiness, and language-pack resolution.
-- DevQL uses language-pack metadata to select a built-in extraction runtime.
-- Agent integrations live under `adapters/agents` and plug into the shared hook and checkpoint runtime.
+- **GraphQL is the canonical DevQL contract**
+- **the host owns execution, storage selection, command execution, and schema composition**
+- **capability packs and language adapters plug into the host through explicit contracts**
+
+DevQL DSL remains a concise authoring syntax. It compiles to GraphQL and executes through the `/devql` endpoints rather than bypassing GraphQL.
 
 ## High-level view
 
 ```mermaid
 flowchart TD
-    subgraph Presentation["Presentation layer"]
-        CLI["CLI commands"]
-        API["Dashboard API"]
+    subgraph Presentation["Presentation"]
+        CLI["CLI"]
+        DASH["Dashboard and third-party clients"]
+        DSL["DevQL DSL compiler"]
     end
 
-    subgraph Host["Host substrate"]
-        DEVQL["DevQL orchestration"]
+    subgraph GraphQL["Canonical DevQL contract"]
+        GLOBAL["/devql/global"]
+        SLIM["/devql"]
+    end
+
+    subgraph Host["Host-owned runtime"]
         CAPHOST["DevqlCapabilityHost"]
         EXTHOST["CoreExtensionHost"]
-        HOOKS["Hook dispatcher and runtime"]
-        CHECKPOINTS["Checkpoint lifecycle"]
+        LANGSVC["Language adapter registry and services"]
+        HOOKS["Hooks and checkpoints"]
     end
 
-    subgraph Extensions["Extension and adapter surfaces"]
-        PACKS["Capability packs"]
-        LANG["Language-pack descriptors and built-in language runtimes"]
-        AGENTS["Agent adapters"]
-        CONNECTORS["Connector adapters"]
-        PROVIDERS["Model providers"]
+    subgraph Packs["Capability packs"]
+        KNOW["knowledge"]
+        TESTS["test_harness"]
+        CLONES["semantic_clones"]
     end
 
-    subgraph Shared["Infrastructure and shared modules"]
-        STORAGE["Storage backends"]
-        CONFIG["Config"]
-        GIT["Git"]
-        TELEMETRY["Telemetry"]
-        UTILS["Utils and domain models"]
+    subgraph Lang["Language adapters"]
+        RUST["rust-language-pack"]
+        TSJS["ts-js-language-pack"]
+        PY["python-language-pack"]
     end
 
-    CLI --> DEVQL
-    CLI --> HOOKS
-    API --> CHECKPOINTS
+    subgraph Infra["Infrastructure"]
+        STORES["Relational, document, blob, checkpoint stores"]
+        CONN["Connector adapters"]
+        GIT["Git and repo identity"]
+    end
 
-    DEVQL --> CAPHOST
-    DEVQL --> EXTHOST
-    DEVQL --> LANG
-    DEVQL --> PROVIDERS
+    CLI --> DSL
+    DSL --> GLOBAL
+    DASH --> GLOBAL
+    DASH --> SLIM
 
-    HOOKS --> AGENTS
-    HOOKS --> CHECKPOINTS
+    GLOBAL --> CAPHOST
+    SLIM --> CAPHOST
+    GLOBAL --> LANGSVC
+    SLIM --> LANGSVC
 
-    CAPHOST --> PACKS
-    CAPHOST --> CONNECTORS
-    CAPHOST --> STORAGE
-    CAPHOST --> CONFIG
+    CAPHOST --> KNOW
+    CAPHOST --> TESTS
+    CAPHOST --> CLONES
 
-    PACKS --> STORAGE
-    PACKS --> CONNECTORS
-    PACKS --> PROVIDERS
+    EXTHOST --> RUST
+    EXTHOST --> TSJS
+    EXTHOST --> PY
+    LANGSVC --> RUST
+    LANGSVC --> TSJS
+    LANGSVC --> PY
 
-    CHECKPOINTS --> STORAGE
-    CHECKPOINTS --> GIT
-
-    DEVQL --> TELEMETRY
-    HOOKS --> TELEMETRY
+    CAPHOST --> STORES
+    CAPHOST --> CONN
+    LANGSVC --> GIT
+    HOOKS --> STORES
 ```
 
-## Layer summary
+## Runtime layers
 
-| Layer                          | Main modules                                                            | Responsibility                                                                      |
-| ------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Presentation                   | `bitloops/src/cli`, `bitloops/src/api`                                  | User-facing entrypoints for DevQL, dashboard, hooks, and test tooling.              |
-| Host substrate                 | `bitloops/src/host`                                                     | Orchestration, policy, lifecycle, checkpointing, and registry/reporting.            |
-| Executable extensions          | `bitloops/src/capability_packs`                                         | Repository-scoped capabilities executed by DevQL through stages and ingesters.      |
-| Runtime adapters               | `bitloops/src/adapters`                                                 | Agent integrations, external knowledge connectors, and model-provider abstractions. |
-| Infrastructure and shared code | `bitloops/src/storage`, `config`, `git`, `telemetry`, `utils`, `models` | Storage, config resolution, Git access, logging, helpers, and shared types.         |
+| Layer | Main modules | Responsibility |
+| --- | --- | --- |
+| Presentation | `bitloops/src/cli`, `bitloops/src/api` | CLI commands, dashboard/API routes, DevQL DSL parsing, and GraphQL transport. |
+| Canonical DevQL contract | `bitloops/src/graphql` | The public query and mutation surface for DevQL. |
+| Host runtime | `bitloops/src/host` | Capability execution, language resolution, pack lifecycle, policy, and integration boundaries. |
+| Capability packs | `bitloops/src/capability_packs` | Domain behaviour such as knowledge, test linkage, coverage, and semantic clones. |
+| Adapters | `bitloops/src/adapters` | Language runtimes, agent integrations, and external connectors. |
+| Infrastructure | `storage`, `config`, `git`, `telemetry`, `models` | Persistence, repo identity, config, and shared domain types. |
 
-## The real architectural boundaries
+## Architectural boundaries
 
-### 1. Capability packs are runtime extensions
+### 1. GraphQL is the DevQL product contract
 
-`bitloops/src/host/capability_host` defines the executable capability-pack contract:
+The two GraphQL surfaces are first-class product interfaces:
 
-- `CapabilityPack`
-- `CapabilityRegistrar` (core + knowledge registration surfaces)
-- `StageHandler` and `IngesterHandler` for core/non-knowledge packs
-- `KnowledgeStageHandler` and `KnowledgeIngesterHandler` for the Knowledge pack
-- `CapabilityExecutionContext`, `CapabilityIngestContext`, `CapabilityMigrationContext`
-- `KnowledgeExecutionContext`, `KnowledgeIngestContext`, `KnowledgeMigrationContext`
-- `MigrationRunner::Core` and `MigrationRunner::Knowledge`
-- `CapabilityHealthContext`
+- `/devql/global`
+- `/devql`
 
-The built-in packs registered on this path are:
+DevQL DSL compiles into GraphQL documents that target those endpoints. The DSL is a shorthand, not a parallel execution engine.
 
-- `knowledge`
-- `test_harness`
-- `semantic_clones`
+Important current rules:
 
-This is the path that actually runs stage and ingester code during `bitloops devql` commands.
+- typed GraphQL fields are the public capability-pack surface
+- the generic `extension(stage: ...)` field has been removed from the public schema
+- `tests`, `coverage`, and `testsSummary` are now exposed as typed GraphQL fields
 
-### 2. `CoreExtensionHost` is a metadata and readiness host
+### 2. The host owns execution beneath GraphQL
 
-`bitloops/src/host/extension_host` is not the same thing as `DevqlCapabilityHost`.
+`bitloops/src/host/capability_host` owns executable capability packs.
 
-It owns:
+It is responsible for:
 
-- language-pack descriptors and profile resolution
-- extension capability descriptors
+- registering stages and ingesters
+- resolving the owning capability for an internal stage
+- constructing execution and ingest contexts
+- selecting and attaching storage backends
+- mediating pack access to connectors, provenance, and language services
+
+Capability packs no longer own infrastructure bootstrapping. For example, `test_harness` now receives its repository through the host context instead of opening it inside the pack.
+
+### 3. `CoreExtensionHost` remains the metadata and ownership layer
+
+`bitloops/src/host/extension_host` still owns descriptor-level concerns:
+
+- language-pack profile resolution
+- capability descriptor ownership and readiness
 - compatibility checks
-- readiness snapshots
-- diagnostics
-- extension-side migration planning
+- diagnostics and registry reports
 
-The built-in language packs on this path are:
+This remains distinct from `DevqlCapabilityHost`, which executes runtime handlers.
 
-- `rust-language-pack`
-- `ts-js-language-pack`
+### 4. Language adapters are reusable host-owned semantics
 
-The built-in extension capability descriptors on this path are currently:
+`bitloops/src/host/language_adapter` and `bitloops/src/adapters/languages` now provide more than artefact extraction.
 
-- `knowledge-capability-pack`
-- `test-harness-capability-pack`
+The runtime contract covers:
 
-That distinction matters because the executable runtime and the descriptor registry are related, but not identical.
+- artefact extraction
+- dependency-edge extraction
+- optional file docstring extraction
+- optional language facets such as `LanguageTestSupport`
 
-### 3. Language adapters are split between metadata and runtime extraction
+`LanguageTestSupport` is the first shared facet. It lets the host expose language-specific test discovery, enumeration, and reconciliation to capability packs without those packs owning parallel parsers.
 
-Bitloops does not currently have a dedicated `adapters/languages` tree. Instead, the language-adapter story is split across two places:
+### 5. Capability packs are isolated behind host-owned ports
 
-- `CoreExtensionHost` resolves language-pack descriptors and profiles.
-- DevQL maps the resolved pack id to a built-in extractor table in `host/devql/ingestion/artefact_persistence.rs`.
+Capability packs must treat the host context as the only integration surface.
 
-Today that runtime table supports:
+In practice this means:
 
-- Rust extraction
-- TypeScript/JavaScript extraction
+- packs do not open stores directly
+- packs do not choose storage engines
+- packs do not execute external commands directly
+- packs do not import language-adapter implementation modules directly
+- cross-pack interaction happens through host-owned stages, ingesters, and gateways
 
-So language handling is descriptor-driven at selection time, but still built in at execution time.
+The current code reflects that direction:
 
-### 4. Agent adapters are a separate adapter system
-
-`bitloops/src/adapters/agents` is its own architecture.
-
-It contains:
-
-- concrete `Agent` implementations such as Codex, Cursor, Copilot, Gemini, Claude Code, and OpenCode
-- a simple `AgentRegistry` for instantiated agents
-- a richer `AgentAdapterRegistry` with protocol families, target profiles, package metadata, readiness, and resolution traces
-- canonical request/response/lifecycle types
-- host-owned policy, provenance, and audit helpers
-
-Those adapters then feed `host/hooks` and `host/checkpoints` rather than the DevQL capability-pack runtime.
+- `test_harness` consumes `languages()` and `test_harness_store()` from the host context
+- `semantic_clones` uses `clone_rebuild_relational()` rather than `devql_relational_scoped(...)`
+- GraphQL resolvers call typed stage adapters rather than the removed public `extension(stage)` field
 
 ## Key runtime flows
 
-### DevQL ingestion
+### DevQL query flow
 
 ```mermaid
 sequenceDiagram
-    participant CLI as CLI
-    participant DevQL as host/devql
-    participant ExtHost as CoreExtensionHost
-    participant CapHost as DevqlCapabilityHost
+    participant CLI as CLI or client
+    participant DSL as DevQL DSL compiler
+    participant GQL as GraphQL schema
+    participant Host as DevqlCapabilityHost
     participant Pack as Capability pack
-    participant Store as Storage
+    participant Store as Host-owned stores
 
-    CLI->>DevQL: bitloops devql ingest
-    DevQL->>ExtHost: resolve language pack for file or language
-    DevQL->>CapHost: ensure pack migrations and runtime policy
-    DevQL->>CapHost: dispatch core or knowledge ingester
-    CapHost->>Pack: invoke handler with typed context
-    Pack->>Store: write host relational, knowledge repositories, blobs, and connector-backed data
+    CLI->>DSL: concise DevQL query
+    DSL->>GQL: compiled GraphQL document
+    GQL->>Host: typed field resolution
+    Host->>Pack: stage or service execution via host context
+    Pack->>Store: host-owned store access
+    Pack-->>Host: typed result payload
+    Host-->>GQL: typed GraphQL response
 ```
 
-### DevQL query execution
+### Language-aware test-harness flow
 
 ```mermaid
 sequenceDiagram
-    participant CLI as CLI
-    participant DevQL as host/devql
-    participant CapHost as DevqlCapabilityHost
-    participant Pack as Capability pack
-    participant Store as Storage
+    participant TestHarness as test_harness ingester
+    participant HostCtx as CapabilityIngestContext
+    participant LangSvc as LanguageServicesGateway
+    participant Adapter as LanguageTestSupport
+    participant Store as Test harness repository
 
-    CLI->>DevQL: bitloops devql query
-    DevQL->>CapHost: resolve registered stage
-    CapHost->>Pack: execute core or knowledge stage with typed context
-    Pack->>Store: read capability-owned or DevQL relational data
-    Pack-->>CapHost: StageResponse
-    CapHost-->>DevQL: rendered result
+    TestHarness->>HostCtx: languages()
+    HostCtx->>LangSvc: resolve test support for file path
+    LangSvc->>Adapter: discover and optionally enumerate tests
+    Adapter-->>TestHarness: shared discovery model
+    TestHarness->>Store: persist linkage, coverage, and classifications
 ```
 
-### Agent hook and checkpoint flow
+## Current implementation status
 
-```mermaid
-sequenceDiagram
-    participant Agent as External agent
-    participant Hooks as host/hooks
-    participant Runtime as shared hook runtime
-    participant Checkpoints as host/checkpoints
-    participant Store as Session and checkpoint storage
+The architecture direction is clear, but two pieces are still in transition:
 
-    Agent->>Hooks: hook command with session payload
-    Hooks->>Runtime: parse agent-specific input
-    Runtime->>Checkpoints: apply lifecycle transition
-    Checkpoints->>Store: persist session, pre-prompt, and checkpoint state
-```
+- GraphQL remains statically assembled in Rust code today; the long-term direction is host-owned runtime stitching from capability contributions.
+- The old pack-local `test_harness` language-provider modules still exist as implementation scaffolding behind the new adapter facet, even though `test_harness` itself now executes through the host language service.
 
-## What is built in today
+## Summary
 
-### Capability packs
+Bitloops now has one dominant runtime shape:
 
-- `knowledge`: external knowledge ingestion, versioning, storage, and retrieval
-- `test_harness`: test linkage, coverage ingestion, classification, and query stages
-- `semantic_clones`: semantic feature and embedding pipeline plus clone-edge rebuild
-
-### Language packs
-
-- Rust
-- TypeScript/JavaScript
-
-### Agent adapters
-
-- Claude Code
-- Codex
-- Copilot
-- Cursor
-- Gemini
-- OpenCode
-
-### Connector adapters
-
-- GitHub
-- Jira
-- Confluence
-
-## Design consequences
-
-1. The host substrate is intentionally layered, but the layers are not perfectly uniform.
-2. Capability-pack execution is centralised in `DevqlCapabilityHost`.
-3. Extension metadata and language resolution are centralised in `CoreExtensionHost`.
-4. Language execution still depends on a built-in runtime registry keyed by language-pack id.
-5. Agent adapters are richer and more self-contained than language adapters.
-6. Checkpointing and hook lifecycle are shared across agent integrations rather than implemented per agent.
-
-## Detailed companion documents
-
-- [Host substrate architecture](./layered-extension-architecture-host.md)
-- [Capability-pack architecture](./layered-extension-architecture-capability-packs.md)
-- [Language-adapter architecture](./layered-extension-architecture-language-adapters.md)
-- [Agent-adapter architecture](./layered-extension-architecture-agent-adapters.md)
+- GraphQL is the canonical DevQL contract
+- the host owns execution beneath that contract
+- language adapters provide reusable language semantics
+- capability packs consume host-owned ports rather than infrastructure directly
