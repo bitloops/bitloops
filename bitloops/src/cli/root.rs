@@ -234,8 +234,6 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Completion(_) => "completion",
         crate::cli::Commands::CurlBashPostInstall => "curl-bash-post-install",
         crate::cli::Commands::Help(_) => "help",
-        #[cfg(feature = "qat")]
-        crate::cli::Commands::Qat(_) => "qat",
     }
 }
 

@@ -11,8 +11,6 @@ pub mod git;
 pub mod graphql;
 pub mod host;
 pub mod models;
-#[cfg(feature = "qat")]
-pub mod qat;
 pub mod storage;
 pub mod telemetry;
 pub mod utils;

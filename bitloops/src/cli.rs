@@ -114,9 +114,6 @@ pub enum Commands {
     CurlBashPostInstall,
     /// Help about any command.
     Help(root::HelpArgs),
-    #[cfg(feature = "qat")]
-    /// Run Bitloops quality acceptance tests from the integrated Rust BDD harness.
-    Qat(crate::qat::QatArgs),
 }
 
 /// Marker error: the command already printed a user-facing message.
@@ -204,8 +201,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Completion(args) => root::run_completion_command(&args),
         Commands::CurlBashPostInstall => root::run_curl_bash_post_install_command(),
         Commands::Help(args) => root::run_help_command(&args),
-        #[cfg(feature = "qat")]
-        Commands::Qat(args) => crate::qat::run(args).await,
     };
 
     root::run_persistent_post_run(&hidden_chain, command_name);

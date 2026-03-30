@@ -10,8 +10,6 @@ pub use bitloops::git;
 pub use bitloops::graphql;
 pub use bitloops::host;
 pub use bitloops::models;
-#[cfg(feature = "qat")]
-pub use bitloops::qat;
 pub use bitloops::storage;
 pub use bitloops::telemetry;
 pub use bitloops::utils;
