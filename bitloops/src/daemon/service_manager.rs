@@ -166,6 +166,92 @@ pub(super) fn stop_configured_supervisor_service(
     Ok(())
 }
 
+pub(super) fn uninstall_configured_supervisor_service(
+    metadata: &SupervisorServiceMetadata,
+) -> Result<()> {
+    match metadata.manager {
+        ServiceManagerKind::Launchd => {
+            let domain_target = launchd_domain_target()?;
+            if let Some(path) = metadata.service_file.as_ref() {
+                let _ = Command::new("launchctl")
+                    .arg("bootout")
+                    .arg(&domain_target)
+                    .arg(path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+
+                if path.exists() {
+                    fs::remove_file(path)
+                        .with_context(|| format!("removing {}", path.display()))?;
+                }
+            } else {
+                let _ = Command::new("launchctl")
+                    .arg("bootout")
+                    .arg(format!("{domain_target}/{}", metadata.service_name))
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+        ServiceManagerKind::SystemdUser => {
+            let _ = Command::new("systemctl")
+                .arg("--user")
+                .arg("stop")
+                .arg(&metadata.service_name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = Command::new("systemctl")
+                .arg("--user")
+                .arg("disable")
+                .arg(&metadata.service_name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            if let Some(path) = metadata.service_file.as_ref()
+                && path.exists()
+            {
+                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+            }
+
+            let _ = Command::new("systemctl")
+                .arg("--user")
+                .arg("daemon-reload")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        ServiceManagerKind::WindowsTask => {
+            let _ = Command::new("schtasks")
+                .arg("/End")
+                .arg("/TN")
+                .arg(&metadata.service_name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = Command::new("schtasks")
+                .arg("/Delete")
+                .arg("/TN")
+                .arg(&metadata.service_name)
+                .arg("/F")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn is_supervisor_service_running(metadata: &SupervisorServiceMetadata) -> Result<bool> {
     match metadata.manager {
         ServiceManagerKind::Launchd => {

@@ -10,7 +10,7 @@ use std::io::BufRead;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::cli::{clean, doctor, enable, reset, resume, versioncheck};
+use crate::cli::{clean, doctor, enable, reset, resume, uninstall, versioncheck};
 use crate::config::settings::{self, BitloopsSettings};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 
@@ -42,14 +42,6 @@ pub struct DisableArgs {
     /// Deprecated: repo policy files are not changed by this command.
     #[arg(long, default_value_t = false)]
     pub project: bool,
-
-    /// Completely remove Bitloops from repository.
-    #[arg(long, default_value_t = false)]
-    pub uninstall: bool,
-
-    /// Skip confirmation prompt for uninstall behavior.
-    #[arg(long, default_value_t = false)]
-    pub force: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -159,18 +151,14 @@ pub fn run_clean_command(args: &CleanArgs) -> Result<()> {
 }
 
 pub fn run_disable_command(args: &DisableArgs) -> Result<()> {
-    if args.uninstall {
-        let cwd = env::current_dir().context("getting current directory")?;
-        let repo_root = enable::find_repo_root(&cwd).unwrap_or(cwd);
-        let mut out = io::stdout();
-        let mut err = io::stderr();
-        return enable::run_uninstall(&repo_root, &mut out, &mut err, args.force);
-    }
-
     let cwd = env::current_dir().context("getting current directory")?;
     let repo_root = enable::find_repo_root(&cwd)?;
     let mut out = io::stdout();
     enable::run_disable(&repo_root, &mut out, args.project)
+}
+
+pub async fn run_uninstall_command(args: uninstall::UninstallArgs) -> Result<()> {
+    uninstall::run(args).await
 }
 
 pub fn run_doctor_command(args: &DoctorArgs) -> Result<()> {
@@ -230,6 +218,7 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Init(_) => "init",
         crate::cli::Commands::Enable(_) => "enable",
         crate::cli::Commands::Disable(_) => "disable",
+        crate::cli::Commands::Uninstall(_) => "uninstall",
         crate::cli::Commands::Dashboard(_) => "dashboard",
         crate::cli::Commands::Hooks(_) => "hooks",
         crate::cli::Commands::Version(_) => "version",

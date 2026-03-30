@@ -16,6 +16,7 @@ pub mod resume;
 pub mod rewind;
 pub mod root;
 pub mod testlens;
+pub mod uninstall;
 pub mod versioncheck;
 
 /// Bitloops CLI
@@ -67,12 +68,14 @@ pub enum Commands {
     Clean(root::CleanArgs),
     /// Reset shadow/session state for current HEAD.
     Reset(root::ResetArgs),
-    /// Initialize agent integrations in the current project.
+    /// Initialize the global Bitloops daemon config.
     Init(init::InitArgs),
     /// Enable Bitloops in the current project.
     Enable(enable::EnableArgs),
     /// Disable Bitloops in the current project.
     Disable(root::DisableArgs),
+    /// Uninstall Bitloops artefacts from your system or known repositories.
+    Uninstall(uninstall::UninstallArgs),
     /// Open the local Bitloops dashboard in your browser.
     Dashboard(dashboard::DashboardArgs),
     /// Internal: agent hook handlers (called by supported agents, not users).
@@ -180,6 +183,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Init(args) => init::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
         Commands::Disable(args) => root::run_disable_command(&args),
+        Commands::Uninstall(args) => uninstall::run(args).await,
         Commands::Dashboard(args) => dashboard::run(args).await,
         Commands::Hooks(args) => {
             crate::host::hooks::dispatcher::run(args, &strategy_registry).await

@@ -117,17 +117,13 @@ brew install bitloops/tap/bitloops
 
 ## Getting Started
 
-From within the repo you are currently working on:
-
-1. Initialize your agent integrations:
+1. Initialise the global daemon config:
 
    ```bash
    bitloops init
    ```
 
-   Select your agents, or use `Ctrl+A` to select them all.
-
-2. To start recording Checkpoints run:
+2. From inside the git repository you want to capture, enable Bitloops hooks:
 
    ```bash
    bitloops enable
@@ -151,6 +147,20 @@ bitloops daemon start
 bitloops daemon stop
 bitloops status
 bitloops checkpoints status
+```
+
+## Uninstall
+
+Remove Bitloops hooks from the current repository:
+
+```bash
+bitloops disable
+```
+
+Remove Bitloops-managed artefacts from your machine as well:
+
+```bash
+bitloops uninstall --full
 ```
 
 ## Supported Agents
@@ -190,8 +200,9 @@ For this flow, SQLite stores repository-scoped identity and relations, DuckDB st
 
 ### Do you need access to my codebase?
 
-No. None of your code is sent to our servers. Your data is stored in your git
-repo (`bitloops/checkpoints/v1`) as well as your DBs.
+No. None of your code is sent to our servers. By default Bitloops keeps its
+config, cache, state, and local data in platform app directories on your
+machine, with store backends controlled by the daemon config.
 
 ### Is this totally free for real?
 

@@ -11,6 +11,7 @@ Bitloops has moved to a daemon-first architecture. This release intentionally br
 
 - `bitloops init` now prepares the global daemon config.
 - `bitloops enable` and `bitloops disable` now manage hooks only.
+- `bitloops uninstall` is now the command for machine-wide cleanup.
 - `bitloops status` now reports daemon status.
 - Repo/session status moved to `bitloops checkpoints status`.
 - `bitloops dashboard` is now a browser launcher instead of the server command.
@@ -54,6 +55,7 @@ Default path categories now follow platform app directories:
 3. Move local repo overrides into `.bitloops.local.toml`.
 4. Re-run `bitloops init` to create the daemon config if needed.
 5. Re-run `bitloops enable` in each repo to install hooks under the new model.
+6. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
 
 ## Examples
 

@@ -96,3 +96,13 @@ bitloops checkpoints status --detailed
 ```
 
 `bitloops status` reports daemon status. `bitloops checkpoints status` reports repo capture status and shows the resolved policy root and fingerprint.
+
+## Remove Bitloops Later
+
+Use `bitloops disable` to remove hooks from the current repository.
+
+Use `bitloops uninstall` when you want to remove Bitloops-managed machine artefacts as well:
+
+```bash
+bitloops uninstall --full
+```

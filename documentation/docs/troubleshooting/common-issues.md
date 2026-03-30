@@ -34,6 +34,8 @@ Checks:
 
 Bitloops now warns when it finds old repo-local data directories. Those paths are ignored unless you explicitly point the daemon config at them.
 
+If you want to remove those old directories entirely, use `bitloops uninstall --data` or `bitloops uninstall --full`.
+
 ## Capture Seems Disabled Unexpectedly
 
 Checks:

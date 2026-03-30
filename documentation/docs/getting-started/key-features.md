@@ -37,4 +37,4 @@ By default Bitloops separates paths by intent:
 
 ## Agent And Hook Integration
 
-`bitloops enable` installs git hooks and supported agent hooks for the current repo. `bitloops disable` removes them again.
+`bitloops enable` installs git hooks and supported agent hooks for the current repo. `bitloops disable` removes those repo hooks again. `bitloops uninstall` handles wider cleanup across global directories, services, binaries, shell integration, and known repositories.

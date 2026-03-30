@@ -125,6 +125,7 @@ fn TestRootCommand_SubcommandWiring() {
         "reset",
         "enable",
         "disable",
+        "uninstall",
         "dashboard",
         "hooks",
         "version",
@@ -178,6 +179,7 @@ fn TestRootCommand_WatcherAutostartMatrix() {
     let cases = [
         (["bitloops", "clean"].as_slice(), false),
         (["bitloops", "disable"].as_slice(), false),
+        (["bitloops", "uninstall", "--full"].as_slice(), false),
         (["bitloops", "help"].as_slice(), false),
         (["bitloops", "version"].as_slice(), false),
         (["bitloops", "status"].as_slice(), false),

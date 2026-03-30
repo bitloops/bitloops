@@ -214,105 +214,6 @@ pub fn run_enable_with_strategy(
     Ok(target_path)
 }
 
-pub fn run_uninstall(
-    repo_root: &Path,
-    out: &mut dyn Write,
-    err_out: &mut dyn Write,
-    force: bool,
-) -> Result<()> {
-    if !repo_root.join(".git").exists() {
-        writeln!(err_out, "Not a git repository. Nothing to uninstall.")?;
-        return Err(crate::cli::SilentError.into());
-    }
-
-    let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);
-    let session_state_count = count_session_states(repo_root);
-    let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
-    let installed_agents = AgentAdapterRegistry::builtin().installed_agents(repo_root);
-    let installed_agent_labels = installed_agents
-        .iter()
-        .map(|agent| {
-            AgentAdapterRegistry::builtin()
-                .agent_display(agent)
-                .unwrap_or("Unknown")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-
-    if !bitloops_dir_exists
-        && !git_hooks_installed
-        && session_state_count == 0
-        && installed_agents.is_empty()
-    {
-        writeln!(out, "Bitloops is not installed in this repository.")?;
-        return Ok(());
-    }
-
-    if !force {
-        writeln!(
-            out,
-            "\nThis will completely remove Bitloops from this repository:"
-        )?;
-        if bitloops_dir_exists {
-            writeln!(out, "  - .bitloops/ directory")?;
-        }
-        if git_hooks_installed {
-            writeln!(
-                out,
-                "  - Git hooks (prepare-commit-msg, commit-msg, post-commit, post-merge, post-checkout, pre-push, reference-transaction)"
-            )?;
-        }
-        if session_state_count > 0 {
-            writeln!(out, "  - Session state files ({session_state_count})")?;
-        }
-        if !installed_agent_labels.is_empty() {
-            writeln!(
-                out,
-                "  - Agent hooks ({})",
-                installed_agent_labels.join(", ")
-            )?;
-        }
-
-        write!(
-            out,
-            "\nAre you sure you want to uninstall Bitloops? [y/N]: "
-        )?;
-        out.flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let confirmed = matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-        if !confirmed {
-            writeln!(out, "Uninstall cancelled.")?;
-            return Ok(());
-        }
-    }
-
-    writeln!(out, "\nUninstalling Bitloops CLI...")?;
-
-    if let Err(err) = remove_agent_hooks(repo_root, out) {
-        writeln!(err_out, "Warning: failed to remove agent hooks: {err}")?;
-    }
-
-    let removed = git_hooks::uninstall_git_hooks(repo_root).unwrap_or(0);
-    if removed > 0 {
-        writeln!(out, "  Removed git hooks ({removed})")?;
-    }
-
-    let states_removed = remove_all_session_states(repo_root).unwrap_or(0);
-    if states_removed > 0 {
-        writeln!(out, "  Removed session states ({states_removed})")?;
-    }
-
-    if bitloops_dir_exists {
-        remove_bitloops_directory(repo_root)?;
-        writeln!(out, "  Removed .bitloops directory")?;
-    }
-
-    writeln!(out, "\nBitloops CLI uninstalled successfully.")?;
-    Ok(())
-}
-
 pub fn count_session_states(repo_root: &Path) -> usize {
     let backend = create_session_backend_or_local(repo_root);
     backend.list_sessions().map_or(0, |sessions| sessions.len())
@@ -324,23 +225,7 @@ pub fn count_shadow_branches(repo_root: &Path) -> usize {
     0
 }
 
-fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
-    let backend = create_session_backend_or_local(repo_root);
-    let sessions = backend.list_sessions().context("listing session states")?;
-
-    let mut removed = 0usize;
-    for session in sessions {
-        let session_id = session.session_id;
-        backend
-            .delete_session(&session_id)
-            .with_context(|| format!("removing session state {}", session_id))?;
-        removed += 1;
-    }
-
-    Ok(removed)
-}
-
-fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
+pub(crate) fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
     let registry = AgentAdapterRegistry::builtin();
     for agent in registry.available_agents() {
         if registry.are_agent_hooks_installed(repo_root, &agent)? {

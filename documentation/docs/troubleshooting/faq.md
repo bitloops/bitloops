@@ -18,6 +18,16 @@ In platform app directories by default:
 - cache directory for embedding downloads and dashboard bundle assets
 - state directory for daemon runtime metadata and hook scratch files
 
+### How do I remove Bitloops completely?
+
+Use:
+
+```bash
+bitloops uninstall --full
+```
+
+Use `bitloops disable` if you only want to remove hooks from the current repository.
+
 ### Do I need a repo config file?
 
 No. If no `.bitloops.toml` exists, Bitloops uses built-in thin-CLI defaults.

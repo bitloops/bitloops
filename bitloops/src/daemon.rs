@@ -124,6 +124,30 @@ pub async fn stop() -> Result<()> {
     lifecycle::stop().await
 }
 
+pub fn uninstall_supervisor_service() -> Result<()> {
+    let metadata = read_supervisor_service_metadata()?.unwrap_or_else(|| {
+        let manager = current_service_manager();
+        let service_file = match manager {
+            ServiceManagerKind::Launchd => {
+                launch_agent_plist_path(GLOBAL_SUPERVISOR_SERVICE_NAME).ok()
+            }
+            ServiceManagerKind::SystemdUser => {
+                systemd_user_unit_path(GLOBAL_SUPERVISOR_SERVICE_NAME).ok()
+            }
+            ServiceManagerKind::WindowsTask => None,
+        };
+
+        SupervisorServiceMetadata {
+            version: 1,
+            manager,
+            service_name: GLOBAL_SUPERVISOR_SERVICE_NAME.to_string(),
+            service_file,
+        }
+    });
+
+    uninstall_configured_supervisor_service(&metadata)
+}
+
 pub async fn status() -> Result<DaemonStatusReport> {
     lifecycle::status().await
 }

@@ -24,6 +24,8 @@ Disable them again with:
 bitloops disable
 ```
 
+Use `bitloops uninstall` if you want to remove Bitloops beyond the current repo hook setup.
+
 ## Policy
 
 Shared capture policy lives in `.bitloops.toml`:

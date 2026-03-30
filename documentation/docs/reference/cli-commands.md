@@ -54,8 +54,41 @@ Removes Bitloops hooks from the current repository.
 
 ```bash
 bitloops disable
-bitloops disable --uninstall
 ```
+
+### `bitloops uninstall`
+
+Removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.
+
+```bash
+bitloops uninstall --full
+bitloops uninstall --agent-hooks --git-hooks
+bitloops uninstall --agent-hooks --git-hooks --only-current-project
+bitloops uninstall --config --data --caching
+```
+
+Key flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--full` | Remove all Bitloops-managed artefacts, including legacy locations |
+| `--binaries` | Remove recognised `bitloops` binaries |
+| `--service` | Remove the daemon service and daemon state metadata |
+| `--data` | Remove global data and legacy repo-local `.bitloops/` data |
+| `--caching` | Remove the global cache directory |
+| `--config` | Remove the global config directory and legacy TLS artefacts |
+| `--agent-hooks` | Remove supported agent hooks |
+| `--git-hooks` | Remove Bitloops git hooks |
+| `--shell` | Remove managed shell completion integration |
+| `--only-current-project` | Limit hook removal to the current repository |
+| `--force` | Skip confirmation |
+
+Notes:
+
+- No flags opens an interactive multi-select picker when running in a TTY.
+- In non-interactive environments, you must pass explicit flags.
+- `disable` remains the repo-scoped hook-off command. Use `uninstall` for machine-wide cleanup.
+- See [Uninstalling Bitloops](./uninstall.md) for target-by-target behaviour and caveats.
 
 ## Daemon Lifecycle
 

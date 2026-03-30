@@ -92,6 +92,8 @@ Bitloops uses platform app directories by default:
 
 The default repo footprint is now limited to optional policy files at the repo root. Bitloops no longer uses repo-local runtime storage by default.
 
+If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
+
 ## Repo Policy
 
 The thin CLI and hook layer look for repo policy by walking upwards until they find the nearest `.bitloops.toml`.
