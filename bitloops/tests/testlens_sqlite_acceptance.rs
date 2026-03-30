@@ -4,7 +4,8 @@ mod test_harness_support;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use test_harness_support::{
-    Workspace, load_symbol_fqn, run_bitloops_or_panic, seed_production_artefacts,
+    Workspace, bootstrap_codex_workspace, load_symbol_fqn, run_bitloops_or_panic,
+    seed_production_artefacts,
     write_rust_coverage_fixture,
 };
 
@@ -13,10 +14,7 @@ use test_harness_support::{
 fn bitloops_devql_init_initialises_sqlite_test_harness_tables() {
     let workspace = Workspace::new("sqlite-init");
 
-    run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &["init", "--agent", "codex", "--telemetry", "false"],
-    );
+    bootstrap_codex_workspace(&workspace);
 
     assert!(
         workspace.db_path().is_file(),
@@ -76,10 +74,7 @@ fn bitloops_testlens_ingest_coverage_reports_artefact_only_mode_on_sqlite() {
     let workspace = Workspace::new("sqlite-coverage");
     write_rust_coverage_fixture(&workspace);
 
-    run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &["init", "--agent", "codex", "--telemetry", "false"],
-    );
+    bootstrap_codex_workspace(&workspace);
     run_bitloops_or_panic(workspace.repo_dir(), &["devql", "init"]);
 
     for commit in ["C0", "C1"] {
