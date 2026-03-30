@@ -1,4 +1,4 @@
-use crate::capability_packs::test_harness::mapping::languages::rust::scenarios::collect_rust_suites;
+use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_source_discovery,
