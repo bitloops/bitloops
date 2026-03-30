@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.12] - 2026-03-30
+
+### Added
+
 - **Host-owned language test-support runtime**: added `LanguageTestSupport` and shared test-discovery/enumeration models under `host/language_adapter`, plus host-managed `LanguageServicesGateway` access from capability contexts. Built-in Rust, TypeScript/JavaScript, and Python language adapters now expose reusable test-support facets, and Rust test enumeration now runs through a host-owned command runner rather than pack-local process execution.
 - **Typed test-harness GraphQL summary fields**: added typed `testsSummary` GraphQL fields for project and slim DevQL scopes together with `TestHarnessCommitSummary` / `TestHarnessCommitCounts` types, replacing the need to expose test-harness commit snapshots through generic stage payloads.
 - **Architecture decision and guide refresh**: added the ADR `docs/adr-graphql-first-devql-host-runtime.md` and updated the layered architecture and language-adapter guides to document the GraphQL-first DevQL contract, host-owned capability isolation, and the new language-facet model.
