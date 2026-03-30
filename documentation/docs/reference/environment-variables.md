@@ -5,56 +5,60 @@ title: Environment Variables
 
 # Environment Variables
 
-Bitloops uses environment variables for secrets, overrides, and build-time configuration.
+Bitloops prefers daemon config and repo policy over environment variables, but a small number of variables are still supported for runtime control and temporary overrides.
 
-## Runtime Variables
+## General
 
-These are resolved at runtime when Bitloops reads your configuration.
+| Variable | Meaning |
+| --- | --- |
+| `BITLOOPS_TELEMETRY_OPTOUT` | Disables telemetry dispatch at runtime. It does not answer the CLI consent prompt or rewrite stored daemon-config consent. |
+| `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
+| `BITLOOPS_LOG_LEVEL` | Overrides the effective log level |
+| `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |
 
-### Knowledge Provider Credentials
+## DevQL Semantic Overrides
 
-| Variable | Used By | Description |
-|----------|---------|-------------|
-| `GITHUB_TOKEN` | GitHub knowledge provider | Personal access token for GitHub API |
-| `ATLASSIAN_EMAIL` | Jira / Confluence providers | Email for Atlassian API authentication |
-| `ATLASSIAN_TOKEN` | Jira / Confluence providers | API token for Atlassian services |
+These override semantic settings resolved from daemon config:
 
-### Semantic Provider
+| Variable | Meaning |
+| --- | --- |
+| `BITLOOPS_DEVQL_SEMANTIC_PROVIDER` | Semantic provider override |
+| `BITLOOPS_DEVQL_SEMANTIC_MODEL` | Semantic model override |
+| `BITLOOPS_DEVQL_SEMANTIC_API_KEY` | Semantic API key override |
+| `BITLOOPS_DEVQL_SEMANTIC_BASE_URL` | Semantic base URL override |
 
-| Variable | Used By | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | Semantic embeddings | API key for embedding generation |
+## DevQL Embedding Overrides
 
-### Storage Credentials
+| Variable | Meaning |
+| --- | --- |
+| `BITLOOPS_DEVQL_EMBEDDING_PROVIDER` | Embedding provider override |
+| `BITLOOPS_DEVQL_EMBEDDING_MODEL` | Embedding model override |
+| `BITLOOPS_DEVQL_EMBEDDING_API_KEY` | Embedding API key override |
 
-AWS and GCS credentials are resolved from your standard cloud provider environment:
+## Watcher Overrides
 
-- **AWS S3**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, or AWS CLI profiles
-- **Google Cloud Storage**: Application default credentials or `GOOGLE_APPLICATION_CREDENTIALS`
+| Variable | Meaning |
+| --- | --- |
+| `BITLOOPS_DEVQL_WATCH_DEBOUNCE_MS` | Overrides repo-policy debounce |
+| `BITLOOPS_DEVQL_WATCH_POLL_FALLBACK_MS` | Overrides repo-policy polling fallback |
+| `BITLOOPS_DISABLE_WATCHER_AUTOSTART` | Prevents watcher auto-start for supported commands |
 
-## Bitloops Override Variables
+## Dashboard Bundle Overrides
 
-| Variable | Description |
-|----------|-------------|
-| `BITLOOPS_DASHBOARD_MANIFEST_URL` | Override the dashboard bundle manifest URL |
-| `BITLOOPS_DASHBOARD_CDN_BASE_URL` | Override the dashboard CDN base URL |
+These are mainly useful in development or CI:
 
-These are advanced overrides typically used for development or custom deployments.
+| Variable | Meaning |
+| --- | --- |
+| `BITLOOPS_DASHBOARD_CDN_BASE_URL` | Overrides the dashboard CDN base URL |
+| `BITLOOPS_DASHBOARD_MANIFEST_URL` | Overrides the dashboard manifest URL |
 
-## Using Variables in Configuration
+## Interpolation In Daemon Config
 
-Reference environment variables in `.bitloops/config.json` using the `${VAR_NAME}` syntax:
+Daemon config values may reference environment variables with `${VAR_NAME}`:
 
-```json
-{
-  "knowledge": {
-    "providers": {
-      "github": {
-        "token": "${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
+```toml
+[knowledge.providers.github]
+token = "${GITHUB_TOKEN}"
 ```
 
-This lets you commit your configuration to git without exposing secrets.
+Use this for secrets and per-machine credentials. Repo policy files should not contain secrets.

@@ -6,7 +6,7 @@ pub(super) fn build_historical_edge_records(
     cfg: &DevqlConfig,
     blob_sha: &str,
     language: &str,
-    edges: Vec<JsTsDependencyEdge>,
+    edges: Vec<DependencyEdge>,
     current_by_fqn: &HashMap<String, PersistedArtefactRecord>,
 ) -> Vec<PersistedEdgeRecord> {
     let mut out = Vec::new();
@@ -417,7 +417,7 @@ pub(super) fn build_current_edge_records(
     cfg: &DevqlConfig,
     path: &str,
     language: &str,
-    edges: Vec<JsTsDependencyEdge>,
+    edges: Vec<DependencyEdge>,
     current_by_fqn: &HashMap<String, PersistedArtefactRecord>,
     external_targets: &HashMap<String, (String, String)>,
 ) -> Vec<PersistedEdgeRecord> {
@@ -603,9 +603,15 @@ WHERE repo_id = '{}' AND branch = '{}' AND to_symbol_id IN ({})",
 mod tests {
     use super::*;
 
+    fn sample_repo_root() -> PathBuf {
+        std::env::temp_dir().join("bitloops-artefact-persistence-edges")
+    }
+
     fn sample_cfg() -> DevqlConfig {
+        let repo_root = sample_repo_root();
         DevqlConfig {
-            repo_root: PathBuf::from("."),
+            config_root: repo_root.clone(),
+            repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),
                 organization: "bitloops".to_string(),
@@ -625,6 +631,7 @@ mod tests {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 

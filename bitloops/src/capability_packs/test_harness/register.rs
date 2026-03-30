@@ -1,8 +1,5 @@
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
 
-use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::CapabilityRegistrar;
 
 use super::ingesters::{
@@ -15,18 +12,15 @@ use super::stages::{
     build_tests_summary_stage,
 };
 
-pub fn register_test_harness_pack(
-    registrar: &mut dyn CapabilityRegistrar,
-    test_harness: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
-) -> Result<()> {
-    registrar.register_ingester(build_linkage_ingester(test_harness.clone()))?;
-    registrar.register_ingester(build_coverage_ingester(test_harness.clone()))?;
-    registrar.register_ingester(build_classification_ingester(test_harness.clone()))?;
-    registrar.register_stage(build_tests_stage(test_harness.clone()))?;
-    registrar.register_stage(build_tests_stage_alias(test_harness.clone()))?;
-    registrar.register_stage(build_tests_summary_stage(test_harness.clone()))?;
-    registrar.register_stage(build_coverage_stage(test_harness.clone()))?;
-    registrar.register_stage(build_coverage_stage_alias(test_harness))?;
+pub fn register_test_harness_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
+    registrar.register_ingester(build_linkage_ingester())?;
+    registrar.register_ingester(build_coverage_ingester())?;
+    registrar.register_ingester(build_classification_ingester())?;
+    registrar.register_stage(build_tests_stage())?;
+    registrar.register_stage(build_tests_stage_alias())?;
+    registrar.register_stage(build_tests_summary_stage())?;
+    registrar.register_stage(build_coverage_stage())?;
+    registrar.register_stage(build_coverage_stage_alias())?;
     registrar.register_schema_module(TEST_HARNESS_SCHEMA_MODULE)?;
     registrar.register_query_examples(TEST_HARNESS_QUERY_EXAMPLES)?;
     Ok(())
@@ -81,7 +75,7 @@ mod tests {
     fn register_test_harness_pack_registers_expected_contributions() -> Result<()> {
         let mut registrar = CollectingRegistrar::default();
 
-        register_test_harness_pack(&mut registrar, None)?;
+        register_test_harness_pack(&mut registrar)?;
 
         assert_eq!(
             registrar.stages,

@@ -165,13 +165,14 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
+    let config_start = std::env::current_dir().unwrap_or_else(|_| repo_root.clone());
 
     // Skip silently when Bitloops is disabled.
-    if !settings::is_enabled(&repo_root).unwrap_or(true) {
+    if !settings::is_enabled_for_hooks(&config_start) {
         return Ok(());
     }
 
-    let strategy_name = settings::load_settings(&repo_root)
+    let strategy_name = settings::load_settings(&config_start)
         .map(|s| s.strategy)
         .unwrap_or_else(|_| registry::STRATEGY_NAME_MANUAL_COMMIT.to_string());
     let strategy: Box<dyn Strategy> = strategy_registry
@@ -256,6 +257,7 @@ fn read_pre_push_stdin_lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::settings::{self, BitloopsSettings};
     use crate::host::checkpoints::session::backend::SessionBackend;
     use crate::host::checkpoints::session::local_backend::LocalFileBackend;
     use crate::host::checkpoints::session::phase::SessionPhase;
@@ -264,7 +266,10 @@ mod tests {
     use crate::test_support::logger_lock::with_logger_test_lock;
     use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
 
     fn setup_git_repo(dir: &TempDir) {
         let run = |args: &[&str]| {
@@ -283,12 +288,32 @@ mod tests {
         run(&["commit", "-m", "initial"]);
     }
 
+    fn with_test_logging_state<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
+        let state_root = repo_root.join("state-root");
+        let state_root_value = state_root.display().to_string();
+        with_process_state(
+            Some(repo_root),
+            &[(TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str()))],
+            f,
+        )
+    }
+
+    fn write_strategy_config(repo_root: &Path, strategy: &str) {
+        let settings = BitloopsSettings {
+            strategy: strategy.to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        settings::save_settings(&settings, &settings::settings_path(repo_root))
+            .expect("write repo policy");
+    }
+
     #[test]
     fn test_init_hook_logging() {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
 
-        with_cwd(dir.path(), || {
+        with_test_logging_state(dir.path(), || {
             with_logger_test_lock(|| {
                 let cleanup = init_hook_logging(dir.path());
                 cleanup();
@@ -307,7 +332,7 @@ mod tests {
                 let cleanup = init_hook_logging(dir.path());
                 cleanup();
 
-                let log_file = dir.path().join(logging::LOGS_DIR).join("bitloops.log");
+                let log_file = logging::log_file_path();
                 assert!(
                     log_file.exists(),
                     "expected log file at {}",
@@ -322,10 +347,15 @@ mod tests {
     fn run_post_commit_writes_non_empty_log_at_default_level() {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
+        write_strategy_config(dir.path(), "manual-commit");
+        let state_root_value = dir.path().join("state-root").display().to_string();
 
         with_process_state(
             Some(dir.path()),
-            &[(logging::LOG_LEVEL_ENV_VAR, None)],
+            &[
+                (TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str())),
+                (logging::LOG_LEVEL_ENV_VAR, None),
+            ],
             || {
                 with_logger_test_lock(|| {
                     logging::reset_logger_for_tests();
@@ -351,7 +381,7 @@ mod tests {
                     ));
                     assert!(result.is_ok(), "post-commit hook should not fail");
 
-                    let log_file = dir.path().join(logging::LOGS_DIR).join("bitloops.log");
+                    let log_file = logging::log_file_path();
                     let content = fs::read_to_string(&log_file).expect("log file should exist");
                     assert!(
                         !content.trim().is_empty(),

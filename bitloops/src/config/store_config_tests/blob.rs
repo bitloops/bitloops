@@ -1,4 +1,3 @@
-use super::super::store_config_utils::user_home_dir;
 use super::*;
 
 #[test]
@@ -49,9 +48,14 @@ fn blob_local_path_resolution_uses_explicit_path() {
 
 #[test]
 fn blob_local_path_resolution_expands_tilde_prefix() {
-    let Some(home) = user_home_dir() else {
-        return;
-    };
+    let temp = tempfile::tempdir().expect("temp dir");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create fake home");
+    let home_str = home.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        None,
+        &[("HOME", Some(home_str.as_str())), ("USERPROFILE", None)],
+    );
 
     let resolved =
         resolve_blob_local_path(Some("~/blob-storage")).expect("tilde blob path should resolve");

@@ -1,209 +1,147 @@
 # Bitloops language-adapter architecture
 
-This document describes the implemented equivalent of a language-adapter layer.
+This document describes the host-owned language-adapter runtime implemented under:
 
-## Naming clarification
+- `bitloops/src/host/language_adapter`
+- `bitloops/src/adapters/languages`
 
-There is no dedicated `bitloops/src/adapters/languages` module today.
+Contributor onboarding guide:
 
-The implemented language-adapter story is split across:
+- `docs/language-adapter-contributing.md`
 
-- `host/extension_host/language`: language-pack descriptors, profiles, aliases, and resolution
-- `host/extension_host/host/builtins.rs`: built-in language-pack metadata
-- `host/devql/ingestion/artefact_persistence.rs`: built-in runtime registry keyed by language-pack id
-- `host/devql/ingestion/extraction_rust.rs`: Rust extraction runtime
-- `host/devql/ingestion/extraction_js_ts.rs`: TypeScript/JavaScript extraction runtime
+## Summary
 
-So when this document says “language adapter”, it means that combined system.
+Language adapters are no longer just artefact extractors for DevQL ingestion.
 
-## Architecture overview
+They are now the shared source of language semantics for the rest of the system. The first reusable semantic facet is `LanguageTestSupport`, which allows `test_harness` to consume language-specific test discovery through the host rather than through a pack-local parser registry.
+
+## Module layout
 
 ```mermaid
 flowchart TD
     INPUT["File path or language hint"]
-    REGISTRY["LanguagePackRegistry"]
-    CONTEXT["LanguagePackContext"]
-    RUNTIME["BuiltInLanguagePackRuntime registry"]
-    RUST["Rust extractor"]
-    TSJS["TypeScript or JavaScript extractor"]
-    PERSIST["DevQL artefact persistence"]
+    EXTHOST["CoreExtensionHost language resolution"]
+    REG["LanguageAdapterRegistry"]
+    PACK["LanguageAdapterPack"]
+    TEST["LanguageTestSupport facet"]
+    DEVQL["DevQL ingestion"]
+    HARNESS["test_harness"]
 
-    INPUT --> REGISTRY
-    REGISTRY --> CONTEXT
-    REGISTRY --> RUNTIME
-    RUNTIME --> RUST
-    RUNTIME --> TSJS
-    RUST --> PERSIST
-    TSJS --> PERSIST
+    INPUT --> EXTHOST
+    EXTHOST --> REG
+    REG --> PACK
+    PACK --> DEVQL
+    PACK --> TEST
+    TEST --> HARNESS
 ```
 
-## Layer 1: descriptor and profile resolution
+The runtime is split into two layers:
 
-`LanguagePackRegistry` owns the metadata side.
+- `host/extension_host/language`
+  - descriptor resolution and profile ownership
+- `host/language_adapter` plus `adapters/languages`
+  - executable language semantics
 
-### What it stores
+## Base runtime contract
 
-It stores:
+`LanguageAdapterPack` remains the host-owned runtime contract.
 
-- language-pack descriptors
-- pack aliases
-- ownership of supported languages
-- profile aliases
-- profiles by language
-- profiles by file extension
-- registration observations
+It provides:
 
-### What a language pack descriptor contains
-
-A `LanguagePackDescriptor` declares:
-
-- pack id
-- version and API version
-- display name
-- aliases
-- supported languages
-- language profiles
-- extension compatibility rules
-
-### What a language profile descriptor contains
-
-A `LanguageProfileDescriptor` declares:
-
-- profile id
-- display name
-- language id
-- optional dialect
-- aliases
-- file extensions
-- supported source-version ranges
-
-### Resolution rules
-
-The registry can resolve by:
-
-- profile key
-- language id
-- file path
-- structured language profile input
-
-It rejects ambiguous or invalid inputs rather than guessing silently.
-
-That behaviour is important because the runtime extractor table is keyed by resolved pack id. If resolution is sloppy, runtime execution becomes unsafe.
-
-## Built-in language packs
-
-The built-ins registered by `CoreExtensionHost` are:
-
-| Pack id | Supported languages | Profiles |
-| --- | --- | --- |
-| `rust-language-pack` | `rust` | `rust-default` |
-| `ts-js-language-pack` | `typescript`, `javascript`, `tsx`, `jsx` | `typescript-standard`, `javascript-standard` |
-
-### Rust pack
-
-- alias: `rust-pack`
-- profile alias: `rust-profile`
-- file extension: `rs`
-- supported source version: `^1.70`
-
-### TypeScript/JavaScript pack
-
-- aliases: `typescript-pack`, `javascript-pack`
-- TypeScript profile aliases include `ts`
-- JavaScript profile aliases include `js`
-- supported extensions include `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, `cjs`
-
-## Layer 2: DevQL runtime mapping
-
-After language-pack resolution, DevQL still needs an executable runtime.
-
-That runtime lives in `host/devql/ingestion/artefact_persistence.rs` as `BuiltInLanguagePackRuntime`.
-
-Each entry provides three functions:
-
+- descriptor identity
+- canonical mappings
+- supported language kinds
 - artefact extraction
 - dependency-edge extraction
-- file-docstring extraction
+- optional file-docstring extraction
+- optional reusable facets such as `test_support()`
 
-The registry is keyed by the descriptor id from `CoreExtensionHost`.
+Built-in packs live under `bitloops/src/adapters/languages`.
 
-That means the current runtime contract between metadata and execution is a shared pack id, not a dynamically loaded executable plug-in.
+Current built-ins:
 
-## Runtime extractors
+- Rust
+- TypeScript/JavaScript
+- Python
 
-### Rust extractor
+## Shared test-support facet
 
-`extraction_rust.rs` uses tree-sitter Rust to produce artefacts such as:
+`LanguageTestSupport` is now part of the host language-adapter API.
 
-- modules
-- structs
-- enums
-- traits
-- types
-- consts and statics
-- impl blocks
-- functions and methods
-- use declarations
+It exposes language-specific test behaviour through a reusable contract:
 
-It also extracts Rust file docstrings.
+- `supports_path(...)`
+- `discover_tests(...)`
+- `enumerate_tests(...)`
+- `reconcile(...)`
 
-### TypeScript/JavaScript extractor
+Shared model types also live in `host/language_adapter`, including:
 
-`extraction_js_ts.rs` tries TypeScript and JavaScript tree-sitter grammars and extracts artefacts such as:
+- `DiscoveredTestFile`
+- `DiscoveredTestSuite`
+- `DiscoveredTestScenario`
+- `ReferenceCandidate`
+- `EnumerationResult`
+- `ReconciledDiscovery`
+- `StructuralMappingOutput`
 
-- functions
-- interfaces
-- type aliases
-- enums
-- classes
-- methods
-- class fields
-- top-level variables
-- import statements
+## Host-owned execution context
 
-If parsing fails, DevQL logs a warning and can still preserve file-level state.
+`LanguageAdapterContext` is host-owned and now includes command execution support for best-effort runtime enumeration.
 
-## Runtime flow during ingestion
+That matters because:
 
-1. DevQL determines a language id from the file path or caller input.
-2. `CoreExtensionHost` resolves the owning language pack and profile.
-3. DevQL builds a `LanguagePackContext` containing repo root, repo id, and optional commit sha.
-4. DevQL looks up a `BuiltInLanguagePackRuntime` by resolved pack id.
-5. The extractor emits artefacts, dependency edges, and optional file docstrings.
-6. DevQL persists the result into current-state tables.
+- adapters may request commands such as `cargo test -- --list`
+- adapters do not spawn commands directly
+- the host controls timeout, repo root, and diagnostics
 
-## What is good about the current design
+This keeps language adapters inside the same isolation model as capability packs.
 
-The strong parts are:
+## `test_harness` integration
 
-- deterministic language and profile resolution
-- explicit ownership of languages and file extensions
-- support for aliasing and source-version constraints
-- a clear bridge from metadata selection to runtime execution
+`test_harness` now consumes language semantics through `LanguageServicesGateway`.
 
-## Current limitations
+The current flow is:
 
-### 1. Runtime execution is still built in
+1. resolve the owning language support for a candidate path
+2. discover tests through the adapter facet
+3. optionally enumerate tests through the adapter facet
+4. reconcile source and enumerated results
+5. perform linkage/materialisation in `test_harness`
 
-The descriptor layer is extensible, but the executable runtime is still a hard-coded table.
+This is a deliberate change from the older design where `test_harness` carried its own runtime registry under `capability_packs/test_harness/mapping/languages`.
 
-In practice that means:
+## Current implementation notes
 
-- third-party language packs are not yet executable
-- adding a new language requires both metadata registration and Rust runtime wiring
+The host-facing architecture is in place, but the implementation is still being simplified internally.
 
-### 2. `LanguagePackContext` is still thin
+Today:
 
-It currently carries identity information, but not executable hooks or storage surfaces.
+- `test_harness` executes through the host language service
+- adapter packs expose `LanguageTestSupport`
+- Rust runtime enumeration uses the host-owned command runner
 
-That is consistent with the present design, but it shows that language packs are still descriptors rather than full runtime extensions.
+Still transitional:
 
-### 3. Pack metadata and extraction logic live in different places
+- some adapter-side test-support wrappers reuse the older `test_harness` language-provider code behind the new facet
+- that scaffolding exists to preserve behaviour while the logic is moved fully into adapter-owned modules
 
-The metadata is under `host/extension_host`, while the extraction runtime is under `host/devql/ingestion`.
+## Design rules for future work
 
-That split is workable, but it is the main reason the old “single adapter layer” description was misleading.
+- reusable language semantics belong in `host/language_adapter` and `adapters/languages`
+- pack-specific business rules belong in the consuming capability pack
+- new capability-pack features should ask whether they need a reusable language facet before introducing another pack-local parser
 
-## Related but separate code
+Examples of good facet candidates:
 
-`capability_packs/test_harness/mapping/languages` contains language-aware test-discovery logic for the Test Harness pack. That code is pack-internal and should not be confused with the host-level language-pack mechanism described here.
+- test discovery
+- runtime enumeration
+- framework-specific file classification
+- reference extraction that is reusable across packs
+
+Examples of concerns that should stay in capability packs:
+
+- confidence scoring
+- linkage policy
+- materialisation rules
+- pack-specific persistence

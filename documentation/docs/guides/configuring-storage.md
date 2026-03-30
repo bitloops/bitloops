@@ -1,121 +1,79 @@
 ---
-sidebar_position: 8
+sidebar_position: 3
 title: Configuring Storage
 ---
 
 # Configuring Storage
 
-Bitloops works out of the box with bundled SQLite and DuckDB. This guide covers how to configure alternative backends for teams or production environments.
+Storage backends are a daemon concern and belong in the global daemon config.
 
-## PostgreSQL (Relational Store)
+## Default Behaviour
 
-Replace SQLite with PostgreSQL for shared access or larger datasets.
+By default Bitloops uses platform app directories:
 
-### Configuration
+- relational database in the data directory
+- event database in the data directory
+- blob store in the data directory
+- embedding model downloads in the cache directory
 
-In `.bitloops/config.json`:
+Linux examples:
 
-```json
-{
-  "stores": {
-    "relational": {
-      "provider": "postgres",
-      "postgres_dsn": "postgres://user:password@localhost:5432/bitloops"
-    }
-  }
-}
+```text
+~/.config/bitloops/config.toml
+~/.local/share/bitloops/stores/relational/relational.db
+~/.local/share/bitloops/stores/event/events.duckdb
+~/.local/share/bitloops/stores/blob/
+~/.cache/bitloops/embeddings/models/
 ```
 
-### Setup
+## Local SQLite, DuckDB, And Blob Defaults
 
-1. Create a PostgreSQL database
-2. Set the DSN in your config (or use environment variables: `"postgres_dsn": "${BITLOOPS_PG_DSN}"`)
-3. Run `bitloops devql init` to create the schema
-4. Verify with `bitloops --connection-status`
+```toml
+[stores.relational]
+sqlite_path = "/Users/alex/.local/share/bitloops/stores/relational/relational.db"
 
-## ClickHouse (Event Store)
+[stores.events]
+duckdb_path = "/Users/alex/.local/share/bitloops/stores/event/events.duckdb"
 
-Replace DuckDB with ClickHouse for high-volume analytics.
-
-### Configuration
-
-```json
-{
-  "stores": {
-    "event": {
-      "provider": "clickhouse",
-      "clickhouse_url": "http://localhost:8123"
-    }
-  }
-}
+[stores.blob]
+local_path = "/Users/alex/.local/share/bitloops/stores/blob"
 ```
 
-### Setup
+## Remote Stores
 
-1. Install and start ClickHouse
-2. Set the URL in your config
-3. Run `bitloops devql init` to create the schema
-4. Verify with `bitloops --connection-status`
+```toml
+[stores.relational]
+postgres_dsn = "${BITLOOPS_POSTGRES_DSN}"
 
-## AWS S3 (Blob Store)
+[stores.events]
+clickhouse_url = "http://localhost:8123"
+clickhouse_user = "${BITLOOPS_CLICKHOUSE_USER}"
+clickhouse_password = "${BITLOOPS_CLICKHOUSE_PASSWORD}"
+clickhouse_database = "bitloops"
 
-Replace local filesystem with S3 for centralized storage.
-
-### Configuration
-
-```json
-{
-  "stores": {
-    "blob": {
-      "provider": "s3",
-      "s3_bucket": "your-bitloops-bucket",
-      "s3_region": "us-east-1"
-    }
-  }
-}
+[stores.blob]
+s3_bucket = "bitloops-artifacts"
+s3_region = "eu-west-1"
+s3_access_key_id = "${AWS_ACCESS_KEY_ID}"
+s3_secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
 ```
 
-AWS credentials are resolved from your environment (AWS CLI profile, environment variables, or IAM role).
+## Embedding Cache
 
-## Google Cloud Storage (Blob Store)
+Embedding model downloads are cache, not durable store data:
 
-### Configuration
-
-```json
-{
-  "stores": {
-    "blob": {
-      "provider": "gcs",
-      "gcs_bucket": "your-bitloops-bucket"
-    }
-  }
-}
+```toml
+[stores]
+embedding_provider = "local"
+embedding_model = "jinaai/jina-embeddings-v2-base-code"
+embedding_cache_dir = "/Users/alex/.cache/bitloops/embeddings/models"
 ```
 
-GCS credentials are resolved from your environment (application default credentials or service account).
-
-## Mixed Configurations
-
-You can mix and match backends. For example, keep SQLite for local development but use PostgreSQL in CI:
-
-```json
-{
-  "stores": {
-    "relational": { "provider": "postgres", "postgres_dsn": "${BITLOOPS_PG_DSN}" },
-    "event": { "provider": "duckdb" },
-    "blob": { "provider": "s3", "s3_bucket": "my-team-bitloops" }
-  }
-}
-```
-
-## Verifying Configuration
-
-After changing storage configuration:
+## Check The Effective State
 
 ```bash
-# Re-initialize schema for new backends
-bitloops devql init
-
-# Check connectivity
+bitloops status
 bitloops --connection-status
 ```
+
+If Bitloops finds old repo-local store directories, it warns that they are ignored unless you explicitly point the daemon config at them.

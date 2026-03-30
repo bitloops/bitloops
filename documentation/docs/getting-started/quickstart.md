@@ -5,47 +5,117 @@ title: Quickstart
 
 # Quickstart
 
-Installing Bitloops is very simple. Its a CLI that works in the background. 
+This quickstart assumes you want the new daemon-first Bitloops setup.
+
+If you are coming from the old JSON and repo-local storage model, read the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).
 
 ## 1. Install Bitloops
 
-There are few installation options:
-
-**Via curl**
+Choose one install method:
 
 ```bash
 curl -fsSL https://bitloops.com/install.sh | bash
 ```
 
-**Or via Homebrew:**
 ```bash
 brew tap bitloops/tap && brew install bitloops
 ```
 
-**Or via Cargo:**
 ```bash
 cargo install bitloops
 ```
 
-## 2. Initialize Bitloops
+## 2. Start The Daemon
 
-Simply:
+```bash
+bitloops start --create-default-config
+```
+
+On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
+
+Interactive `bitloops start` also prompts to create the default config when it is missing. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
+
+## 3. Initialise A Project
+
+From inside a git repository or subproject:
 
 ```bash
 bitloops init
+bitloops init --install-default-daemon
 ```
 
-That's it. 
+Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service first.
 
-We do ask you if you don't mind sharing anonymous usage data to help us improve Bitloops. No code or personal info collected.
-Press Y and we'll virtually high-five you!
+This creates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync through the daemon.
 
-## 3. Enable Bitloops
+If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
-This one is tricky.... type:
+If telemetry consent is unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
+
+## 4. Add Optional Shared Project Policy
+
+If you want shared capture policy in git, create `.bitloops.toml` in the project root:
+
+```toml title=".bitloops.toml"
+[capture]
+enabled = true
+strategy = "manual-commit"
+
+[watch]
+watch_debounce_ms = 750
+watch_poll_fallback_ms = 2500
+```
+
+Keep `.bitloops.local.toml` for local-only overrides.
+
+## 5. Start Or Open Bitloops
+
+Open the dashboard:
 
 ```bash
+bitloops dashboard
+```
+
+Or manage the daemon yourself:
+
+```bash
+bitloops start -d
+bitloops start --until-stopped
+```
+
+## 6. Query And Ingest
+
+Initial project bootstrap already initialises the schema. You can then ingest and query:
+
+```bash
+bitloops devql ingest
+bitloops devql query "files changed last 7 days"
+```
+
+## 7. Check Status
+
+```bash
+bitloops status
+bitloops checkpoints status --detailed
+```
+
+`bitloops status` reports daemon status. `bitloops checkpoints status` reports repo capture status and shows the resolved policy root and fingerprint.
+
+## Toggle Capture Later
+
+```bash
+bitloops disable
 bitloops enable
 ```
 
-That's it. Bitloops is now working in the background, capturing your discussions with AI agents, and building an intelligence layer automatically that you or your AI agents can access whenever you want!
+These commands edit the nearest discovered project policy and leave installed hooks in place. If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask again before it edits project policy.
+
+## Remove Bitloops Later
+
+Use `bitloops disable` when you want hooks and watchers to stay installed but stop capturing.
+
+Use `bitloops uninstall` when you want to remove Bitloops-managed machine artefacts as well:
+
+```bash
+bitloops uninstall --full
+```

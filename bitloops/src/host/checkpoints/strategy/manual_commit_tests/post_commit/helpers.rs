@@ -52,32 +52,17 @@ fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {
     let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
     let duckdb_path = repo_root.join(".bitloops/stores/events/post-commit-events.duckdb");
     let blob_local_path = repo_root.join(".bitloops/stores/blobs/post-commit");
-    let cfg = serde_json::json!({
-        "version": "1.0",
-        "scope": "project",
-        "settings": {
-            "stores": {
-                "relational": {
-                    "sqlite_path": sqlite_path,
-                    "postgres_dsn": postgres_dsn
-                },
-                "event": {
-                    "duckdb_path": duckdb_path,
-                    "clickhouse_url": null,
-                    "clickhouse_user": null,
-                    "clickhouse_password": null,
-                    "clickhouse_database": null
-                },
-                "blob": {
-                    "local_path": blob_local_path
-                }
-            }
-        }
-    });
-
+    let postgres_line = postgres_dsn
+        .map(|dsn| format!("postgres_dsn = {dsn:?}\n"))
+        .unwrap_or_default();
     fs::write(
-        repo_root.join(".bitloops/config.json"),
-        serde_json::to_vec_pretty(&cfg).expect("serialise post-commit test config"),
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {sqlite_path:?}\n{postgres_line}\n[stores.event]\nduckdb_path = {duckdb_path:?}\n\n[stores.blob]\nlocal_path = {blob_local_path:?}\n",
+            sqlite_path = sqlite_path.to_string_lossy(),
+            duckdb_path = duckdb_path.to_string_lossy(),
+            blob_local_path = blob_local_path.to_string_lossy(),
+        ),
     )
     .expect("write repo-local store config for post-commit tests");
 }

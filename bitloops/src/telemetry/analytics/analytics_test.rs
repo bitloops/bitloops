@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::settings::{self, BitloopsSettings};
+use crate::config::default_daemon_config_path;
 use crate::test_support::process_state::{
     GIT_ENV_KEYS, git_command, with_env_var, with_process_state,
 };
@@ -20,17 +20,23 @@ fn cleared_git_env() -> Vec<(&'static str, Option<&'static str>)> {
     GIT_ENV_KEYS.iter().map(|key| (*key, None)).collect()
 }
 
-fn write_settings_with_telemetry(repo_root: &Path, telemetry: Option<bool>) {
-    let settings_value = BitloopsSettings {
-        telemetry,
-        strategy: "manual-commit".to_string(),
-        enabled: true,
-        ..Default::default()
-    };
+fn write_daemon_telemetry_config(config_root: &Path, telemetry: Option<bool>) {
+    let config_root_str = config_root.to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let path = default_daemon_config_path().expect("daemon config path");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("create config dir");
 
-    let path = settings::settings_path(repo_root);
-    std::fs::create_dir_all(path.parent().expect("settings parent")).expect("create settings dir");
-    settings::save_settings(&settings_value, &path).expect("save settings");
+    let content = match telemetry {
+        Some(enabled) => format!("[telemetry]\nenabled = {enabled}\n"),
+        None => String::new(),
+    };
+    std::fs::write(&path, content).expect("write daemon config");
 }
 
 #[test]
@@ -166,15 +172,29 @@ fn TestSendEventHandlesInvalidJSON() {
 fn TestLoadDispatchContextRequiresExplicitEnablement() {
     let temp_none = tempfile::tempdir().expect("temp dir");
     setup_git_repo(temp_none.path());
-    write_settings_with_telemetry(temp_none.path(), None);
-    with_process_state(Some(temp_none.path()), &cleared_git_env(), || {
+    let config_none = tempfile::tempdir().expect("config dir");
+    write_daemon_telemetry_config(config_none.path(), None);
+    let config_none_str = config_none.path().to_string_lossy().to_string();
+    let mut env = cleared_git_env();
+    env.push((
+        "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+        Some(config_none_str.as_str()),
+    ));
+    with_process_state(Some(temp_none.path()), &env, || {
         assert!(load_dispatch_context().is_none());
     });
 
     let temp_false = tempfile::tempdir().expect("temp dir");
     setup_git_repo(temp_false.path());
-    write_settings_with_telemetry(temp_false.path(), Some(false));
-    with_process_state(Some(temp_false.path()), &cleared_git_env(), || {
+    let config_false = tempfile::tempdir().expect("config dir");
+    write_daemon_telemetry_config(config_false.path(), Some(false));
+    let config_false_str = config_false.path().to_string_lossy().to_string();
+    let mut env = cleared_git_env();
+    env.push((
+        "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+        Some(config_false_str.as_str()),
+    ));
+    with_process_state(Some(temp_false.path()), &env, || {
         assert!(load_dispatch_context().is_none());
     });
 }
@@ -184,14 +204,21 @@ fn TestLoadDispatchContextRequiresExplicitEnablement() {
 fn TestLoadDispatchContextDetectsAgents() {
     let temp = tempfile::tempdir().expect("temp dir");
     setup_git_repo(temp.path());
-    write_settings_with_telemetry(temp.path(), Some(true));
+    let config = tempfile::tempdir().expect("config dir");
+    write_daemon_telemetry_config(config.path(), Some(true));
     std::fs::create_dir_all(temp.path().join(".claude")).expect("create .claude");
     std::fs::create_dir_all(temp.path().join(".codex")).expect("create .codex");
     std::fs::create_dir_all(temp.path().join(".gemini")).expect("create .gemini");
     std::fs::create_dir_all(temp.path().join(".cursor")).expect("create .cursor");
     std::fs::create_dir_all(temp.path().join(".opencode")).expect("create .opencode");
 
-    with_process_state(Some(temp.path()), &cleared_git_env(), || {
+    let config_str = config.path().to_string_lossy().to_string();
+    let mut env = cleared_git_env();
+    env.push((
+        "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+        Some(config_str.as_str()),
+    ));
+    with_process_state(Some(temp.path()), &env, || {
         let context = load_dispatch_context().expect("dispatch context");
         assert_eq!(context.strategy, "manual-commit");
         assert!(context.is_bitloops_enabled);

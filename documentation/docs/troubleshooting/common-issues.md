@@ -5,96 +5,43 @@ title: Common Issues
 
 # Common Issues
 
-Solutions for frequently encountered problems with Bitloops.
+## Hooks Are Not Firing
 
-## Session Appears Stuck
+Checks:
 
-**Symptom**: `bitloops status` shows an active session that should have ended.
+1. Run `bitloops init` in the repository or subproject you want to capture.
+2. Verify the repo is still a git repository.
+3. Run `bitloops checkpoints status --detailed` to confirm the effective capture policy.
+4. If capture is disabled, re-enable it with `bitloops enable`.
 
-**Solution**: Run the doctor command to diagnose:
+## The Dashboard Does Not Open
 
-```bash
-bitloops doctor
-```
+Checks:
 
-If the session is genuinely stuck, reset the state:
+1. Run `bitloops status`.
+2. If needed, start the daemon manually with `bitloops start`.
+3. Re-run `bitloops dashboard`.
+4. If you use local HTTPS, try `bitloops daemon start --recheck-local-dashboard-net`.
 
-```bash
-bitloops reset
-```
+## DevQL Cannot Reach Storage
 
-This clears the shadow state without deleting checkpoint data.
+Checks:
 
-## Hooks Not Firing
+1. Run `bitloops --connection-status`.
+2. Confirm the store paths or remote DSNs in the global daemon config.
+3. Re-run `bitloops devql init` if the stores were recreated.
 
-**Symptom**: You're using an AI agent but `bitloops status` shows no session activity.
+## Legacy Repo-Local Data Is Present
 
-**Possible causes**:
+Bitloops now warns when it finds old repo-local data directories. Those paths are ignored unless you explicitly point the daemon config at them.
 
-1. **Bitloops not enabled** — run `bitloops enable`
-2. **Hooks not installed** — reinitialize: `bitloops init --agent <name> --force`
-3. **Agent not detected** — specify the agent explicitly: `bitloops init --agent claude-code`
+If you want to remove those old directories entirely, use `bitloops uninstall --data` or `bitloops uninstall --full`.
 
-## DevQL Ingestion Fails
+## Capture Seems Disabled Unexpectedly
 
-**Symptom**: `bitloops devql ingest` errors out.
+Checks:
 
-**Steps**:
-
-1. Check store connectivity:
-   ```bash
-   bitloops --connection-status
-   ```
-
-2. Re-initialize the schema:
-   ```bash
-   bitloops devql init
-   ```
-
-3. If using PostgreSQL or ClickHouse, verify the connection string in `.bitloops/config.json`
-
-## Dashboard Won't Start
-
-**Symptom**: `bitloops dashboard` fails or the page doesn't load.
-
-**Possible causes**:
-
-1. **Port already in use** — try a different port:
-   ```bash
-   bitloops dashboard --port 8080
-   ```
-
-2. **Stores not initialized** — run `bitloops devql init` first
-
-3. **Check for errors** in the terminal output when starting the dashboard
-
-## No Checkpoints After Committing
-
-**Symptom**: You committed code from an AI session but no checkpoint was created.
-
-**Check**:
-
-1. Is capture enabled? `bitloops status`
-2. Are git hooks installed? Check `.git/hooks/` for Bitloops hooks
-3. Reinitialize if needed: `bitloops init --agent <name> --force`
-
-## Orphaned Data
-
-**Symptom**: Storage grows unexpectedly or data seems inconsistent.
-
-**Solution**: Clean up orphaned data:
-
-```bash
-bitloops clean
-```
-
-This removes data that's no longer linked to valid sessions or checkpoints.
-
-## Getting More Help
-
-If these solutions don't resolve your issue:
-
-1. Run `bitloops doctor` for a comprehensive diagnostic
-2. Check the [FAQ](/troubleshooting/faq) for common questions
-3. Open an issue on [GitHub](https://github.com/bitloops/bitloops/issues)
-4. Join the [Discord community](https://discord.com/invite/vj8EdZx8gK)
+1. Inspect `.bitloops.toml`.
+2. Inspect `.bitloops.local.toml`.
+3. Run `bitloops checkpoints status --detailed` to confirm the active policy root and fingerprint.
+4. Re-enable capture with `bitloops enable` if `[capture].enabled = false`.

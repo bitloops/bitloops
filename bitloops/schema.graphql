@@ -1,0 +1,670 @@
+input AddKnowledgeInput {
+	url: String!
+	commitRef: String
+}
+
+type AddKnowledgeResult {
+	success: Boolean!
+	knowledgeItemVersionId: String!
+	itemCreated: Boolean!
+	newVersionCreated: Boolean!
+	knowledgeItem: KnowledgeItem!
+	association: KnowledgeRelation
+}
+
+type ApplyMigrationsResult {
+	success: Boolean!
+	migrationsApplied: [MigrationRecord!]!
+}
+
+type Artefact {
+	id: ID!
+	symbolId: String!
+	path: String!
+	language: String!
+	canonicalKind: CanonicalKind!
+	languageKind: String
+	symbolFqn: String
+	parentArtefactId: ID
+	startLine: Int!
+	endLine: Int!
+	startByte: Int!
+	endByte: Int!
+	signature: String
+	modifiers: [String!]!
+	docstring: String
+	contentHash: String
+	blobSha: String!
+	createdAt: DateTime!
+	parent: Artefact
+	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
+	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
+	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+}
+
+type ArtefactConnection {
+	edges: [ArtefactEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type ArtefactEdge {
+	node: Artefact!
+	cursor: String!
+}
+
+input ArtefactFilterInput {
+	kind: CanonicalKind
+	symbolFqn: String
+	lines: LineRangeInput
+	agent: String
+	since: DateTime
+}
+
+input AsOfInput {
+	ref: String
+	commit: String
+	save: SaveSelector
+	saveRevision: String
+}
+
+input AssociateKnowledgeInput {
+	sourceRef: String!
+	targetRef: String!
+}
+
+type AssociateKnowledgeResult {
+	success: Boolean!
+	relation: KnowledgeRelation!
+}
+
+type Branch {
+	name: String!
+	checkpointCount: Int!
+	latestCheckpointAt: DateTime
+}
+
+enum CanonicalKind {
+	FILE
+	NAMESPACE
+	MODULE
+	IMPORT
+	TYPE
+	INTERFACE
+	ENUM
+	CALLABLE
+	FUNCTION
+	METHOD
+	VALUE
+	VARIABLE
+	MEMBER
+	PARAMETER
+	TYPE_PARAMETER
+	ALIAS
+}
+
+type ChatEntry {
+	sessionId: String!
+	agent: String!
+	timestamp: DateTime!
+	role: ChatRole!
+	content: String!
+	metadata: JSON
+}
+
+type ChatEntryConnection {
+	edges: [ChatEntryEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type ChatEntryEdge {
+	node: ChatEntry!
+	cursor: String!
+}
+
+enum ChatRole {
+	USER
+	ASSISTANT
+	SYSTEM
+	TOOL
+}
+
+type Checkpoint {
+	id: ID!
+	sessionId: String!
+	commitSha: String
+	branch: String
+	agent: String
+	eventTime: DateTime!
+	strategy: String
+	filesTouched: [String!]!
+	payload: JSON
+	checkpointsCount: Int!
+	sessionCount: Int!
+	tokenUsage: CheckpointTokenUsage
+	agents: [String!]!
+	firstPromptPreview: String
+	createdAt: String
+	isTask: Boolean!
+	toolUseId: String
+	commit: Commit
+}
+
+type CheckpointConnection {
+	edges: [CheckpointEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type CheckpointEdge {
+	node: Checkpoint!
+	cursor: String!
+}
+
+type CheckpointTokenUsage {
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+type Clone {
+	id: ID!
+	sourceArtefactId: ID!
+	targetArtefactId: ID!
+	relationKind: String!
+	score: Float!
+	metadata: JSON
+	sourceArtefact: Artefact!
+	targetArtefact: Artefact!
+}
+
+type CloneConnection {
+	edges: [CloneEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type CloneEdge {
+	node: Clone!
+	cursor: String!
+}
+
+input ClonesFilterInput {
+	relationKind: String
+	minScore: Float
+}
+
+type Commit {
+	sha: String!
+	parents: [String!]!
+	authorName: String!
+	authorEmail: String!
+	commitMessage: String!
+	committedAt: DateTime!
+	branch: String
+	filesChanged: [String!]!
+	checkpoints(first: Int, after: String, last: Int, before: String): CheckpointConnection!
+}
+
+type CommitConnection {
+	edges: [CommitEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type CommitEdge {
+	node: Commit!
+	cursor: String!
+}
+
+scalar DateTime
+
+type DependencyConnectionEdge {
+	node: DependencyEdge!
+	cursor: String!
+}
+
+type DependencyEdge {
+	id: ID!
+	edgeKind: EdgeKind!
+	language: String!
+	fromArtefactId: ID!
+	toArtefactId: ID
+	toSymbolRef: String
+	startLine: Int
+	endLine: Int
+	metadata: JSON
+	fromArtefact: Artefact!
+	toArtefact: Artefact
+}
+
+type DependencyEdgeConnection {
+	edges: [DependencyConnectionEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+enum DepsDirection {
+	OUT
+	IN
+	BOTH
+}
+
+input DepsFilterInput {
+	kind: EdgeKind
+	direction: DepsDirection! = OUT
+	includeUnresolved: Boolean! = false
+}
+
+enum EdgeKind {
+	IMPORTS
+	CALLS
+	REFERENCES
+	EXTENDS
+	IMPLEMENTS
+	EXPORTS
+}
+
+type FileContext {
+	path: String!
+	language: String
+	blobSha: String
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+}
+
+type HealthBackendStatus {
+	connected: Boolean!
+	backend: String!
+	status: String!
+	detail: String!
+}
+
+type HealthStatus {
+	relational: HealthBackendStatus!
+	events: HealthBackendStatus!
+	blob: HealthBackendStatus!
+}
+
+input IngestInput {
+	init: Boolean! = true
+	maxCheckpoints: Int! = 500
+}
+
+type IngestResult {
+	success: Boolean!
+	initRequested: Boolean!
+	checkpointsProcessed: Int!
+	eventsInserted: Int!
+	artefactsUpserted: Int!
+	checkpointsWithoutCommit: Int!
+	temporaryRowsPromoted: Int!
+	semanticFeatureRowsUpserted: Int!
+	semanticFeatureRowsSkipped: Int!
+	symbolEmbeddingRowsUpserted: Int!
+	symbolEmbeddingRowsSkipped: Int!
+	symbolCloneEdgesUpserted: Int!
+	symbolCloneSourcesScored: Int!
+}
+
+enum IngestionPhase {
+	INITIALIZING
+	EXTRACTING
+	PERSISTING
+	COMPLETE
+	FAILED
+}
+
+type IngestionProgressEvent {
+	phase: IngestionPhase!
+	checkpointsTotal: Int!
+	checkpointsProcessed: Int!
+	currentCheckpointId: String
+	currentCommitSha: String
+	eventsInserted: Int!
+	artefactsUpserted: Int!
+	checkpointsWithoutCommit: Int!
+	temporaryRowsPromoted: Int!
+}
+
+type InitSchemaResult {
+	success: Boolean!
+	repoIdentity: String!
+	repoId: String!
+	relationalBackend: String!
+	eventsBackend: String!
+}
+
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
+type KnowledgeItem {
+	id: ID!
+	sourceId: ID!
+	provider: KnowledgeProvider!
+	sourceKind: KnowledgeSourceKind!
+	canonicalExternalId: String!
+	externalUrl: String!
+	title: String
+	latestVersion: KnowledgeVersion!
+	versions(first: Int, after: String, last: Int, before: String): KnowledgeVersionConnection!
+	relations(first: Int, after: String, last: Int, before: String): KnowledgeRelationConnection!
+}
+
+type KnowledgeItemConnection {
+	edges: [KnowledgeItemEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type KnowledgeItemEdge {
+	node: KnowledgeItem!
+	cursor: String!
+}
+
+type KnowledgePayload {
+	bodyText: String
+	bodyHtml: String
+	bodyAdf: JSON
+	discussion: JSON
+	rawPayload: JSON!
+}
+
+enum KnowledgeProvider {
+	GITHUB
+	JIRA
+	CONFLUENCE
+}
+
+type KnowledgeRelation {
+	id: ID!
+	sourceVersionId: ID!
+	targetType: KnowledgeTargetType!
+	targetId: String!
+	targetVersionId: ID
+	relationType: String!
+	associationMethod: String!
+	confidence: Float
+	provenance: JSON!
+}
+
+type KnowledgeRelationConnection {
+	edges: [KnowledgeRelationEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type KnowledgeRelationEdge {
+	node: KnowledgeRelation!
+	cursor: String!
+}
+
+enum KnowledgeSourceKind {
+	ISSUE
+	PULL_REQUEST
+	JIRA_ISSUE
+	CONFLUENCE_PAGE
+}
+
+enum KnowledgeTargetType {
+	COMMIT
+	CHECKPOINT
+	ARTEFACT
+	KNOWLEDGE
+}
+
+type KnowledgeVersion {
+	id: ID!
+	knowledgeItemId: ID!
+	contentHash: String!
+	title: String!
+	state: String
+	author: String
+	updatedAt: DateTime
+	bodyPreview: String
+	normalizedFields: JSON!
+	provenance: JSON!
+	createdAt: DateTime!
+	payload: KnowledgePayload
+}
+
+type KnowledgeVersionConnection {
+	edges: [KnowledgeVersionEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type KnowledgeVersionEdge {
+	node: KnowledgeVersion!
+	cursor: String!
+}
+
+input LineRangeInput {
+	start: Int!
+	end: Int!
+}
+
+type MigrationRecord {
+	packId: String!
+	migrationName: String!
+	description: String!
+	appliedAt: DateTime!
+}
+
+type MutationRoot {
+	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
+	initSchema: InitSchemaResult!
+	ingest(input: IngestInput!): IngestResult!
+	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
+	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
+	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
+	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
+	applyMigrations: ApplyMigrationsResult!
+}
+
+type PageInfo {
+	hasNextPage: Boolean!
+	hasPreviousPage: Boolean!
+	startCursor: String
+	endCursor: String
+}
+
+type Project {
+	path: String!
+	asOf(input: AsOfInput!): TemporalScope!
+	file(path: String!): FileContext!
+	files(path: String!): [FileContext!]!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
+	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
+	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
+	testsSummary: TestHarnessCommitSummary!
+}
+
+type QueryRoot {
+	health: HealthStatus!
+	repo(name: String!): Repository!
+}
+
+input RefreshKnowledgeInput {
+	knowledgeRef: String!
+}
+
+type RefreshKnowledgeResult {
+	success: Boolean!
+	latestDocumentVersionId: String!
+	contentChanged: Boolean!
+	newVersionCreated: Boolean!
+	knowledgeItem: KnowledgeItem!
+}
+
+type Repository {
+	id: ID!
+	name: String!
+	provider: String!
+	organization: String!
+	project(path: String!): Project!
+	branch(name: String!): Repository!
+	asOf(input: AsOfInput!): TemporalScope!
+	defaultBranch: String!
+	commits(branch: String, author: String, since: DateTime, until: DateTime, first: Int, after: String, last: Int, before: String): CommitConnection!
+	branches(since: DateTime, until: DateTime): [Branch!]!
+	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
+	telemetry(eventType: String, agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): TelemetryEventConnection!
+	users: [String!]!
+	agents: [String!]!
+	file(path: String!): FileContext!
+	files(path: String!): [FileContext!]!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+}
+
+enum SaveSelector {
+	CURRENT
+}
+
+type SubscriptionRoot {
+	checkpointIngested(repoName: String!): Checkpoint!
+	ingestionProgress(repoName: String!): IngestionProgressEvent!
+}
+
+type TelemetryEvent {
+	id: ID!
+	sessionId: String!
+	eventType: String!
+	agent: String
+	eventTime: DateTime!
+	commitSha: String
+	branch: String
+	payload: JSON
+}
+
+type TelemetryEventConnection {
+	edges: [TelemetryEventEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type TelemetryEventEdge {
+	node: TelemetryEvent!
+	cursor: String!
+}
+
+type TemporalScope {
+	resolvedCommit: String!
+	project(path: String!): Project!
+	file(path: String!): FileContext!
+	files(path: String!): [FileContext!]!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+}
+
+type TestHarnessArtefactRef {
+	artefactId: String!
+	name: String!
+	kind: String!
+	filePath: String!
+	startLine: Int!
+	endLine: Int!
+}
+
+type TestHarnessCommitCounts {
+	testArtefacts: Int!
+	testArtefactEdges: Int!
+	testClassifications: Int!
+	coverageCaptures: Int!
+	coverageHits: Int!
+}
+
+type TestHarnessCommitSummary {
+	capability: String!
+	stage: String!
+	status: String!
+	commitSha: String!
+	counts: TestHarnessCommitCounts!
+	coveragePresent: Boolean!
+}
+
+type TestHarnessCoverage {
+	coverageSource: String!
+	lineCoveragePct: Float!
+	branchCoveragePct: Float!
+	lineDataAvailable: Boolean!
+	branchDataAvailable: Boolean!
+	uncoveredLines: [Int!]!
+	branches: [TestHarnessCoverageBranch!]!
+}
+
+type TestHarnessCoverageBranch {
+	line: Int!
+	block: Int!
+	branch: Int!
+	covered: Boolean!
+	hitCount: Int!
+}
+
+type TestHarnessCoverageResult {
+	artefact: TestHarnessArtefactRef!
+	coverage: TestHarnessCoverage!
+	summary: TestHarnessCoverageSummary!
+}
+
+type TestHarnessCoverageSummary {
+	uncoveredLineCount: Int!
+	uncoveredBranchCount: Int!
+	diagnosticCount: Int!
+}
+
+type TestHarnessCoveringTest {
+	testId: String!
+	testName: String!
+	suiteName: String
+	filePath: String!
+	confidence: Float!
+	discoverySource: String!
+	linkageSource: String!
+	linkageStatus: String!
+}
+
+type TestHarnessTestsResult {
+	artefact: TestHarnessArtefactRef!
+	coveringTests: [TestHarnessCoveringTest!]!
+	summary: TestHarnessTestsSummary!
+}
+
+type TestHarnessTestsSummary {
+	totalCoveringTests: Int!
+	crossCutting: Boolean!
+	dataSources: [String!]!
+	diagnosticCount: Int!
+}
+
+type UpdateCliTelemetryConsentResult {
+	telemetry: Boolean
+	needsPrompt: Boolean!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: QueryRoot
+	mutation: MutationRoot
+	subscription: SubscriptionRoot
+}

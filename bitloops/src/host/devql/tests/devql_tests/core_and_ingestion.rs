@@ -17,6 +17,7 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/main.js"), "javascript");
     assert_eq!(detect_language("src/component.jsx"), "javascript");
     assert_eq!(detect_language("src/lib.rs"), "rust");
+    assert_eq!(detect_language("src/main.py"), "python");
     assert_eq!(detect_language("src/readme.custom"), "custom");
     assert_eq!(detect_language("README"), "text");
 }
@@ -109,7 +110,7 @@ fn build_symbol_records_chain_file_and_nested_parent_links() {
     let file = test_file_row(&cfg, path, blob_sha, 30, 300);
     let content = "export class Widget {\n  render(): void {}\n}\n";
     let items = vec![
-        JsTsArtefact {
+        LanguageArtefact {
             canonical_kind: Some("class".to_string()),
             language_kind: "class_declaration".to_string(),
             name: "Widget".to_string(),
@@ -123,7 +124,7 @@ fn build_symbol_records_chain_file_and_nested_parent_links() {
             modifiers: vec!["export".to_string()],
             docstring: Some("Widget docs".to_string()),
         },
-        JsTsArtefact {
+        LanguageArtefact {
             canonical_kind: Some("method".to_string()),
             language_kind: "method_definition".to_string(),
             name: "render".to_string(),
@@ -172,7 +173,7 @@ fn build_symbol_records_derive_content_hash_from_symbol_content_not_blob() {
     let file_a = test_file_row(&cfg, path, "blob-a", 10, 100);
     let file_b = test_file_row(&cfg, path, "blob-b", 10, 100);
     let content = "export function render() {\n  return 1;\n}\n";
-    let items = vec![JsTsArtefact {
+    let items = vec![LanguageArtefact {
         canonical_kind: Some("function".to_string()),
         language_kind: "function_declaration".to_string(),
         name: "render".to_string(),

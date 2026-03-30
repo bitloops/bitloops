@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
-use std::io::{self, IsTerminal, Read, Write};
+#[cfg(not(test))]
+use std::io::{self, IsTerminal};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{env, fs};
@@ -14,10 +16,17 @@ pub fn can_prompt_interactively() -> bool {
     if let Ok(v) = env::var("BITLOOPS_TEST_TTY") {
         return v == "1" && command_exists("stty");
     }
-    if io::stdin().is_terminal() && io::stdout().is_terminal() && command_exists("stty") {
-        return true;
+    #[cfg(test)]
+    {
+        false
     }
-    fs::OpenOptions::new().read(true).open("/dev/tty").is_ok() && command_exists("stty")
+    #[cfg(not(test))]
+    {
+        if io::stdin().is_terminal() && io::stdout().is_terminal() && command_exists("stty") {
+            return true;
+        }
+        fs::OpenOptions::new().read(true).open("/dev/tty").is_ok() && command_exists("stty")
+    }
 }
 
 fn command_exists(program: &str) -> bool {

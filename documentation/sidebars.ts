@@ -33,10 +33,12 @@ const sidebars: SidebarsConfig = {
         'guides/end-to-end-workflow',
         'guides/team-setup',
         'guides/configuring-devql',
+        'guides/devql-graphql',
         'guides/devql-query-cookbook',
         'guides/connecting-knowledge-sources',
         'guides/configuring-storage',
         'guides/using-the-dashboard',
+        'guides/dashboard-local-https-setup',
       ],
     },
     {
@@ -44,8 +46,10 @@ const sidebars: SidebarsConfig = {
       label: 'Reference',
       items: [
         'reference/cli-commands',
+        'reference/uninstall',
         'reference/configuration',
         'reference/environment-variables',
+        'reference/rust-code-standards',
       ],
     },
     {

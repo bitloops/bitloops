@@ -117,34 +117,12 @@ pub struct CurrentProductionEdgeRecord {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProductionIngestionBatch {
-    pub repository: RepositoryRecord,
-    pub commit: CommitRecord,
-    pub file_states: Vec<FileStateRecord>,
-    pub current_file_states: Vec<CurrentFileStateRecord>,
-    pub artefacts: Vec<ProductionArtefactRecord>,
-    pub current_artefacts: Vec<CurrentProductionArtefactRecord>,
-    pub edges: Vec<ProductionEdgeRecord>,
-    pub current_edges: Vec<CurrentProductionEdgeRecord>,
-}
-
-#[derive(Debug, Clone)]
 pub struct ProductionArtefact {
     pub artefact_id: String,
     pub symbol_id: String,
     pub symbol_fqn: String,
     pub path: String,
     pub start_line: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct QueriedArtefactRecord {
-    pub artefact_id: String,
-    pub symbol_fqn: Option<String>,
-    pub canonical_kind: String,
-    pub path: String,
-    pub start_line: i64,
-    pub end_line: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -187,16 +165,6 @@ pub struct CoverageSummaryRecord {
     pub branch_total: usize,
     pub branch_covered: usize,
     pub branches: Vec<CoverageBranchRecord>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ListedArtefactRecord {
-    pub artefact_id: String,
-    pub symbol_fqn: Option<String>,
-    pub kind: String,
-    pub file_path: String,
-    pub start_line: i64,
-    pub end_line: i64,
 }
 
 #[derive(Debug, Clone)]

@@ -10,9 +10,10 @@ use semantic_clones::SemanticClonesPack;
 use test_harness::TestHarnessPack;
 
 pub fn builtin_packs(repo_root: &Path) -> anyhow::Result<Vec<Box<dyn CapabilityPack>>> {
+    let _ = repo_root;
     Ok(vec![
         Box::new(KnowledgePack::new()?),
-        Box::new(TestHarnessPack::new(repo_root)),
+        Box::new(TestHarnessPack::new()),
         Box::new(SemanticClonesPack::new()?),
     ])
 }

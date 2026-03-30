@@ -197,7 +197,7 @@ pub fn get_current_worktree_hash(worktree_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(worktree_id.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)[..6].to_string()
+    hex::encode(digest)[..6].to_string()
 }
 
 /// Real implementation: derives the worktree hash from the repo's actual worktree ID.
@@ -639,3 +639,7 @@ fn get_reachable_temporary_checkpoints_shell(
 
     points
 }
+
+#[cfg(test)]
+#[path = "branch_tests.rs"]
+mod tests;

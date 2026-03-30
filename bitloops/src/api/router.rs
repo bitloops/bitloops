@@ -7,6 +7,11 @@ use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
     has_bundle_index, resolve_bundle_file,
 };
+use crate::graphql::{
+    global_graphql_handler, global_graphql_playground_handler, global_graphql_sdl_handler,
+    global_graphql_ws_handler, slim_graphql_handler, slim_graphql_playground_handler,
+    slim_graphql_sdl_handler, slim_graphql_ws_handler,
+};
 use axum::{
     Router,
     body::Body,
@@ -174,6 +179,23 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
     Router::new()
         .route("/api/", get(handle_api_root))
         .nest("/api", build_dashboard_api_router())
+        .route(
+            "/devql",
+            post(slim_graphql_handler).get(slim_graphql_playground_handler),
+        )
+        .route("/devql/playground", get(slim_graphql_playground_handler))
+        .route("/devql/sdl", get(slim_graphql_sdl_handler))
+        .route("/devql/ws", get(slim_graphql_ws_handler))
+        .route(
+            "/devql/global",
+            post(global_graphql_handler).get(global_graphql_playground_handler),
+        )
+        .route(
+            "/devql/global/playground",
+            get(global_graphql_playground_handler),
+        )
+        .route("/devql/global/sdl", get(global_graphql_sdl_handler))
+        .route("/devql/global/ws", get(global_graphql_ws_handler))
         .route("/", any(handle_dashboard_root))
         .route("/{*path}", any(handle_dashboard_path))
         .with_state(state)

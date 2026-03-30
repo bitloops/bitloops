@@ -1781,10 +1781,17 @@ fn log_post_task_hook_context_compat() {
 fn new_agent_hook_verb_cmd_logs_invocation() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
+    let state_root_value = dir.path().join("state-root").display().to_string();
 
     with_process_state(
         Some(dir.path()),
-        &[(logging::LOG_LEVEL_ENV_VAR, Some("DEBUG"))],
+        &[
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_value.as_str()),
+            ),
+            (logging::LOG_LEVEL_ENV_VAR, Some("DEBUG")),
+        ],
         || {
             with_logger_test_lock(|| {
                 let backend = LocalFileBackend::new(dir.path());
@@ -1809,7 +1816,7 @@ fn new_agent_hook_verb_cmd_logs_invocation() {
                 )
                 .unwrap();
 
-                let log_file = dir.path().join(logging::LOGS_DIR).join("bitloops.log");
+                let log_file = logging::log_file_path();
                 let content = fs::read_to_string(log_file).expect("log file should exist");
 
                 let mut found_invocation = false;

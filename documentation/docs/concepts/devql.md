@@ -3,141 +3,84 @@ sidebar_position: 3
 title: DevQL
 ---
 
-# DevQL — Development Query Language
+# DevQL
 
-DevQL is a graph-navigation query language for codebase intelligence. It traverses your repository's knowledge graph by chaining stages — navigating from repositories to files to artefacts to dependencies to tests, all resolved against immutable commit snapshots.
+DevQL is Bitloops's typed query surface for codebase intelligence. It is implemented as a GraphQL-compatible schema, with a terminal-friendly DSL layered on top for CLI use.
 
-## Why DevQL?
+That means you can use DevQL in three ways:
 
-Without structured context, AI agents waste tokens navigating your codebase and miss architectural patterns. DevQL gives agents precise, high-signal context:
+- DevQL DSL pipelines in the CLI, such as `repo("bitloops")->artefacts()->limit(10)`
+- Raw GraphQL documents in the CLI, such as `bitloops devql query '{ repo(name: "bitloops") { ... } }'`
+- HTTP and WebSocket clients against `/devql` and `/devql/ws` when the dashboard server is running
 
-- **Structural queries** — find specific artefacts by kind, language, or symbol name
-- **Dependency traversal** — follow imports, calls, references, inheritance edges
-- **Blast radius** — compute what breaks if a symbol changes
-- **Historical snapshots** — query the codebase at any commit
-- **External knowledge** — surface linked issues, tickets, and decisions
+## Why It Exists
 
-## Query Model — Stage Chaining
+DevQL gives agents and developers a typed, introspectable view of repository state so they can ask for precise context instead of scraping ad hoc text.
 
-DevQL queries chain stages together, each narrowing or expanding the result set:
+It is designed for:
 
-```
-artefacts(kind:"function", language:"typescript")
-  → deps(direction:"out", kind:"imports")
-```
+- Structural queries over files, artefacts, dependency edges, commits, checkpoints, telemetry, and knowledge
+- Temporal queries with `asOf(...)` so reads can be pinned to a commit, branch ref, or save state
+- Monorepo scoping through `project(path: ...)`
+- Capability-pack enrichments such as knowledge, test coverage, covering tests, and semantic clones
 
-### Core Stages
+## Core Model
 
-| Stage | Purpose | Example |
-|-------|---------|---------|
-| `artefacts()` | Select code symbols | `artefacts(kind:"function", symbol_fqn:"auth::validate")` |
-| `deps()` | Traverse dependencies | `deps(direction:"in", kind:"calls")` |
-| `asOf()` | Query at a specific point in time | `asOf(commit:"a1b2c3d")` |
+The schema starts at a repository and then narrows from there:
 
-### Artefact Filters
-
-```
-artefacts(
-  kind: "function | method | class | interface | type | enum | module | struct | trait",
-  language: "typescript | javascript | rust",
-  symbol_fqn: "module::symbol_name"
-)
+```text
+Repository
+  -> Project
+  -> FileContext
+  -> Artefact
+  -> Checkpoint / Telemetry / Knowledge
 ```
 
-### Dependency Traversal
+The same graph can also be traversed historically:
 
-```
-deps(
-  direction: "out | in | both",
-  kind: "imports | calls | references | extends | implements | exports"
-)
-```
-
-- **`direction:"out"`** — what does this symbol depend on?
-- **`direction:"in"`** — what depends on this symbol? (reverse dependencies)
-- **`direction:"both"`** — full dependency neighbourhood
-
-### Edge Kinds
-
-| Kind | Meaning |
-|------|---------|
-| `imports` | Module A imports from module B |
-| `calls` | Function A calls function B |
-| `references` | Symbol A references symbol B |
-| `extends` | Class A extends class B |
-| `implements` | Struct A implements trait B |
-| `exports` | Module A exports symbol B |
-
-## Blast Radius — Impact Analysis
-
-One of DevQL's most powerful capabilities: answering **"what will this break?"**
-
-```bash
-bitloops devql query "artefacts(symbol_fqn:'auth::validate_token') → deps(direction:'in', kind:'calls')"
+```text
+Repository
+  -> asOf(input: ...)
+  -> Project / FileContext / Artefact
 ```
 
-This computes the transitive impact by following all incoming call edges — every function that directly or indirectly calls `validate_token`. If you change that function's signature, these are the artefacts that break.
+Most list fields use cursor-based GraphQL connections, so pagination, field selection, and introspection all work with standard GraphQL tooling.
 
-## Historical Snapshots
+## Query Modes
 
-DevQL resolves queries against immutable commit snapshots:
+`bitloops devql query` now runs against the GraphQL schema in-process:
 
-```bash
-# Query current workspace state (default)
-bitloops devql query "artefacts(language:'rust')"
+- If the query contains `->`, the CLI treats it as DevQL DSL and compiles it to GraphQL first
+- Otherwise, the CLI treats the input as raw GraphQL
+- `--graphql` is available as an explicit raw-GraphQL override
 
-# Query at a specific commit
-bitloops devql query "asOf(commit:'a1b2c3d') → artefacts(kind:'function')"
+The result is one execution engine for CLI, dashboard, and external GraphQL clients.
 
-# Query at a branch ref
-bitloops devql query "asOf(ref:'main') → artefacts(kind:'struct')"
-```
+## Capability Packs
 
-### Current vs Historical State
+Capability packs extend DevQL through typed fields and generic stage execution:
 
-DevQL maintains two state models:
+- `knowledge(...)`
+- `tests(...)`
+- `coverage(...)`
+- `clones(...)`
+- `extension(stage:, args:, first:)`
 
-| State | Tables | Use Case |
-|-------|--------|----------|
-| **Current** | `artefacts_current`, `artefact_edges_current` | Latest workspace, including uncommitted changes |
-| **Historical** | `artefacts`, `artefact_edges` | Committed state at any point in git history |
+This keeps the core schema typed while still leaving room for pack-specific extensions.
 
-The default query (no `asOf`) returns current workspace state. Historical queries use `asOf(commit:"...")` or `asOf(ref:"...")`.
+## Storage Model
 
-## Knowledge Graph Contents
+DevQL still uses the three-store Bitloops architecture:
 
-**Artefacts** (nodes):
-- Functions, methods, classes, interfaces, types, enums, structs, traits, modules
-- Each with: source content, file path, line numbers, language, metadata
+| Store | Default | Purpose |
+|---|---|---|
+| Relational | SQLite | Artefacts, dependency edges, semantic features, and pack-owned relational state |
+| Event | DuckDB | Checkpoints, sessions, and telemetry |
+| Blob | Local filesystem | Large payloads, knowledge bodies, and other blob-backed content |
 
-**Edges** (relationships):
-- Imports, calls, references, extends, implements, exports
-- Each with: source/target artefact, edge kind, line numbers, metadata
+## Learn More
 
-**External knowledge** (optional):
-- GitHub issues/PRs, Jira tickets, Confluence pages
-- Versioned and linked to specific commits and artefacts
+Start with [Configuring DevQL](/guides/configuring-devql), then use:
 
-## Supported Languages
-
-| Language | Parser | Extracted Artefact Types |
-|----------|--------|------------------------|
-| Rust | tree-sitter-rust | Functions, structs, enums, traits, modules, impls |
-| TypeScript | tree-sitter-typescript | Functions, classes, interfaces, types, modules |
-| JavaScript | tree-sitter-javascript | Functions, classes, modules, exports |
-
-Parsing is deterministic and parser-backed (Tree-sitter), not heuristic.
-
-## Three-Store Architecture
-
-| Store | Default | Contents |
-|-------|---------|----------|
-| **Relational** | SQLite (bundled) | Artefacts, dependency edges, semantic features |
-| **Event** | DuckDB (bundled) | Checkpoints, transcripts, telemetry |
-| **Blob** | Local filesystem | Raw content, embeddings, knowledge documents |
-
-Zero configuration required — SQLite and DuckDB are compiled into the binary. See [Configuring Storage](/guides/configuring-storage) for team setups.
-
-## Getting Started
-
-See [Configuring DevQL](/guides/configuring-devql) for setup, and the [DevQL Query Cookbook](/guides/devql-query-cookbook) for practical examples.
+- [DevQL GraphQL](/guides/devql-graphql) for endpoints, SDL export, mutations, subscriptions, and migration notes
+- [DevQL Query Cookbook](/guides/devql-query-cookbook) for practical query examples

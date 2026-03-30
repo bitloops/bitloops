@@ -1,30 +1,29 @@
 mod bundle;
 mod bundle_types;
+mod dashboard_git;
+mod dashboard_paths;
+mod dashboard_runtime;
 mod db;
 mod dto;
 mod handlers;
 mod router;
+pub mod tls;
 
-use crate::config::dashboard_use_bitloops_local;
-use crate::host::checkpoints::strategy::manual_commit::{
-    CommittedInfo, list_committed, read_commit_checkpoint_mappings, read_committed_info, run_git,
-};
-use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
-use crate::utils::paths;
-use anyhow::{Context, Result, anyhow, bail};
-use std::collections::{HashMap, HashSet};
-use std::env;
-use std::ffi::OsStr;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-use tokio::net::TcpListener;
+use crate::graphql;
+use crate::graphql::SubscriptionHub;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
-const PREFERRED_LOCAL_HOST: &str = "bitloops.local";
 const FALLBACK_LOCAL_HOST: &str = "127.0.0.1";
-const DEFAULT_BUNDLE_RELATIVE_DIR: &str = ".bitloops/dashboard/bundle";
 pub(super) const API_GIT_SCAN_LIMIT: usize = 5_000;
 pub(super) const API_DEFAULT_PAGE_LIMIT: usize = 100;
 const API_MAX_PAGE_LIMIT: usize = 500;
@@ -33,12 +32,53 @@ pub(super) const GIT_RECORD_SEPARATOR: char = '\u{1e}';
 pub(super) const DASHBOARD_FALLBACK_INSTALL_HTML: &str =
     include_str!("api/dashboard_fallback_install.html");
 
-#[derive(Debug, Clone)]
+pub type DashboardReadyHook =
+    Arc<dyn Fn(&DashboardReadyInfo) -> Result<()> + Send + Sync + 'static>;
+pub type DashboardShutdownHook = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardServerConfig {
     pub host: Option<String>,
     pub port: u16,
     pub no_open: bool,
+    pub force_http: bool,
+    pub recheck_local_dashboard_net: bool,
     pub bundle_dir: Option<PathBuf>,
+}
+
+pub struct DashboardRuntimeOptions {
+    pub ready_subject: String,
+    pub print_ready_banner: bool,
+    pub open_browser: bool,
+    pub shutdown_message: Option<String>,
+    pub on_ready: Option<DashboardReadyHook>,
+    pub on_shutdown: Option<DashboardShutdownHook>,
+    pub config_root: Option<PathBuf>,
+    pub repo_registry_path: Option<PathBuf>,
+}
+
+impl Default for DashboardRuntimeOptions {
+    fn default() -> Self {
+        Self {
+            ready_subject: "Dashboard".to_string(),
+            print_ready_banner: true,
+            open_browser: true,
+            shutdown_message: Some("Dashboard server stopped.".to_string()),
+            on_ready: None,
+            on_shutdown: None,
+            config_root: None,
+            repo_registry_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardReadyInfo {
+    pub url: String,
+    pub host: String,
+    pub port: u16,
+    pub bundle_dir: PathBuf,
+    pub repo_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -90,13 +130,6 @@ impl ApiPage {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct CommitCheckpointPair {
-    pub(super) commit: DashboardCommitNode,
-    pub(super) user: DashboardUser,
-    pub(super) checkpoint: CommittedInfo,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct CommitCheckpointQuery {
     pub(super) branch: String,
@@ -113,366 +146,112 @@ pub(super) enum ServeMode {
     Bundle(PathBuf),
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct DashboardState {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardTransport {
+    Http,
+    Https,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardStartupMode {
+    FastHttpLoopback,
+    FastConfiguredHttps,
+    SlowProbe,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LocalDashboardDiscovery {
+    tls: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct DashboardState {
+    pub(super) config_root: PathBuf,
     pub(super) repo_root: PathBuf,
+    pub(super) repo_registry_path: Option<PathBuf>,
     pub(super) mode: ServeMode,
     pub(super) db: db::DashboardDbPools,
     pub(super) bundle_dir: PathBuf,
+    pub(super) subscription_hub: Arc<SubscriptionHub>,
+    pub(super) devql_schema: graphql::DevqlSchema,
+    pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
 }
 
-/// True when BITLOOPS_DEV is set (show extra info on CLI).
-fn is_dev_mode() -> bool {
-    env::var("BITLOOPS_DEV").is_ok()
-}
-
-pub async fn run(config: DashboardServerConfig) -> Result<()> {
-    let db_init = db::init_dashboard_db().await;
-    if db_init.startup_health.has_failures() {
-        bail!(
-            "dashboard database startup health check failed; run `bitloops --connection-status` for details"
-        );
+impl DashboardState {
+    pub(crate) fn devql_schema(&self) -> &graphql::DevqlSchema {
+        &self.devql_schema
     }
 
-    let selected_host = select_host_with_dashboard_preference(
-        config.host.as_deref(),
-        dashboard_use_bitloops_local(),
-    );
-    let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
-
-    let listener = TcpListener::bind(bind_addr).await.with_context(|| {
-        format!(
-            "Binding dashboard server to {selected_host}:{}",
-            config.port
-        )
-    })?;
-    let local_addr = listener
-        .local_addr()
-        .context("Reading dashboard listener address")?;
-
-    let bundle_dir = resolve_bundle_dir(config.bundle_dir.as_deref());
-    let serve_mode = if has_bundle_index(&bundle_dir) {
-        ServeMode::Bundle(bundle_dir.clone())
-    } else {
-        ServeMode::HelloWorld
-    };
-    let repo_root = paths::repo_root()
-        .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
-        .unwrap_or_else(|_| PathBuf::from("."));
-
-    let browser_host = browser_host_for_url(&selected_host, local_addr);
-    let url = format_dashboard_url(&browser_host, local_addr.port());
-
-    println!();
-    println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
-    println!();
-    print!("📊 Dashboard ");
-    print!("{}", color_hex("ready ", "#22c55e"));
-    print!("at ");
-    println!("{}", color_hex(&clickable_url(&url), BITLOOPS_PURPLE_HEX));
-    match &serve_mode {
-        ServeMode::HelloWorld => {
-            println!(
-                "Bundle not found. Bundle expected at {}",
-                bundle_dir.display()
-            );
-        }
-        ServeMode::Bundle(path) => {
-            log::debug!("Serving dashboard bundle from {}", path.display());
-            if is_dev_mode() {
-                println!("Serving dashboard bundle from {}", path.display());
-            }
-            println!();
-            println!("To exit, press Ctrl+C");
-        }
+    pub(crate) fn devql_global_schema(&self) -> &graphql::DevqlSchema {
+        &self.devql_schema
     }
 
-    if !config.no_open
-        && let Err(err) = open_in_default_browser(&url)
-    {
-        eprintln!("Warning: failed to open default browser: {err:#}");
+    pub(crate) fn devql_slim_schema(&self) -> &graphql::SlimDevqlSchema {
+        &self.devql_slim_schema
     }
 
-    serve_until_ctrl_c(
-        listener,
-        DashboardState {
-            repo_root,
-            mode: serve_mode,
-            db: db_init.pools,
-            bundle_dir,
-        },
-    )
-    .await
-}
-
-async fn serve_until_ctrl_c(listener: TcpListener, state: DashboardState) -> Result<()> {
-    let app = router::build_dashboard_router(state);
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("Serving dashboard requests")?;
-
-    println!("Dashboard server stopped.");
-    Ok(())
-}
-
-fn clickable_url(url: &str) -> String {
-    format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
-}
-
-fn canonical_user_key(name: &str, email: &str) -> String {
-    let email_normalized = email.trim().to_ascii_lowercase();
-    if !email_normalized.is_empty() {
-        return email_normalized;
+    pub(crate) fn repo_registry_path(&self) -> Option<&Path> {
+        self.repo_registry_path.as_deref()
     }
 
-    let name_normalized = name.trim().to_ascii_lowercase();
-    if name_normalized.is_empty() {
-        return String::new();
-    }
-    format!("name:{name_normalized}")
-}
-
-pub(super) fn dashboard_user(name: &str, email: &str) -> DashboardUser {
-    DashboardUser {
-        key: canonical_user_key(name, email),
-        name: name.trim().to_string(),
-        email: email.trim().to_ascii_lowercase(),
+    pub(crate) fn subscription_hub(&self) -> Arc<SubscriptionHub> {
+        Arc::clone(&self.subscription_hub)
     }
 }
 
-pub(super) fn canonical_agent_key(agent: &str) -> String {
-    let trimmed = agent.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let mut key = String::with_capacity(trimmed.len());
-    let mut last_was_dash = false;
-
-    for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() {
-            key.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !key.is_empty() && !last_was_dash {
-            key.push('-');
-            last_was_dash = true;
-        }
-    }
-
-    while key.ends_with('-') {
-        key.pop();
-    }
-
-    key
+#[cfg(test)]
+fn branch_is_excluded(branch: &str) -> bool {
+    dashboard_git::branch_is_excluded(branch)
 }
 
-fn user_matches_filter(user: &DashboardUser, user_filter: Option<&str>) -> bool {
-    let Some(filter) = user_filter else {
-        return true;
-    };
-
-    let normalized = filter.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return true;
-    }
-
-    user.key == normalized || user.name.to_ascii_lowercase() == normalized
-}
-
-fn agent_matches_filter(info: &CommittedInfo, agent_filter: Option<&str>) -> bool {
-    let Some(filter) = agent_filter else {
-        return true;
-    };
-
-    let normalized = canonical_agent_key(filter);
-    if normalized.is_empty() {
-        return true;
-    }
-
-    if !info.agents.is_empty() {
-        return info
-            .agents
-            .iter()
-            .map(|agent| canonical_agent_key(agent))
-            .any(|agent| agent == normalized);
-    }
-
-    canonical_agent_key(&info.agent) == normalized
-}
-
-fn normalize_branch_name(branch: &str) -> &str {
-    let trimmed = branch.trim().trim_start_matches('*').trim();
-    if let Some(short) = trimmed.strip_prefix("refs/heads/") {
-        return short;
-    }
-    if let Some(short) = trimmed.strip_prefix("refs/remotes/") {
-        return short;
-    }
-    trimmed
-}
-
-pub(super) fn branch_is_excluded(branch: &str) -> bool {
-    let normalized = normalize_branch_name(branch);
-    let without_origin = normalized.strip_prefix("origin/").unwrap_or(normalized);
-
-    without_origin == paths::METADATA_BRANCH_NAME || without_origin.starts_with("bitloops/")
-}
-
-pub(super) fn list_dashboard_branches(repo_root: &Path) -> Result<Vec<String>> {
-    let refs = run_git(
-        repo_root,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads",
-            "refs/remotes/origin",
-        ],
-    )?;
-
-    let mut branches: HashSet<String> = HashSet::new();
-    for branch in refs.lines() {
-        let branch = branch.trim();
-        if branch.is_empty() || branch.ends_with("/HEAD") {
-            continue;
-        }
-        if branch_is_excluded(branch) {
-            continue;
-        }
-        branches.insert(branch.to_string());
-    }
-
-    let mut out: Vec<String> = branches.into_iter().collect();
-    out.sort();
-    Ok(out)
-}
-
-pub(super) fn build_branch_commit_log_args(
+#[cfg(test)]
+fn build_branch_commit_log_args(
     branch_ref: &str,
     from_unix: Option<i64>,
     to_unix: Option<i64>,
     max_count: usize,
 ) -> Vec<String> {
-    let mut args = vec![
-        "log".to_string(),
-        branch_ref.to_string(),
-        "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%ct%x1f%s%x1e".to_string(),
-        "--max-count".to_string(),
-        max_count.max(1).to_string(),
-        "--no-color".to_string(),
-    ];
-
-    if let Some(from) = from_unix {
-        args.push(format!("--since=@{from}"));
-    }
-    if let Some(to) = to_unix {
-        args.push(format!("--until=@{to}"));
-    }
-    args
+    dashboard_git::build_branch_commit_log_args(branch_ref, from_unix, to_unix, max_count)
 }
 
-pub(super) fn parse_branch_commit_log(raw: &str) -> Vec<DashboardCommitNode> {
-    let mut nodes = Vec::new();
-
-    for record in raw.split(GIT_RECORD_SEPARATOR) {
-        let record = record.trim();
-        if record.is_empty() {
-            continue;
-        }
-
-        let mut parts = record.split(GIT_FIELD_SEPARATOR);
-        let Some(sha) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(parents_raw) = parts.next() else {
-            continue;
-        };
-        let Some(author_name) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(author_email) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(timestamp_raw) = parts.next().map(str::trim) else {
-            continue;
-        };
-        let Some(message) = parts.next().map(str::trim) else {
-            continue;
-        };
-
-        if sha.is_empty() {
-            continue;
-        }
-
-        let timestamp = timestamp_raw.parse::<i64>().unwrap_or(0);
-
-        nodes.push(DashboardCommitNode {
-            sha: sha.to_string(),
-            parents: parents_raw
-                .split_whitespace()
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect(),
-            author_name: author_name.to_string(),
-            author_email: author_email.to_string(),
-            timestamp,
-            message: message.to_string(),
-            checkpoint_id: String::new(),
-        });
-    }
-
-    nodes
+pub(super) fn canonical_agent_key(agent: &str) -> String {
+    dashboard_git::canonical_agent_key(agent)
 }
 
-pub(super) fn parse_numstat_output(raw: &str) -> HashMap<String, (u64, u64)> {
-    let mut stats: HashMap<String, (u64, u64)> = HashMap::new();
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() != 3 {
-            continue;
-        }
-        let adds = if parts[0] == "-" {
-            0u64
-        } else {
-            parts[0].parse::<u64>().unwrap_or(0)
-        };
-        let dels = if parts[1] == "-" {
-            0u64
-        } else {
-            parts[1].parse::<u64>().unwrap_or(0)
-        };
-        let path = parts[2].to_string();
-        let entry = stats.entry(path).or_insert((0, 0));
-        entry.0 += adds;
-        entry.1 += dels;
-    }
-    stats
+pub(super) fn dashboard_user(name: &str, email: &str) -> DashboardUser {
+    dashboard_git::dashboard_user(name, email)
+}
+
+pub(super) fn paginate<T: Clone>(items: &[T], page: ApiPage) -> Vec<T> {
+    dashboard_git::paginate(items, page)
+}
+
+#[cfg(test)]
+fn parse_branch_commit_log(raw: &str) -> Vec<DashboardCommitNode> {
+    dashboard_git::parse_branch_commit_log(raw)
+}
+
+#[cfg(test)]
+fn parse_numstat_output(raw: &str) -> HashMap<String, (u64, u64)> {
+    dashboard_git::parse_numstat_output(raw)
+}
+
+pub(super) fn read_checkpoint_info_for_filtering(
+    repo_root: &Path,
+    checkpoint_id: &str,
+) -> Result<Option<crate::host::checkpoints::strategy::manual_commit::CommittedInfo>> {
+    dashboard_git::read_checkpoint_info_for_filtering(repo_root, checkpoint_id)
 }
 
 pub(super) fn read_commit_numstat(
     repo_root: &Path,
     sha: &str,
 ) -> Result<HashMap<String, (u64, u64)>> {
-    let raw = run_git(
-        repo_root,
-        &[
-            "show",
-            "--numstat",
-            "--format=",
-            "--no-color",
-            "--find-renames",
-            "--find-copies",
-            sha,
-        ],
-    )?;
-    Ok(parse_numstat_output(&raw))
+    dashboard_git::read_commit_numstat(repo_root, sha)
+}
+
+pub(super) fn user_matches_filter(user: &DashboardUser, user_filter: Option<&str>) -> bool {
+    dashboard_git::user_matches_filter(user, user_filter)
 }
 
 pub(super) fn walk_branch_commits_with_checkpoints(
@@ -482,301 +261,70 @@ pub(super) fn walk_branch_commits_with_checkpoints(
     to_unix: Option<i64>,
     max_count: usize,
 ) -> Result<Vec<DashboardCommitNode>> {
-    let args = build_branch_commit_log_args(branch_ref, from_unix, to_unix, max_count);
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let raw = run_git(repo_root, &args_ref)?;
-    let mut commits = parse_branch_commit_log(&raw);
-    attach_checkpoint_ids_from_db(repo_root, &mut commits)?;
-    Ok(commits)
-}
-
-fn attach_checkpoint_ids_from_db(
-    repo_root: &Path,
-    commits: &mut [DashboardCommitNode],
-) -> Result<()> {
-    let mappings = read_commit_checkpoint_mappings(repo_root)
-        .context("reading commit_checkpoints mappings for dashboard commit walk")?;
-    if mappings.is_empty() {
-        return Ok(());
-    }
-
-    for commit in commits {
-        if let Some(checkpoint_id) = mappings.get(&commit.sha) {
-            commit.checkpoint_id = checkpoint_id.clone();
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn paginate<T: Clone>(items: &[T], page: ApiPage) -> Vec<T> {
-    let page = page.normalized();
-    let start = page.offset.min(items.len());
-    let end = start.saturating_add(page.limit).min(items.len());
-    items[start..end].to_vec()
-}
-
-pub(super) fn build_committed_info_map(repo_root: &Path) -> Result<HashMap<String, CommittedInfo>> {
-    Ok(list_committed(repo_root)?
-        .into_iter()
-        .map(|info| (info.checkpoint_id.clone(), info))
-        .collect())
-}
-
-pub(super) fn query_commit_checkpoint_pairs(
-    repo_root: &Path,
-    query: &CommitCheckpointQuery,
-) -> Result<Vec<CommitCheckpointPair>> {
-    let pairs = query_commit_checkpoint_pairs_all(repo_root, query)?;
-    Ok(paginate(&pairs, query.page))
-}
-
-pub(super) fn query_commit_checkpoint_pairs_all(
-    repo_root: &Path,
-    query: &CommitCheckpointQuery,
-) -> Result<Vec<CommitCheckpointPair>> {
-    let commits = walk_branch_commits_with_checkpoints(
-        repo_root,
-        &query.branch,
-        query.from_unix,
-        query.to_unix,
-        API_GIT_SCAN_LIMIT,
-    )?;
-    let committed_map = build_committed_info_map(repo_root)?;
-
-    let mut pairs = Vec::new();
-    for commit in commits {
-        if commit.checkpoint_id.is_empty() {
-            continue;
-        }
-
-        let Some(info) = committed_map.get(&commit.checkpoint_id) else {
-            continue;
-        };
-
-        let user = dashboard_user(&commit.author_name, &commit.author_email);
-        if !user_matches_filter(&user, query.user.as_deref()) {
-            continue;
-        }
-        if !agent_matches_filter(info, query.agent.as_deref()) {
-            continue;
-        }
-
-        pairs.push(CommitCheckpointPair {
-            commit,
-            user,
-            checkpoint: info.clone(),
-        });
-    }
-
-    pairs.sort_by(|left, right| {
-        right
-            .commit
-            .timestamp
-            .cmp(&left.commit.timestamp)
-            .then_with(|| right.commit.sha.cmp(&left.commit.sha))
-    });
-
-    Ok(pairs)
-}
-
-pub(super) fn read_checkpoint_info_for_filtering(
-    repo_root: &Path,
-    checkpoint_id: &str,
-) -> Result<Option<CommittedInfo>> {
-    read_committed_info(repo_root, checkpoint_id)
-}
-
-pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Option<PathBuf> {
-    let mut relative = PathBuf::new();
-    let trimmed = request_path.trim_start_matches('/');
-
-    for component in Path::new(trimmed).components() {
-        match component {
-            Component::Normal(segment) => relative.push(segment),
-            Component::CurDir => {}
-            Component::RootDir | Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    let mut candidate = if relative.as_os_str().is_empty() {
-        bundle_dir.join("index.html")
-    } else {
-        bundle_dir.join(relative)
-    };
-
-    if candidate.is_dir() {
-        candidate = candidate.join("index.html");
-    }
-
-    Some(candidate)
+    dashboard_git::walk_branch_commits_with_checkpoints(
+        repo_root, branch_ref, from_unix, to_unix, max_count,
+    )
 }
 
 pub(super) fn content_type_for_path(path: &Path) -> &'static str {
-    let Some(extension) = path.extension().and_then(OsStr::to_str) else {
-        return "application/octet-stream";
-    };
-
-    match extension.to_ascii_lowercase().as_str() {
-        "html" => "text/html; charset=utf-8",
-        "js" | "mjs" => "application/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "ico" => "image/x-icon",
-        "txt" => "text/plain; charset=utf-8",
-        "map" => "application/json; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    dashboard_paths::content_type_for_path(path)
 }
 
-fn resolve_bundle_dir(bundle_arg: Option<&Path>) -> PathBuf {
-    bundle_arg
-        .map(expand_tilde)
-        .unwrap_or_else(default_bundle_dir)
+#[cfg(test)]
+fn default_bundle_dir_from_cache_dir(cache_dir: Option<&Path>) -> PathBuf {
+    dashboard_paths::default_bundle_dir_from_cache_dir(cache_dir)
 }
 
-fn default_bundle_dir() -> PathBuf {
-    let home = env::var_os("HOME").map(PathBuf::from);
-    default_bundle_dir_from_home(home.as_deref())
+#[cfg(test)]
+fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
+    dashboard_paths::expand_tilde_with_home(path, home)
 }
 
-pub(super) fn default_bundle_dir_from_home(home: Option<&Path>) -> PathBuf {
-    if let Some(home) = home {
-        home.join(DEFAULT_BUNDLE_RELATIVE_DIR)
-    } else {
-        PathBuf::from(DEFAULT_BUNDLE_RELATIVE_DIR)
-    }
+#[cfg(test)]
+fn browser_host_for_url(bind_host: &str, local_addr: SocketAddr) -> String {
+    dashboard_paths::browser_host_for_url(bind_host, local_addr)
+}
+
+#[cfg(test)]
+fn format_dashboard_url(transport: DashboardTransport, host: &str, port: u16) -> String {
+    dashboard_paths::format_dashboard_url(transport, host, port)
 }
 
 pub(super) fn has_bundle_index(bundle_dir: &Path) -> bool {
-    bundle_dir.join("index.html").is_file()
+    dashboard_paths::has_bundle_index(bundle_dir)
 }
 
-fn expand_tilde(path: &Path) -> PathBuf {
-    let home = env::var_os("HOME").map(PathBuf::from);
-    expand_tilde_with_home(path, home.as_deref())
+pub(super) fn resolve_bundle_file(bundle_dir: &Path, request_path: &str) -> Option<PathBuf> {
+    dashboard_paths::resolve_bundle_file(bundle_dir, request_path)
 }
 
-pub(super) fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
-    let rendered = path.to_string_lossy();
-    if rendered == "~" {
-        return home
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| path.to_path_buf());
-    }
-    if let Some(suffix) = rendered.strip_prefix("~/")
-        && let Some(home) = home
-    {
-        return home.join(suffix);
-    }
-    path.to_path_buf()
-}
-
-pub(super) fn select_host_with_dashboard_preference(
+#[cfg(test)]
+fn select_startup_mode(
+    config: &DashboardServerConfig,
+    local_dashboard_cfg: Option<&crate::config::DashboardLocalDashboardConfig>,
     explicit_host: Option<&str>,
-    use_bitloops_local: bool,
-) -> String {
-    if let Some(host) = explicit_host.and_then(normalized_host) {
-        return host.to_string();
-    }
-
-    if use_bitloops_local {
-        PREFERRED_LOCAL_HOST.to_string()
-    } else {
-        FALLBACK_LOCAL_HOST.to_string()
-    }
+) -> Result<DashboardStartupMode> {
+    dashboard_runtime::select_startup_mode(config, local_dashboard_cfg, explicit_host)
 }
 
-fn normalized_host(input: &str) -> Option<&str> {
-    let host = input.trim();
-    if host.is_empty() { None } else { Some(host) }
+#[cfg(test)]
+fn warning_block_lines(warning: &str, use_color: bool) -> Vec<String> {
+    dashboard_runtime::warning_block_lines(warning, use_color)
 }
 
-fn resolve_bind_addr(host: &str, port: u16) -> Result<SocketAddr> {
-    let addrs: Vec<SocketAddr> = (host, port)
-        .to_socket_addrs()
-        .with_context(|| format!("Resolving host {host}:{port}"))?
-        .collect();
-
-    if addrs.is_empty() {
-        return Err(anyhow!("Resolved no addresses for {host}:{port}"));
-    }
-
-    if let Some(addr) = addrs
-        .iter()
-        .copied()
-        .find(|addr| addr.ip().is_loopback() || addr.ip().is_unspecified())
-    {
-        return Ok(addr);
-    }
-
-    Ok(addrs[0])
+pub async fn run(config: DashboardServerConfig) -> Result<()> {
+    run_with_options(config, DashboardRuntimeOptions::default()).await
 }
 
-pub(super) fn browser_host_for_url(bind_host: &str, local_addr: SocketAddr) -> String {
-    match bind_host {
-        "0.0.0.0" => "127.0.0.1".to_string(),
-        "::" | "[::]" => "localhost".to_string(),
-        _ if local_addr.ip().is_unspecified() => {
-            if local_addr.is_ipv4() {
-                "127.0.0.1".to_string()
-            } else {
-                "localhost".to_string()
-            }
-        }
-        _ => bind_host.to_string(),
-    }
+pub async fn run_with_options(
+    config: DashboardServerConfig,
+    options: DashboardRuntimeOptions,
+) -> Result<()> {
+    dashboard_runtime::run(config, options).await
 }
 
-pub(super) fn format_dashboard_url(host: &str, port: u16) -> String {
-    if host.contains(':') && !host.starts_with('[') {
-        format!("http://[{host}]:{port}")
-    } else {
-        format!("http://{host}:{port}")
-    }
-}
-
-fn open_in_default_browser(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        return Err(anyhow!(
-            "opening the browser is not supported on this platform"
-        ));
-    }
-
-    let status = command
-        .status()
-        .with_context(|| format!("Running browser opener for {url}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("Browser opener exited with status {status}"))
-    }
+pub fn open_in_default_browser(url: &str) -> Result<()> {
+    dashboard_runtime::open_in_default_browser(url)
 }
 
 #[cfg(test)]

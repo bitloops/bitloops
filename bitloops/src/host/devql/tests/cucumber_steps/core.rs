@@ -1,4 +1,4 @@
-use crate::capability_packs::test_harness::mapping::languages::rust::scenarios::collect_rust_suites;
+use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_source_discovery,
@@ -6,18 +6,26 @@ use crate::capability_packs::test_harness::mapping::materialize::{
 use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, ReferenceCandidate, StructuralMappingStats,
 };
+use crate::capability_packs::test_harness::storage::TestHarnessRepository;
 use crate::host::devql::cucumber_world::{DevqlBddWorld, EdgeExpectation};
 use crate::host::devql::*;
-use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
+use crate::models::{
+    CoverageCaptureRecord, CoverageFormat, CoverageHitRecord, ProductionArtefact, ScopeKind,
+    TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord, TestDiscoveryRunRecord,
+};
 use crate::telemetry::logging;
+use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::with_cwd;
+use crate::test_support::process_state::enter_process_state;
+use anyhow::Context;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::future::Future;
+use std::path::Path;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
+use tempfile::TempDir;
 use tree_sitter::Parser;
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 
@@ -256,13 +264,21 @@ fn when_execute_query_without_pg_client(
     Box::pin(async move {
         world.init_test_logger();
         let workspace = world.logger_workspace_path().to_path_buf();
+        let state_root_value = workspace.join("state-root").display().to_string();
         let parsed = world
             .parsed_query
             .clone()
             .expect("query should be parsed before execution");
         let cfg = world.cfg.clone();
 
-        let error = with_cwd(&workspace, || {
+        let error = {
+            let _guard = enter_process_state(
+                Some(&workspace),
+                &[(
+                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                    Some(state_root_value.as_str()),
+                )],
+            );
             with_logger_test_lock(|| {
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
@@ -278,7 +294,7 @@ fn when_execute_query_without_pg_client(
                 logging::close();
                 result.expect_err("query should fail without a Postgres client")
             })
-        });
+        };
         world.query_error = Some(error);
     })
 }
@@ -290,6 +306,7 @@ fn when_extract_artefacts_and_edges_with_logger(
     Box::pin(async move {
         world.init_test_logger();
         let workspace = world.logger_workspace_path().to_path_buf();
+        let state_root_value = workspace.join("state-root").display().to_string();
         let source_content = world
             .source_content
             .clone()
@@ -299,7 +316,14 @@ fn when_extract_artefacts_and_edges_with_logger(
             .clone()
             .expect("typescript source path should be set");
 
-        let (artefacts, edges) = with_cwd(&workspace, || {
+        let (artefacts, edges) = {
+            let _guard = enter_process_state(
+                Some(&workspace),
+                &[(
+                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                    Some(state_root_value.as_str()),
+                )],
+            );
             with_logger_test_lock(|| {
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
@@ -311,7 +335,7 @@ fn when_extract_artefacts_and_edges_with_logger(
                 logging::close();
                 (artefacts, edges)
             })
-        });
+        };
 
         world.artefacts = artefacts;
         world.edges = edges;
@@ -684,6 +708,441 @@ fn run_linkage_resolution(world: &mut DevqlBddWorld) {
     world.materialized_links = test_edges;
 }
 
+#[derive(Copy, Clone)]
+enum RegisteredStageQueryMode {
+    Current,
+    AsOfCommit,
+    AsOfRef,
+}
+
+struct SeededArtefact {
+    path: String,
+    symbol_id: String,
+    current_artefact_id: String,
+    historical_artefact_id: String,
+}
+
+fn write_repo_sources(repo_root: &Path, world: &DevqlBddWorld) {
+    for (path, source) in world
+        .production_sources
+        .iter()
+        .chain(world.test_sources.iter())
+    {
+        let full_path = repo_root.join(path);
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).expect("create source parent directory");
+        }
+        std::fs::write(&full_path, source).expect("write fixture source file");
+    }
+}
+
+fn write_repo_config(repo_root: &Path, sqlite_path: &Path) {
+    std::fs::write(
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
+    )
+    .expect("write config");
+}
+
+fn rewrite_test_artefact(
+    artefact: &TestArtefactCurrentRecord,
+    repo_id: &str,
+    commit_sha: &str,
+) -> TestArtefactCurrentRecord {
+    let mut rewritten = artefact.clone();
+    rewritten.repo_id = repo_id.to_string();
+    rewritten.commit_sha = commit_sha.to_string();
+    rewritten.blob_sha = format!("blob:{commit_sha}:{}", rewritten.path);
+    rewritten.revision_id = commit_sha.to_string();
+    rewritten
+}
+
+fn rewrite_test_edge(
+    edge: &TestArtefactEdgeCurrentRecord,
+    repo_id: &str,
+    commit_sha: &str,
+    artefact_name: &str,
+    symbol_id: &str,
+    current_artefact_id: &str,
+) -> TestArtefactEdgeCurrentRecord {
+    let mut rewritten = edge.clone();
+    rewritten.repo_id = repo_id.to_string();
+    rewritten.commit_sha = commit_sha.to_string();
+    rewritten.blob_sha = format!("blob:{commit_sha}:{}", rewritten.path);
+    rewritten.revision_id = commit_sha.to_string();
+    if edge_targets_artefact(edge, artefact_name) {
+        rewritten.to_symbol_id = Some(symbol_id.to_string());
+        rewritten.to_artefact_id = Some(current_artefact_id.to_string());
+    }
+    rewritten
+}
+
+fn edge_targets_artefact(edge: &TestArtefactEdgeCurrentRecord, artefact_name: &str) -> bool {
+    edge.to_artefact_id
+        .as_deref()
+        .is_some_and(|artefact_id| artefact_id.contains(artefact_name))
+        || edge
+            .to_symbol_id
+            .as_deref()
+            .is_some_and(|symbol_id| symbol_id.contains(artefact_name))
+}
+
+fn discovery_run_record(repo_id: &str, commit_sha: &str) -> TestDiscoveryRunRecord {
+    TestDiscoveryRunRecord {
+        discovery_run_id: format!("discovery:{commit_sha}:bdd"),
+        repo_id: repo_id.to_string(),
+        commit_sha: commit_sha.to_string(),
+        language: Some("rust".to_string()),
+        started_at: "2026-03-24T00:00:00Z".to_string(),
+        finished_at: Some("2026-03-24T00:00:01Z".to_string()),
+        status: "complete".to_string(),
+        enumeration_status: Some("hybrid_full".to_string()),
+        notes_json: None,
+        stats_json: None,
+    }
+}
+
+fn coverage_capture_record(
+    repo_id: &str,
+    commit_sha: &str,
+    scenario_id: &str,
+) -> CoverageCaptureRecord {
+    CoverageCaptureRecord {
+        capture_id: format!("capture:{commit_sha}:bdd"),
+        repo_id: repo_id.to_string(),
+        commit_sha: commit_sha.to_string(),
+        tool: "llvm-cov".to_string(),
+        format: CoverageFormat::Lcov,
+        scope_kind: ScopeKind::TestScenario,
+        subject_test_symbol_id: Some(scenario_id.to_string()),
+        line_truth: true,
+        branch_truth: true,
+        captured_at: "2026-03-24T00:00:02Z".to_string(),
+        status: "complete".to_string(),
+        metadata_json: Some("{\"runner\":\"cargo test\"}".to_string()),
+    }
+}
+
+fn coverage_hits(symbol_id: &str, path: &str, capture_id: &str) -> Vec<CoverageHitRecord> {
+    vec![
+        CoverageHitRecord {
+            capture_id: capture_id.to_string(),
+            production_symbol_id: symbol_id.to_string(),
+            file_path: path.to_string(),
+            line: 1,
+            branch_id: -1,
+            covered: true,
+            hit_count: 3,
+        },
+        CoverageHitRecord {
+            capture_id: capture_id.to_string(),
+            production_symbol_id: symbol_id.to_string(),
+            file_path: path.to_string(),
+            line: 2,
+            branch_id: -1,
+            covered: false,
+            hit_count: 0,
+        },
+        CoverageHitRecord {
+            capture_id: capture_id.to_string(),
+            production_symbol_id: symbol_id.to_string(),
+            file_path: path.to_string(),
+            line: 3,
+            branch_id: 0,
+            covered: true,
+            hit_count: 1,
+        },
+        CoverageHitRecord {
+            capture_id: capture_id.to_string(),
+            production_symbol_id: symbol_id.to_string(),
+            file_path: path.to_string(),
+            line: 3,
+            branch_id: 1,
+            covered: false,
+            hit_count: 0,
+        },
+    ]
+}
+
+fn seed_target_production_artefact(
+    conn: &rusqlite::Connection,
+    repo_root: &Path,
+    repo_id: &str,
+    commit_sha: &str,
+    world: &DevqlBddWorld,
+    artefact_name: &str,
+) -> anyhow::Result<SeededArtefact> {
+    for (path, source) in &world.production_sources {
+        let artefacts = extract_rust_artefacts(source, path).context("extract rust artefacts")?;
+        if artefacts
+            .iter()
+            .any(|artefact| artefact.name == artefact_name)
+        {
+            let blob_sha = git_ok(repo_root, &["rev-parse", &format!("{commit_sha}:{path}")]);
+            let symbol_id = format!("sym:{path}:{artefact_name}");
+            let current_artefact_id = format!("current:{path}:{artefact_name}");
+            let historical_artefact_id = format!("historical:{path}:{artefact_name}");
+            let symbol_fqn = format!("{path}::{artefact_name}");
+
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                    canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+                    end_byte, modifiers, content_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                rusqlite::params![
+                    repo_id,
+                    symbol_id.as_str(),
+                    current_artefact_id.as_str(),
+                    commit_sha,
+                    blob_sha.as_str(),
+                    path,
+                    "rust",
+                    "function",
+                    "function_item",
+                    symbol_fqn.as_str(),
+                    1i64,
+                    3i64,
+                    0i64,
+                    64i64,
+                    "[]",
+                    "hash-current",
+                ],
+            )
+            .context("insert current artefact row")?;
+
+            conn.execute(
+                "INSERT INTO artefacts (
+                    artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind,
+                    language_kind, symbol_fqn, start_line, end_line, start_byte, end_byte,
+                    modifiers, content_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    historical_artefact_id.as_str(),
+                    symbol_id.as_str(),
+                    repo_id,
+                    blob_sha.as_str(),
+                    path,
+                    "rust",
+                    "function",
+                    "function_item",
+                    symbol_fqn.as_str(),
+                    1i64,
+                    3i64,
+                    0i64,
+                    64i64,
+                    "[]",
+                    "hash-historical",
+                ],
+            )
+            .context("insert historical artefact row")?;
+
+            return Ok(SeededArtefact {
+                path: path.clone(),
+                symbol_id,
+                current_artefact_id,
+                historical_artefact_id,
+            });
+        }
+    }
+
+    anyhow::bail!("target production artefact `{artefact_name}` not found in fixture sources")
+}
+
+async fn execute_registered_stage_query(
+    world: &mut DevqlBddWorld,
+    stage_name: &str,
+    artefact_name: &str,
+    mode: RegisteredStageQueryMode,
+) -> anyhow::Result<Value> {
+    run_linkage_resolution(world);
+
+    let temp = TempDir::new().context("create temp dir")?;
+    let home = TempDir::new().context("create temp home")?;
+    let home_path = home.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            ("HOME", Some(home_path.as_str())),
+            ("USERPROFILE", Some(home_path.as_str())),
+            ("BITLOOPS_DEVQL_PG_DSN", None),
+            ("BITLOOPS_DEVQL_CH_URL", None),
+            ("BITLOOPS_DEVQL_CH_USER", None),
+            ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+            ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ],
+    );
+
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).context("create repo root")?;
+    init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    write_repo_sources(&repo_root, world);
+    git_ok(&repo_root, &["add", "."]);
+    git_ok(&repo_root, &["commit", "-m", "seed devql bdd fixture"]);
+    let commit_sha = git_ok(&repo_root, &["rev-parse", "HEAD"]);
+
+    let mut cfg = DevqlBddWorld::test_cfg();
+    cfg.config_root = repo_root.clone();
+    cfg.repo_root = repo_root.clone();
+    let sqlite_path = temp.path().join("relational.sqlite");
+    write_repo_config(&repo_root, &sqlite_path);
+    init_sqlite_schema(&sqlite_path)
+        .await
+        .context("initialise sqlite relational schema")?;
+    crate::capability_packs::test_harness::storage::init_schema_for_repo(&repo_root)
+        .context("initialise test harness schema")?;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).context("open sqlite db")?;
+    let seeded = seed_target_production_artefact(
+        &conn,
+        &repo_root,
+        &cfg.repo.repo_id,
+        commit_sha.trim(),
+        world,
+        artefact_name,
+    )?;
+
+    let mut repository =
+        crate::capability_packs::test_harness::storage::open_repository_for_repo(&repo_root)
+            .context("open test harness repository")?;
+    let rewritten_suites = world
+        .discovered_suites
+        .iter()
+        .map(|artefact| rewrite_test_artefact(artefact, &cfg.repo.repo_id, commit_sha.trim()))
+        .collect::<Vec<_>>();
+    let rewritten_scenarios = world
+        .discovered_scenarios
+        .iter()
+        .map(|artefact| rewrite_test_artefact(artefact, &cfg.repo.repo_id, commit_sha.trim()))
+        .collect::<Vec<_>>();
+    let rewritten_edges = world
+        .materialized_links
+        .iter()
+        .map(|edge| {
+            rewrite_test_edge(
+                edge,
+                &cfg.repo.repo_id,
+                commit_sha.trim(),
+                artefact_name,
+                &seeded.symbol_id,
+                &seeded.current_artefact_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut test_artefacts = rewritten_suites;
+    test_artefacts.extend(rewritten_scenarios.clone());
+    repository
+        .replace_test_discovery(
+            commit_sha.trim(),
+            &test_artefacts,
+            &rewritten_edges,
+            &discovery_run_record(&cfg.repo.repo_id, commit_sha.trim()),
+            &[],
+        )
+        .context("seed test discovery rows")?;
+
+    if stage_name == "coverage"
+        && world
+            .materialized_links
+            .iter()
+            .any(|edge| edge_targets_artefact(edge, artefact_name))
+    {
+        let scenario_id = rewritten_scenarios
+            .first()
+            .map(|scenario| scenario.symbol_id.as_str())
+            .expect("expected discovered scenario");
+        let capture = coverage_capture_record(&cfg.repo.repo_id, commit_sha.trim(), scenario_id);
+        repository
+            .insert_coverage_capture(&capture)
+            .context("seed coverage capture")?;
+        repository
+            .insert_coverage_hits(&coverage_hits(
+                &seeded.symbol_id,
+                &seeded.path,
+                &capture.capture_id,
+            ))
+            .context("seed coverage hits")?;
+    }
+
+    let query = match mode {
+        RegisteredStageQueryMode::Current => format!(
+            r#"repo("temp2")->file("{}")->artefacts(kind:"function")->{}()->limit(10)"#,
+            seeded.path, stage_name
+        ),
+        RegisteredStageQueryMode::AsOfCommit => format!(
+            r#"repo("temp2")->asOf(commit:"{}")->file("{}")->artefacts(kind:"function")->{}()->limit(10)"#,
+            commit_sha.trim(),
+            seeded.path,
+            stage_name
+        ),
+        RegisteredStageQueryMode::AsOfRef => format!(
+            r#"repo("temp2")->asOf(ref:"main")->file("{}")->artefacts(kind:"function")->{}()->limit(10)"#,
+            seeded.path, stage_name
+        ),
+    };
+
+    let expected_artefact_id = match mode {
+        RegisteredStageQueryMode::Current => seeded.current_artefact_id.as_str(),
+        RegisteredStageQueryMode::AsOfCommit | RegisteredStageQueryMode::AsOfRef => {
+            seeded.historical_artefact_id.as_str()
+        }
+    };
+
+    let parsed = parse_devql_query(&query).context("parse query")?;
+    let relational = RelationalStorage::local_only(sqlite_path.clone());
+    let events_cfg = crate::config::EventsBackendConfig {
+        duckdb_path: None,
+        clickhouse_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: None,
+    };
+    let base_rows = execute_devql_query(&cfg, &parsed, &events_cfg, Some(&relational))
+        .await
+        .context("execute base pipeline")?;
+    let mut rows = execute_registered_stages(&cfg, &parsed, base_rows)
+        .await
+        .context("execute registered stage")?;
+    let row = rows
+        .pop()
+        .context("expected registered stage response row")?;
+    if stage_name == "tests"
+        && row
+            .get("covering_tests")
+            .and_then(Value::as_array)
+            .is_some_and(|tests| tests.is_empty())
+    {
+        let mode_label = match mode {
+            RegisteredStageQueryMode::Current => "current",
+            RegisteredStageQueryMode::AsOfCommit => "asof_commit",
+            RegisteredStageQueryMode::AsOfRef => "asof_ref",
+        };
+        eprintln!(
+            "empty tests() response for mode {mode_label}: {}",
+            serde_json::to_string_pretty(&row).unwrap_or_else(|_| "<unserializable>".to_string())
+        );
+    }
+    let artefact_id = row
+        .get("artefact")
+        .and_then(|artefact| artefact.get("artefact_id"))
+        .and_then(Value::as_str)
+        .context("response artefact_id should exist")?;
+    anyhow::ensure!(
+        artefact_id == expected_artefact_id,
+        "expected artefact_id `{expected_artefact_id}`, got `{artefact_id}`"
+    );
+
+    Ok(row)
+}
+
 fn when_test_discovery(
     world: &mut DevqlBddWorld,
     _ctx: cucumber::step::Context,
@@ -707,48 +1166,52 @@ fn when_linkage_and_tests_query(
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-        run_linkage_resolution(world);
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "tests",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::Current,
+            )
+            .await
+            .expect("execute current tests() query"),
+        );
+    })
+}
 
-        let artefact_name = &ctx.matches[1].1;
-        let matching_link = world.materialized_links.iter().find(|link| {
-            link.to_artefact_id
-                .as_deref()
-                .is_some_and(|artefact_id| artefact_id.contains(artefact_name))
-        });
+fn when_linkage_and_tests_query_asof_commit(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "tests",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::AsOfCommit,
+            )
+            .await
+            .expect("execute historical tests() commit query"),
+        );
+    })
+}
 
-        if let Some(link) = matching_link {
-            let covering_tests: Vec<Value> = world
-                .materialized_links
-                .iter()
-                .filter(|l| l.to_artefact_id == link.to_artefact_id)
-                .map(|l| {
-                    let scenario_name = world
-                        .discovered_scenarios
-                        .iter()
-                        .find(|scenario| scenario.symbol_id == l.from_symbol_id)
-                        .map(|scenario| scenario.name.as_str())
-                        .unwrap_or_else(|| {
-                            l.from_symbol_id
-                                .rsplit(':')
-                                .next()
-                                .unwrap_or(l.from_symbol_id.as_str())
-                        });
-                    serde_json::json!({
-                        "test_name": scenario_name,
-                        "confidence": link_confidence(l),
-                        "linkage_status": link_status(l),
-                    })
-                })
-                .collect();
-
-            world.tests_query_response = Some(serde_json::json!({
-                "covering_tests": covering_tests,
-            }));
-        } else {
-            world.tests_query_response = Some(serde_json::json!({
-                "covering_tests": [],
-            }));
-        }
+fn when_linkage_and_tests_query_asof_ref(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "tests",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::AsOfRef,
+            )
+            .await
+            .expect("execute historical tests() ref query"),
+        );
     })
 }
 
@@ -1013,44 +1476,52 @@ fn when_coverage_ingested_and_query(
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
-        run_linkage_resolution(world);
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "coverage",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::Current,
+            )
+            .await
+            .expect("execute current coverage() query"),
+        );
+    })
+}
 
-        let artefact_name = &ctx.matches[1].1;
-        let matching_link = world.materialized_links.iter().find(|link| {
-            link.to_artefact_id
-                .as_deref()
-                .is_some_and(|artefact_id| artefact_id.contains(artefact_name))
-        });
+fn when_coverage_ingested_and_query_asof_commit(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "coverage",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::AsOfCommit,
+            )
+            .await
+            .expect("execute historical coverage() commit query"),
+        );
+    })
+}
 
-        // Build a synthetic coverage response based on the artefact existence
-        if matching_link.is_some() {
-            world.tests_query_response = Some(serde_json::json!({
-                "coverage": {
-                    "coverage_source": "lcov",
-                    "line_coverage_pct": 78.5,
-                    "branch_coverage_pct": 60.0,
-                    "line_data_available": true,
-                    "branch_data_available": true,
-                    "uncovered_lines": [55, 56],
-                    "branches": [
-                        { "line": 48, "block": 0, "branch": 0, "covered": true, "hit_count": 3 },
-                        { "line": 48, "block": 0, "branch": 1, "covered": false, "hit_count": 0 }
-                    ]
-                },
-            }));
-        } else {
-            world.tests_query_response = Some(serde_json::json!({
-                "coverage": {
-                    "coverage_source": "lcov",
-                    "line_coverage_pct": 0.0,
-                    "branch_coverage_pct": 0.0,
-                    "line_data_available": false,
-                    "branch_data_available": false,
-                    "uncovered_lines": [],
-                    "branches": []
-                },
-            }));
-        }
+fn when_coverage_ingested_and_query_asof_ref(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        world.tests_query_response = Some(
+            execute_registered_stage_query(
+                world,
+                "coverage",
+                &ctx.matches[1].1,
+                RegisteredStageQueryMode::AsOfRef,
+            )
+            .await
+            .expect("execute historical coverage() ref query"),
+        );
     })
 }
 
@@ -1074,6 +1545,25 @@ fn then_response_has_coverage_pct(
             line_pct >= 0.0,
             "line_coverage_pct should be non-negative, got {line_pct}"
         );
+    })
+}
+
+fn then_response_artefact_has_id(
+    world: &mut DevqlBddWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected = &ctx.matches[1].1;
+        let response = world
+            .tests_query_response
+            .as_ref()
+            .expect("stage response should be set");
+        let artefact_id = response
+            .get("artefact")
+            .and_then(|artefact| artefact.get("artefact_id"))
+            .and_then(Value::as_str)
+            .expect("response should include artefact.artefact_id");
+        assert_eq!(artefact_id, expected, "unexpected response artefact_id");
     })
 }
 
@@ -1191,6 +1681,16 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
         )
         .when(
             None,
+            regex(r#"^linkage resolution runs and asOf\(commit\) tests\(\) query executes for "([^"]+)"$"#),
+            step_fn(when_linkage_and_tests_query_asof_commit),
+        )
+        .when(
+            None,
+            regex(r#"^linkage resolution runs and asOf\(ref\) tests\(\) query executes for "([^"]+)"$"#),
+            step_fn(when_linkage_and_tests_query_asof_ref),
+        )
+        .when(
+            None,
             regex(r"^test discovery runs with diagnostics$"),
             step_fn(when_test_discovery_with_diagnostics),
         )
@@ -1229,14 +1729,242 @@ pub(super) fn collection() -> Collection<DevqlBddWorld> {
             regex(r"^the response has covering_tests with:$"),
             step_fn(then_response_has_covering_tests),
         )
+        .then(
+            None,
+            regex(r#"^the response artefact has artefact_id "([^"]+)"$"#),
+            step_fn(then_response_artefact_has_id),
+        )
         .when(
             None,
             regex(r#"^coverage is ingested and coverage\(\) query executes for "([^"]+)"$"#),
             step_fn(when_coverage_ingested_and_query),
+        )
+        .when(
+            None,
+            regex(r#"^coverage is ingested and asOf\(commit\) coverage\(\) query executes for "([^"]+)"$"#),
+            step_fn(when_coverage_ingested_and_query_asof_commit),
+        )
+        .when(
+            None,
+            regex(r#"^coverage is ingested and asOf\(ref\) coverage\(\) query executes for "([^"]+)"$"#),
+            step_fn(when_coverage_ingested_and_query_asof_ref),
         )
         .then(
             None,
             regex(r"^the response has coverage with line_coverage_pct$"),
             step_fn(then_response_has_coverage_pct),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_world() -> DevqlBddWorld {
+        let mut world = DevqlBddWorld::default();
+        world.production_sources.push((
+            "src/user/service.rs".to_string(),
+            r#"
+pub fn create_user(name: &str) -> String {
+    name.to_string()
+}
+
+pub fn delete_user(id: u64) -> bool {
+    let _ = id;
+    true
+}
+"#
+            .trim()
+            .to_string(),
+        ));
+        world.test_sources.push((
+            "src/user/service_tests.rs".to_string(),
+            r#"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_create_user() {
+        create_user("Alice");
+    }
+}
+"#
+            .trim()
+            .to_string(),
+        ));
+        world
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_tests_current_uses_live_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "tests",
+            "create_user",
+            RegisteredStageQueryMode::Current,
+        )
+        .await
+        .expect("execute current tests query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("current:src/user/service.rs:create_user".to_string())
+        );
+        assert_eq!(response["covering_tests"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_tests_asof_commit_uses_historical_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "tests",
+            "create_user",
+            RegisteredStageQueryMode::AsOfCommit,
+        )
+        .await
+        .expect("execute commit tests query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("historical:src/user/service.rs:create_user".to_string())
+        );
+        assert_eq!(response["covering_tests"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_tests_asof_ref_uses_historical_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "tests",
+            "create_user",
+            RegisteredStageQueryMode::AsOfRef,
+        )
+        .await
+        .expect("execute ref tests query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("historical:src/user/service.rs:create_user".to_string())
+        );
+        assert_eq!(response["covering_tests"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_tests_current_does_not_invent_links_for_other_artefacts()
+     {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "tests",
+            "delete_user",
+            RegisteredStageQueryMode::Current,
+        )
+        .await
+        .expect("execute current tests query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("current:src/user/service.rs:delete_user".to_string())
+        );
+        assert_eq!(response["covering_tests"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_coverage_current_uses_live_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "coverage",
+            "create_user",
+            RegisteredStageQueryMode::Current,
+        )
+        .await
+        .expect("execute current coverage query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("current:src/user/service.rs:create_user".to_string())
+        );
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_coverage_asof_commit_uses_historical_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "coverage",
+            "create_user",
+            RegisteredStageQueryMode::AsOfCommit,
+        )
+        .await
+        .expect("execute commit coverage query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("historical:src/user/service.rs:create_user".to_string())
+        );
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_coverage_asof_ref_uses_historical_artefact_rows() {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "coverage",
+            "create_user",
+            RegisteredStageQueryMode::AsOfRef,
+        )
+        .await
+        .expect("execute ref coverage query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("historical:src/user/service.rs:create_user".to_string())
+        );
+        assert!(
+            response["coverage"]["line_coverage_pct"]
+                .as_f64()
+                .is_some_and(|value| value >= 0.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_registered_stage_query_coverage_current_does_not_invent_hits_for_other_artefacts()
+     {
+        let mut world = fixture_world();
+        let response = execute_registered_stage_query(
+            &mut world,
+            "coverage",
+            "delete_user",
+            RegisteredStageQueryMode::Current,
+        )
+        .await
+        .expect("execute current coverage query");
+
+        assert_eq!(
+            response["artefact"]["artefact_id"],
+            Value::String("current:src/user/service.rs:delete_user".to_string())
+        );
+        assert_eq!(
+            response["coverage"]["line_data_available"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            response["coverage"]["branch_data_available"].as_bool(),
+            Some(false)
+        );
+    }
 }

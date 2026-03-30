@@ -24,6 +24,9 @@ pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOST
 pub struct WatcherProcessArgs {
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
+
+    #[arg(long, hide = true)]
+    pub config_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -47,8 +50,8 @@ impl From<crate::config::WatchRuntimeConfig> for DevqlWatchOptions {
     }
 }
 
-pub fn watcher_pid_file(repo_root: &Path) -> PathBuf {
-    repo_root
+pub fn watcher_pid_file(config_root: &Path) -> PathBuf {
+    config_root
         .join(crate::utils::paths::BITLOOPS_DIR)
         .join(WATCHER_PID_FILE_NAME)
 }
@@ -59,12 +62,12 @@ fn watcher_autostart_disabled() -> bool {
         .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
 }
 
-pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
+pub fn ensure_watcher_running(repo_root: &Path, config_root: &Path) -> Result<()> {
     if watcher_autostart_disabled() {
         return Ok(());
     }
 
-    let pid_file = watcher_pid_file(repo_root);
+    let pid_file = watcher_pid_file(config_root);
     let restart_token = current_watcher_restart_token()?;
     if let Some(entry) = read_pid_file(&pid_file)?
         && process_is_running(entry.pid)
@@ -84,7 +87,10 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
     let repo_root = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.to_path_buf());
-    let mut command = build_watcher_spawn_command(&repo_root)?;
+    let config_root = config_root
+        .canonicalize()
+        .unwrap_or_else(|_| config_root.to_path_buf());
+    let mut command = build_watcher_spawn_command(&repo_root, &config_root)?;
     command
         // Avoid pinning the repository directory as the watcher cwd. Temp test
         // repos can be deleted while the detached watcher is still alive.
@@ -104,15 +110,33 @@ pub fn ensure_watcher_running(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn restart_watcher(repo_root: &Path, config_root: &Path) -> Result<()> {
+    let pid_file = watcher_pid_file(config_root);
+    if let Some(entry) = read_pid_file(&pid_file)?
+        && process_is_running(entry.pid)
+    {
+        kill_process(entry.pid);
+    }
+    if pid_file.exists() {
+        let _ = fs::remove_file(&pid_file);
+    }
+    if crate::config::settings::is_enabled_for_hooks(config_root) {
+        ensure_watcher_running(repo_root, config_root)?;
+    }
+    Ok(())
+}
+
 pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
     let repo_root = resolve_repo_root(args.repo_root)?;
+    let config_root = resolve_config_root(args.config_root, &repo_root)?;
     let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
-    let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.clone(), repo)?;
-    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
+    let cfg =
+        crate::host::devql::DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)?;
+    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&config_root);
     let opts = DevqlWatchOptions::from(watch_cfg);
-    let pid_file = watcher_pid_file(&repo_root);
+    let pid_file = watcher_pid_file(&config_root);
 
-    initialise_local_watch_schema(&repo_root)?;
+    initialise_local_watch_schema(&repo_root, &config_root)?;
     let _pid_guard = WatcherPidGuard::acquire(pid_file)?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -147,8 +171,15 @@ fn resolve_repo_root(explicit_repo_root: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn initialise_local_watch_schema(repo_root: &Path) -> Result<()> {
-    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
+fn resolve_config_root(explicit_config_root: Option<PathBuf>, repo_root: &Path) -> Result<PathBuf> {
+    match explicit_config_root {
+        Some(config_root) => Ok(config_root),
+        None => Ok(repo_root.to_path_buf()),
+    }
+}
+
+fn initialise_local_watch_schema(repo_root: &Path, config_root: &Path) -> Result<()> {
+    let backend_cfg = crate::config::resolve_store_backend_config_for_repo(config_root)
         .context("resolving store config for watcher start")?;
     let sqlite_path = crate::config::resolve_sqlite_db_path_for_repo(
         repo_root,
@@ -272,7 +303,7 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
     .is_ok()
 }
 
-fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {
+fn build_watcher_spawn_command(repo_root: &Path, config_root: &Path) -> Result<Command> {
     #[cfg(unix)]
     use std::os::unix::process::CommandExt;
 
@@ -281,6 +312,7 @@ fn build_watcher_spawn_command(repo_root: &Path) -> Result<Command> {
     let mut command = Command::new(current_exe);
     command.arg(WATCHER_COMMAND_NAME);
     command.arg("--repo-root").arg(repo_root);
+    command.arg("--config-root").arg(config_root);
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -416,7 +448,7 @@ fn current_watcher_restart_token() -> Result<String> {
         std::env::current_exe().context("resolving current executable for watcher")?;
     let bytes = fs::read(&current_exe)
         .with_context(|| format!("reading watcher executable {}", current_exe.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 async fn wait_for_shutdown_signal() {
@@ -602,7 +634,8 @@ mod tests {
         let pid_file = watcher_pid_file(dir.path());
 
         with_env_var(DISABLE_WATCHER_AUTOSTART_ENV, Some("1"), || {
-            ensure_watcher_running(dir.path()).expect("autostart-disabled no-op should succeed");
+            ensure_watcher_running(dir.path(), dir.path())
+                .expect("autostart-disabled no-op should succeed");
         });
 
         assert!(

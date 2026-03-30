@@ -25,8 +25,8 @@ pub(super) struct DevqlBddWorld {
     pub(super) source_content: Option<String>,
     pub(super) rust_source_path: Option<String>,
     pub(super) rust_source_content: Option<String>,
-    pub(super) artefacts: Vec<JsTsArtefact>,
-    pub(super) edges: Vec<JsTsDependencyEdge>,
+    pub(super) artefacts: Vec<LanguageArtefact>,
+    pub(super) edges: Vec<DependencyEdge>,
     pub(super) parsed_query: Option<ParsedDevqlQuery>,
     pub(super) query_sql: Option<String>,
     pub(super) query_error: Option<anyhow::Error>,
@@ -113,6 +113,7 @@ impl DevqlBddWorld {
 
     pub(super) fn test_cfg() -> DevqlConfig {
         DevqlConfig {
+            config_root: PathBuf::from("/tmp/repo"),
             repo_root: PathBuf::from("/tmp/repo"),
             repo: RepoIdentity {
                 provider: "github".to_string(),
@@ -133,6 +134,7 @@ impl DevqlBddWorld {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 
@@ -143,7 +145,8 @@ impl DevqlBddWorld {
         let workspace = tempfile::tempdir().expect("create temp logger workspace");
         let log_file_path = workspace
             .path()
-            .join(".bitloops")
+            .join("state-root")
+            .join("bitloops")
             .join("logs")
             .join("bitloops.log");
         self.log_file_path = Some(log_file_path);

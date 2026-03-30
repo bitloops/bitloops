@@ -246,14 +246,44 @@ use super::types::{
 /// [`UnifiedSettings`]. Applies defaults and resolves paths relative to `repo_root`.
 pub fn resolve_store_backend_from_unified(
     settings: &UnifiedSettings,
-    _repo_root: &Path,
+    repo_root: &Path,
 ) -> Result<StoreBackendConfig> {
     let stores_value = settings
         .stores
         .clone()
         .unwrap_or(Value::Object(Default::default()));
     let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
-    resolve_store_backend_config_with(file_cfg)
+    let mut config = resolve_store_backend_config_with(file_cfg.clone())?;
+
+    config.relational.sqlite_path = Some(
+        file_cfg
+            .sqlite_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_relational_db_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+    config.events.duckdb_path = Some(
+        file_cfg
+            .duckdb_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_events_db_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+    config.blobs.local_path = Some(
+        file_cfg
+            .blob_local_path
+            .as_deref()
+            .map(|path| super::store_config_utils::resolve_configured_path(path, repo_root))
+            .unwrap_or_else(|| crate::utils::paths::default_blob_store_path(repo_root))
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    Ok(config)
 }
 
 /// Resolve semantic search configuration from merged [`UnifiedSettings`],
@@ -276,6 +306,7 @@ pub fn resolve_semantic_from_unified<F: Fn(&str) -> Option<String>>(
 /// with environment variables taking precedence where documented.
 pub fn resolve_embedding_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
+    config_root: &Path,
     env_lookup: F,
 ) -> StoreEmbeddingConfig {
     // Embedding fields live at root level inside the stores Value.
@@ -284,7 +315,7 @@ pub fn resolve_embedding_from_unified<F: Fn(&str) -> Option<String>>(
         .clone()
         .unwrap_or(Value::Object(Default::default()));
     let file_cfg = super::types::StoreFileConfig::from_json_value(&stores_value);
-    resolve_store_embedding_config_with(file_cfg, env_lookup)
+    resolve_store_embedding_config_with(file_cfg, config_root, env_lookup)
 }
 
 /// Resolve watch runtime configuration from merged [`UnifiedSettings`] (JSON only,
@@ -317,10 +348,17 @@ pub fn resolve_provider_from_unified<F: Fn(&str) -> Option<String>>(
 }
 
 /// Resolve dashboard configuration from merged [`UnifiedSettings`].
-pub fn resolve_dashboard_from_unified(settings: &UnifiedSettings) -> DashboardFileConfig {
+pub fn resolve_dashboard_from_unified(
+    settings: &UnifiedSettings,
+    config_root: &Path,
+) -> DashboardFileConfig {
     let mut map = serde_json::Map::new();
     if let Some(dashboard) = &settings.dashboard {
         map.insert("dashboard".into(), dashboard.clone());
     }
-    DashboardFileConfig::from_json_value(&Value::Object(map))
+    let mut config = DashboardFileConfig::from_json_value(&Value::Object(map));
+    config.bundle_dir = config.bundle_dir.as_deref().map(|path| {
+        super::store_config_utils::resolve_configured_path(&path.to_string_lossy(), config_root)
+    });
+    config
 }

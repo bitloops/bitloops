@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
+pub mod checkpoints;
 pub mod clean;
+pub mod daemon;
 pub mod dashboard;
 pub mod debug;
 pub mod devql;
@@ -13,9 +15,9 @@ pub mod reset;
 pub mod resume;
 pub mod rewind;
 pub mod root;
-pub mod status;
+pub(crate) mod telemetry_consent;
 pub mod testlens;
-pub mod testlens_types;
+pub mod uninstall;
 pub mod versioncheck;
 
 /// Bitloops CLI
@@ -47,6 +49,18 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Manage the Bitloops daemon lifecycle.
+    Daemon(daemon::DaemonArgs),
+    /// Start the global Bitloops daemon.
+    Start(daemon::DaemonStartArgs),
+    /// Stop the global Bitloops daemon.
+    Stop(daemon::DaemonStopArgs),
+    /// Show global Bitloops daemon status.
+    Status(daemon::DaemonStatusArgs),
+    /// Restart the global Bitloops daemon.
+    Restart(daemon::DaemonRestartArgs),
+    /// Repository/session checkpoint status and related views.
+    Checkpoints(checkpoints::CheckpointsArgs),
     /// Browse checkpoints and rewind your session.
     Rewind(rewind::RewindArgs),
     /// Switch to a branch and resume its session.
@@ -55,15 +69,15 @@ pub enum Commands {
     Clean(root::CleanArgs),
     /// Reset shadow/session state for current HEAD.
     Reset(root::ResetArgs),
-    /// Initialize agent integrations in the current project.
+    /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
-    /// Enable Bitloops in the current project.
+    /// Enable capture in the current Bitloops project.
     Enable(enable::EnableArgs),
-    /// Disable Bitloops in the current project.
+    /// Disable capture in the current Bitloops project.
     Disable(root::DisableArgs),
-    /// Show current status.
-    Status(status::StatusArgs),
-    /// Serve the local Bitloops dashboard.
+    /// Uninstall Bitloops artefacts from your system or known repositories.
+    Uninstall(uninstall::UninstallArgs),
+    /// Open the local Bitloops dashboard in your browser.
     Dashboard(dashboard::DashboardArgs),
     /// Internal: agent hook handlers (called by supported agents, not users).
     #[command(hide = true)]
@@ -77,11 +91,17 @@ pub enum Commands {
     Debug(debug::DebugArgs),
     /// DevQL ingestion and querying.
     Devql(devql::DevqlArgs),
-    /// Test harness ingestion and querying over DevQL production artefacts.
+    /// Test harness ingestion for DevQL production artefacts.
     Testlens(testlens::TestLensArgs),
     /// Hidden internal DevQL watcher process entry point.
     #[command(name = "__devql-watcher", hide = true)]
     DevqlWatcher(crate::host::devql::watch::WatcherProcessArgs),
+    /// Hidden internal daemon process entry point.
+    #[command(name = "__daemon-process", hide = true)]
+    DaemonProcess(crate::daemon::InternalDaemonProcessArgs),
+    /// Hidden internal daemon supervisor entry point.
+    #[command(name = "__daemon-supervisor", hide = true)]
+    DaemonSupervisor(crate::daemon::InternalDaemonSupervisorArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -142,7 +162,11 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     if root::should_attempt_watcher_autostart(&command)
         && let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root)
+        && let Ok(policy_start) = std::env::current_dir()
+        && let Ok(policy) = crate::config::discover_repo_policy_optional(&policy_start)
+        && let Some(config_root) = policy.root.as_deref()
+        && crate::config::settings::is_enabled_for_hooks(&policy_start)
+        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root, config_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
@@ -151,6 +175,12 @@ pub async fn run(cli: Cli) -> Result<()> {
     let hidden_chain = root::hidden_chain_for_command(&command);
 
     let result = match command {
+        Commands::Daemon(args) => daemon::run(args).await,
+        Commands::Start(args) => daemon::run_start(args).await,
+        Commands::Stop(args) => daemon::run_stop(args).await,
+        Commands::Status(args) => daemon::run_status(args).await,
+        Commands::Restart(args) => daemon::run_restart(args).await,
+        Commands::Checkpoints(args) => checkpoints::run(args).await,
         Commands::Rewind(args) => rewind::run(&args),
         Commands::Resume(args) => root::run_resume_command(&args),
         Commands::Clean(args) => root::run_clean_command(&args),
@@ -158,7 +188,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Init(args) => init::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
         Commands::Disable(args) => root::run_disable_command(&args),
-        Commands::Status(args) => status::run(args).await,
+        Commands::Uninstall(args) => uninstall::run(args).await,
         Commands::Dashboard(args) => dashboard::run(args).await,
         Commands::Hooks(args) => {
             crate::host::hooks::dispatcher::run(args, &strategy_registry).await
@@ -169,6 +199,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Devql(args) => devql::run(args).await,
         Commands::Testlens(args) => testlens::run(args).await,
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
+        Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
+        Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

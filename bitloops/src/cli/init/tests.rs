@@ -1,24 +1,60 @@
 use super::agent_hooks::{
     AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
-use super::telemetry::{
-    TELEMETRY_OPTOUT_ENV, maybe_capture_telemetry_consent, prompt_telemetry_consent,
-};
 use super::*;
+use crate::cli::telemetry_consent::{
+    NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
+};
 use crate::cli::{Cli, Commands};
-use crate::config::settings;
-use crate::test_support::process_state::{with_cwd, with_env_var, with_process_state};
-use crate::utils::paths;
+use crate::config::ensure_daemon_config_exists;
+use crate::test_support::process_state::with_process_state;
 
 use clap::Parser;
 use std::io::Cursor;
+use tempfile::TempDir;
 
-fn setup_git_repo(dir: &tempfile::TempDir) {
+fn setup_git_repo(dir: &TempDir) {
     std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(dir.path())
         .status()
         .expect("git init");
+}
+
+fn app_dir_env(temp: &TempDir) -> [(&'static str, Option<String>); 4] {
+    [
+        (
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(temp.path().join("config-root").display().to_string()),
+        ),
+        (
+            "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+            Some(temp.path().join("data-root").display().to_string()),
+        ),
+        (
+            "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+            Some(temp.path().join("cache-root").display().to_string()),
+        ),
+        (
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(temp.path().join("state-root").display().to_string()),
+        ),
+    ]
+}
+
+fn with_temp_app_dirs_and_env<T>(
+    repo_root: &std::path::Path,
+    temp: &TempDir,
+    extra_env: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let env_vars = app_dir_env(temp);
+    let mut env_refs = env_vars
+        .iter()
+        .map(|(key, value)| (*key, value.as_deref()))
+        .collect::<Vec<_>>();
+    env_refs.extend_from_slice(extra_env);
+    with_process_state(Some(repo_root), &env_refs, f)
 }
 
 #[test]
@@ -29,6 +65,16 @@ fn init_args_supports_agent_flag() {
         panic!("expected init command");
     };
     assert_eq!(args.agent.as_deref(), Some("cursor"));
+}
+
+#[test]
+fn init_args_supports_install_default_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--install-default-daemon"])
+        .expect("parse init install-default-daemon flag");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert!(args.install_default_daemon);
 }
 
 #[test]
@@ -53,273 +99,78 @@ fn init_cmd_agent_flag_no_value_errors() {
 }
 
 #[test]
-fn run_init_with_unknown_agent_returns_error() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        let err = run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some("bad-agent".to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap_err();
-        assert!(format!("{err:#}").contains("unknown agent name"));
-    });
-}
+fn run_init_creates_project_local_policy_and_installs_selected_agents() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
 
-#[test]
-fn run_init_creates_default_store_databases_and_blob_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-
-        let sqlite_path = dir
-            .path()
-            .join(paths::BITLOOPS_RELATIONAL_STORE_DIR)
-            .join(paths::RELATIONAL_DB_FILE_NAME);
-        let duckdb_path = dir
-            .path()
-            .join(paths::BITLOOPS_EVENT_STORE_DIR)
-            .join(paths::EVENTS_DB_FILE_NAME);
-        let blob_dir = dir.path().join(paths::BITLOOPS_BLOB_STORE_DIR);
-
-        assert!(
-            sqlite_path.is_file(),
-            "expected sqlite db at {}",
-            sqlite_path.display()
-        );
-        assert!(
-            duckdb_path.is_file(),
-            "expected duckdb db at {}",
-            duckdb_path.display()
-        );
-        assert!(
-            blob_dir.is_dir(),
-            "expected blob dir at {}",
-            blob_dir.display()
-        );
-
-        let sqlite = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
-        let sessions_table_count: i64 = sqlite
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
-                [],
-                |row| row.get(0),
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
+        || {
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: false,
+                    agent: None,
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: false,
+                },
+                &mut out,
+                None,
             )
-            .expect("query sqlite sessions table");
-        assert_eq!(sessions_table_count, 1);
+            .expect("run init");
 
-        let duckdb = duckdb::Connection::open(&duckdb_path).expect("open duckdb db");
-        let mut stmt = duckdb
-            .prepare(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'checkpoint_events'",
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(!rendered.contains("Initialising DevQL schema"));
+            assert!(!rendered.contains("Bitloops project bootstrap is ready."));
+            assert!(repo.path().join(".bitloops.local.toml").exists());
+            assert!(repo.path().join(".claude/settings.json").exists());
+            let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                .expect("read git exclude");
+            assert!(exclude.contains(".bitloops.local.toml"));
+            assert!(!exclude.contains("config.local.json"));
+            assert!(!exclude.contains(".bitloops/config.local.json"));
+        },
+    );
+}
+
+#[test]
+fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_requested() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
+        || {
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: true,
+                    agent: Some(AGENT_CURSOR.to_string()),
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: true,
+                },
+                &mut out,
+                None,
             )
-            .expect("prepare duckdb schema query");
-        let mut rows = stmt.query([]).expect("query duckdb schema");
-        let row = rows
-            .next()
-            .expect("read duckdb row")
-            .expect("duckdb row exists");
-        let table_count: i64 = row.get(0).expect("read duckdb count");
-        assert_eq!(table_count, 1);
-    });
-}
+            .expect("run init");
 
-#[test]
-fn run_init_respects_repo_level_configured_store_paths() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    let bitloops_dir = dir.path().join(".bitloops");
-    std::fs::create_dir_all(&bitloops_dir).expect("create .bitloops directory");
-    std::fs::write(
-        bitloops_dir.join("config.json"),
-        r#"{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {
-    "stores": {
-      "relational": {
-        "sqlite_path": ".custom/relational/custom-relational.db"
-      },
-      "event": {
-        "duckdb_path": ".custom/event/custom-events.duckdb"
-      },
-      "blob": {
-        "local_path": ".custom/blob-store"
-      }
-    }
-  }
-}"#,
-    )
-    .expect("write repo-level config");
-
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-
-        assert!(
-            dir.path()
-                .join(".custom/relational/custom-relational.db")
-                .is_file()
-        );
-        assert!(
-            dir.path()
-                .join(".custom/event/custom-events.duckdb")
-                .is_file()
-        );
-        assert!(dir.path().join(".custom/blob-store").is_dir());
-    });
-}
-
-#[test]
-fn run_init_with_agent_claude_installs_claude_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-        assert!(dir.path().join(".claude/settings.json").exists());
-    });
-}
-
-#[test]
-fn run_init_with_agent_cursor_installs_cursor_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CURSOR.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-
-        let hooks = std::fs::read_to_string(dir.path().join(".cursor/hooks.json")).unwrap();
-        assert!(hooks.contains("bitloops hooks cursor session-start"));
-    });
-}
-
-#[test]
-fn run_init_with_agent_codex_installs_codex_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CODEX.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-
-        let hooks = std::fs::read_to_string(dir.path().join(".codex/hooks.json")).unwrap();
-        assert!(hooks.contains("bitloops hooks codex session-start"));
-        assert!(hooks.contains("bitloops hooks codex stop"));
-    });
-}
-
-#[test]
-fn run_init_with_agent_gemini_installs_gemini_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_GEMINI.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .unwrap();
-        assert!(dir.path().join(".gemini/settings.json").exists());
-    });
-}
-
-#[test]
-fn run_init_with_force_reinstalls_claude_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    with_cwd(dir.path(), || {
-        let mut first_out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut first_out,
-            None,
-        )
-        .unwrap();
-        let mut second_out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: true,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut second_out,
-            None,
-        )
-        .unwrap();
-        let second = String::from_utf8(second_out).unwrap();
-        assert!(second.contains("Installed"));
-    });
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(!rendered.contains("Initialised agents: cursor"));
+            assert!(!rendered.contains("Initialising DevQL schema"));
+            assert!(repo.path().join(".cursor/hooks.json").exists());
+            assert!(!repo.path().join(".claude/settings.json").exists());
+        },
+    );
 }
 
 #[test]
@@ -421,6 +272,8 @@ fn detect_or_select_agent_no_tty_returns_all_detected() {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, None).unwrap();
             assert_eq!(selected.len(), 2);
+            assert!(selected.contains(&AGENT_CLAUDE_CODE.to_string()));
+            assert!(selected.contains(&AGENT_GEMINI.to_string()));
         },
     );
 }
@@ -434,6 +287,7 @@ fn detect_or_select_agent_multiple_with_selector() {
     let select = |_available: &[String]| -> std::result::Result<Vec<String>, String> {
         Ok(vec![
             AGENT_GEMINI.to_string(),
+            AGENT_CODEX.to_string(),
             AGENT_CLAUDE_CODE.to_string(),
         ])
     };
@@ -445,7 +299,11 @@ fn detect_or_select_agent_multiple_with_selector() {
             let selected = detect_or_select_agent(dir.path(), &mut out, Some(&select)).unwrap();
             assert_eq!(
                 selected,
-                vec![AGENT_GEMINI.to_string(), AGENT_CLAUDE_CODE.to_string()]
+                vec![
+                    AGENT_GEMINI.to_string(),
+                    AGENT_CODEX.to_string(),
+                    AGENT_CLAUDE_CODE.to_string()
+                ]
             );
         },
     );
@@ -458,7 +316,17 @@ fn init_args_supports_telemetry_flag() {
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert!(!args.telemetry);
+    assert_eq!(args.telemetry, Some(false));
+}
+
+#[test]
+fn init_args_support_no_telemetry_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--no-telemetry"])
+        .expect("parse init no telemetry flag");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert!(args.no_telemetry);
 }
 
 #[test]
@@ -478,43 +346,209 @@ fn prompt_telemetry_consent_accepts_no() {
 }
 
 #[test]
-fn maybe_capture_telemetry_consent_flag_false_disables() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
 
-    let mut out = Vec::new();
-    maybe_capture_telemetry_consent(dir.path(), false, true, &mut out).expect("telemetry config");
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("1")),
+        ],
+        || {
+            ensure_daemon_config_exists().expect("create default daemon config");
 
-    let merged = settings::load_settings(dir.path()).expect("load settings");
-    assert_eq!(merged.telemetry, Some(false));
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, variables| {
+                    if variables["telemetry"].is_null() {
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": serde_json::Value::Null,
+                                "needsPrompt": true
+                            }
+                        }))
+                    } else {
+                        assert_eq!(variables["telemetry"], serde_json::json!(true));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": true,
+                                "needsPrompt": false
+                            }
+                        }))
+                    }
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("\n");
+                    let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            Some(&select),
+                        ))
+                        .expect("run init");
+
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(rendered.contains("Help us improve Bitloops"));
+                    assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
+                    assert!(!rendered.contains("Bitloops project bootstrap is ready."));
+                },
+            );
+        },
+    );
 }
 
 #[test]
-fn maybe_capture_telemetry_consent_env_optout_disables() {
-    with_env_var(TELEMETRY_OPTOUT_ENV, Some("1"), || {
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
+fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
 
-        let mut out = Vec::new();
-        maybe_capture_telemetry_consent(dir.path(), true, true, &mut out)
-            .expect("telemetry config");
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            ensure_daemon_config_exists().expect("create default daemon config");
 
-        let merged = settings::load_settings(dir.path()).expect("load settings");
-        assert_eq!(merged.telemetry, Some(false));
-    });
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, _variables| {
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": serde_json::Value::Null,
+                            "needsPrompt": true
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    let err = runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            None,
+                        ))
+                        .expect_err("init should fail without explicit telemetry");
+
+                    assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+                    assert!(!repo.path().join(".bitloops.local.toml").exists());
+                },
+            );
+        },
+    );
 }
 
 #[test]
-fn maybe_capture_telemetry_consent_no_tty_leaves_unset() {
-    with_env_var("BITLOOPS_TEST_TTY", Some("0"), || {
-        let dir = tempfile::tempdir().unwrap();
-        setup_git_repo(&dir);
+fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_flag() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
 
-        let mut out = Vec::new();
-        maybe_capture_telemetry_consent(dir.path(), true, true, &mut out)
-            .expect("telemetry config");
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            let err = runtime
+                .block_on(run_with_io_async(
+                    InitArgs {
+                        install_default_daemon: true,
+                        force: false,
+                        agent: None,
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                    },
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect_err("init should fail without explicit telemetry flag");
 
-        let merged = settings::load_settings(dir.path()).expect("load settings");
-        assert_eq!(merged.telemetry, None);
-    });
+            assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+        },
+    );
+}
+
+#[test]
+fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            ensure_daemon_config_exists().expect("create default daemon config");
+
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, variables| {
+                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": false,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            None,
+                        ))
+                        .expect("run init");
+
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(!rendered.contains("Help us improve Bitloops"));
+                },
+            );
+        },
+    );
 }

@@ -1,22 +1,13 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value};
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::utils::paths;
 
-use super::constants::BITLOOPS_CONFIG_RELATIVE_PATH;
-
 pub(super) fn current_repo_root_or_cwd_result() -> Result<PathBuf> {
     paths::repo_root()
         .or_else(|_| env::current_dir().context("resolving current directory for repo config"))
-}
-
-pub(super) fn load_repo_config_value(repo_root: &Path) -> Option<Value> {
-    let path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let data = fs::read(&path).ok()?;
-    serde_json::from_slice(&data).ok()
 }
 
 pub(super) fn current_repo_root_or_cwd() -> PathBuf {

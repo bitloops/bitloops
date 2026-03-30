@@ -18,8 +18,7 @@ use crate::capability_packs::semantic_clones::{
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo, resolve_store_embedding_config,
-    resolve_store_semantic_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -31,10 +30,17 @@ use crate::host::db_status::{
 use crate::host::extension_host::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
+use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::utils::terminal::print_db_status_table;
 
+#[path = "devql/artefact_sql.rs"]
+pub(crate) mod artefact_sql;
+#[path = "devql/checkpoint_file_snapshots.rs"]
+pub(crate) mod checkpoint_file_snapshots;
 #[path = "devql/commands_ingest.rs"]
 mod commands_ingest;
+#[path = "devql/commands_projection.rs"]
+mod commands_projection;
 #[path = "devql/commands_query.rs"]
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
@@ -43,16 +49,26 @@ mod connection_status;
 pub(crate) mod identity;
 mod types;
 
+pub(crate) use self::commands_ingest::execute_ingest_with_observer;
 pub use self::commands_ingest::run_ingest;
+#[cfg(test)]
+pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
+pub use self::commands_projection::{
+    CheckpointFileSnapshotBackfillOptions, CheckpointFileSnapshotBackfillSummary,
+    run_checkpoint_file_snapshot_backfill,
+};
 pub(crate) use self::commands_query::{
-    RegisteredStageCompositionContext, execute_query_json_with_composition,
+    RegisteredStageCompositionContext, compile_query_document, execute_query_json_with_composition,
+    format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
     PostCommitArtefactRefreshStats, run_post_checkout_branch_seed,
-    run_post_commit_artefact_refresh, run_post_merge_artefact_refresh,
+    run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
+    run_post_merge_artefact_refresh,
 };
 pub use self::connection_status::run_connection_status;
+pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
@@ -70,11 +86,67 @@ pub fn build_capability_host(
 ) -> anyhow::Result<crate::host::capability_host::DevqlCapabilityHost> {
     crate::host::capability_host::DevqlCapabilityHost::builtin(repo_root.to_path_buf(), repo)
 }
+#[cfg(test)]
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
+#[cfg(test)]
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
+#[cfg(test)]
+const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitSchemaSummary {
+    pub success: bool,
+    pub repo_identity: String,
+    pub repo_id: String,
+    pub relational_backend: String,
+    pub events_backend: String,
+}
+
+pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String {
+    format!(
+        "DevQL schema ready for repo {} ({})",
+        summary.repo_identity, summary.repo_id
+    )
+}
+
+pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
+    format!(
+        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        summary.checkpoints_processed,
+        summary.events_inserted,
+        summary.artefacts_upserted,
+        summary.checkpoints_without_commit,
+        summary.temporary_rows_promoted,
+        summary.semantic_feature_rows_upserted,
+        summary.semantic_feature_rows_skipped,
+        summary.symbol_embedding_rows_upserted,
+        summary.symbol_embedding_rows_skipped,
+        summary.symbol_clone_edges_upserted,
+        summary.symbol_clone_sources_scored
+    )
+}
+
+pub(crate) fn format_checkpoint_file_snapshot_backfill_summary(
+    summary: &CheckpointFileSnapshotBackfillSummary,
+) -> String {
+    format!(
+        "Checkpoint file snapshot backfill complete: dry_run={}, checkpoints_scanned={}, checkpoints_processed={}, checkpoints_without_commit={}, rows_projected={}, rows_already_present={}, stale_rows_deleted={}, stale_rows_detected={}, unresolved_files={}, last_checkpoint_id={}",
+        summary.dry_run,
+        summary.checkpoints_scanned,
+        summary.checkpoints_processed,
+        summary.checkpoints_without_commit,
+        summary.rows_projected,
+        summary.rows_already_present,
+        summary.stale_rows_deleted,
+        summary.stale_rows_detected,
+        summary.unresolved_files,
+        summary.last_checkpoint_id.as_deref().unwrap_or("-"),
+    )
+}
 
 fn core_extension_host() -> Result<&'static CoreExtensionHost> {
     static CORE_EXTENSION_HOST: OnceLock<Result<CoreExtensionHost, String>> = OnceLock::new();
@@ -88,6 +160,168 @@ fn core_extension_host() -> Result<&'static CoreExtensionHost> {
             "initialising Core extension host for DevQL runtime: {error_message}"
         )),
     }
+}
+
+fn language_adapter_registry() -> Result<&'static LanguageAdapterRegistry> {
+    static REGISTRY: OnceLock<Result<LanguageAdapterRegistry, String>> = OnceLock::new();
+    let registry_result = REGISTRY.get_or_init(|| {
+        let packs = crate::adapters::languages::builtin_language_adapter_packs();
+        LanguageAdapterRegistry::with_builtins(packs).map_err(|err| err.to_string())
+    });
+    match registry_result {
+        Ok(registry) => Ok(registry),
+        Err(error_message) => {
+            bail!("failed to initialize language adapter registry: {error_message}")
+        }
+    }
+}
+
+struct LanguageAdapterLifecycleCollection {
+    summary: crate::host::capability_host::diagnostics::LanguageAdapterLifecycleSummary,
+    readiness_reports: Vec<crate::host::extension_host::ExtensionReadinessReport>,
+}
+
+fn extension_readiness_status_label(
+    status: crate::host::extension_host::ExtensionReadinessStatus,
+) -> String {
+    match status {
+        crate::host::extension_host::ExtensionReadinessStatus::Ready => "ready".to_string(),
+        crate::host::extension_host::ExtensionReadinessStatus::NotReady => "not_ready".to_string(),
+    }
+}
+
+fn extension_lifecycle_state_label(
+    state: crate::host::extension_host::ExtensionLifecycleState,
+) -> String {
+    match state {
+        crate::host::extension_host::ExtensionLifecycleState::Discovered => "discovered",
+        crate::host::extension_host::ExtensionLifecycleState::Validated => "validated",
+        crate::host::extension_host::ExtensionLifecycleState::Registered => "registered",
+        crate::host::extension_host::ExtensionLifecycleState::Migrated => "migrated",
+        crate::host::extension_host::ExtensionLifecycleState::Ready => "ready",
+        crate::host::extension_host::ExtensionLifecycleState::Failed => "failed",
+    }
+    .to_string()
+}
+
+fn collect_language_adapter_lifecycle(
+    cfg: &DevqlConfig,
+    runtime: &str,
+    apply_migrations: bool,
+    with_health: bool,
+) -> Result<LanguageAdapterLifecycleCollection> {
+    let registry = language_adapter_registry()?;
+    if apply_migrations {
+        let context =
+            LanguageAdapterContext::new(cfg.repo_root.clone(), cfg.repo.repo_id.clone(), None);
+        let _ = registry.run_migrations(&context);
+    }
+
+    let readiness_reports = registry.readiness_reports(runtime, with_health);
+    let readiness = readiness_reports
+        .iter()
+        .map(|report| {
+            crate::host::capability_host::diagnostics::LanguageAdapterReadinessSummary {
+                family: report.family.clone(),
+                id: report.id.clone(),
+                registered: report.registered,
+                ready: report.ready,
+                status: extension_readiness_status_label(report.status),
+                lifecycle_state: extension_lifecycle_state_label(report.lifecycle_state),
+                failures: report
+                    .failures
+                    .iter()
+                    .map(|failure| {
+                        crate::host::capability_host::diagnostics::LanguageAdapterReadinessFailureSummary {
+                            code: failure.code.clone(),
+                            message: failure.message.clone(),
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    let packs = registry
+        .registered_pack_ids()
+        .into_iter()
+        .filter_map(|pack_id| {
+            registry
+                .get(pack_id)
+                .map(|pack| (pack_id.to_string(), pack))
+        })
+        .map(|(pack_id, pack)| {
+            let descriptor = pack.descriptor();
+            crate::host::capability_host::diagnostics::LanguageAdapterPackRegistryEntry {
+                id: pack_id,
+                display_name: descriptor.display_name.to_string(),
+                version: descriptor.version.to_string(),
+                api_version: descriptor.api_version,
+                supported_languages: descriptor
+                    .supported_languages
+                    .iter()
+                    .map(|language| (*language).to_string())
+                    .collect(),
+                migration_count: registry.migration_count_for(descriptor.id),
+                health_check_names: registry.health_check_names_for(descriptor.id),
+            }
+        })
+        .collect();
+
+    let migration_plan = registry
+        .migration_plan()
+        .into_iter()
+        .map(|step| {
+            crate::host::capability_host::diagnostics::LanguageAdapterMigrationStepSummary {
+                pack_id: step.pack_id,
+                migration_id: step.migration_id,
+                order: step.order,
+                description: step.description,
+            }
+        })
+        .collect();
+
+    let applied_migrations = registry
+        .applied_migrations()
+        .into_iter()
+        .map(|execution| {
+            crate::host::capability_host::diagnostics::LanguageAdapterMigrationExecutionSummary {
+                pack_id: execution.pack_id,
+                migration_id: execution.migration_id,
+                order: execution.order,
+            }
+        })
+        .collect();
+
+    let health = if with_health {
+        registry
+            .collect_health_outcomes(runtime)
+            .into_iter()
+            .map(
+                |(check_id, result)| crate::host::capability_host::diagnostics::HealthOutcome {
+                    check_id,
+                    healthy: result.healthy,
+                    message: result.message,
+                    details: result.details,
+                },
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(LanguageAdapterLifecycleCollection {
+        summary: crate::host::capability_host::diagnostics::LanguageAdapterLifecycleSummary {
+            runtime: runtime.to_string(),
+            packs,
+            migration_plan,
+            migrated_pack_ids: registry.migrated_pack_ids(),
+            applied_migrations,
+            readiness,
+            health,
+        },
+        readiness_reports,
+    })
 }
 
 fn normalise_optional_commit_sha(commit_sha: Option<&str>) -> Option<String> {
@@ -182,18 +416,37 @@ pub fn run_capability_packs_report(
     with_health: bool,
     with_extensions: bool,
 ) -> Result<()> {
-    let mut host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     if apply_migrations {
         host.ensure_migrations_applied_sync()?;
     }
+    let runtime = core_extension_host()
+        .map(|host| host.compatibility_context().runtime.as_str().to_string())
+        .unwrap_or_else(|_| "local-cli".to_string());
+    let language_adapter_lifecycle =
+        collect_language_adapter_lifecycle(cfg, &runtime, apply_migrations, with_health)?;
     let mut devql_report = host.registry_report();
+    devql_report.language_adapters = language_adapter_lifecycle.summary.clone();
     if with_health {
         devql_report.health = crate::host::capability_host::collect_health_outcomes(&host);
     }
 
     let (core_extension_host, core_extension_host_error) = if with_extensions {
         match crate::host::extension_host::CoreExtensionHost::with_builtins() {
-            Ok(ext_host) => (Some(ext_host.registry_report()), None),
+            Ok(ext_host) => {
+                let snapshot = ext_host
+                    .readiness_snapshot()
+                    .with_language_adapter_readiness(
+                        language_adapter_lifecycle
+                            .summary
+                            .packs
+                            .iter()
+                            .map(|pack| pack.id.clone())
+                            .collect(),
+                        language_adapter_lifecycle.readiness_reports.clone(),
+                    );
+                (Some(ext_host.registry_report_with_snapshot(snapshot)), None)
+            }
             Err(err) => (None, Some(err.to_string())),
         }
     } else {
@@ -230,7 +483,7 @@ async fn init_relational_schema(cfg: &DevqlConfig, relational: &RelationalStorag
         init_postgres_schema(cfg, &remote.client).await?;
     }
 
-    let mut capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     capability_host
         .ensure_migrations_applied_sync()
         .context("running built-in DevQL capability pack migrations")?;
@@ -262,14 +515,15 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
         embedding_provider: cfg.embedding_provider.clone(),
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
+        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
     }
 }
 
 async fn initialise_devql_schema_for_command(
     cfg: &DevqlConfig,
     command: &str,
-) -> Result<RelationalStorage> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+) -> Result<(RelationalStorage, InitSchemaSummary)> {
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -279,35 +533,64 @@ async fn initialise_devql_schema_for_command(
         init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
     }
     init_relational_schema(cfg, &relational).await?;
-    Ok(relational)
+    Ok((
+        relational,
+        InitSchemaSummary {
+            success: true,
+            repo_identity: cfg.repo.identity.clone(),
+            repo_id: cfg.repo.repo_id.clone(),
+            relational_backend: if backends.relational.has_postgres() {
+                "postgres".to_string()
+            } else {
+                "sqlite".to_string()
+            },
+            events_backend: if backends.events.has_clickhouse() {
+                "clickhouse".to_string()
+            } else {
+                "duckdb".to_string()
+            },
+        },
+    ))
+}
+
+pub(crate) async fn execute_init_schema(
+    cfg: &DevqlConfig,
+    command: &str,
+) -> Result<InitSchemaSummary> {
+    let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
+    Ok(summary)
 }
 
 pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
-    let _relational = initialise_devql_schema_for_command(cfg, "devql init").await?;
-
-    println!(
-        "DevQL schema ready for repo {} ({})",
-        cfg.repo.identity, cfg.repo.repo_id
-    );
+    let summary = execute_init_schema(cfg, "devql init").await?;
+    println!("{}", format_init_schema_summary(&summary));
     Ok(())
 }
 
+pub async fn execute_project_bootstrap(
+    cfg: &DevqlConfig,
+    skip_baseline: bool,
+) -> Result<InitSchemaSummary> {
+    let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
+
+    if skip_baseline {
+        return Ok(summary);
+    }
+
+    run_baseline_ingestion(cfg, &relational).await?;
+    Ok(summary)
+}
+
 pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
-    let relational = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
-    println!(
-        "DevQL schema ready for repo {} ({})",
-        cfg.repo.identity, cfg.repo.repo_id
-    );
+    let summary = execute_project_bootstrap(cfg, skip_baseline).await?;
+    println!("{}", format_init_schema_summary(&summary));
 
     if skip_baseline {
         println!("Baseline ingestion skipped (`--skip-baseline`).");
-        return Ok(());
     }
-
-    run_baseline_ingestion(cfg, &relational).await
+    Ok(())
 }
 
-mod canonical_mapping;
 mod core_contracts;
 mod vocab;
 // ingestion: shared types
@@ -351,34 +634,13 @@ mod ingestion_artefact_persistence_edges;
 mod ingestion_artefact_persistence;
 // Stages 1–2 semantic feature + embedding persistence: `capabilities::semantic_clones::{stage_semantic_features,stage_embeddings}`
 // Stage 3 clone persistence: `capabilities::semantic_clones::pipeline`
-// ingestion: JS/TS artefact extraction (tree-sitter)
-#[path = "devql/ingestion/extraction_js_ts.rs"]
-mod ingestion_extraction_js_ts;
-// ingestion: Rust artefact extraction (tree-sitter)
-#[path = "devql/ingestion/extraction_rust.rs"]
-mod ingestion_extraction_rust;
-// ingestion: shared edge-building utilities
-#[path = "devql/ingestion/edges_shared.rs"]
-mod ingestion_edges_shared;
-// ingestion: export edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_export.rs"]
-mod ingestion_edges_export;
-// ingestion: inheritance edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_inherits.rs"]
-mod ingestion_edges_inherits;
-// ingestion: reference edges (JS/TS + Rust)
-#[path = "devql/ingestion/edges_reference.rs"]
-mod ingestion_edges_reference;
-// ingestion: JS/TS dependency edge orchestration
-#[path = "devql/ingestion/edges_js_ts.rs"]
-mod ingestion_edges_js_ts;
 // ingestion: Rust dependency edge orchestration
 #[path = "devql/db_utils.rs"]
 mod db_utils;
 #[path = "devql/deps_query.rs"]
 mod deps_query;
-#[path = "devql/ingestion/edges_rust.rs"]
-mod ingestion_edges_rust;
+#[path = "devql/query/dsl_compiler.rs"]
+mod query_dsl_compiler;
 #[path = "devql/query/executor.rs"]
 mod query_executor;
 #[path = "devql/query/parser.rs"]
@@ -386,11 +648,13 @@ mod query_parser;
 #[path = "devql/query/utils.rs"]
 mod query_utils;
 
-use self::canonical_mapping::*;
+pub(crate) use self::core_contracts::CanonicalKindProjection;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
-    esc_pg, postgres_exec, sqlite_exec_path_allow_create, sqlite_query_rows_path,
+    clickhouse_query_data, duckdb_query_rows_path, duckdb_value_to_json, esc_ch, esc_pg,
+    escape_like_pattern, glob_to_sql_like, postgres_exec, sql_like_with_escape,
+    sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
 use self::ingestion_artefact_identity::*;
@@ -403,14 +667,6 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
-use self::ingestion_edges_export::*;
-use self::ingestion_edges_inherits::*;
-use self::ingestion_edges_js_ts::*;
-use self::ingestion_edges_reference::*;
-use self::ingestion_edges_rust::*;
-use self::ingestion_edges_shared::*;
-use self::ingestion_extraction_js_ts::*;
-use self::ingestion_extraction_rust::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;
@@ -419,18 +675,42 @@ pub(crate) use self::ingestion_schema::{
     knowledge_schema_sql_duckdb, knowledge_schema_sql_sqlite,
 };
 use self::ingestion_types::*;
+pub(crate) use self::ingestion_types::{
+    IngestedCheckpointNotification, IngestionCounters, IngestionObserver, IngestionProgressPhase,
+    IngestionProgressUpdate,
+};
+pub(crate) use self::query_dsl_compiler::GraphqlCompileMode;
+pub(crate) use self::query_dsl_compiler::compile_devql_to_graphql_with_mode;
 use self::query_executor::*;
+pub(crate) use self::query_parser::parse_devql_query;
 use self::query_parser::*;
+pub(crate) use self::query_parser::{AsOfSelector as DevqlAsOfSelector, ParsedDevqlQuery};
 pub(crate) use self::query_utils::sql_string_list_pg;
 use self::query_utils::*;
 use self::vocab::*;
-pub(crate) use self::vocab::{EDGE_KIND_CALLS, EDGE_KIND_EXPORTS};
+pub(crate) use self::vocab::{
+    CallForm, EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, EdgeKind, ExportForm, ImportForm, RefKind,
+    Resolution,
+};
 
+#[cfg(test)]
+use crate::adapters::languages::rust::edges::*;
+#[cfg(test)]
+use crate::adapters::languages::rust::extraction::*;
+#[cfg(test)]
+use crate::adapters::languages::ts_js::edges::*;
+#[cfg(test)]
+use crate::adapters::languages::ts_js::extraction::*;
 #[cfg(test)]
 pub(crate) use crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges;
+#[cfg(test)]
+use crate::host::language_adapter::EdgeMetadata;
+#[cfg(test)]
+use crate::host::language_adapter::edges_shared::*;
+use crate::host::language_adapter::{DependencyEdge, LanguageArtefact};
 
 #[cfg(test)]
-fn symbol_id_for_artefact(item: &JsTsArtefact) -> String {
+fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
     structural_symbol_id_for_artefact(item, None)
 }
 

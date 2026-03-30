@@ -40,28 +40,17 @@ async fn init_relational_schema_creates_test_harness_tables() {
         ],
     );
     let repo_root = temp.path().join("repo");
-    std::fs::create_dir_all(repo_root.join(".bitloops")).expect("create config dir");
     let db_path = repo_root.join("devql.sqlite");
-    std::fs::write(
-        repo_root.join(".bitloops/config.json"),
+    write_repo_daemon_config(
+        &repo_root,
         format!(
-            r#"{{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {{
-    "stores": {{
-      "relational": {{
-        "sqlite_path": "{}"
-      }}
-    }}
-  }}
-}}"#,
-            db_path.display()
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = db_path.display()
         ),
-    )
-    .expect("write store config");
+    );
 
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let relational = RelationalStorage::local_only(db_path.clone());
     init_relational_schema(&cfg, &relational)

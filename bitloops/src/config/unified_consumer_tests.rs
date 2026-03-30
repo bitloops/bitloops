@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::path::Path;
 
 use super::unified_config::{
     UnifiedSettings, merge_layers, resolve_dashboard_from_unified, resolve_embedding_from_unified,
@@ -6,8 +7,8 @@ use super::unified_config::{
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL, ENV_SEMANTIC_PROVIDER,
-    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
+    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
+    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -145,7 +146,7 @@ fn embedding_from_unified_reads_values() {
         })),
         ..Default::default()
     };
-    let cfg = resolve_embedding_from_unified(&settings, no_env);
+    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
 
     assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
     assert_eq!(
@@ -158,7 +159,7 @@ fn embedding_from_unified_reads_values() {
 #[test]
 fn embedding_from_unified_defaults_provider_to_local() {
     let settings = UnifiedSettings::default();
-    let cfg = resolve_embedding_from_unified(&settings, no_env);
+    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
 
     assert_eq!(
         cfg.embedding_provider.as_deref(),
@@ -271,20 +272,27 @@ fn provider_from_unified_resolves_env_indirection() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn dashboard_from_unified_reads_flag() {
+fn dashboard_from_unified_reads_local_dashboard_flags() {
     let settings = UnifiedSettings {
-        dashboard: Some(json!({ "use_bitloops_local": true })),
+        dashboard: Some(json!({
+            "local_dashboard": {
+                "tls": true
+            }
+        })),
         ..Default::default()
     };
-    let cfg = resolve_dashboard_from_unified(&settings);
-    assert_eq!(cfg.use_bitloops_local, Some(true));
+    let cfg = resolve_dashboard_from_unified(&settings, Path::new("/config"));
+    assert_eq!(
+        cfg.local_dashboard,
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
+    );
 }
 
 #[test]
 fn dashboard_from_unified_defaults_when_absent() {
     let settings = UnifiedSettings::default();
-    let cfg = resolve_dashboard_from_unified(&settings);
-    assert_eq!(cfg.use_bitloops_local, None);
+    let cfg = resolve_dashboard_from_unified(&settings, Path::new("/config"));
+    assert_eq!(cfg.local_dashboard, None);
 }
 
 // ---------------------------------------------------------------------------

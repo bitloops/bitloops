@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -44,7 +45,8 @@ pub struct DevqlCapabilityHost {
     query_examples: Vec<&'static [QueryExample]>,
     migrations: Vec<CapabilityMigration>,
     health_checks: HashMap<String, Vec<CapabilityHealthCheck>>,
-    migrations_applied: bool,
+    migrations_applied: AtomicBool,
+    migration_lock: Mutex<()>,
     invocation_policy: HostInvocationPolicy,
     cross_pack_access: CrossPackAccessPolicy,
 }
@@ -63,7 +65,8 @@ impl DevqlCapabilityHost {
             query_examples: Vec::new(),
             migrations: Vec::new(),
             health_checks: HashMap::new(),
-            migrations_applied: false,
+            migrations_applied: AtomicBool::new(false),
+            migration_lock: Mutex::new(()),
             invocation_policy,
             cross_pack_access,
         })
@@ -173,11 +176,12 @@ impl DevqlCapabilityHost {
             repo_id: repo.repo_id.clone(),
             repo_identity: repo.identity.clone(),
             repo_root: self.repo_root().display().to_string(),
-            migrations_applied_this_session: self.migrations_applied,
+            migrations_applied_this_session: self.migrations_applied.load(Ordering::Acquire),
             invocation: InvocationSummary::from(self.invocation_policy()),
             cross_pack_grants,
             migration_plan,
             packs,
+            language_adapters: super::diagnostics::LanguageAdapterLifecycleSummary::default(),
             health: Vec::new(),
         }
     }
@@ -264,7 +268,7 @@ impl DevqlCapabilityHost {
     }
 
     pub async fn invoke_ingester(
-        &mut self,
+        &self,
         capability_id: &str,
         ingester_name: &str,
         payload: Value,
@@ -274,7 +278,7 @@ impl DevqlCapabilityHost {
     }
 
     pub async fn invoke_ingester_with_relational(
-        &mut self,
+        &self,
         capability_id: &str,
         ingester_name: &str,
         payload: Value,
@@ -318,7 +322,7 @@ impl DevqlCapabilityHost {
     }
 
     pub async fn invoke_stage(
-        &mut self,
+        &self,
         capability_id: &str,
         stage_name: &str,
         payload: Value,
@@ -361,22 +365,26 @@ impl DevqlCapabilityHost {
             .contains_key(&(capability_id.to_string(), stage_name.to_string()))
     }
 
-    fn ensure_migrations_applied(&mut self) -> Result<()> {
-        if self.migrations_applied {
+    fn ensure_migrations_applied(&self) -> Result<()> {
+        if self.migrations_applied.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.ensure_migrations_applied_sync()
-    }
-
-    /// Run registered pack migrations synchronously (e.g. during `devql init` before async ingest).
-    pub fn ensure_migrations_applied_sync(&mut self) -> Result<()> {
-        if self.migrations_applied {
+        let _guard = self
+            .migration_lock
+            .lock()
+            .expect("capability host migration lock poisoned");
+        if self.migrations_applied.load(Ordering::Acquire) {
             return Ok(());
         }
         let mut runtime = self.runtime.runtime();
         lifecycle::run_migrations(&self.migrations, &mut runtime)?;
-        self.migrations_applied = true;
+        self.migrations_applied.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Run registered pack migrations synchronously (e.g. during `devql init` before async ingest).
+    pub fn ensure_migrations_applied_sync(&self) -> Result<()> {
+        self.ensure_migrations_applied()
     }
 }
 

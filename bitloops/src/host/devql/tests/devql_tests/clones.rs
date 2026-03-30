@@ -300,3 +300,154 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
     );
     assert!(rows[0]["explanation_json"].is_object());
 }
+
+#[tokio::test]
+async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_identity() {
+    let cfg = test_cfg();
+    let events_cfg = default_events_cfg();
+    let temp = tempdir().expect("tempdir");
+    let sqlite_path = temp.path().join("relational.sqlite");
+    let relational = sqlite_relational_store_with_schema(&sqlite_path).await;
+
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    let repo_id = cfg.repo.repo_id.as_str();
+
+    for (symbol_id, artefact_id, path, blob_sha, symbol_fqn) in [
+        (
+            "sym::matched_source",
+            "artefact::matched_source",
+            "src/matched.ts",
+            "shared-blob",
+            "src/matched.ts::matched",
+        ),
+        (
+            "sym::unmatched_source",
+            "artefact::unmatched_source",
+            "src/unmatched.ts",
+            "shared-blob",
+            "src/unmatched.ts::unmatched",
+        ),
+        (
+            "sym::target_a",
+            "artefact::target_a",
+            "src/target-a.ts",
+            "target-blob-a",
+            "src/target-a.ts::targetA",
+        ),
+        (
+            "sym::target_b",
+            "artefact::target_b",
+            "src/target-b.ts",
+            "target-blob-b",
+            "src/target-b.ts::targetB",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO artefacts_current (
+                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+                end_byte, signature, modifiers, content_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, '[]', ?16)",
+            rusqlite::params![
+                repo_id,
+                symbol_id,
+                artefact_id,
+                "commit-1",
+                blob_sha,
+                path,
+                "typescript",
+                "function",
+                "function_declaration",
+                symbol_fqn,
+                1,
+                8,
+                0,
+                64,
+                format!(
+                    "function {}",
+                    symbol_fqn.rsplit("::").next().unwrap_or("run")
+                ),
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert current artefact");
+    }
+
+    conn.execute(
+        "INSERT INTO checkpoint_file_snapshots (
+            repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy, commit_sha,
+            path, blob_sha
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![
+            repo_id,
+            "checkpoint-1",
+            "session-1",
+            "2026-03-21T10:00:00Z",
+            "codex",
+            "main",
+            "manual",
+            "commit-1",
+            "src/matched.ts",
+            "shared-blob",
+        ],
+    )
+    .expect("insert checkpoint snapshot");
+
+    for (source_symbol_id, source_artefact_id, target_symbol_id, target_artefact_id, score) in [
+        (
+            "sym::matched_source",
+            "artefact::matched_source",
+            "sym::target_a",
+            "artefact::target_a",
+            0.91_f64,
+        ),
+        (
+            "sym::unmatched_source",
+            "artefact::unmatched_source",
+            "sym::target_b",
+            "artefact::target_b",
+            0.89_f64,
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO symbol_clone_edges (
+                repo_id, source_symbol_id, source_artefact_id, target_symbol_id,
+                target_artefact_id, relation_kind, score, semantic_score, lexical_score,
+                structural_score, clone_input_hash, explanation_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                repo_id,
+                source_symbol_id,
+                source_artefact_id,
+                target_symbol_id,
+                target_artefact_id,
+                "similar_implementation",
+                score,
+                score,
+                0.6_f64,
+                0.5_f64,
+                format!("clone-hash-{source_symbol_id}"),
+                "{}",
+            ],
+        )
+        .expect("insert clone edge");
+    }
+
+    let parsed = parse_devql_query(
+        r#"repo("temp2")->artefacts(kind:"function",agent:"codex")->clones(min_score:0.5)->limit(10)"#,
+    )
+    .expect("parse clone query");
+    let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
+        .await
+        .expect("execute projection-backed clone query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["source_path"],
+        Value::String("src/matched.ts".to_string())
+    );
+    assert_eq!(
+        rows[0]["target_symbol_fqn"],
+        Value::String("src/target-a.ts::targetA".to_string())
+    );
+}

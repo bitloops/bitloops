@@ -20,6 +20,7 @@ impl CoreExtensionHost {
     pub fn bootstrap_builtins(&mut self) -> Result<(), CoreExtensionHostError> {
         self.register_language_pack(RUST_LANGUAGE_PACK)?;
         self.register_language_pack(TS_JS_LANGUAGE_PACK)?;
+        self.register_language_pack(PYTHON_LANGUAGE_PACK)?;
         self.register_capability_pack(KNOWLEDGE_CAPABILITY_PACK)?;
         self.register_capability_pack(TEST_HARNESS_CAPABILITY_PACK)?;
         Ok(())
@@ -305,6 +306,7 @@ impl CoreExtensionHost {
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            language_adapter_pack_ids: Vec::new(),
             capability_pack_ids: self
                 .capability_packs
                 .registered_pack_ids()
@@ -314,6 +316,7 @@ impl CoreExtensionHost {
             language_observations: self.language_packs.observations().to_vec(),
             capability_observations: self.capability_packs.observations().to_vec(),
             diagnostics,
+            language_adapter_readiness_reports: Vec::new(),
             readiness_reports,
         }
     }
@@ -450,6 +453,13 @@ impl CoreExtensionHost {
     /// Serializable registry snapshot (language packs, extension capability descriptors, migration plan, readiness, diagnostics).
     pub fn registry_report(&self) -> registry_report::CoreExtensionHostRegistryReport {
         registry_report::build(self)
+    }
+
+    pub fn registry_report_with_snapshot(
+        &self,
+        snapshot: CoreExtensionHostReadinessSnapshot,
+    ) -> registry_report::CoreExtensionHostRegistryReport {
+        registry_report::build_with_snapshot(self, snapshot)
     }
 
     /// Capability pack ids that have completed migrations in this host instance (empty until `run_capability_migrations` runs).

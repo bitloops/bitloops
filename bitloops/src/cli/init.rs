@@ -1,19 +1,18 @@
-use std::env;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::Args;
-
-use crate::adapters::agents::{AgentAdapterRegistry, AgentReadinessStatus};
-use crate::cli::enable::find_repo_root;
-use crate::config::settings;
-use crate::host::devql::{DevqlConfig, resolve_repo_identity, run_init_for_bitloops};
 
 mod agent_hooks;
 mod agent_selection;
-mod store_backends;
-mod telemetry;
+use crate::adapters::agents::AgentAdapterRegistry;
+use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::telemetry_consent;
+use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
+use crate::config::{
+    REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
+};
 
 pub use agent_selection::detect_or_select_agent;
 
@@ -21,34 +20,40 @@ pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, S
 
 #[derive(Args)]
 pub struct InitArgs {
-    /// Remove and reinstall existing hooks for selected agents
+    /// Bootstrap and start the default Bitloops daemon service if it is not already running.
+    #[arg(long, default_value_t = false)]
+    pub install_default_daemon: bool,
+
+    /// Remove and reinstall existing hooks for selected agents.
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode)
+    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
     #[arg(long)]
     pub agent: Option<String>,
 
-    /// Enable anonymous usage analytics
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub telemetry: bool,
+    /// Enable anonymous telemetry for this CLI version.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub telemetry: Option<bool>,
 
-    /// Skip initial baseline ingestion of tracked source files.
+    /// Disable anonymous telemetry for this CLI version.
+    #[arg(
+        long = "no-telemetry",
+        conflicts_with = "telemetry",
+        default_value_t = false
+    )]
+    pub no_telemetry: bool,
+
+    /// Accepted for compatibility; `bitloops init` no longer runs the initial baseline sync.
     #[arg(long, default_value_t = false)]
     pub skip_baseline: bool,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
-    let cwd = env::current_dir()?;
-    let repo_root = find_repo_root(&cwd)?;
-    store_backends::initialise_store_backends(&repo_root)?;
-
-    let repo = resolve_repo_identity(&repo_root)?;
-    let cfg = DevqlConfig::from_env(repo_root.clone(), repo)?;
-    run_init_for_bitloops(&cfg, args.skip_baseline).await?;
-
     let mut out = io::stdout().lock();
-    run_with_writer_for_repo(args, &repo_root, &mut out, None, true)
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    run_with_io_async(args, &mut out, &mut input, None).await
 }
 
 #[cfg(test)]
@@ -57,71 +62,166 @@ fn run_with_writer(
     out: &mut dyn Write,
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
-    let cwd = env::current_dir()?;
-    let repo_root = find_repo_root(&cwd)?;
-    run_with_writer_for_repo(args, &repo_root, out, select_fn, false)
+    let runtime = tokio::runtime::Runtime::new().context("creating runtime for `bitloops init`")?;
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    runtime.block_on(run_with_io_async(args, out, &mut input, select_fn))
 }
 
-fn run_with_writer_for_repo(
+async fn run_with_io_async(
     args: InitArgs,
-    repo_root: &Path,
     out: &mut dyn Write,
+    input: &mut dyn BufRead,
     select_fn: Option<&AgentSelector>,
-    stores_initialised: bool,
 ) -> Result<()> {
-    if !stores_initialised {
-        store_backends::initialise_store_backends(repo_root)?;
+    let project_root = std::env::current_dir().context("getting current directory")?;
+    let git_root = crate::cli::enable::find_repo_root(&project_root)?;
+    let daemon_config_existed_at_entry = default_daemon_config_exists()?;
+    let telemetry_choice =
+        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
+
+    if !daemon_config_existed_at_entry
+        && args.install_default_daemon
+        && telemetry_choice.is_none()
+        && !telemetry_consent::can_prompt_interactively()
+    {
+        bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
     }
 
-    let local_dev = settings::load_settings(repo_root)
-        .unwrap_or_default()
-        .local_dev;
+    maybe_install_default_daemon(args.install_default_daemon).await?;
+    telemetry_consent::ensure_default_daemon_running().await?;
+    if daemon_config_existed_at_entry {
+        telemetry_consent::ensure_existing_config_telemetry_consent(
+            project_root.as_path(),
+            telemetry_choice,
+            out,
+            input,
+        )
+        .await?;
+    } else if let Some(choice) = telemetry_choice {
+        let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
+            project_root.as_path(),
+            Some(choice),
+        )
+        .await?;
+        if persisted.needs_prompt {
+            bail!("failed to persist telemetry consent");
+        }
+    }
+    ensure_repo_local_policy_excluded(&git_root, &project_root)?;
 
     let selected_agents = if let Some(agent) = args.agent.as_deref() {
-        vec![agent_hooks::normalize_agent_name(agent)?]
+        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
     } else {
-        detect_or_select_agent(repo_root, out, select_fn)?
+        detect_or_select_agent(&project_root, out, select_fn)?
     };
+    let strategy = load_settings(&project_root)
+        .map(|settings| settings.strategy)
+        .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
+    let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
+    write_project_bootstrap_settings(&local_policy_path, &strategy, &selected_agents)?;
 
-    let mut total_installed = 0usize;
-    let mut selected_labels = Vec::new();
-
-    for agent in &selected_agents {
-        let (label, count) =
-            agent_hooks::install_agent_hooks(repo_root, agent, local_dev, args.force)?;
-        selected_labels.push(label.clone());
-        total_installed += count;
-        if count > 0 {
-            writeln!(out, "Installed {count} {label} hook(s).")?;
-        } else {
-            writeln!(out, "{label} hooks are already initialized.")?;
-        }
+    let settings = load_settings(&project_root).unwrap_or_default();
+    let git_count = git_hooks::install_git_hooks(&git_root, settings.local_dev)?;
+    if git_count > 0 {
+        writeln!(out, "Installed {git_count} git hook(s).")?;
     }
 
-    let readiness = AgentAdapterRegistry::builtin().collect_readiness(repo_root);
-    for selected in &selected_agents {
-        if let Some(report) = readiness.iter().find(|entry| entry.id == *selected)
-            && report.status == AgentReadinessStatus::NotReady
-        {
-            writeln!(out, "Readiness: {} is not ready.", report.display_name)?;
-            for failure in &report.failures {
-                writeln!(out, "  - {}: {}", failure.code, failure.message)?;
-            }
-            writeln!(out)?;
-        }
-    }
-
-    telemetry::maybe_capture_telemetry_consent(
-        repo_root,
-        args.telemetry,
-        args.agent.is_none(),
+    reconcile_agent_hooks(
+        &project_root,
+        &selected_agents,
+        settings.local_dev,
+        args.force,
         out,
     )?;
+    Ok(())
+}
 
-    writeln!(out)?;
-    writeln!(out, "Initialized agents: {}", selected_labels.join(", "))?;
-    writeln!(out, "Total hooks installed: {total_installed}")?;
-    writeln!(out, "Bitloops agent initialization complete.")?;
+async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {
+    if !install_default_daemon {
+        return Ok(());
+    }
+
+    let status = crate::daemon::status().await?;
+    if status.runtime.is_some() {
+        return Ok(());
+    }
+
+    let config_path = bootstrap_default_daemon_environment()?;
+    let daemon_config = crate::daemon::resolve_daemon_config(Some(config_path.as_path()))?;
+    let config = crate::api::DashboardServerConfig {
+        host: None,
+        port: crate::api::DEFAULT_DASHBOARD_PORT,
+        no_open: true,
+        force_http: false,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+    let _ = crate::daemon::start_service(&daemon_config, config, None).await?;
+    Ok(())
+}
+
+fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Result<()> {
+    let exclude_path = git_root.join(".git").join("info").join("exclude");
+    if let Some(parent) = exclude_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating git exclude directory {}", parent.display()))?;
+    }
+
+    let mut content = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    let relative_local_policy = project_root
+        .strip_prefix(git_root)
+        .unwrap_or(project_root)
+        .join(REPO_POLICY_LOCAL_FILE_NAME);
+    let relative_local_policy = relative_local_policy.to_string_lossy().replace('\\', "/");
+
+    for entry in [relative_local_policy.as_str(), ".bitloops/"] {
+        if content.lines().any(|line| line.trim() == entry) {
+            continue;
+        }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
+    }
+
+    std::fs::write(&exclude_path, content)
+        .with_context(|| format!("writing {}", exclude_path.display()))?;
+    Ok(())
+}
+
+fn reconcile_agent_hooks(
+    project_root: &Path,
+    selected_agents: &[String],
+    local_dev: bool,
+    force: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let registry = AgentAdapterRegistry::builtin();
+    let selected = selected_agents
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for agent in registry.installed_agents(project_root) {
+        if selected.contains(&agent) {
+            continue;
+        }
+        let label = registry.uninstall_agent_hooks(project_root, &agent)?;
+        writeln!(out, "Removed {label} hooks.")?;
+    }
+
+    for agent in selected_agents {
+        let (label, installed) =
+            registry.install_agent_hooks(project_root, agent, local_dev, force)?;
+        if installed > 0 {
+            writeln!(out, "Installed {installed} {label} hook(s).")?;
+        } else {
+            writeln!(out, "{label} hooks are already initialised.")?;
+        }
+    }
+
     Ok(())
 }
 
