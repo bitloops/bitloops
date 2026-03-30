@@ -2,7 +2,6 @@ use super::agent_hooks::{
     AGENT_CLAUDE_CODE, AGENT_CODEX, AGENT_CURSOR, AGENT_GEMINI, DEFAULT_AGENT,
 };
 use super::*;
-use crate::cli::devql::graphql::with_graphql_executor_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
 };
@@ -100,7 +99,7 @@ fn init_cmd_agent_flag_no_value_errors() {
 }
 
 #[test]
-fn run_init_creates_project_local_policy_and_bootstraps_selected_agents() {
+fn run_init_creates_project_local_policy_and_installs_selected_agents() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -110,52 +109,37 @@ fn run_init_creates_project_local_policy_and_bootstraps_selected_agents() {
         &app_dirs,
         &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
         || {
-            with_graphql_executor_hook(
-                |_repo_root, _query, _variables| {
-                    Ok(serde_json::json!({
-                        "bootstrapProject": {
-                            "success": true,
-                            "repoIdentity": "local://local/repo",
-                            "repoId": "repo-id",
-                            "relationalBackend": "sqlite",
-                            "eventsBackend": "duckdb"
-                        }
-                    }))
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: false,
+                    agent: None,
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: false,
                 },
-                || {
-                    let mut out = Vec::new();
-                    run_with_writer(
-                        InitArgs {
-                            install_default_daemon: false,
-                            force: false,
-                            agent: None,
-                            telemetry: None,
-                            no_telemetry: false,
-                            skip_baseline: false,
-                        },
-                        &mut out,
-                        None,
-                    )
-                    .expect("run init");
+                &mut out,
+                None,
+            )
+            .expect("run init");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(rendered.contains("Project config:"));
-                    assert!(rendered.contains("Bitloops project bootstrap is ready."));
-                    assert!(repo.path().join(".bitloops.local.toml").exists());
-                    assert!(repo.path().join(".claude/settings.json").exists());
-                    let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
-                        .expect("read git exclude");
-                    assert!(exclude.contains(".bitloops.local.toml"));
-                    assert!(!exclude.contains("config.local.json"));
-                    assert!(!exclude.contains(".bitloops/config.local.json"));
-                },
-            );
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(!rendered.contains("Initialising DevQL schema"));
+            assert!(!rendered.contains("Bitloops project bootstrap is ready."));
+            assert!(repo.path().join(".bitloops.local.toml").exists());
+            assert!(repo.path().join(".claude/settings.json").exists());
+            let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                .expect("read git exclude");
+            assert!(exclude.contains(".bitloops.local.toml"));
+            assert!(!exclude.contains("config.local.json"));
+            assert!(!exclude.contains(".bitloops/config.local.json"));
         },
     );
 }
 
 #[test]
-fn run_init_with_agent_flag_installs_requested_hooks_and_skips_baseline_when_requested() {
+fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_requested() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -165,41 +149,26 @@ fn run_init_with_agent_flag_installs_requested_hooks_and_skips_baseline_when_req
         &app_dirs,
         &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
         || {
-            with_graphql_executor_hook(
-                |_repo_root, _query, variables| {
-                    assert_eq!(variables["skipBaseline"], true);
-                    Ok(serde_json::json!({
-                        "bootstrapProject": {
-                            "success": true,
-                            "repoIdentity": "local://local/repo",
-                            "repoId": "repo-id",
-                            "relationalBackend": "sqlite",
-                            "eventsBackend": "duckdb"
-                        }
-                    }))
+            let mut out = Vec::new();
+            run_with_writer(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: true,
+                    agent: Some(AGENT_CURSOR.to_string()),
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: true,
                 },
-                || {
-                    let mut out = Vec::new();
-                    run_with_writer(
-                        InitArgs {
-                            install_default_daemon: false,
-                            force: true,
-                            agent: Some(AGENT_CURSOR.to_string()),
-                            telemetry: None,
-                            no_telemetry: false,
-                            skip_baseline: true,
-                        },
-                        &mut out,
-                        None,
-                    )
-                    .expect("run init");
+                &mut out,
+                None,
+            )
+            .expect("run init");
 
-                    let rendered = String::from_utf8(out).expect("utf8 output");
-                    assert!(rendered.contains("Initialised agents: cursor"));
-                    assert!(repo.path().join(".cursor/hooks.json").exists());
-                    assert!(!repo.path().join(".claude/settings.json").exists());
-                },
-            );
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(!rendered.contains("Initialised agents: cursor"));
+            assert!(!rendered.contains("Initialising DevQL schema"));
+            assert!(repo.path().join(".cursor/hooks.json").exists());
+            assert!(!repo.path().join(".claude/settings.json").exists());
         },
     );
 }
@@ -412,45 +381,30 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                     }
                 },
                 || {
-                    with_graphql_executor_hook(
-                        |_repo_root, _query, _variables| {
-                            Ok(serde_json::json!({
-                                "bootstrapProject": {
-                                    "success": true,
-                                    "repoIdentity": "local://local/repo",
-                                    "repoId": "repo-id",
-                                    "relationalBackend": "sqlite",
-                                    "eventsBackend": "duckdb"
-                                }
-                            }))
-                        },
-                        || {
-                            let mut out = Vec::new();
-                            let mut input = Cursor::new("\n");
-                            let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
-                            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-                            runtime
-                                .block_on(run_with_io_async(
-                                    InitArgs {
-                                        install_default_daemon: false,
-                                        force: false,
-                                        agent: None,
-                                        telemetry: None,
-                                        no_telemetry: false,
-                                        skip_baseline: false,
-                                    },
-                                    &mut out,
-                                    &mut input,
-                                    Some(&select),
-                                ))
-                                .expect("run init");
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("\n");
+                    let select = |_items: &[String]| Ok(vec!["claude-code".to_string()]);
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: None,
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            Some(&select),
+                        ))
+                        .expect("run init");
 
-                            let rendered = String::from_utf8(out).expect("utf8 output");
-                            assert!(rendered.contains("Help us improve Bitloops"));
-                            assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
-                            assert!(rendered.contains("Bitloops project bootstrap is ready."));
-                        },
-                    );
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(rendered.contains("Help us improve Bitloops"));
+                    assert!(rendered.contains("Enable anonymous telemetry? [Y/n]"));
+                    assert!(!rendered.contains("Bitloops project bootstrap is ready."));
                 },
             );
         },
@@ -572,42 +526,27 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                     }))
                 },
                 || {
-                    with_graphql_executor_hook(
-                        |_repo_root, _query, _variables| {
-                            Ok(serde_json::json!({
-                                "bootstrapProject": {
-                                    "success": true,
-                                    "repoIdentity": "local://local/repo",
-                                    "repoId": "repo-id",
-                                    "relationalBackend": "sqlite",
-                                    "eventsBackend": "duckdb"
-                                }
-                            }))
-                        },
-                        || {
-                            let mut out = Vec::new();
-                            let mut input = Cursor::new("");
-                            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-                            runtime
-                                .block_on(run_with_io_async(
-                                    InitArgs {
-                                        install_default_daemon: false,
-                                        force: false,
-                                        agent: None,
-                                        telemetry: Some(false),
-                                        no_telemetry: false,
-                                        skip_baseline: false,
-                                    },
-                                    &mut out,
-                                    &mut input,
-                                    None,
-                                ))
-                                .expect("run init");
+                    let mut out = Vec::new();
+                    let mut input = Cursor::new("");
+                    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                    runtime
+                        .block_on(run_with_io_async(
+                            InitArgs {
+                                install_default_daemon: false,
+                                force: false,
+                                agent: None,
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                            },
+                            &mut out,
+                            &mut input,
+                            None,
+                        ))
+                        .expect("run init");
 
-                            let rendered = String::from_utf8(out).expect("utf8 output");
-                            assert!(!rendered.contains("Help us improve Bitloops"));
-                        },
-                    );
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(!rendered.contains("Help us improve Bitloops"));
                 },
             );
         },

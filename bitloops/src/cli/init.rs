@@ -13,7 +13,6 @@ use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_boo
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
 };
-use crate::devql_transport::discover_slim_cli_repo_scope;
 
 pub use agent_selection::detect_or_select_agent;
 
@@ -45,7 +44,7 @@ pub struct InitArgs {
     )]
     pub no_telemetry: bool,
 
-    /// Skip the initial baseline sync into DevQL current state.
+    /// Accepted for compatibility; `bitloops init` no longer runs the initial baseline sync.
     #[arg(long, default_value_t = false)]
     pub skip_baseline: bool,
 }
@@ -135,17 +134,6 @@ async fn run_with_io_async(
         args.force,
         out,
     )?;
-
-    let scope = discover_slim_cli_repo_scope(Some(&project_root))?;
-    let bootstrap_summary =
-        crate::cli::devql::graphql::run_project_bootstrap_via_graphql(&scope, args.skip_baseline)
-            .await?;
-    writeln!(out, "{bootstrap_summary}")?;
-
-    writeln!(out)?;
-    writeln!(out, "Project config: {}", local_policy_path.display())?;
-    writeln!(out, "Initialised agents: {}", selected_agents.join(", "))?;
-    writeln!(out, "Bitloops project bootstrap is ready.")?;
     Ok(())
 }
 
