@@ -28,7 +28,11 @@ pub mod migrations;
 pub mod pack;
 pub mod provenance;
 pub mod query_examples;
-pub mod refs;
+mod reference_parse;
+mod reference_resolve;
+mod reference_types;
+mod reference_validate;
+pub mod references;
 pub mod register;
 pub mod schema;
 pub mod services;
@@ -39,4 +43,5 @@ pub mod url;
 
 pub use cli::run_knowledge_versions_via_host;
 pub use pack::KnowledgePack;
+pub use references as refs;
 pub use types::*;
