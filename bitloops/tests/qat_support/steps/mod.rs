@@ -1,0 +1,309 @@
+use crate::qat_support::world::QatWorld;
+use cucumber::step::Collection;
+
+mod common;
+mod given;
+mod then;
+
+use self::common::{regex, step_fn};
+use self::given::*;
+use self::then::*;
+
+pub fn collection() -> Collection<QatWorld> {
+    Collection::new()
+        .given(
+            None,
+            regex(r#"^I run CleanStart for flow \"([^\"]+)\"$"#),
+            step_fn(given_clean_start),
+        )
+        .given(
+            None,
+            regex(r"^I run CleanStart$"),
+            step_fn(given_default_clean_start),
+        )
+        .given(
+            None,
+            regex(r"^I run InitCommit for (\S+)$"),
+            step_fn(given_init_commit),
+        )
+        .given(
+            None,
+            regex(r"^I ran InitCommit yesterday for (\S+)$"),
+            step_fn(given_init_commit_yesterday),
+        )
+        .given(
+            None,
+            regex(r"^I create a Vite app project in (\S+)$"),
+            step_fn(given_create_vite_app),
+        )
+        .given(
+            None,
+            regex(r"^I init bitloops in (\S+)$"),
+            step_fn(given_init_bitloops),
+        )
+        .given(
+            None,
+            regex(r"^I run EnableCLI for (\S+)$"),
+            step_fn(given_enable_cli),
+        )
+        .given(
+            None,
+            regex(r"^I run EnableCLIs for (\S+)$"),
+            step_fn(given_enable_cli),
+        )
+        .given(
+            None,
+            regex(r"^I ensure Claude Code auth in (\S+)$"),
+            step_fn(given_claude_auth),
+        )
+        .given(
+            None,
+            regex(r"^I make a first change using Claude Code to (\S+)$"),
+            step_fn(given_first_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I make a second change using Claude Code to (\S+)$"),
+            step_fn(given_second_claude_change),
+        )
+        .given(
+            None,
+            regex(r"^I committed yesterday in (\S+)$"),
+            step_fn(given_commit_yesterday),
+        )
+        .given(
+            None,
+            regex(r"^I committed today in (\S+)$"),
+            step_fn(given_commit_today),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL init in (\S+)$"),
+            step_fn(given_devql_init),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL ingest in (\S+)$"),
+            step_fn(given_devql_ingest),
+        )
+        .given(
+            None,
+            regex(r"^I create a TypeScript project with known dependencies in (\S+)$"),
+            step_fn(given_create_ts_deps_project),
+        )
+        .given(
+            None,
+            regex(r#"^I add a new caller of \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_add_new_caller),
+        )
+        .given(
+            None,
+            regex(r"^I create a TypeScript project with tests and coverage in (\S+)$"),
+            step_fn(given_create_ts_test_project),
+        )
+        .given(
+            None,
+            regex(r"^I run TestLens ingest-tests for latest commit in (\S+)$"),
+            step_fn(given_testlens_ingest_tests),
+        )
+        .given(
+            None,
+            regex(r"^I run TestLens ingest-coverage for latest commit in (\S+)$"),
+            step_fn(given_testlens_ingest_coverage),
+        )
+        .given(
+            None,
+            regex(r"^I run TestLens ingest-results with a failing test for latest commit in (\S+)$"),
+            step_fn(given_testlens_ingest_results_failing),
+        )
+        .given(
+            None,
+            regex(r"^I create a TypeScript project with similar implementations in (\S+)$"),
+            step_fn(given_create_ts_similar_project),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL semantic clones rebuild in (\S+)$"),
+            step_fn(given_devql_semantic_clones_rebuild),
+        )
+        .given(
+            None,
+            regex(r#"^I add knowledge URL \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_knowledge_add),
+        )
+        .given(
+            None,
+            regex(r#"^I add knowledge URL \"([^\"]+)\" with commit association in (\S+)$"#),
+            step_fn(given_knowledge_add_with_commit),
+        )
+        .given(
+            None,
+            regex(r#"^I associate knowledge \"([^\"]+)\" to knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_knowledge_associate),
+        )
+        .given(
+            None,
+            regex(r#"^I refresh knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_knowledge_refresh),
+        )
+        .given(
+            None,
+            regex(r#"^I attempt to add knowledge URL \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_knowledge_add_expect_failure),
+        )
+        .then(
+            None,
+            regex(r"^bitloops stores exist in (\S+)$"),
+            step_fn(then_bitloops_stores_exist),
+        )
+        .then(
+            None,
+            regex(r"^commit timeline and contents are correct in (\S+)$"),
+            step_fn(then_commit_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r"^claude-code session exists in (\S+)$"),
+            step_fn(then_claude_session_exists),
+        )
+        .then(
+            None,
+            regex(r"^checkpoint mapping exists in (\S+)$"),
+            step_fn(then_checkpoint_mapping_exists),
+        )
+        .then(
+            None,
+            regex(r"^checkpoint mapping count is at least (\d+) in (\S+)$"),
+            step_fn(then_checkpoint_mapping_count_at_least),
+        )
+        .then(
+            None,
+            regex(r"^DevQL artefacts query returns results in (\S+)$"),
+            step_fn(then_devql_artefacts_returns_results),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL checkpoints query returns results for \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_checkpoints_returns_results),
+        )
+        .then(
+            None,
+            regex(r"^DevQL chatHistory query returns results in (\S+)$"),
+            step_fn(then_devql_chat_history_returns_results),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_deps_returns_at_least),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" and asOf previous commit returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_deps_as_of_previous_commit),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" and asOf latest commit returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_deps_as_of_latest_commit),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" and asOf previous commit returns exactly (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_deps_as_of_previous_commit_exact),
+        )
+        .then(
+            None,
+            regex(r"^DevQL artefacts query result count is stable across ingests in (\S+)$"),
+            step_fn(then_devql_artefacts_stable),
+        )
+        .then(
+            None,
+            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" returns results in (\S+)$"#),
+            step_fn(then_testlens_query_returns_results),
+        )
+        .then(
+            None,
+            regex(r"^TestLens summary shows non-zero test count in (\S+)$"),
+            step_fn(then_testlens_summary_nonzero),
+        )
+        .then(
+            None,
+            regex(r"^TestLens tests include at least 1 test with a classification in (\S+)$"),
+            step_fn(then_testlens_tests_have_classification),
+        )
+        .then(
+            None,
+            regex(r"^TestLens coverage shows line coverage percentage in (\S+)$"),
+            step_fn(then_testlens_coverage_has_line_pct),
+        )
+        .then(
+            None,
+            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" returns empty or zero-count in (\S+)$"#),
+            step_fn(then_testlens_query_empty_or_zero),
+        )
+        .then(
+            None,
+            regex(r#"^TestLens query for \"([^\"]+)\" at latest commit with view \"([^\"]+)\" includes a failing test in (\S+)$"#),
+            step_fn(then_testlens_includes_failing_test),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_clones_returns_at_least),
+        )
+        .then(
+            None,
+            regex(r"^DevQL clones results include score and relation_kind fields in (\S+)$"),
+            step_fn(then_devql_clones_have_score_and_kind),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) returns results in (\S+)$"#),
+            step_fn(then_devql_clones_with_min_score),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" with min_score (\S+) returns fewer or equal results in (\S+)$"#),
+            step_fn(then_devql_clones_fewer_or_equal),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" has highest-scored result with score above (\S+) in (\S+)$"#),
+            step_fn(then_devql_clones_top_score_above),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL clones query for \"([^\"]+)\" returns results with explanation data in (\S+)$"#),
+            step_fn(then_devql_clones_have_explanation),
+        )
+        .then(
+            None,
+            regex(r"^the knowledge add command fails with an error in (\S+)$"),
+            step_fn(then_last_command_failed),
+        )
+        .then(
+            None,
+            regex(r"^DevQL knowledge query returns at least (\d+) items? in (\S+)$"),
+            step_fn(then_devql_knowledge_count_at_least),
+        )
+        .then(
+            None,
+            regex(r"^DevQL knowledge query returns (\d+) items in (\S+)$"),
+            step_fn(then_devql_knowledge_exact_count),
+        )
+        .then(
+            None,
+            regex(r#"^knowledge item has provider \"([^\"]+)\" and source_kind \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_knowledge_provider_and_kind),
+        )
+        .then(
+            None,
+            regex(r"^knowledge item is associated to a commit in (\S+)$"),
+            step_fn(then_knowledge_has_commit_association),
+        )
+        .then(
+            None,
+            regex(r#"^knowledge versions for \"([^\"]+)\" shows exactly (\d+) versions? in (\S+)$"#),
+            step_fn(then_knowledge_versions_count),
+        )
+}
