@@ -33,6 +33,11 @@ impl Repository {
             scope: ResolverScope::default(),
         }
     }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -47,7 +52,7 @@ impl Repository {
     async fn project(&self, ctx: &Context<'_>, path: String) -> Result<Project> {
         let project_path = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .validate_project_path(&path)
+            .validate_project_path(&self.scope, &path)
             .map_err(bad_user_input_error)?;
         Ok(Project::new(
             project_path.clone(),
@@ -55,11 +60,26 @@ impl Repository {
         ))
     }
 
+    async fn branch(&self, _ctx: &Context<'_>, name: String) -> Result<Repository> {
+        let branch_name = name.trim();
+        if branch_name.is_empty() {
+            return Err(bad_user_input_error("branch name must not be empty"));
+        }
+
+        Ok(Self {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            provider: self.provider.clone(),
+            organization: self.organization.clone(),
+            scope: self.scope.with_branch_name(branch_name.to_string()),
+        })
+    }
+
     #[graphql(name = "asOf")]
     async fn as_of(&self, ctx: &Context<'_>, input: AsOfInput) -> Result<TemporalScope> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let temporal_scope = context
-            .resolve_temporal_scope(&input)
+            .resolve_temporal_scope(&self.scope, &input)
             .await
             .map_err(|err| {
                 let message = format!("{err:#}");
@@ -80,7 +100,7 @@ impl Repository {
 
     async fn default_branch(&self, ctx: &Context<'_>) -> String {
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .default_branch_name()
+            .default_branch_name_for_scope(&self.scope)
             .await
     }
 
@@ -107,6 +127,7 @@ impl Repository {
         let commits = match ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_commits(
+                &self.scope,
                 branch.as_deref(),
                 author.as_deref(),
                 since.as_ref(),
@@ -147,7 +168,7 @@ impl Repository {
         until: Option<DateTimeScalar>,
     ) -> Result<Vec<Branch>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_branches(since.as_ref(), until.as_ref())
+            .list_branches(&self.scope, since.as_ref(), until.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query repository branches: {err:#}")))
     }
@@ -211,14 +232,14 @@ impl Repository {
 
     async fn users(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_users()
+            .list_users(&self.scope)
             .await
             .map_err(|err| backend_error(format!("failed to query repository users: {err:#}")))
     }
 
     async fn agents(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_agents()
+            .list_agents(&self.scope)
             .await
             .map_err(|err| backend_error(format!("failed to query repository agents: {err:#}")))
     }

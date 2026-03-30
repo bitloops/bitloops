@@ -166,12 +166,6 @@ fn mkcert_hint() -> &'static str {
 /// Build `mkcert` arguments after `-cert-file` / `-key-file` per plan.
 fn mkcert_identity_args(browser_host: &str) -> Vec<String> {
     match browser_host {
-        "bitloops.local" => vec![
-            "bitloops.local".into(),
-            "localhost".into(),
-            "127.0.0.1".into(),
-            "::1".into(),
-        ],
         "localhost" => vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
         "127.0.0.1" => vec!["127.0.0.1".into(), "localhost".into(), "::1".into()],
         "::1" => vec!["::1".into(), "localhost".into(), "127.0.0.1".into()],
@@ -363,7 +357,7 @@ pub fn load_existing_dashboard_tls_material(browser_host: &str) -> Result<Dashbo
     browser_host_has_matching_san(&cert_path, &leaf_cert, browser_host).with_context(|| {
         format!(
             "dashboard TLS fast path validation failed for host {browser_host}; \
-             run `bitloops dashboard --recheck-local-dashboard-net` once to refresh local dashboard network hints"
+             run `bitloops daemon start --recheck-local-dashboard-net` once to refresh local dashboard network hints"
         )
     })?;
     let server_config = load_server_config(&cert_path, &key_path)?;
@@ -467,7 +461,7 @@ mod tls_tests {
     fn host_id_for_path_normalizes_hosts() {
         assert_eq!(host_id_for_path("127.0.0.1"), "ipv4-127-0-0-1");
         assert_eq!(host_id_for_path("::1"), "ipv6-localhost");
-        assert_eq!(host_id_for_path("bitloops.local"), "bitloops-local");
+        assert_eq!(host_id_for_path("localhost"), "localhost");
     }
 
     #[test]
@@ -475,10 +469,6 @@ mod tls_tests {
         assert_eq!(
             mkcert_identity_args("localhost"),
             vec!["localhost", "127.0.0.1", "::1"]
-        );
-        assert_eq!(
-            mkcert_identity_args("bitloops.local"),
-            vec!["bitloops.local", "localhost", "127.0.0.1", "::1"]
         );
     }
 
@@ -501,9 +491,9 @@ mod tls_tests {
 
     #[test]
     fn resolve_tls_paths_for_host_uses_host_specific_directory() {
-        let (cert, key) = resolve_tls_paths_for_host("bitloops.local");
-        assert!(cert.ends_with("bitloops-local/cert.pem"));
-        assert!(key.ends_with("bitloops-local/key.pem"));
+        let (cert, key) = resolve_tls_paths_for_host("localhost");
+        assert!(cert.ends_with("localhost/cert.pem"));
+        assert!(key.ends_with("localhost/key.pem"));
     }
 
     #[test]

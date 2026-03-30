@@ -246,16 +246,10 @@ pub(crate) fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<Clean
         .filter(|sid| !sid.is_empty())
         .collect();
 
-    let legacy_shadow_branches_enabled =
-        crate::host::checkpoints::session::legacy_local_backend_enabled();
-    let shadow_branch_set: std::collections::HashSet<String> = if legacy_shadow_branches_enabled {
-        list_shadow_branches(repo_root)
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
-    } else {
-        std::collections::HashSet::new()
-    };
+    let shadow_branch_set: std::collections::HashSet<String> = list_shadow_branches(repo_root)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
 
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -269,22 +263,15 @@ pub(crate) fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<Clean
         }
 
         let has_checkpoints = sessions_with_checkpoints.contains(&state.session_id);
-        let has_shadow_branch = if legacy_shadow_branches_enabled {
-            let expected_branch =
-                expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
-            !expected_branch.is_empty() && shadow_branch_set.contains(&expected_branch)
-        } else {
-            false
-        };
+        let expected_branch =
+            expected_shadow_branch_short_name(&state.base_commit, &state.worktree_id);
+        let has_shadow_branch =
+            !expected_branch.is_empty() && shadow_branch_set.contains(&expected_branch);
 
         if !has_checkpoints && !has_shadow_branch {
             orphaned.push(CleanupItem {
                 id: state.session_id,
-                reason: if legacy_shadow_branches_enabled {
-                    "no checkpoints or shadow branch found".to_string()
-                } else {
-                    "no checkpoints found".to_string()
-                },
+                reason: "no checkpoints or shadow branch found".to_string(),
             });
         }
     }
@@ -293,9 +280,6 @@ pub(crate) fn list_orphaned_session_states(repo_root: &Path) -> Result<Vec<Clean
 }
 
 pub fn list_shadow_branches_for_cleanup(repo_root: &Path) -> Result<Vec<String>> {
-    if !crate::host::checkpoints::session::legacy_local_backend_enabled() {
-        return Ok(vec![]);
-    }
     list_shadow_branches(repo_root)
 }
 
@@ -303,9 +287,6 @@ pub fn delete_shadow_branches_for_cleanup(
     repo_root: &Path,
     branches: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    if !crate::host::checkpoints::session::legacy_local_backend_enabled() {
-        return (vec![], vec![]);
-    }
     delete_shadow_branches(repo_root, branches)
 }
 

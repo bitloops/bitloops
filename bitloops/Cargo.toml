@@ -31,8 +31,10 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml_edit = { version = "0.25", features = ["serde"] }
 regex = "1"
 tree-sitter = "0.26.7"
+tree-sitter-python = "0.23"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.24.1"
@@ -60,6 +62,7 @@ rustls-pemfile = "2"
 x509-parser = "0.18.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
+dirs = "6"
 
 [dev-dependencies]
 cucumber = "0.22.1"

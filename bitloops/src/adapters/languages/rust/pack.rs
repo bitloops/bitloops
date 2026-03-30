@@ -1,11 +1,13 @@
 use anyhow::Result;
+use std::sync::Arc;
 
 use super::canonical::{RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS};
 use super::edges::extract_rust_dependency_edges;
 use super::extraction::{extract_rust_artefacts, extract_rust_file_docstring};
+use super::test_support::rust_test_support;
 use crate::host::extension_host::LanguagePackDescriptor;
 use crate::host::language_adapter::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact,
+    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageTestSupport,
 };
 
 pub(crate) struct RustLanguageAdapterPack;
@@ -38,5 +40,9 @@ impl LanguageAdapterPack for RustLanguageAdapterPack {
 
     fn extract_file_docstring(&self, content: &str) -> Option<String> {
         extract_rust_file_docstring(content)
+    }
+
+    fn test_support(&self) -> Option<Arc<dyn LanguageTestSupport>> {
+        Some(rust_test_support())
     }
 }

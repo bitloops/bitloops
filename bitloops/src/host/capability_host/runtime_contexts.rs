@@ -1,12 +1,17 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
+use crate::adapters::languages::builtin_language_adapter_packs;
 use crate::capability_packs::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, KnowledgeDocumentRepository,
     KnowledgeRelationalRepository, SqliteKnowledgeRelationalRepository,
+};
+use crate::capability_packs::test_harness::storage::{
+    BitloopsTestHarnessRepository, open_repository_for_repo,
 };
 use crate::config::{
     ProviderConfig, StoreBackendConfig, resolve_provider_config_for_repo,
@@ -14,6 +19,8 @@ use crate::config::{
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
+use crate::host::extension_host::{CoreExtensionHost, LanguagePackResolutionInput};
+use crate::host::language_adapter::LanguageAdapterRegistry;
 use crate::storage::SqliteConnectionPool;
 
 use super::config_view::CapabilityConfigView;
@@ -24,8 +31,52 @@ use super::contexts::{
 };
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, ConnectorContext, ConnectorRegistry,
-    ProvenanceBuilder, RelationalGateway, SqliteRelationalGateway, StoreHealthGateway,
+    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, SqliteRelationalGateway,
+    StoreHealthGateway,
 };
+
+pub struct BuiltinLanguageServicesGateway {
+    extension_host: &'static CoreExtensionHost,
+    registry: &'static LanguageAdapterRegistry,
+}
+
+impl LanguageServicesGateway for BuiltinLanguageServicesGateway {
+    fn test_supports(
+        &self,
+    ) -> Vec<std::sync::Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        self.registry.all_test_supports()
+    }
+
+    fn resolve_test_support_for_path(
+        &self,
+        relative_path: &str,
+    ) -> Option<std::sync::Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
+        let resolved = self
+            .extension_host
+            .language_packs()
+            .resolve(LanguagePackResolutionInput::for_file_path(relative_path))
+            .ok()?;
+        self.registry.test_support_for_pack(resolved.pack.id)
+    }
+}
+
+fn builtin_language_services() -> Result<&'static BuiltinLanguageServicesGateway> {
+    static SERVICES: OnceLock<Result<BuiltinLanguageServicesGateway, String>> = OnceLock::new();
+    let service = SERVICES.get_or_init(|| {
+        let extension_host = CoreExtensionHost::with_builtins().map_err(|err| err.to_string())?;
+        let registry = LanguageAdapterRegistry::with_builtins(builtin_language_adapter_packs())
+            .map_err(|err| err.to_string())?;
+        Ok(BuiltinLanguageServicesGateway {
+            extension_host: Box::leak(Box::new(extension_host)),
+            registry: Box::leak(Box::new(registry)),
+        })
+    });
+
+    match service {
+        Ok(service) => Ok(service),
+        Err(error) => anyhow::bail!("failed to initialise built-in language services: {error}"),
+    }
+}
 
 pub struct LocalCapabilityRuntimeResources {
     pub repo_root: PathBuf,
@@ -41,6 +92,8 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
+    pub languages: &'static BuiltinLanguageServicesGateway,
 }
 
 impl LocalCapabilityRuntimeResources {
@@ -61,6 +114,9 @@ impl LocalCapabilityRuntimeResources {
 
         let config_root = build_capability_config_root(&backends, &provider_config);
         let stores = LocalStoreHealthGateway;
+        let test_harness = open_repository_for_repo(repo_root)
+            .ok()
+            .map(std::sync::Mutex::new);
 
         Ok(Self {
             repo_root: repo_root.to_path_buf(),
@@ -76,6 +132,8 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            test_harness,
+            languages: builtin_language_services()?,
         })
     }
 
@@ -102,6 +160,8 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            self.test_harness.as_ref(),
+            self.languages,
             devql_relational,
             invoking_capability_id,
             invoking_ingester_id,
@@ -150,6 +210,8 @@ pub struct LocalCapabilityRuntime<'a> {
     provenance: &'a dyn ProvenanceBuilder,
     graph: &'a dyn CanonicalGraphGateway,
     stores: &'a dyn StoreHealthGateway,
+    test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
+    languages: &'a BuiltinLanguageServicesGateway,
     devql_relational: Option<&'a RelationalStorage>,
     invoking_capability_id: Option<&'a str>,
     invoking_ingester_id: Option<&'a str>,
@@ -170,6 +232,8 @@ impl<'a> LocalCapabilityRuntime<'a> {
         provenance: &'a dyn ProvenanceBuilder,
         graph: &'a dyn CanonicalGraphGateway,
         stores: &'a dyn StoreHealthGateway,
+        test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
+        languages: &'a BuiltinLanguageServicesGateway,
         devql_relational: Option<&'a RelationalStorage>,
         invoking_capability_id: Option<&'a str>,
         invoking_ingester_id: Option<&'a str>,
@@ -187,6 +251,8 @@ impl<'a> LocalCapabilityRuntime<'a> {
             provenance,
             graph,
             stores,
+            test_harness,
+            languages,
             devql_relational,
             invoking_capability_id,
             invoking_ingester_id,
@@ -209,6 +275,14 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
 
     fn host_relational(&self) -> &dyn RelationalGateway {
         self.relational
+    }
+
+    fn languages(&self) -> &dyn LanguageServicesGateway {
+        self.languages
+    }
+
+    fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+        self.test_harness
     }
 }
 
@@ -246,6 +320,21 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn host_relational(&self) -> &dyn RelationalGateway {
         self.relational
+    }
+
+    fn languages(&self) -> &dyn LanguageServicesGateway {
+        self.languages
+    }
+
+    fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+        self.test_harness
+    }
+
+    fn clone_rebuild_relational(&self) -> Result<&RelationalStorage> {
+        let Some(relational) = self.devql_relational else {
+            anyhow::bail!("clone rebuild relational store is not attached to this ingest");
+        };
+        Ok(relational)
     }
 
     fn devql_relational(&self) -> Option<&RelationalStorage> {
@@ -723,6 +812,7 @@ mod tests {
         let provenance = DummyProvenance;
         let graph = DummyGraph;
         let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
         let runtime = LocalCapabilityRuntime::new(
             repo_root,
             &repo,
@@ -736,6 +826,8 @@ mod tests {
             &provenance,
             &graph,
             &stores,
+            None,
+            languages,
             None,
             None,
             None,
@@ -770,6 +862,7 @@ mod tests {
         let provenance = DummyProvenance;
         let graph = DummyGraph;
         let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
         let runtime = LocalCapabilityRuntime::new(
             repo_root,
             &repo,
@@ -783,6 +876,8 @@ mod tests {
             &provenance,
             &graph,
             &stores,
+            None,
+            languages,
             None,
             None,
             None,
@@ -816,6 +911,7 @@ mod tests {
         let provenance = DummyProvenance;
         let graph = DummyGraph;
         let stores = DummyStores;
+        let languages = builtin_language_services().expect("built-in language services");
         let runtime = LocalCapabilityRuntime::new(
             repo_root,
             &repo,
@@ -829,6 +925,8 @@ mod tests {
             &provenance,
             &graph,
             &stores,
+            None,
+            languages,
             None,
             None,
             None,

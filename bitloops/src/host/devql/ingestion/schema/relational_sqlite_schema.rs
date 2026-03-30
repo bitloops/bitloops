@@ -141,17 +141,17 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     PRIMARY KEY (repo_id, branch, symbol_id)
 );
 
-CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
-ON artefacts_current (repo_id, path);
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx
+ON artefacts_current (repo_id, branch, path);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx
-ON artefacts_current (repo_id, canonical_kind);
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx
+ON artefacts_current (repo_id, branch, canonical_kind);
 
 CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
-ON artefacts_current (repo_id, artefact_id);
+ON artefacts_current (repo_id, branch, artefact_id);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_symbol_fqn_idx
-ON artefacts_current (repo_id, symbol_fqn);
+CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx
+ON artefacts_current (repo_id, branch, symbol_fqn);
 
 CREATE TABLE IF NOT EXISTS artefact_edges (
     edge_id TEXT PRIMARY KEY,
@@ -230,23 +230,24 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
-ON artefact_edges_current (repo_id, path);
+ON artefact_edges_current (repo_id, branch, path);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx
-ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx
+ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_to_idx
-ON artefact_edges_current (repo_id, to_symbol_id, edge_kind);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx
+ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_idx
-ON artefact_edges_current (repo_id, edge_kind);
+ON artefact_edges_current (repo_id, branch, edge_kind);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_symbol_ref_idx
-ON artefact_edges_current (repo_id, to_symbol_ref);
+ON artefact_edges_current (repo_id, branch, to_symbol_ref);
 
 CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq
 ON artefact_edges_current (
     repo_id,
+    branch,
     from_symbol_id,
     edge_kind,
     COALESCE(to_symbol_id, ''),
@@ -284,4 +285,31 @@ ON sync_state (repo_id);
 
 pub(crate) fn devql_schema_sql_sqlite() -> &'static str {
     sqlite_schema_sql()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_schema_sql;
+
+    #[test]
+    fn sqlite_schema_sql_uses_branch_aware_current_state_indexes() {
+        let sql = sqlite_schema_sql();
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, branch, path);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, branch, canonical_kind);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, branch, symbol_fqn);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx"));
+        assert!(
+            sql.contains("ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);")
+        );
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx"));
+        assert!(
+            sql.contains("ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);")
+        );
+        assert!(sql.contains(
+            "ON artefact_edges_current (\n    repo_id,\n    branch,\n    from_symbol_id,"
+        ));
+    }
 }

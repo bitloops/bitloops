@@ -163,12 +163,11 @@ Provider values support `${ENV_VAR}` interpolation. That interpolation is limite
 
 ### Dashboard keys
 
-Dashboard local network hints are nested under `dashboard.local_dashboard`.
+Dashboard local TLS hints are nested under `dashboard.local_dashboard`.
 
 | Key | Type | Default | Notes |
 | --- | ---- | ------- | ----- |
 | `dashboard.local_dashboard.tls` | boolean | unset | When `true`, dashboard fast-path assumes local TLS material is already present and valid. |
-| `dashboard.local_dashboard.bitloops_local` | boolean | unset | When `true`, dashboard fast-path assumes `bitloops.local` host mapping is already present and valid. |
 
 Example:
 
@@ -179,8 +178,7 @@ Example:
   "settings": {
     "dashboard": {
       "local_dashboard": {
-        "tls": true,
-        "bitloops_local": true
+        "tls": true
       }
     }
   }
@@ -189,8 +187,8 @@ Example:
 
 CLI interaction:
 
-- `bitloops dashboard --recheck-local-dashboard-net` forces a full local dashboard network/TLS recheck.
-- `bitloops dashboard --http --host 127.0.0.1` explicitly forces loopback HTTP mode (no TLS).
+- `bitloops daemon start --recheck-local-dashboard-net` forces a full local dashboard TLS recheck.
+- `bitloops daemon start --http --host 127.0.0.1` explicitly forces loopback HTTP mode (no TLS).
 
 ## 4) Manual knowledge ingestion
 

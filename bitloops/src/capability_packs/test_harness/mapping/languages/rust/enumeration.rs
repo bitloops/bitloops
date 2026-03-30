@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -156,7 +158,7 @@ fn run_cargo_test_list(repo_dir: &Path, doctests: bool) -> Result<String, String
     }
 }
 
-fn parse_enumerated_host_tests(output: &str) -> Vec<EnumeratedTestScenario> {
+pub(crate) fn parse_enumerated_host_tests(output: &str) -> Vec<EnumeratedTestScenario> {
     let mut scenarios = Vec::new();
 
     for line in output.lines() {

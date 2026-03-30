@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{isolated_git_command, with_cwd, with_process_state};
+use crate::test_support::process_state::{isolated_git_command, with_process_state};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -10,6 +10,7 @@ use tempfile::TempDir;
 const TEST_SESSION_ID: &str = "2025-01-15-test-session";
 const TEST_COMPONENT: &str = "hooks";
 const TEST_AGENT: &str = "claude-code";
+const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
 
 struct TestWorkspace {
     tmp_dir: TempDir,
@@ -55,7 +56,24 @@ fn init_git_repo(path: &Path) {
 }
 
 fn test_log_file_path(tmp_dir: &Path) -> PathBuf {
-    tmp_dir.join(".bitloops").join("logs").join("bitloops.log")
+    tmp_dir
+        .join("state-root")
+        .join("bitloops")
+        .join(LOGS_DIR)
+        .join(LOG_FILE_NAME)
+}
+
+fn with_logger_workspace<T>(
+    ws: &TestWorkspace,
+    extra_env: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let state_root = ws.path().join("state-root");
+    let state_root_value = state_root.display().to_string();
+    let mut env_vars = Vec::with_capacity(extra_env.len() + 1);
+    env_vars.push((TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str())));
+    env_vars.extend_from_slice(extra_env);
+    with_process_state(Some(ws.path()), &env_vars, f)
 }
 
 fn read_single_log_entry(log_path: &Path) -> serde_json::Value {
@@ -98,17 +116,20 @@ fn TestParseLogLevel() {
 #[allow(non_snake_case)]
 fn TestInit_CreatesLogDirectory() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let result = init(TEST_SESSION_ID);
             assert!(result.is_ok(), "init should succeed: {result:?}");
             close();
 
-            let logs_dir = ws.path().join(".bitloops").join("logs");
+            let logs_dir = test_log_file_path(ws.path())
+                .parent()
+                .expect("log file should have parent")
+                .to_path_buf();
             assert!(
                 logs_dir.exists(),
-                "init should create .bitloops/logs directory at {}",
+                "init should create the log directory at {}",
                 logs_dir.display()
             );
         });
@@ -119,7 +140,7 @@ fn TestInit_CreatesLogDirectory() {
 #[allow(non_snake_case)]
 fn TestInit_CreatesLogFile() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let result = init(TEST_SESSION_ID);
@@ -140,7 +161,7 @@ fn TestInit_CreatesLogFile() {
 #[allow(non_snake_case)]
 fn TestInit_WritesJSONLogs() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let result = init("2025-01-15-json-test");
@@ -172,114 +193,108 @@ fn TestInit_WritesJSONLogs() {
 #[allow(non_snake_case)]
 fn TestInit_RespectsLogLevel() {
     let ws = TestWorkspace::setup();
-    with_process_state(
-        Some(ws.path()),
-        &[(LOG_LEVEL_ENV_VAR, Some("WARN"))],
-        || {
-            with_logger_test_lock(|| {
-                let session_id = "2025-01-15-level-test";
+    with_logger_workspace(&ws, &[(LOG_LEVEL_ENV_VAR, Some("WARN"))], || {
+        with_logger_test_lock(|| {
+            let session_id = "2025-01-15-level-test";
 
-                reset_logger_for_tests();
+            reset_logger_for_tests();
 
-                let result = init(session_id);
-                assert!(result.is_ok(), "init should succeed: {result:?}");
+            let result = init(session_id);
+            assert!(result.is_ok(), "init should succeed: {result:?}");
 
-                let ctx = background();
-                debug(&ctx, "debug message", &[]);
-                info(&ctx, "info message", &[]);
-                warn(&ctx, "warn message", &[]);
-                close();
+            let ctx = background();
+            debug(&ctx, "debug message", &[]);
+            info(&ctx, "info message", &[]);
+            warn(&ctx, "warn message", &[]);
+            close();
 
-                let content = fs::read_to_string(test_log_file_path(ws.path()))
-                    .expect("log file should exist and be readable");
-                let entries: Vec<serde_json::Value> = content
-                    .lines()
-                    .map(|line| {
-                        serde_json::from_str(line).expect("log output lines should be valid JSON")
-                    })
-                    .collect();
+            let content = fs::read_to_string(test_log_file_path(ws.path()))
+                .expect("log file should exist and be readable");
+            let entries: Vec<serde_json::Value> = content
+                .lines()
+                .map(|line| {
+                    serde_json::from_str(line).expect("log output lines should be valid JSON")
+                })
+                .collect();
 
-                let session_entries: Vec<&serde_json::Value> = entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.get("session_id").and_then(serde_json::Value::as_str)
-                            == Some(session_id)
-                    })
-                    .collect();
+            let session_entries: Vec<&serde_json::Value> = entries
+                .iter()
+                .filter(|entry| {
+                    entry.get("session_id").and_then(serde_json::Value::as_str) == Some(session_id)
+                })
+                .collect();
 
-                assert!(
-                    !session_entries.is_empty(),
-                    "expected at least one entry for session {session_id}"
-                );
+            assert!(
+                !session_entries.is_empty(),
+                "expected at least one entry for session {session_id}"
+            );
 
-                let has_debug = session_entries.iter().any(|entry| {
-                    entry.get("msg").and_then(serde_json::Value::as_str) == Some("debug message")
-                });
-                let has_info = session_entries.iter().any(|entry| {
-                    entry.get("msg").and_then(serde_json::Value::as_str) == Some("info message")
-                });
-                let has_warn = session_entries.iter().any(|entry| {
-                    entry.get("msg").and_then(serde_json::Value::as_str) == Some("warn message")
-                });
-
-                assert!(
-                    !has_debug,
-                    "DEBUG messages should be filtered out at WARN level"
-                );
-                assert!(
-                    !has_info,
-                    "INFO messages should be filtered out at WARN level"
-                );
-                assert!(has_warn, "WARN messages should be included at WARN level");
+            let has_debug = session_entries.iter().any(|entry| {
+                entry.get("msg").and_then(serde_json::Value::as_str) == Some("debug message")
             });
-        },
-    );
+            let has_info = session_entries.iter().any(|entry| {
+                entry.get("msg").and_then(serde_json::Value::as_str) == Some("info message")
+            });
+            let has_warn = session_entries.iter().any(|entry| {
+                entry.get("msg").and_then(serde_json::Value::as_str) == Some("warn message")
+            });
+
+            assert!(
+                !has_debug,
+                "DEBUG messages should be filtered out at WARN level"
+            );
+            assert!(
+                !has_info,
+                "INFO messages should be filtered out at WARN level"
+            );
+            assert!(has_warn, "WARN messages should be included at WARN level");
+        });
+    });
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestInit_InvalidLogLevelWarns() {
     let ws = TestWorkspace::setup();
-    with_process_state(
-        Some(ws.path()),
-        &[(LOG_LEVEL_ENV_VAR, Some("INVALID_LEVEL"))],
-        || {
-            with_logger_test_lock(|| {
-                reset_logger_for_tests();
-                start_stderr_capture_for_tests();
+    with_logger_workspace(&ws, &[(LOG_LEVEL_ENV_VAR, Some("INVALID_LEVEL"))], || {
+        with_logger_test_lock(|| {
+            reset_logger_for_tests();
+            start_stderr_capture_for_tests();
 
-                let result = init("2025-01-15-invalid-level");
-                assert!(
-                    result.is_ok(),
-                    "init should not fail when log level is invalid: {result:?}"
-                );
-                close();
+            let result = init("2025-01-15-invalid-level");
+            assert!(
+                result.is_ok(),
+                "init should not fail when log level is invalid: {result:?}"
+            );
+            close();
 
-                let stderr_output = take_stderr_capture_for_tests();
+            let stderr_output = take_stderr_capture_for_tests();
 
-                assert_eq!(
-                    parse_log_level("INVALID_LEVEL"),
-                    LogLevel::Info,
-                    "invalid log level should default to INFO"
-                );
-                assert!(
-                    stderr_output.contains("invalid log level"),
-                    "expected warning about invalid log level on stderr, got: {stderr_output}"
-                );
-            });
-        },
-    );
+            assert_eq!(
+                parse_log_level("INVALID_LEVEL"),
+                LogLevel::Info,
+                "invalid log level should default to INFO"
+            );
+            assert!(
+                stderr_output.contains("invalid log level"),
+                "expected warning about invalid log level on stderr, got: {stderr_output}"
+            );
+        });
+    });
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn TestInit_FallsBackToStderrOnError() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
 
-            let logs_dir = ws.path().join(".bitloops").join("logs");
+            let logs_dir = test_log_file_path(ws.path())
+                .parent()
+                .expect("log file should have parent")
+                .to_path_buf();
             fs::create_dir_all(&logs_dir).expect("create logs dir");
             let blocker = test_log_file_path(ws.path());
             fs::create_dir_all(&blocker).expect("create blocking directory");
@@ -300,7 +315,7 @@ fn TestInit_FallsBackToStderrOnError() {
 #[allow(non_snake_case)]
 fn TestClose_SafeToCallMultipleTimes() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let result = init("2025-01-15-close-test");
@@ -338,7 +353,7 @@ fn TestLogging_BeforeInit() {
 #[allow(non_snake_case)]
 fn TestLogging_IncludesContextValues() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let session_id = "2025-01-15-context-test";
@@ -373,7 +388,7 @@ fn TestLogging_IncludesContextValues() {
 #[allow(non_snake_case)]
 fn TestLogging_ParentSessionID() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let session_id = "2025-01-15-parent-test";
@@ -404,7 +419,7 @@ fn TestLogging_ParentSessionID() {
 #[allow(non_snake_case)]
 fn TestLogging_AdditionalAttrs() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let session_id = "2025-01-15-attrs-test";
@@ -439,7 +454,7 @@ fn TestLogging_AdditionalAttrs() {
 #[allow(non_snake_case)]
 fn TestLogDuration() {
     let ws = TestWorkspace::setup();
-    with_cwd(ws.path(), || {
+    with_logger_workspace(&ws, &[], || {
         with_logger_test_lock(|| {
             reset_logger_for_tests();
             let session_id = "2025-01-15-duration-test";
@@ -522,7 +537,7 @@ fn TestInit_RejectsInvalidSessionIDs() {
 
         if !want_err {
             let ws = TestWorkspace::setup();
-            with_cwd(ws.path(), || {
+            with_logger_workspace(&ws, &[], || {
                 with_logger_test_lock(|| {
                     let err = init(session_id).err();
                     assert_eq!(

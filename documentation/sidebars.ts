@@ -46,6 +46,7 @@ const sidebars: SidebarsConfig = {
       label: 'Reference',
       items: [
         'reference/cli-commands',
+        'reference/uninstall',
         'reference/configuration',
         'reference/environment-variables',
         'reference/rust-code-standards',

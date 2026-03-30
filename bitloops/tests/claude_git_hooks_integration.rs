@@ -1,8 +1,8 @@
 mod test_command_support;
 
+use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::session::phase::SessionPhase;
 use bitloops::host::checkpoints::session::state::{PrePromptState, SessionState};
-use bitloops::host::checkpoints::session::{SessionBackend, create_session_backend_or_local};
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed, read_session_content,
 };
@@ -18,8 +18,7 @@ fn bitloops_bin() -> PathBuf {
 
 fn run_cmd(repo: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) =
-        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
+    let mut cmd = test_command_support::new_isolated_bitloops_command(&bin, repo, args);
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn bitloops command");
@@ -43,8 +42,7 @@ fn run_cmd_with_env(
     extra_env: &[(&str, &str)],
 ) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) =
-        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
+    let mut cmd = test_command_support::new_isolated_bitloops_command(&bin, repo, args);
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
@@ -98,12 +96,10 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     }
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
-    Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .env("PATH", path)
-        .output()
-        .expect("failed to run git")
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo).env("PATH", path);
+    test_command_support::apply_repo_app_env(&mut cmd, repo);
+    cmd.output().expect("failed to run git")
 }
 
 fn git_ref_exists(repo: &Path, reference: &str) -> bool {
@@ -112,19 +108,17 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
         .success()
 }
 
-fn session_backend(repo: &Path) -> Box<dyn SessionBackend> {
-    create_session_backend_or_local(repo)
-}
-
 fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
-        .expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
-            .expect("resolve configured sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
+    test_command_support::with_repo_app_env(repo_root, || {
+        let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
+            .expect("resolve backend config");
+        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+                .expect("resolve configured sqlite path")
+        } else {
+            bitloops::utils::paths::default_relational_db_path(repo_root)
+        }
+    })
 }
 
 fn ensure_relational_store_file(repo_root: &Path) {
@@ -146,9 +140,9 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["commit", "-m", "initial"]);
 }
 
-fn enable(repo: &Path) {
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
+fn enable_claude(repo: &Path) {
+    let out = run_cmd(repo, &["enable", "--agent", "claude-code"], None);
+    assert_success(&out, "bitloops enable --agent claude-code");
 }
 
 fn init(repo: &Path) {
@@ -158,7 +152,7 @@ fn init(repo: &Path) {
 
 fn setup_claude_and_enable(repo: &Path) {
     init(repo);
-    enable(repo);
+    enable_claude(repo);
 }
 
 fn hook_command_exists(settings: &Value, hook_type: &str, matcher: &str, command: &str) -> bool {
@@ -195,24 +189,54 @@ fn read_json(path: &Path) -> Value {
 }
 
 fn session_state(repo: &Path, session_id: &str) -> SessionState {
-    session_backend(repo)
-        .load_session(session_id)
-        .expect("failed to load session state from backend")
-        .expect("expected session state to exist")
+    test_command_support::with_repo_app_env(repo, || {
+        create_session_backend_or_local(repo)
+            .load_session(session_id)
+            .expect("failed to load session state from backend")
+            .expect("expected session state to exist")
+    })
 }
 
 fn pre_prompt_state(repo: &Path, session_id: &str) -> Option<PrePromptState> {
-    session_backend(repo)
-        .load_pre_prompt(session_id)
-        .expect("failed to load pre-prompt state from backend")
+    test_command_support::with_repo_app_env(repo, || {
+        create_session_backend_or_local(repo)
+            .load_pre_prompt(session_id)
+            .expect("failed to load pre-prompt state from backend")
+    })
 }
 
 fn checkpoint_id_for_head(repo: &Path) -> Option<String> {
     let head = run_git(repo, &["rev-parse", "HEAD"]);
-    read_commit_checkpoint_mappings(repo)
-        .expect("failed to read commit-checkpoint mappings")
-        .get(&head)
-        .cloned()
+    test_command_support::with_repo_app_env(repo, || {
+        read_commit_checkpoint_mappings(repo)
+            .expect("failed to read commit-checkpoint mappings")
+            .get(&head)
+            .cloned()
+    })
+}
+
+fn checkpoint_mappings(repo: &Path) -> std::collections::HashMap<String, String> {
+    test_command_support::with_repo_app_env(repo, || {
+        read_commit_checkpoint_mappings(repo).expect("failed to read commit-checkpoint mappings")
+    })
+}
+
+fn committed_summary(repo: &Path, checkpoint_id: &str) -> Option<serde_json::Value> {
+    test_command_support::with_repo_app_env(repo, || {
+        read_committed(repo, checkpoint_id)
+            .expect("reading committed checkpoint should succeed")
+            .map(|summary| serde_json::to_value(summary).expect("serialize committed summary"))
+    })
+}
+
+fn committed_content(repo: &Path, checkpoint_id: &str, session_index: usize) -> serde_json::Value {
+    test_command_support::with_repo_app_env(repo, || {
+        serde_json::to_value(
+            read_session_content(repo, checkpoint_id, session_index)
+                .expect("session content should exist"),
+        )
+        .expect("serialize committed session content")
+    })
 }
 
 fn user_prompt_submit(repo: &Path, session_id: &str, transcript_path: &str, prompt: &str) {
@@ -236,25 +260,27 @@ fn stop(repo: &Path, session_id: &str, transcript_path: &str) {
 
 fn write_test_session_state_for_logging(repo: &Path, session_id: &str) {
     ensure_relational_store_file(repo);
-    let backend = session_backend(repo);
-    backend
-        .save_session(&SessionState {
-            session_id: session_id.to_string(),
-            worktree_path: repo.to_string_lossy().to_string(),
-            started_at: "2026-01-01T00:00:00Z".to_string(),
-            last_interaction_time: Some("2026-01-01T00:00:01Z".to_string()),
-            phase: SessionPhase::Active,
-            ..Default::default()
-        })
-        .expect("failed to persist session state");
+    test_command_support::with_repo_app_env(repo, || {
+        create_session_backend_or_local(repo)
+            .save_session(&SessionState {
+                session_id: session_id.to_string(),
+                worktree_path: repo.to_string_lossy().to_string(),
+                started_at: "2026-01-01T00:00:00Z".to_string(),
+                last_interaction_time: Some("2026-01-01T00:00:01Z".to_string()),
+                phase: SessionPhase::Active,
+                ..Default::default()
+            })
+            .expect("failed to persist session state");
+    });
 }
 
 #[test]
-fn init_adds_all_required_claude_hooks() {
+fn enable_adds_all_required_claude_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
     init(dir.path());
+    enable_claude(dir.path());
 
     let settings = read_json(&dir.path().join(".claude/settings.json"));
     assert!(hook_command_exists(
@@ -302,7 +328,7 @@ fn init_adds_all_required_claude_hooks() {
 }
 
 #[test]
-fn init_preserves_existing_claude_settings_and_user_hooks() {
+fn enable_preserves_existing_claude_settings_and_user_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
@@ -328,6 +354,7 @@ fn init_preserves_existing_claude_settings_and_user_hooks() {
     .unwrap();
 
     init(dir.path());
+    enable_claude(dir.path());
 
     let settings = read_json(&dir.path().join(".claude/settings.json"));
     assert_eq!(
@@ -365,46 +392,46 @@ fn init_preserves_existing_claude_settings_and_user_hooks() {
 }
 
 #[test]
-fn enable_does_not_add_claude_hooks() {
+fn init_does_not_add_claude_hooks() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
-    enable(dir.path());
+    init(dir.path());
 
     let claude_settings = dir.path().join(".claude/settings.json");
-    if claude_settings.exists() {
-        let settings = read_json(&claude_settings);
-        assert!(
-            !hook_command_exists(
-                &settings,
-                "SessionStart",
-                "",
-                "bitloops hooks claude-code session-start"
-            ),
-            "enable should not install Claude hooks"
-        );
-    }
+    assert!(
+        !claude_settings.exists(),
+        "init should not install Claude hooks"
+    );
 }
 
 #[test]
 fn hook_logging_writes_to_session_log_file() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
-    enable(dir.path());
 
     let session_id = "test-logging-session-123";
     write_test_session_state_for_logging(dir.path(), session_id);
-    fs::create_dir_all(dir.path().join(".bitloops/logs")).unwrap();
+    let commit_msg_file = dir.path().join(".git/COMMIT_EDITMSG");
+    fs::write(&commit_msg_file, "test commit\n").unwrap();
 
     let out = run_cmd_with_env(
         dir.path(),
-        &["hooks", "git", "post-commit"],
+        &[
+            "hooks",
+            "git",
+            "prepare-commit-msg",
+            commit_msg_file.to_string_lossy().as_ref(),
+            "message",
+        ],
         None,
         &[("BITLOOPS_LOG_LEVEL", "debug")],
     );
-    let _ = out;
+    assert_success(&out, "hooks git prepare-commit-msg");
 
-    let log_file = dir.path().join(".bitloops/logs/bitloops.log");
+    let log_file = test_command_support::with_repo_app_env(dir.path(), || {
+        bitloops::telemetry::logging::log_file_path()
+    });
     assert!(
         log_file.exists(),
         "expected log file at {}",
@@ -418,8 +445,8 @@ fn hook_logging_writes_to_session_log_file() {
         content
     );
     assert!(
-        content.contains("\"post-commit\""),
-        "log file should contain post-commit hook name; content:\n{}",
+        content.contains("\"prepare-commit-msg\""),
+        "log file should contain prepare-commit-msg hook name; content:\n{}",
         content
     );
     assert!(
@@ -433,17 +460,26 @@ fn hook_logging_writes_to_session_log_file() {
 fn hook_logging_writes_without_session() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
-    enable(dir.path());
+    let commit_msg_file = dir.path().join(".git/COMMIT_EDITMSG");
+    fs::write(&commit_msg_file, "test commit\n").unwrap();
 
     let out = run_cmd_with_env(
         dir.path(),
-        &["hooks", "git", "post-commit"],
+        &[
+            "hooks",
+            "git",
+            "prepare-commit-msg",
+            commit_msg_file.to_string_lossy().as_ref(),
+            "message",
+        ],
         None,
         &[("BITLOOPS_LOG_LEVEL", "debug")],
     );
-    let _ = out;
+    assert_success(&out, "hooks git prepare-commit-msg");
 
-    let log_file = dir.path().join(".bitloops/logs/bitloops.log");
+    let log_file = test_command_support::with_repo_app_env(dir.path(), || {
+        bitloops::telemetry::logging::log_file_path()
+    });
     let content = fs::read_to_string(&log_file)
         .expect("expected bitloops.log to be created even without session");
     assert!(
@@ -782,23 +818,27 @@ fn commit_condenses_metadata_to_checkpoints_branch() {
 
     let checkpoint_id =
         checkpoint_id_for_head(dir.path()).expect("HEAD commit should map to a checkpoint");
-    let summary = read_committed(dir.path(), &checkpoint_id)
-        .expect("reading committed checkpoint should succeed")
-        .expect("committed checkpoint should exist");
+    let summary =
+        committed_summary(dir.path(), &checkpoint_id).expect("committed checkpoint should exist");
 
     assert!(
-        summary.files_touched.iter().any(|f| f == "src/auth.rs"),
+        summary["files_touched"]
+            .as_array()
+            .is_some_and(|files| files.iter().any(|f| f.as_str() == Some("src/auth.rs"))),
         "checkpoint should include touched file list for src/auth.rs"
     );
     assert!(
-        summary.sessions.len() == 1,
+        summary["sessions"]
+            .as_array()
+            .is_some_and(|sessions| sessions.len() == 1),
         "single-session stop+commit should produce one checkpoint session"
     );
 
-    let content =
-        read_session_content(dir.path(), &checkpoint_id, 0).expect("session content should exist");
+    let content = committed_content(dir.path(), &checkpoint_id, 0);
     assert!(
-        content.prompts.contains("Create auth module"),
+        content["prompts"]
+            .as_str()
+            .is_some_and(|prompts| prompts.contains("Create auth module")),
         "checkpoint prompts should include the user prompt"
     );
 
@@ -838,16 +878,14 @@ fn intermediate_commit_without_new_prompt_has_no_checkpoint_mapping() {
     run_git(dir.path(), &["commit", "-m", "first"]);
     let checkpoint1 = checkpoint_id_for_head(dir.path())
         .expect("first commit should be mapped to a checkpoint id");
-    let mappings_after_first = read_commit_checkpoint_mappings(dir.path())
-        .expect("reading commit-checkpoint mappings should succeed");
+    let mappings_after_first = checkpoint_mappings(dir.path());
     let checkpoints_count_after_first = mappings_after_first.len();
 
     fs::write(dir.path().join("intermediate.txt"), "human change\n").unwrap();
     run_git(dir.path(), &["add", "intermediate.txt"]);
     run_git(dir.path(), &["commit", "-m", "intermediate"]);
     let second_head = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let mappings_after_second = read_commit_checkpoint_mappings(dir.path())
-        .expect("reading commit-checkpoint mappings should succeed");
+    let mappings_after_second = checkpoint_mappings(dir.path());
     assert!(
         !mappings_after_second.contains_key(&second_head),
         "intermediate commit without a new prompt should not map to a checkpoint"
@@ -883,16 +921,8 @@ fn intermediate_commit_without_new_prompt_has_no_checkpoint_mapping() {
         "new session work should produce a new checkpoint id"
     );
 
-    assert!(
-        read_committed(dir.path(), &checkpoint1)
-            .expect("reading first checkpoint should succeed")
-            .is_some()
-    );
-    assert!(
-        read_committed(dir.path(), &checkpoint3)
-            .expect("reading third checkpoint should succeed")
-            .is_some()
-    );
+    assert!(committed_summary(dir.path(), &checkpoint1).is_some());
+    assert!(committed_summary(dir.path(), &checkpoint3).is_some());
 }
 
 #[test]

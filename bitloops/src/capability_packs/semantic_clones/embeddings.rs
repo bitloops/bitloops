@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::adapters::model_providers::embeddings::{
     EmbeddingProvider, build_embedding_provider, default_embedding_model,
@@ -19,6 +20,7 @@ pub struct EmbeddingProviderConfig {
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
+    pub embedding_cache_dir: Option<PathBuf>,
 }
 
 pub fn build_symbol_embedding_provider(
@@ -59,7 +61,11 @@ pub fn build_symbol_embedding_provider(
     }
 
     Ok(Some(build_embedding_provider(
-        &provider, model, api_key, repo_root,
+        &provider,
+        model,
+        api_key,
+        repo_root,
+        cfg.embedding_cache_dir.as_deref(),
     )?))
 }
 
@@ -505,6 +511,7 @@ mod tests {
                 embedding_provider: Some("voyage".to_string()),
                 embedding_model: None,
                 embedding_api_key: Some("test-key".to_string()),
+                embedding_cache_dir: None,
             },
             None,
         )
@@ -526,6 +533,7 @@ mod tests {
             embedding_provider: Some("local".to_string()),
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         });
 
         assert_eq!(provider.as_deref(), Some("local"));
@@ -548,6 +556,7 @@ mod tests {
                 embedding_provider: None,
                 embedding_model: None,
                 embedding_api_key: None,
+                embedding_cache_dir: None,
             })
             .as_deref(),
             Some(crate::adapters::model_providers::embeddings::default_embedding_provider())
@@ -567,6 +576,7 @@ mod tests {
                 embedding_provider: Some("disabled".to_string()),
                 embedding_model: None,
                 embedding_api_key: None,
+                embedding_cache_dir: None,
             },
             None,
         )
@@ -582,6 +592,7 @@ mod tests {
                 embedding_provider: Some("openai".to_string()),
                 embedding_model: Some("text-embedding-3-large".to_string()),
                 embedding_api_key: None,
+                embedding_cache_dir: None,
             },
             None,
         )

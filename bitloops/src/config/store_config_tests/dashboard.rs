@@ -8,8 +8,7 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
@@ -19,10 +18,7 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
 
     assert_eq!(
         resolve_dashboard_config().local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-            bitloops_local: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
@@ -40,8 +36,7 @@ fn dashboard_file_config_reads_local_dashboard_flags() {
     let value = serde_json::json!({
         "dashboard": {
             "local_dashboard": {
-                "tls": true,
-                "bitloops_local": true
+                "tls": true
             }
         }
     });
@@ -49,10 +44,7 @@ fn dashboard_file_config_reads_local_dashboard_flags() {
     let cfg = DashboardFileConfig::from_json_value(&value);
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-            bitloops_local: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
@@ -75,8 +67,7 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
     let value = serde_json::json!({
         "dashboard": {
             "local_dashboard": {
-                "tls": "yes",
-                "bitloops_local": "yes"
+                "tls": "yes"
             }
         }
     });
@@ -84,38 +75,37 @@ fn dashboard_file_config_accepts_boolean_like_strings() {
     let cfg = DashboardFileConfig::from_json_value(&value);
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-            bitloops_local: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
 #[test]
-fn dashboard_file_config_load_reads_repo_config_file() {
+fn dashboard_file_config_load_reads_daemon_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
+    let config_root = temp.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root.as_str()),
+        )],
+    );
     write_repo_config(
-        temp.path(),
+        &temp.path().join("bitloops"),
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
     );
 
-    with_cwd(temp.path(), || {
-        let cfg = DashboardFileConfig::load();
-        assert_eq!(
-            cfg.local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-                bitloops_local: Some(true),
-            })
-        );
-    });
+    let cfg = DashboardFileConfig::load();
+    assert_eq!(
+        cfg.local_dashboard,
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
+    );
 }
 
 #[test]
@@ -126,8 +116,7 @@ fn resolve_dashboard_config_reads_repo_config_file() {
         serde_json::json!({
             "dashboard": {
                 "local_dashboard": {
-                    "tls": true,
-                    "bitloops_local": true
+                    "tls": true
                 }
             }
         }),
@@ -136,10 +125,7 @@ fn resolve_dashboard_config_reads_repo_config_file() {
     with_cwd(temp.path(), || {
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-                bitloops_local: Some(true),
-            })
+            Some(DashboardLocalDashboardConfig { tls: Some(true) })
         );
     });
 }

@@ -350,13 +350,56 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
+    use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
+
+    fn json_value_to_toml_item(value: &serde_json::Value) -> Item {
+        match value {
+            serde_json::Value::Null => Item::Value(TomlValue::from("")),
+            serde_json::Value::Bool(value) => Item::Value(TomlValue::from(*value)),
+            serde_json::Value::Number(value) => {
+                if let Some(value) = value.as_i64() {
+                    Item::Value(TomlValue::from(value))
+                } else if let Some(value) = value.as_u64() {
+                    Item::Value(TomlValue::from(value as i64))
+                } else if let Some(value) = value.as_f64() {
+                    Item::Value(TomlValue::from(value))
+                } else {
+                    Item::Value(TomlValue::from(value.to_string()))
+                }
+            }
+            serde_json::Value::String(value) => Item::Value(TomlValue::from(value.clone())),
+            serde_json::Value::Array(values) => {
+                let mut array = Array::new();
+                for value in values {
+                    let Item::Value(value) = json_value_to_toml_item(value) else {
+                        panic!("nested TOML table arrays are not supported in test config");
+                    };
+                    array.push(value);
+                }
+                Item::Value(TomlValue::Array(array))
+            }
+            serde_json::Value::Object(map) => {
+                let mut table = Table::new();
+                for (key, value) in map {
+                    table[key] = json_value_to_toml_item(value);
+                }
+                Item::Table(table)
+            }
+        }
+    }
 
     fn write_repo_config(repo_root: &Path, value: serde_json::Value) -> Result<()> {
-        let config_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&config_dir)?;
+        let value = value.get("settings").cloned().unwrap_or(value);
+        let mut doc = DocumentMut::new();
+        let serde_json::Value::Object(map) = value else {
+            panic!("expected object config value");
+        };
+        for (key, value) in map {
+            doc[key.as_str()] = json_value_to_toml_item(&value);
+        }
         fs::write(
-            config_dir.join("config.json"),
-            serde_json::to_vec_pretty(&value)?,
+            repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+            doc.to_string(),
         )?;
         Ok(())
     }

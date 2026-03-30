@@ -49,8 +49,17 @@ CREATE TABLE IF NOT EXISTS checkpoint_events (
 CREATE INDEX IF NOT EXISTS checkpoint_events_repo_time_idx
 ON checkpoint_events (repo_id, event_time);
 
+CREATE INDEX IF NOT EXISTS checkpoint_events_repo_branch_time_idx
+ON checkpoint_events (repo_id, branch, event_time);
+
 CREATE INDEX IF NOT EXISTS checkpoint_events_repo_commit_idx
 ON checkpoint_events (repo_id, commit_sha);
+
+CREATE INDEX IF NOT EXISTS checkpoint_events_repo_branch_commit_idx
+ON checkpoint_events (repo_id, branch, commit_sha);
+
+CREATE INDEX IF NOT EXISTS checkpoint_events_repo_branch_event_time_idx
+ON checkpoint_events (repo_id, branch, event_type, event_time);
 "#;
 
     let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(repo_root);
@@ -58,4 +67,49 @@ ON checkpoint_events (repo_id, commit_sha);
         .await
         .context("creating DuckDB checkpoint_events table")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_duckdb_schema;
+    use crate::config::EventsBackendConfig;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn init_duckdb_schema_creates_branch_aware_event_indexes() {
+        let repo = TempDir::new().expect("temp dir");
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(".bitloops/stores/events.duckdb".into()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+
+        init_duckdb_schema(repo.path(), &events_cfg)
+            .await
+            .expect("initialise duckdb schema");
+
+        let duckdb_path = events_cfg.resolve_duckdb_db_path_for_repo(repo.path());
+        let conn = duckdb::Connection::open(duckdb_path).expect("open duckdb");
+        let mut stmt = conn
+            .prepare(
+                "SELECT index_name
+                 FROM duckdb_indexes()
+                 WHERE table_name = 'checkpoint_events'
+                 ORDER BY index_name",
+            )
+            .expect("prepare duckdb index query");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query duckdb indexes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect duckdb indexes");
+
+        assert!(rows.contains(&"checkpoint_events_repo_time_idx".to_string()));
+        assert!(rows.contains(&"checkpoint_events_repo_branch_time_idx".to_string()));
+        assert!(rows.contains(&"checkpoint_events_repo_commit_idx".to_string()));
+        assert!(rows.contains(&"checkpoint_events_repo_branch_commit_idx".to_string()));
+        assert!(rows.contains(&"checkpoint_events_repo_branch_event_time_idx".to_string()));
+    }
 }

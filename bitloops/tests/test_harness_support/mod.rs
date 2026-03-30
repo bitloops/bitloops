@@ -3,9 +3,12 @@
 pub mod production_seed;
 
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
@@ -21,6 +24,14 @@ pub struct Workspace {
     db_path: PathBuf,
 }
 
+struct AppPaths {
+    home: PathBuf,
+    xdg_config: PathBuf,
+    xdg_data: PathBuf,
+    xdg_cache: PathBuf,
+    xdg_state: PathBuf,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ListedArtefact {
     pub file_path: String,
@@ -34,10 +45,13 @@ impl Workspace {
         let repo_dir = temp_dir.path().join(name);
         fs::create_dir_all(&repo_dir).expect("create repo dir");
         init_git_repo(&repo_dir);
-
-        let db_path = repo_dir
-            .join(paths::BITLOOPS_RELATIONAL_STORE_DIR)
-            .join(paths::RELATIONAL_DB_FILE_NAME);
+        let db_path = with_repo_app_env(&repo_dir, || {
+            bitloops::utils::platform_dirs::bitloops_data_dir()
+                .expect("resolve isolated Bitloops data dir for test workspace")
+                .join("stores")
+                .join("relational")
+                .join(paths::RELATIONAL_DB_FILE_NAME)
+        });
 
         Self {
             _temp_dir: temp_dir,
@@ -87,17 +101,19 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
         &["init", "--agent", "codex", "--telemetry", "false"],
     );
 
-    let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
-        .expect("resolve repo identity for GraphQL workspace");
-    let cfg =
-        bitloops::host::devql::DevqlConfig::from_env(workspace.repo_dir().to_path_buf(), repo)
-            .expect("build DevQL config for GraphQL workspace");
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for GraphQL workspace")
-        .block_on(bitloops::host::devql::run_init(&cfg))
-        .expect("initialise DevQL schema for GraphQL workspace");
+    with_repo_app_env(workspace.repo_dir(), || {
+        let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
+            .expect("resolve repo identity for GraphQL workspace");
+        let cfg =
+            bitloops::host::devql::DevqlConfig::from_env(workspace.repo_dir().to_path_buf(), repo)
+                .expect("build DevQL config for GraphQL workspace");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime for GraphQL workspace")
+            .block_on(bitloops::host::devql::run_init(&cfg))
+            .expect("initialise DevQL schema for GraphQL workspace");
+    });
 }
 
 pub fn seed_production_artefacts(workspace: &Workspace, commit_sha: &str) {
@@ -701,23 +717,121 @@ fn init_git_repo(repo_dir: &Path) {
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {
-    let isolated_home = tempfile::tempdir().expect("create isolated home for test command");
-    let xdg_config_home = isolated_home.path().join("xdg");
-    fs::create_dir_all(&xdg_config_home).expect("create isolated xdg config home");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitloops"));
+    command.current_dir(workdir).args(args);
+    apply_repo_app_env(&mut command, workdir);
+    command.output().expect("execute bitloops command")
+}
 
-    Command::new(env!("CARGO_BIN_EXE_bitloops"))
-        .current_dir(workdir)
-        .args(args)
-        .env("HOME", isolated_home.path())
-        .env("USERPROFILE", isolated_home.path())
-        .env("XDG_CONFIG_HOME", &xdg_config_home)
+pub(crate) fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
+    let app_paths = app_paths_for_repo(repo);
+    cmd.env("HOME", &app_paths.home)
+        .env("USERPROFILE", &app_paths.home)
+        .env("XDG_CONFIG_HOME", &app_paths.xdg_config)
+        .env("XDG_DATA_HOME", &app_paths.xdg_data)
+        .env("XDG_CACHE_HOME", &app_paths.xdg_cache)
+        .env("XDG_STATE_HOME", &app_paths.xdg_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
-        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD")
-        .output()
-        .expect("execute bitloops command")
+        .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+}
+
+pub(crate) fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
+    let _guard = enter_repo_app_env(repo);
+    f()
+}
+
+fn enter_repo_app_env(repo: &Path) -> RepoAppEnvGuard {
+    let lock_guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let app_paths = app_paths_for_repo(repo);
+    let previous_env = apply_env_vars(&[
+        ("HOME", Some(app_paths.home.as_os_str())),
+        ("USERPROFILE", Some(app_paths.home.as_os_str())),
+        ("XDG_CONFIG_HOME", Some(app_paths.xdg_config.as_os_str())),
+        ("XDG_DATA_HOME", Some(app_paths.xdg_data.as_os_str())),
+        ("XDG_CACHE_HOME", Some(app_paths.xdg_cache.as_os_str())),
+        ("XDG_STATE_HOME", Some(app_paths.xdg_state.as_os_str())),
+    ]);
+    RepoAppEnvGuard {
+        _lock_guard: lock_guard,
+        previous_env,
+    }
+}
+
+struct RepoAppEnvGuard {
+    _lock_guard: MutexGuard<'static, ()>,
+    previous_env: Vec<(String, Option<OsString>)>,
+}
+
+impl Drop for RepoAppEnvGuard {
+    fn drop(&mut self) {
+        restore_env_vars(&self.previous_env);
+    }
+}
+
+fn app_paths_for_repo(repo: &Path) -> AppPaths {
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
+    let parent = repo
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let home = parent.join(format!(".bitloops-test-home-{hash:016x}"));
+    let app_paths = AppPaths {
+        xdg_config: home.join("xdg-config"),
+        xdg_data: home.join("xdg-data"),
+        xdg_cache: home.join("xdg-cache"),
+        xdg_state: home.join("xdg-state"),
+        home,
+    };
+    for dir in [
+        &app_paths.home,
+        &app_paths.xdg_config,
+        &app_paths.xdg_data,
+        &app_paths.xdg_cache,
+        &app_paths.xdg_state,
+    ] {
+        fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
+    }
+    app_paths
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn apply_env_vars(vars: &[(&str, Option<&OsStr>)]) -> Vec<(String, Option<OsString>)> {
+    let mut previous = Vec::with_capacity(vars.len());
+    for (key, value) in vars {
+        previous.push(((*key).to_string(), std::env::var_os(key)));
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+    previous
+}
+
+fn restore_env_vars(previous: &[(String, Option<OsString>)]) {
+    for (key, value) in previous.iter().rev() {
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 }

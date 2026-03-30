@@ -5,6 +5,7 @@ pub use bitloops::api;
 pub use bitloops::capability_packs;
 pub use bitloops::cli;
 pub use bitloops::config;
+pub use bitloops::daemon;
 pub use bitloops::git;
 pub use bitloops::graphql;
 pub use bitloops::host;
@@ -48,37 +49,57 @@ mod tests {
     };
     use crate::test_support::process_state::enter_process_state;
     use std::fs;
+    use std::path::{Path, PathBuf};
 
-    fn write_envelope_config(repo_root: &std::path::Path, settings: serde_json::Value) {
-        let config_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&config_dir).expect("create config dir");
-        fs::write(
-            config_dir.join("config.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "version": "1.0",
-                "scope": "project",
-                "settings": settings
-            }))
-            .expect("serialize"),
-        )
-        .expect("write config");
+    fn daemon_config_root(home_root: &Path) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        {
+            home_root.join("Library").join("Application Support")
+        }
+        #[cfg(target_os = "windows")]
+        {
+            home_root.join("AppData").join("Roaming")
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            home_root.join(".config")
+        }
+    }
+
+    fn write_daemon_config(home_root: &Path, toml: &str) {
+        let config_path = daemon_config_root(home_root)
+            .join("bitloops")
+            .join("config.toml");
+        let config_dir = config_path.parent().expect("config dir");
+        fs::create_dir_all(config_dir).expect("create config dir");
+        fs::write(config_path, toml).expect("write config");
     }
 
     #[test]
-    fn main_target_resolves_store_backend_config_from_repo_config() {
+    fn main_target_resolves_store_backend_config_from_daemon_config() {
         let temp = tempfile::tempdir().expect("temp dir");
-        write_envelope_config(
+        write_daemon_config(
             temp.path(),
-            serde_json::json!({
-                "stores": {
-                    "relational": {
-                        "postgres_dsn": "postgres://u:p@localhost:5432/bitloops"
-                    }
-                }
-            }),
+            r#"
+[stores.relational]
+postgres_dsn = "postgres://u:p@localhost:5432/bitloops"
+"#,
         );
 
-        let _guard = enter_process_state(Some(temp.path()), &[]);
+        let xdg_config_home = temp.path().join(".config").display().to_string();
+        let app_data = temp
+            .path()
+            .join("AppData")
+            .join("Roaming")
+            .display()
+            .to_string();
+        let home = temp.path().display().to_string();
+        let env_vars = vec![
+            ("HOME", Some(home.as_str())),
+            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
+            ("APPDATA", Some(app_data.as_str())),
+        ];
+        let _guard = enter_process_state(Some(temp.path()), &env_vars);
         let cfg = resolve_store_backend_config().expect("backend config");
 
         assert_eq!(
@@ -88,28 +109,34 @@ mod tests {
     }
 
     #[test]
-    fn main_target_dashboard_local_dashboard_reads_repo_config() {
+    fn main_target_dashboard_local_dashboard_reads_daemon_config() {
         let temp = tempfile::tempdir().expect("temp dir");
-        write_envelope_config(
+        write_daemon_config(
             temp.path(),
-            serde_json::json!({
-                "dashboard": {
-                    "local_dashboard": {
-                        "tls": true,
-                        "bitloops_local": true
-                    }
-                }
-            }),
+            r#"
+[dashboard.local_dashboard]
+tls = true
+"#,
         );
 
-        let _guard = enter_process_state(Some(temp.path()), &[]);
+        let xdg_config_home = temp.path().join(".config").display().to_string();
+        let app_data = temp
+            .path()
+            .join("AppData")
+            .join("Roaming")
+            .display()
+            .to_string();
+        let home = temp.path().display().to_string();
+        let env_vars = vec![
+            ("HOME", Some(home.as_str())),
+            ("XDG_CONFIG_HOME", Some(xdg_config_home.as_str())),
+            ("APPDATA", Some(app_data.as_str())),
+        ];
+        let _guard = enter_process_state(Some(temp.path()), &env_vars);
 
         assert_eq!(
             resolve_dashboard_config().local_dashboard,
-            Some(DashboardLocalDashboardConfig {
-                tls: Some(true),
-                bitloops_local: Some(true),
-            })
+            Some(DashboardLocalDashboardConfig { tls: Some(true) })
         );
     }
 

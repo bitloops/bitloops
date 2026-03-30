@@ -445,26 +445,37 @@ impl Strategy for AutoCommitStrategy {
         }
 
         let metadata_dir_abs = if !ctx.metadata_dir_abs.trim().is_empty() {
-            PathBuf::from(&ctx.metadata_dir_abs)
+            Some(PathBuf::from(&ctx.metadata_dir_abs))
         } else if !ctx.metadata_dir.trim().is_empty() {
-            self.repo_root.join(&ctx.metadata_dir)
+            Some(self.repo_root.join(&ctx.metadata_dir))
         } else {
-            self.repo_root
-                .join(paths::session_metadata_dir_from_session_id(&ctx.session_id))
+            None
         };
 
         let transcript = {
-            let from_metadata = metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME);
-            if from_metadata.exists() {
-                read_optional_bytes(&from_metadata)
+            if let Some(metadata_dir_abs) = metadata_dir_abs.as_ref() {
+                let from_metadata = metadata_dir_abs.join(paths::TRANSCRIPT_FILE_NAME);
+                if from_metadata.exists() {
+                    read_optional_bytes(&from_metadata)
+                } else if !ctx.transcript_path.trim().is_empty() {
+                    read_optional_bytes(Path::new(&ctx.transcript_path))
+                } else {
+                    vec![]
+                }
             } else if !ctx.transcript_path.trim().is_empty() {
                 read_optional_bytes(Path::new(&ctx.transcript_path))
             } else {
                 vec![]
             }
         };
-        let prompt = read_optional_file(&metadata_dir_abs.join(paths::PROMPT_FILE_NAME));
-        let context = read_optional_file(&metadata_dir_abs.join(paths::CONTEXT_FILE_NAME));
+        let prompt = metadata_dir_abs
+            .as_ref()
+            .map(|path| read_optional_file(&path.join(paths::PROMPT_FILE_NAME)))
+            .unwrap_or_default();
+        let context = metadata_dir_abs
+            .as_ref()
+            .map(|path| read_optional_file(&path.join(paths::CONTEXT_FILE_NAME)))
+            .unwrap_or_default();
         let checkpoint_id = generate_checkpoint_id();
 
         if !self.commit_code_to_active_branch(ctx, &checkpoint_id)? {

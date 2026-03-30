@@ -63,6 +63,25 @@ pub(crate) const TS_JS_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescr
     compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
 };
 
+pub(crate) const PYTHON_LANGUAGE_PACK: LanguagePackDescriptor = LanguagePackDescriptor {
+    id: "python-language-pack",
+    version: "1.0.0",
+    api_version: 1,
+    display_name: "Python Language Pack",
+    aliases: &["python-pack", "py-pack"],
+    supported_languages: &["python"],
+    language_profiles: &[LanguageProfileDescriptor {
+        id: "python-standard",
+        display_name: "Python Standard",
+        language_id: "python",
+        dialect: Some("py"),
+        aliases: &["py"],
+        file_extensions: &["py"],
+        supported_source_versions: &["^3.10", "^3.11", "^3.12"],
+    }],
+    compatibility: ExtensionCompatibility::phase1_local_cli(LANGUAGE_PACK_FEATURES),
+};
+
 const KNOWLEDGE_CAPABILITY_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: "knowledge-capability-pack",
     display_name: "Knowledge Capability Pack",

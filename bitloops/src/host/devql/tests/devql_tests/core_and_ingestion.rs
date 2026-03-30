@@ -17,6 +17,7 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/main.js"), "javascript");
     assert_eq!(detect_language("src/component.jsx"), "javascript");
     assert_eq!(detect_language("src/lib.rs"), "rust");
+    assert_eq!(detect_language("src/main.py"), "python");
     assert_eq!(detect_language("src/readme.custom"), "custom");
     assert_eq!(detect_language("README"), "text");
 }

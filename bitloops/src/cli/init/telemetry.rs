@@ -1,28 +1,20 @@
 use std::env;
 use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 
-use crate::config::settings;
+use crate::config::{load_daemon_settings, persist_daemon_cli_settings};
 
 use super::agent_selection::can_prompt_interactively;
 
 pub(super) const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
 
-fn telemetry_settings_target(repo_root: &Path) -> PathBuf {
-    let local = settings::settings_local_path(repo_root);
-    if local.exists() {
-        local
-    } else {
-        settings::settings_path(repo_root)
-    }
-}
-
-fn persist_telemetry_choice(repo_root: &Path, choice: bool) -> Result<()> {
-    let mut merged = settings::load_settings(repo_root).unwrap_or_default();
-    merged.telemetry = Some(choice);
-    settings::save_settings(&merged, &telemetry_settings_target(repo_root))?;
+fn persist_telemetry_choice(choice: bool) -> Result<()> {
+    let loaded = load_daemon_settings(None)?;
+    let mut cli = loaded.cli;
+    cli.telemetry = Some(choice);
+    persist_daemon_cli_settings(&cli)?;
     Ok(())
 }
 
@@ -60,16 +52,16 @@ pub(super) fn maybe_capture_telemetry_consent(
     allow_prompt: bool,
     out: &mut dyn Write,
 ) -> Result<()> {
+    let _ = repo_root;
     if !telemetry_flag
         || env::var(TELEMETRY_OPTOUT_ENV)
             .ok()
             .is_some_and(|v| !v.trim().is_empty())
     {
-        return persist_telemetry_choice(repo_root, false);
+        return persist_telemetry_choice(false);
     }
 
-    let existing = settings::load_settings(repo_root).unwrap_or_default();
-    if existing.telemetry.is_some() {
+    if load_daemon_settings(None)?.cli.telemetry.is_some() {
         return Ok(());
     }
 
@@ -80,5 +72,5 @@ pub(super) fn maybe_capture_telemetry_consent(
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let consent = prompt_telemetry_consent(out, &mut input)?;
-    persist_telemetry_choice(repo_root, consent)
+    persist_telemetry_choice(consent)
 }

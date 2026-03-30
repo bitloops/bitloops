@@ -11,8 +11,6 @@ use super::super::dto::{
 };
 use super::super::{CommitCheckpointQuery, DashboardState, canonical_agent_key};
 
-const DASHBOARD_GRAPHQL_REPO_NAME: &str = "dashboard";
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DashboardGraphqlBranchesData {
@@ -120,6 +118,7 @@ pub(super) async fn load_dashboard_branches_via_graphql(
     from_unix: Option<i64>,
     to_unix: Option<i64>,
 ) -> std::result::Result<Vec<ApiBranchSummaryDto>, ApiError> {
+    let repo_selector = dashboard_graphql_repo_selector(state)?;
     let data: DashboardGraphqlBranchesData = execute_dashboard_graphql(
         state,
         r#"
@@ -133,7 +132,7 @@ pub(super) async fn load_dashboard_branches_via_graphql(
         }
         "#,
         json!({
-            "repo": DASHBOARD_GRAPHQL_REPO_NAME,
+            "repo": repo_selector,
             "since": optional_rfc3339_from_unix_seconds(from_unix),
             "until": optional_rfc3339_from_unix_seconds(to_unix),
         }),
@@ -155,6 +154,7 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
     state: &DashboardState,
     filter: &CommitCheckpointQuery,
 ) -> std::result::Result<Vec<DashboardGraphqlCommitRow>, ApiError> {
+    let repo_selector = dashboard_graphql_repo_selector(state)?;
     let data: DashboardGraphqlCommitsData = execute_dashboard_graphql(
         state,
         r#"
@@ -202,7 +202,7 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
         }
         "#,
         json!({
-            "repo": DASHBOARD_GRAPHQL_REPO_NAME,
+            "repo": repo_selector,
             "branch": filter.branch.as_str(),
             "since": optional_rfc3339_from_unix_seconds(filter.from_unix),
             "until": optional_rfc3339_from_unix_seconds(filter.to_unix),
@@ -237,6 +237,18 @@ pub(super) async fn load_dashboard_commit_rows_via_graphql(
     Ok(rows)
 }
 
+fn dashboard_graphql_repo_selector(
+    state: &DashboardState,
+) -> std::result::Result<String, ApiError> {
+    crate::host::devql::resolve_repo_identity(&state.repo_root)
+        .map(|repo| repo.repo_id)
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed to resolve dashboard repository scope: {err:#}"
+            ))
+        })
+}
+
 async fn execute_dashboard_graphql<T: DeserializeOwned>(
     state: &DashboardState,
     query: &str,
@@ -244,7 +256,16 @@ async fn execute_dashboard_graphql<T: DeserializeOwned>(
 ) -> std::result::Result<T, ApiError> {
     let response = state
         .devql_schema()
-        .execute(GraphqlRequest::new(query).variables(Variables::from_json(variables)))
+        .execute(
+            GraphqlRequest::new(query)
+                .variables(Variables::from_json(variables))
+                .data(crate::graphql::DevqlGraphqlContext::for_global_request(
+                    state.config_root.clone(),
+                    state.repo_root.clone(),
+                    state.repo_registry_path.clone(),
+                    state.db.clone(),
+                )),
+        )
         .await;
 
     if let Some(error) = response.errors.first() {

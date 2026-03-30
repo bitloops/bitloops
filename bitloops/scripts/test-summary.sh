@@ -14,22 +14,36 @@ else
 fi
 
 with_coverage=0
+test_threads="${BITLOOPS_TEST_THREADS:-8}"
+cargo_jobs="${BITLOOPS_CARGO_JOBS:-4}"
 cargo_args=()
 for arg in "$@"; do
   case "$arg" in
     --coverage)
       with_coverage=1
       ;;
+    --test-threads=*)
+      test_threads="${arg#*=}"
+      ;;
+    --cargo-jobs=*)
+      cargo_jobs="${arg#*=}"
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./scripts/test-summary.sh [--coverage] [cargo test args...]
+Usage: ./scripts/test-summary.sh [--coverage] [--test-threads=N] [--cargo-jobs=N] [cargo test args...]
 
 Options:
   --coverage       Run tests through cargo-llvm-cov (single test run),
                    then print a coverage summary.
+  --test-threads   Set RUST_TEST_THREADS for the test binary runner.
+                   Defaults to BITLOOPS_TEST_THREADS or 1.
+  --cargo-jobs     Set Cargo job parallelism for compiling/running test binaries.
+                   Defaults to BITLOOPS_CARGO_JOBS or 1.
 
 Examples:
   ./scripts/test-summary.sh
+  ./scripts/test-summary.sh --test-threads=4
+  ./scripts/test-summary.sh --cargo-jobs=2
   ./scripts/test-summary.sh --lib
   ./scripts/test-summary.sh --coverage
   ./scripts/test-summary.sh --coverage --lib
@@ -50,6 +64,18 @@ trap cleanup EXIT
 
 coverage_file="$PROJECT_ROOT/target/llvm-cov.info"
 
+if [[ ! "$test_threads" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --test-threads value: $test_threads" >&2
+  exit 2
+fi
+
+if [[ ! "$cargo_jobs" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --cargo-jobs value: $cargo_jobs" >&2
+  exit 2
+fi
+
+export RUST_TEST_THREADS="$test_threads"
+
 set +e
 if [[ "$with_coverage" -eq 1 ]]; then
   if ! cargo llvm-cov --version >/dev/null 2>&1; then
@@ -59,16 +85,20 @@ if [[ "$with_coverage" -eq 1 ]]; then
 
   rm -f "$coverage_file"
   if [[ ${#cargo_args[@]} -gt 0 ]]; then
-    cargo llvm-cov "${duckdb_no_bundle_flags[@]}" --no-fail-fast --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
+    cargo llvm-cov -j "$cargo_jobs" "${duckdb_no_bundle_flags[@]}" --no-fail-fast --lcov --output-path "$coverage_file" "${cargo_args[@]}" 2>&1 | tee "$log_file"
   else
-    cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
+    cargo llvm-cov -j "$cargo_jobs" --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$coverage_file" 2>&1 | tee "$log_file"
   fi
 else
-  cargo test --no-fail-fast "${duckdb_no_bundle_flags[@]}" "${cargo_args[@]}" 2>&1 | tee "$log_file"
+  cargo test -j "$cargo_jobs" --no-fail-fast "${duckdb_no_bundle_flags[@]}" "${cargo_args[@]}" 2>&1 | tee "$log_file"
 fi
 status=${PIPESTATUS[0]}
 set -e
 
+echo
+echo "=== Test runner configuration ==="
+echo "RUST_TEST_THREADS=$RUST_TEST_THREADS"
+echo "CARGO_JOBS=$cargo_jobs"
 echo
 echo "=== Combined test summaries ==="
 if command -v rg >/dev/null 2>&1; then

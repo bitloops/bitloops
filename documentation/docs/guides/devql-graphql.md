@@ -8,7 +8,7 @@ DevQL is exposed as a GraphQL-compatible schema. The CLI, dashboard, and HTTP/We
 
 ## Surface Summary
 
-When the dashboard server is running, DevQL exposes these routes:
+When the Bitloops daemon is running, DevQL exposes these routes:
 
 | Route | Method | Purpose |
 |---|---|---|
@@ -22,7 +22,7 @@ The checked-in schema snapshot lives at `bitloops/schema.graphql`. The canonical
 
 ## CLI Query Modes
 
-`bitloops devql query` executes the in-process GraphQL schema. It supports two input styles:
+`bitloops devql query` executes against the local Bitloops daemon. It supports two input styles:
 
 - DevQL DSL pipelines when the query contains `->`
 - Raw GraphQL by default for any other input

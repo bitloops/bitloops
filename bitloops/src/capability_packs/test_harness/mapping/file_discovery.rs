@@ -1,16 +1,17 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
 use crate::capability_packs::test_harness::mapping::model::CandidateTestFile;
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
+use crate::host::language_adapter::LanguageTestSupport;
 
 pub(crate) fn discover_test_files(
     repo_dir: &Path,
-    providers: &[Box<dyn LanguageProvider>],
+    providers: &[Arc<dyn LanguageTestSupport>],
 ) -> Result<Vec<CandidateTestFile>> {
     let mut files = Vec::new();
 
@@ -29,19 +30,17 @@ pub(crate) fn discover_test_files(
             .with_context(|| format!("file {} is not under repo dir", entry.path().display()))?;
         let relative_path = normalize_rel_path(relative);
 
-        let Some((provider_index, priority)) =
-            providers.iter().enumerate().find_map(|(index, provider)| {
-                provider
-                    .supports_path(entry.path(), &relative_path)
-                    .then_some((index, provider.priority()))
-            })
-        else {
+        let Some((language_id, priority)) = providers.iter().find_map(|provider| {
+            provider
+                .supports_path(entry.path(), &relative_path)
+                .then_some((provider.language_id().to_string(), provider.priority()))
+        }) else {
             continue;
         };
 
         files.push(CandidateTestFile {
             relative_path,
-            provider_index,
+            language_id,
             priority,
         });
     }

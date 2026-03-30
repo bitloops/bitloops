@@ -1,4 +1,3 @@
-use super::git_history::git_default_branch_name;
 use super::{DevqlGraphqlContext, GRAPHQL_GIT_SCAN_LIMIT};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
@@ -7,10 +6,7 @@ use crate::graphql::types::{
 use crate::host::checkpoints::strategy::manual_commit::{
     SessionContentView, read_session_content_by_id,
 };
-use crate::host::devql::{
-    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, escape_like_pattern,
-    sql_like_with_escape, sqlite_query_rows_path,
-};
+use crate::host::devql::{esc_ch, esc_pg, escape_like_pattern, sql_like_with_escape};
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -27,14 +23,15 @@ impl DevqlGraphqlContext {
         let Some(project_path) = scope.project_path() else {
             return Ok(Vec::new());
         };
+        let repo_id = self.repo_id_for_scope(scope)?;
 
         let sql = build_project_clones_sql(
-            self.repo_identity.repo_id.as_str(),
-            &git_default_branch_name(self.repo_root.as_path()),
+            &repo_id,
+            &self.current_branch_name(scope),
             project_path,
             filter,
         );
-        let rows = sqlite_query_rows_path(&self.devql_sqlite_path()?, &sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
             .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
@@ -47,14 +44,15 @@ impl DevqlGraphqlContext {
         filter: Option<&ClonesFilterInput>,
         scope: &ResolverScope,
     ) -> Result<Vec<SemanticClone>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = build_artefact_clones_sql(
-            self.repo_identity.repo_id.as_str(),
-            &git_default_branch_name(self.repo_root.as_path()),
+            &repo_id,
+            &self.current_branch_name(scope),
             artefact_id,
             scope.project_path(),
             filter,
         );
-        let rows = sqlite_query_rows_path(&self.devql_sqlite_path()?, &sql).await?;
+        let rows = self.query_devql_sqlite_rows(&sql).await?;
         rows.into_iter()
             .map(clone_from_row)
             .map(|result| result.map(|clone| clone.with_scope(scope.clone())))
@@ -64,7 +62,7 @@ impl DevqlGraphqlContext {
     pub(crate) async fn load_chat_history_by_paths(
         &self,
         paths: &[String],
-        _scope: &ResolverScope,
+        scope: &ResolverScope,
     ) -> Result<HashMap<String, Vec<ChatEntry>>> {
         let unique_paths = dedup_paths(paths);
         if unique_paths.is_empty() {
@@ -75,7 +73,9 @@ impl DevqlGraphqlContext {
             .iter()
             .map(|path| (path.clone(), build_path_candidates(path)))
             .collect::<HashMap<_, _>>();
-        let events = self.list_chat_history_events(&path_candidates).await?;
+        let events = self
+            .list_chat_history_events(scope, &path_candidates)
+            .await?;
 
         let mut entries_by_path = unique_paths
             .iter()
@@ -99,7 +99,10 @@ impl DevqlGraphqlContext {
                 .entry(cache_key)
                 .or_insert_with(|| {
                     load_session_messages(
-                        self.repo_root.as_path(),
+                        self.repo_root_for_scope(scope)
+                            .ok()
+                            .as_deref()
+                            .unwrap_or(self.repo_root.as_path()),
                         &event.checkpoint_id,
                         &event.session_id,
                         &event.event_time,
@@ -140,6 +143,7 @@ impl DevqlGraphqlContext {
 
     async fn list_chat_history_events(
         &self,
+        scope: &ResolverScope,
         path_candidates: &HashMap<String, Vec<String>>,
     ) -> Result<Vec<CheckpointChatEvent>> {
         if path_candidates.is_empty() {
@@ -150,16 +154,12 @@ impl DevqlGraphqlContext {
             .backend_config
             .as_ref()
             .context("store backend configuration unavailable")?;
-        let repo_id = self.repo_identity.repo_id.as_str();
+        let repo_id = self.repo_id_for_scope(scope)?;
 
         if backend_config.events.has_clickhouse() {
-            let cfg = self.config.as_ref().with_context(|| {
-                self.config_error
-                    .clone()
-                    .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-            })?;
-            let sql = build_clickhouse_chat_history_sql(repo_id, path_candidates);
-            let rows = clickhouse_query_data(cfg, &sql)
+            let sql = build_clickhouse_chat_history_sql(&repo_id, path_candidates);
+            let rows = self
+                .query_clickhouse_data(&sql)
                 .await?
                 .as_array()
                 .cloned()
@@ -170,11 +170,11 @@ impl DevqlGraphqlContext {
                 .collect();
         }
 
-        let sql = build_duckdb_chat_history_sql(repo_id, path_candidates);
+        let sql = build_duckdb_chat_history_sql(&repo_id, path_candidates);
         let duckdb_path = backend_config
             .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root);
-        let rows = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+            .resolve_duckdb_db_path_for_repo(&self.config_root);
+        let rows = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
         rows.into_iter()
             .map(normalise_duckdb_event_row)
             .map(checkpoint_chat_event_from_row)

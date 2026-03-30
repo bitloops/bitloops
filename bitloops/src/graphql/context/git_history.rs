@@ -16,8 +16,20 @@ use std::path::Path;
 use tokio::task;
 
 impl DevqlGraphqlContext {
-    pub(crate) async fn default_branch_name(&self) -> String {
-        let repo_root = self.repo_root.clone();
+    pub(crate) async fn default_branch_name_for_scope(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> String {
+        let repo_root = match self.repo_root_for_scope(scope) {
+            Ok(repo_root) => repo_root,
+            Err(_) => {
+                return self
+                    .repository_selection_for_scope(scope)
+                    .ok()
+                    .and_then(|repository| repository.default_branch().map(str::to_string))
+                    .unwrap_or_else(|| "main".to_string());
+            }
+        };
         task::spawn_blocking(move || git_default_branch_name(repo_root.as_path()))
             .await
             .unwrap_or_else(|_| "main".to_string())
@@ -25,12 +37,14 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn list_commits(
         &self,
+        scope: &crate::graphql::ResolverScope,
         branch: Option<&str>,
         author: Option<&str>,
         since: Option<&DateTimeScalar>,
         until: Option<&DateTimeScalar>,
     ) -> Result<Vec<Commit>> {
-        let repo_root = self.repo_root.clone();
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let scope = scope.clone();
         let branch = branch
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -53,7 +67,10 @@ impl DevqlGraphqlContext {
             let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
             let raw = run_git(repo_root.as_path(), &arg_refs)
                 .with_context(|| format!("reading git history for branch `{branch}`"))?;
-            parse_git_log(&raw, &branch)
+            Ok(parse_git_log(&raw, &branch)?
+                .into_iter()
+                .map(|commit| commit.with_scope(scope.clone()))
+                .collect())
         })
         .await
         .context("joining commit history task")?
@@ -61,10 +78,11 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn list_branches(
         &self,
+        scope: &crate::graphql::ResolverScope,
         since: Option<&DateTimeScalar>,
         until: Option<&DateTimeScalar>,
     ) -> Result<Vec<Branch>> {
-        let repo_root = self.repo_root.clone();
+        let repo_root = self.repo_root_for_scope(scope)?;
         let since = since.map(|value| value.as_str().to_string());
         let until = until.map(|value| value.as_str().to_string());
 
@@ -131,8 +149,11 @@ impl DevqlGraphqlContext {
         .context("joining branch query task")?
     }
 
-    pub(crate) async fn list_users(&self) -> Result<Vec<String>> {
-        let repo_root = self.repo_root.clone();
+    pub(crate) async fn list_users(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> Result<Vec<String>> {
+        let repo_root = self.repo_root_for_scope(scope)?;
 
         task::spawn_blocking(move || -> Result<Vec<String>> {
             let mappings = match read_commit_checkpoint_mappings_all(repo_root.as_path()) {
@@ -176,8 +197,11 @@ impl DevqlGraphqlContext {
         .context("joining users query task")?
     }
 
-    pub(crate) async fn list_agents(&self) -> Result<Vec<String>> {
-        let repo_root = self.repo_root.clone();
+    pub(crate) async fn list_agents(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+    ) -> Result<Vec<String>> {
+        let repo_root = self.repo_root_for_scope(scope)?;
 
         task::spawn_blocking(move || -> Result<Vec<String>> {
             let committed = match list_committed(repo_root.as_path()) {
@@ -208,8 +232,12 @@ impl DevqlGraphqlContext {
         .context("joining agents query task")?
     }
 
-    pub(crate) async fn list_commit_files_changed(&self, commit_sha: &str) -> Result<Vec<String>> {
-        let repo_root = self.repo_root.clone();
+    pub(crate) async fn list_commit_files_changed(
+        &self,
+        scope: &crate::graphql::ResolverScope,
+        commit_sha: &str,
+    ) -> Result<Vec<String>> {
+        let repo_root = self.repo_root_for_scope(scope)?;
         let commit_sha = commit_sha.to_string();
 
         task::spawn_blocking(move || -> Result<Vec<String>> {
@@ -347,6 +375,7 @@ fn parse_git_log(raw: &str, branch: &str) -> Result<Vec<Commit>> {
             commit_message,
             committed_at,
             branch: branch.clone(),
+            scope: crate::graphql::ResolverScope::default(),
         });
     }
 

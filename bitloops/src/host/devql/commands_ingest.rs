@@ -38,7 +38,7 @@ pub(crate) async fn execute_ingest_with_observer(
 
     let result: Result<()> = async {
     let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for `devql ingest`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
     let knowledge_context =

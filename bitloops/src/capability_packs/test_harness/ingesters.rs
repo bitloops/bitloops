@@ -2,9 +2,6 @@ mod classification;
 mod coverage;
 mod linkage;
 
-use std::sync::{Arc, Mutex};
-
-use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::IngesterRegistration;
 
 use super::types::{
@@ -16,32 +13,26 @@ pub use classification::ClassificationIngester;
 pub use coverage::CoverageIngestIngester;
 pub use linkage::LinkageIngester;
 
-pub fn build_linkage_ingester(
-    store: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
-) -> IngesterRegistration {
+pub fn build_linkage_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         "test_harness",
         TEST_HARNESS_LINKAGE_INGESTER_ID,
-        std::sync::Arc::new(LinkageIngester(store)),
+        std::sync::Arc::new(LinkageIngester),
     )
 }
 
-pub fn build_coverage_ingester(
-    store: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
-) -> IngesterRegistration {
+pub fn build_coverage_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         "test_harness",
         TEST_HARNESS_COVERAGE_INGESTER_ID,
-        std::sync::Arc::new(CoverageIngestIngester(store)),
+        std::sync::Arc::new(CoverageIngestIngester),
     )
 }
 
-pub fn build_classification_ingester(
-    store: Option<Arc<Mutex<BitloopsTestHarnessRepository>>>,
-) -> IngesterRegistration {
+pub fn build_classification_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         "test_harness",
         TEST_HARNESS_CLASSIFICATION_INGESTER_ID,
-        std::sync::Arc::new(ClassificationIngester(store)),
+        std::sync::Arc::new(ClassificationIngester),
     )
 }

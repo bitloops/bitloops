@@ -212,9 +212,15 @@ ON CONFLICT (repo_id, branch, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.ar
 mod tests {
     use super::*;
 
+    fn sample_repo_root() -> PathBuf {
+        std::env::temp_dir().join("bitloops-artefact-persistence-symbols")
+    }
+
     fn sample_cfg() -> DevqlConfig {
+        let repo_root = sample_repo_root();
         DevqlConfig {
-            repo_root: PathBuf::from("."),
+            config_root: repo_root.clone(),
+            repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),
                 organization: "bitloops".to_string(),
@@ -234,6 +240,7 @@ mod tests {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 

@@ -12,13 +12,12 @@ use crate::capability_packs::test_harness::mapping::model::{
     DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
     ScenarioDiscoverySource,
 };
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
-pub(crate) struct TypeScriptLanguageProvider {
+pub(crate) struct TypeScriptTestMappingHelper {
     parser: Parser,
 }
 
-impl TypeScriptLanguageProvider {
+impl TypeScriptTestMappingHelper {
     pub(crate) fn new() -> Result<Self> {
         let mut parser = Parser::new();
         parser
@@ -26,24 +25,14 @@ impl TypeScriptLanguageProvider {
             .context("failed to load TypeScript parser")?;
         Ok(Self { parser })
     }
-}
 
-impl LanguageProvider for TypeScriptLanguageProvider {
-    fn language_id(&self) -> &'static str {
-        "typescript"
-    }
-
-    fn priority(&self) -> u8 {
-        1
-    }
-
-    fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.ts")
             || relative_path.ends_with(".spec.ts")
             || relative_path.contains("/__tests__/")
     }
 
-    fn discover_tests(
+    pub(crate) fn discover_tests(
         &mut self,
         absolute_path: &Path,
         relative_path: &str,
@@ -63,7 +52,7 @@ impl LanguageProvider for TypeScriptLanguageProvider {
 
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
-            language: self.language_id().to_string(),
+            language: "typescript".to_string(),
             reference_candidates,
             suites: collect_typescript_suites(root, bytes),
         })

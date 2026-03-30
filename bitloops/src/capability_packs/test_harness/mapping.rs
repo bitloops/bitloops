@@ -3,15 +3,15 @@ pub(crate) mod languages;
 pub(crate) mod linker;
 pub(crate) mod materialize;
 pub(crate) mod model;
-mod registry;
 
 #[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::capability_packs::test_harness::mapping::file_discovery::discover_test_files;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
@@ -21,7 +21,8 @@ use crate::capability_packs::test_harness::mapping::materialize::{
 use crate::capability_packs::test_harness::mapping::model::{
     StructuralMappingOutput, StructuralMappingStats, TestDiscoveryBatch,
 };
-use crate::capability_packs::test_harness::mapping::registry::StructuralMappingRegistry;
+use crate::host::capability_host::gateways::LanguageServicesGateway;
+use crate::host::language_adapter::{LanguageAdapterContext, LanguageTestSupport};
 use crate::models::ProductionArtefact;
 
 pub(crate) fn execute(
@@ -29,18 +30,31 @@ pub(crate) fn execute(
     repo_dir: &Path,
     commit_sha: &str,
     production: &[ProductionArtefact],
+    languages: &dyn LanguageServicesGateway,
 ) -> Result<StructuralMappingOutput> {
     let production_index = build_production_index(production);
-    let mut registry = StructuralMappingRegistry::new()?;
-    let enumeration_results: HashMap<&'static str, _> =
-        registry.enumerate_all(repo_dir).into_iter().collect();
+    let supports = languages.test_supports();
+    let language_context = LanguageAdapterContext::new(
+        repo_dir.to_path_buf(),
+        repo_id.to_string(),
+        Some(commit_sha.to_string()),
+    );
+    let enumeration_results: HashMap<String, _> = supports
+        .iter()
+        .map(|support| {
+            (
+                support.language_id().to_string(),
+                support.enumerate_tests(&language_context),
+            )
+        })
+        .collect();
 
-    let candidates = discover_test_files(repo_dir, registry.providers())?;
+    let candidates = discover_test_files(repo_dir, &supports)?;
     let mut discovery_batch = TestDiscoveryBatch::default();
 
     for candidate in candidates {
         let absolute_path = repo_dir.join(&candidate.relative_path);
-        let provider = registry.provider_mut(candidate.provider_index);
+        let provider = find_language_support(&supports, &candidate.language_id)?;
         discovery_batch
             .files
             .push(provider.discover_tests(&absolute_path, &candidate.relative_path)?);
@@ -75,12 +89,7 @@ pub(crate) fn execute(
         }
         enumeration_notes.extend(enumeration.notes.clone());
 
-        let provider_index = registry
-            .providers()
-            .iter()
-            .position(|provider| provider.language_id() == language_id)
-            .expect("provider should exist for enumeration result");
-        let provider = registry.provider_mut(provider_index);
+        let provider = find_language_support(&supports, &language_id)?;
         let reconciled = provider.reconcile(&discovery_batch.files, enumeration);
 
         materialize_enumerated_scenarios(&mut materialization, &reconciled.enumerated_scenarios);
@@ -94,4 +103,15 @@ pub(crate) fn execute(
         enumeration_notes,
         issues: discovery_batch.issues,
     })
+}
+
+fn find_language_support<'a>(
+    supports: &'a [Arc<dyn LanguageTestSupport>],
+    language_id: &str,
+) -> Result<&'a dyn LanguageTestSupport> {
+    supports
+        .iter()
+        .find(|support| support.language_id() == language_id)
+        .map(Arc::as_ref)
+        .ok_or_else(|| anyhow!("language test support `{language_id}` is not registered"))
 }

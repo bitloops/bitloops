@@ -1,8 +1,9 @@
 use anyhow::Result;
+use std::sync::Arc;
 
 use super::{
     CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck,
-    LanguageAdapterMigrationDescriptor, LanguageArtefact,
+    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageTestSupport,
 };
 use crate::host::extension_host::LanguagePackDescriptor;
 
@@ -19,6 +20,10 @@ pub(crate) trait LanguageAdapterPack: Send + Sync {
     ) -> Result<Vec<DependencyEdge>>;
     fn extract_file_docstring(&self, content: &str) -> Option<String> {
         let _ = content;
+        None
+    }
+
+    fn test_support(&self) -> Option<Arc<dyn LanguageTestSupport>> {
         None
     }
 

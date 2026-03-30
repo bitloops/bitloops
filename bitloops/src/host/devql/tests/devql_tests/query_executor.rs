@@ -1,9 +1,19 @@
 use super::*;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
 
+fn isolated_executor_repo_root() -> PathBuf {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create isolated executor repo root");
+    std::mem::forget(temp);
+    repo_root
+}
+
 fn executor_test_cfg() -> DevqlConfig {
+    let repo_root = isolated_executor_repo_root();
     DevqlConfig {
-        repo_root: PathBuf::from("."),
+        config_root: repo_root.clone(),
+        repo_root,
         repo: RepoIdentity {
             provider: "local".to_string(),
             organization: "bitloops".to_string(),
@@ -23,6 +33,7 @@ fn executor_test_cfg() -> DevqlConfig {
         embedding_provider: None,
         embedding_model: None,
         embedding_api_key: None,
+        embedding_cache_dir: None,
     }
 }
 
@@ -38,6 +49,7 @@ fn executor_events_cfg() -> EventsBackendConfig {
 
 fn executor_test_cfg_for_repo_root(repo_root: PathBuf) -> DevqlConfig {
     let mut cfg = executor_test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     cfg
 }
@@ -48,24 +60,13 @@ fn configure_executor_sqlite_backend(repo_root: &std::path::Path) {
         std::fs::create_dir_all(parent).expect("create sqlite parent");
     }
     rusqlite::Connection::open(&sqlite_path).expect("create sqlite file");
-    let config_dir = repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_repo_daemon_config(
+        repo_root,
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
+    );
 }
 
 async fn sqlite_relational_with_sql(sql: &str) -> RelationalStorage {

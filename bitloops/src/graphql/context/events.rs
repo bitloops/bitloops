@@ -1,7 +1,7 @@
 use super::{DevqlGraphqlContext, GRAPHQL_GIT_SCAN_LIMIT};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{Checkpoint, DateTimeScalar, JsonScalar, TelemetryEvent};
-use crate::host::devql::{clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg};
+use crate::host::devql::{esc_ch, esc_pg};
 use anyhow::{Context, Result, anyhow, bail};
 use async_graphql::types::Json;
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -18,34 +18,35 @@ impl DevqlGraphqlContext {
             .backend_config
             .as_ref()
             .context("store backend configuration unavailable")?;
-        let repo_id = self.repo_identity.repo_id.as_str();
+        let repo_id = self.repo_id_for_scope(scope)?;
 
-        if backend_config.events.has_clickhouse() {
-            let cfg = self.config.as_ref().with_context(|| {
-                self.config_error
-                    .clone()
-                    .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-            })?;
-            let sql = build_clickhouse_checkpoints_sql(repo_id, scope, agent, since);
-            let rows: Vec<Value> = clickhouse_query_data(cfg, &sql)
+        let checkpoints = if backend_config.events.has_clickhouse() {
+            let sql = build_clickhouse_checkpoints_sql(&repo_id, scope, agent, since);
+            let rows: Vec<Value> = self
+                .query_clickhouse_data(&sql)
                 .await?
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
-            return rows
-                .into_iter()
+            rows.into_iter()
                 .map(checkpoint_from_row)
-                .collect::<Result<Vec<_>>>();
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            let sql = build_duckdb_checkpoints_sql(&repo_id, scope, agent, since);
+            let duckdb_path = backend_config
+                .events
+                .resolve_duckdb_db_path_for_repo(&self.config_root);
+            let rows: Vec<Value> = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
+            rows.into_iter()
+                .map(checkpoint_from_row)
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        if checkpoints.is_empty() {
+            return self.list_committed_checkpoints(scope, agent, since).await;
         }
 
-        let sql = build_duckdb_checkpoints_sql(repo_id, scope, agent, since);
-        let duckdb_path = backend_config
-            .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root);
-        let rows: Vec<Value> = duckdb_query_rows_path(&duckdb_path, &sql).await?;
-        rows.into_iter()
-            .map(checkpoint_from_row)
-            .collect::<Result<Vec<_>>>()
+        Ok(checkpoints)
     }
 
     pub(crate) async fn list_telemetry_events(
@@ -59,16 +60,12 @@ impl DevqlGraphqlContext {
             .backend_config
             .as_ref()
             .context("store backend configuration unavailable")?;
-        let repo_id = self.repo_identity.repo_id.as_str();
+        let repo_id = self.repo_id_for_scope(scope)?;
 
         if backend_config.events.has_clickhouse() {
-            let cfg = self.config.as_ref().with_context(|| {
-                self.config_error
-                    .clone()
-                    .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
-            })?;
-            let sql = build_clickhouse_telemetry_sql(repo_id, scope, event_type, agent, since);
-            let rows: Vec<Value> = clickhouse_query_data(cfg, &sql)
+            let sql = build_clickhouse_telemetry_sql(&repo_id, scope, event_type, agent, since);
+            let rows: Vec<Value> = self
+                .query_clickhouse_data(&sql)
                 .await?
                 .as_array()
                 .cloned()
@@ -79,11 +76,11 @@ impl DevqlGraphqlContext {
                 .collect::<Result<Vec<_>>>();
         }
 
-        let sql = build_duckdb_telemetry_sql(repo_id, scope, event_type, agent, since);
+        let sql = build_duckdb_telemetry_sql(&repo_id, scope, event_type, agent, since);
         let duckdb_path = backend_config
             .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root);
-        let rows: Vec<Value> = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+            .resolve_duckdb_db_path_for_repo(&self.config_root);
+        let rows: Vec<Value> = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
         rows.into_iter()
             .map(telemetry_event_from_row)
             .collect::<Result<Vec<_>>>()
@@ -108,6 +105,9 @@ fn build_clickhouse_checkpoints_sql(
             "event_time >= parseDateTime64BestEffortOrZero('{}')",
             esc_ch(since.as_str())
         ));
+    }
+    if let Some(branch_name) = scope.branch_name() {
+        conditions.push(format!("branch = '{}'", esc_ch(branch_name)));
     }
     if let Some(project_path) = scope.project_path() {
         conditions.push(clickhouse_project_filter(project_path));
@@ -148,6 +148,9 @@ fn build_duckdb_checkpoints_sql(
     }
     if let Some(since) = since {
         conditions.push(format!("event_time >= '{}'", esc_pg(since.as_str())));
+    }
+    if let Some(branch_name) = scope.branch_name() {
+        conditions.push(format!("branch = '{}'", esc_pg(branch_name)));
     }
     if let Some(project_path) = scope.project_path() {
         conditions.push(duckdb_project_filter(project_path));
@@ -193,6 +196,9 @@ fn build_clickhouse_telemetry_sql(
             esc_ch(since.as_str())
         ));
     }
+    if let Some(branch_name) = scope.branch_name() {
+        conditions.push(format!("branch = '{}'", esc_ch(branch_name)));
+    }
     if let Some(project_path) = scope.project_path() {
         conditions.push(clickhouse_project_filter(project_path));
     }
@@ -224,6 +230,9 @@ fn build_duckdb_telemetry_sql(
     }
     if let Some(since) = since {
         conditions.push(format!("event_time >= '{}'", esc_pg(since.as_str())));
+    }
+    if let Some(branch_name) = scope.branch_name() {
+        conditions.push(format!("branch = '{}'", esc_pg(branch_name)));
     }
     if let Some(project_path) = scope.project_path() {
         conditions.push(duckdb_project_filter(project_path));

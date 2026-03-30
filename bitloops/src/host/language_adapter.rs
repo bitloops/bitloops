@@ -9,6 +9,7 @@ mod health;
 mod migrations;
 mod pack;
 mod registry;
+mod test_support;
 mod types;
 
 pub(crate) use canonical::*;
@@ -18,4 +19,5 @@ pub(crate) use health::*;
 pub(crate) use migrations::*;
 pub(crate) use pack::*;
 pub(crate) use registry::*;
+pub(crate) use test_support::*;
 pub(crate) use types::*;

@@ -1,5 +1,72 @@
 use super::*;
 
+fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
+    let fingerprint = crate::config::discover_repo_policy(repo_root)
+        .expect("discover repo policy")
+        .fingerprint;
+    vec![
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ID.to_string(),
+            repo.repo_id,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_NAME.to_string(),
+            repo.name,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_PROVIDER.to_string(),
+            repo.provider,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ORGANISATION.to_string(),
+            repo.organization,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_IDENTITY.to_string(),
+            repo.identity,
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ROOT.to_string(),
+            repo_root.to_string_lossy().to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_BRANCH.to_string(),
+            "main".to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_GIT_DIR_RELATIVE_PATH.to_string(),
+            ".git".to_string(),
+        ),
+        (
+            crate::devql_transport::HEADER_SCOPE_CONFIG_FINGERPRINT.to_string(),
+            fingerprint,
+        ),
+    ]
+}
+
+async fn request_slim_query(
+    app: axum::Router,
+    repo_root: &Path,
+    query: &str,
+) -> (StatusCode, Value) {
+    let slim_headers = slim_scope_headers(repo_root);
+    let slim_headers_ref = slim_headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql",
+        "application/json",
+        &slim_headers_ref,
+        Body::from(json!({ "query": query }).to_string()),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn devql_playground_route_serves_explorer() {
     let temp = TempDir::new().expect("temp dir");
@@ -12,7 +79,7 @@ async fn devql_playground_route_serves_explorer() {
     let (status, body) = request_text(app, "/devql/playground").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("DevQL Explorer"));
+    assert!(body.contains("DevQL Slim Explorer"));
     assert!(body.contains("/devql"));
 }
 
@@ -28,35 +95,42 @@ async fn devql_sdl_route_returns_schema_text() {
     let (status, body) = request_text(app, "/devql/sdl").await;
 
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, crate::graphql::slim_schema_sdl());
     assert!(body.contains("health: HealthStatus!"));
-    assert!(body.contains("type QueryRoot"));
+    assert!(body.contains("type SlimQueryRoot"));
     assert!(body.contains("type MutationRoot"));
-    assert!(body.contains("repo(name: String!): Repository!"));
-    assert!(body.contains("initSchema: InitSchemaResult!"));
-    assert!(body.contains("ingest(input: IngestInput!): IngestResult!"));
+    assert!(body.contains("defaultBranch: String!"));
     assert!(body.contains("checkpoints(agent: String, since: DateTime"));
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
     assert!(body.contains("chatHistory"));
-    assert!(body.contains("input IngestInput"));
-    assert!(body.contains("type Clone"));
-    assert!(body.contains("type ChatEntry"));
-    assert!(body.contains("type InitSchemaResult"));
-    assert!(body.contains("type IngestResult"));
-    assert!(body.contains("type KnowledgeItem"));
-    assert!(body.contains("type KnowledgePayload"));
-    assert!(body.contains("type TelemetryEvent"));
-    assert!(body.contains("type TelemetryEventConnection"));
-    assert!(body.contains("type SubscriptionRoot"));
-    assert!(body.contains("checkpointIngested(repoName: String!): Checkpoint!"));
-    assert!(body.contains("ingestionProgress(repoName: String!): IngestionProgressEvent!"));
-    assert!(body.contains("type IngestionProgressEvent"));
-    assert!(body.contains("enum IngestionPhase"));
-    assert!(body.contains("project(path: String!): Project!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
-    assert!(body.contains("input AsOfInput"));
-    assert!(body.contains("type TemporalScope"));
+    assert!(!body.contains("repo(name: String!): Repository!"));
+}
+
+#[tokio::test]
+async fn devql_global_routes_serve_full_schema_and_playground() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (playground_status, playground_body) =
+        request_text(app.clone(), "/devql/global/playground").await;
+    assert_eq!(playground_status, StatusCode::OK);
+    assert!(playground_body.contains("DevQL Global Explorer"));
+    assert!(playground_body.contains("/devql/global"));
+
+    let (sdl_status, sdl_body) = request_text(app, "/devql/global/sdl").await;
+    assert_eq!(sdl_status, StatusCode::OK);
+    assert_eq!(sdl_body, crate::graphql::schema_sdl());
+    assert!(sdl_body.contains("type QueryRoot"));
+    assert!(sdl_body.contains("repo(name: String!): Repository!"));
+    assert!(sdl_body.contains("branch(name: String!): Repository!"));
+    assert!(sdl_body.contains("project(path: String!): Project!"));
 }
 
 #[test]
@@ -64,6 +138,14 @@ fn checked_in_schema_file_matches_runtime_sdl() {
     let expected = crate::graphql::schema_sdl();
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.graphql");
     let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.graphql");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn checked_in_slim_schema_file_matches_runtime_sdl() {
+    let expected = crate::graphql::slim_schema_sdl();
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema.slim.graphql");
+    let actual = fs::read_to_string(&schema_path).expect("read checked-in schema.slim.graphql");
     assert_eq!(actual, expected);
 }
 
@@ -143,17 +225,17 @@ async fn devql_graphql_rejects_queries_over_the_complexity_limit() {
 
 #[tokio::test]
 async fn devql_post_route_executes_graphql_requests() {
-    let temp = TempDir::new().expect("temp dir");
+    let repo = seed_graphql_devql_repo();
     let app = build_dashboard_router(test_state(
-        temp.path().to_path_buf(),
+        repo.path().to_path_buf(),
         ServeMode::HelloWorld,
-        temp.path().to_path_buf(),
+        repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json_with_method_and_content_type(
-        app,
+    let (global_status, global_payload) = request_json_with_method_and_content_type(
+        app.clone(),
         Method::POST,
-        "/devql",
+        "/devql/global",
         "application/json",
         Body::from(
             r#"{"query":"{ repo(name: \"demo\") { name provider } health { blob { backend connected } } }"}"#,
@@ -161,11 +243,618 @@ async fn devql_post_route_executes_graphql_requests() {
     )
     .await;
 
+    assert_eq!(global_status, StatusCode::OK);
+    assert_eq!(global_payload["data"]["repo"]["name"], "demo");
+    assert_eq!(global_payload["data"]["repo"]["provider"], "local");
+    assert_eq!(global_payload["data"]["health"]["blob"]["backend"], "local");
+    assert_eq!(global_payload["data"]["health"]["blob"]["connected"], true);
+
+    let slim_headers = slim_scope_headers(repo.path());
+    let slim_headers_ref = slim_headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let (slim_status, slim_payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql",
+        "application/json",
+        &slim_headers_ref,
+        Body::from(r#"{"query":"{ defaultBranch health { blob { backend connected } } }"}"#),
+    )
+    .await;
+
+    assert_eq!(slim_status, StatusCode::OK);
+    assert_eq!(slim_payload["data"]["defaultBranch"], "main");
+    assert_eq!(slim_payload["data"]["health"]["blob"]["backend"], "local");
+    assert_eq!(slim_payload["data"]["health"]["blob"]["connected"], true);
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_repository_file_and_dependency_queries() {
+    let repo = seed_graphql_devql_repo();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          defaultBranch
+          commits(first: 10) {
+            totalCount
+            pageInfo {
+              hasNextPage
+              hasPreviousPage
+            }
+            edges {
+              node {
+                commitMessage
+                branch
+              }
+            }
+          }
+          branches {
+            name
+            checkpointCount
+          }
+          users
+          agents
+          file(path: "src/caller.ts") {
+            path
+            language
+            blobSha
+            artefacts(filter: { kind: FUNCTION }, first: 10) {
+              totalCount
+              edges {
+                node {
+                  symbolFqn
+                  path
+                }
+              }
+            }
+            deps(filter: { direction: OUT }, first: 10) {
+              totalCount
+              edges {
+                node {
+                  toSymbolRef
+                }
+              }
+            }
+          }
+          files(path: "src/*.ts") {
+            path
+          }
+          artefacts(filter: { kind: FUNCTION }, first: 10) {
+            totalCount
+            pageInfo {
+              hasNextPage
+              hasPreviousPage
+            }
+            edges {
+              node {
+                symbolFqn
+                path
+              }
+            }
+          }
+          deps(filter: { direction: OUT }, first: 10) {
+            totalCount
+            edges {
+              node {
+                toSymbolRef
+                toArtefact {
+                  symbolFqn
+                  path
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(payload["data"]["repo"]["name"], "demo");
-    assert_eq!(payload["data"]["repo"]["provider"], "local");
-    assert_eq!(payload["data"]["health"]["blob"]["backend"], "local");
-    assert_eq!(payload["data"]["health"]["blob"]["connected"], true);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["defaultBranch"], "main");
+    assert_eq!(payload["data"]["commits"]["totalCount"], 1);
+    assert_eq!(payload["data"]["commits"]["pageInfo"]["hasNextPage"], false);
+    assert_eq!(
+        payload["data"]["commits"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(
+        payload["data"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Seed GraphQL DevQL repo"
+    );
+    assert_eq!(
+        payload["data"]["commits"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(payload["data"]["branches"], json!([]));
+    let users = payload["data"]["users"]
+        .as_array()
+        .expect("users should be an array");
+    assert!(
+        users.is_empty(),
+        "expected no users for repo-only fixture, got {users:?}"
+    );
+    assert_eq!(payload["data"]["agents"], json!([]));
+    assert_eq!(payload["data"]["file"]["path"], "src/caller.ts");
+    assert_eq!(payload["data"]["file"]["language"], "typescript");
+    assert_eq!(payload["data"]["file"]["blobSha"], "blob-caller");
+    assert_eq!(payload["data"]["file"]["artefacts"]["totalCount"], 2);
+    assert_eq!(payload["data"]["file"]["deps"]["totalCount"], 1);
+    assert_eq!(payload["data"]["files"].as_array().map(Vec::len), Some(3));
+    assert_eq!(payload["data"]["artefacts"]["totalCount"], 4);
+    assert_eq!(
+        payload["data"]["artefacts"]["pageInfo"]["hasNextPage"],
+        false
+    );
+    assert_eq!(
+        payload["data"]["artefacts"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(payload["data"]["deps"]["totalCount"], 0);
+    assert_eq!(payload["data"]["deps"]["edges"], json!([]));
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_checkpoint_and_telemetry_queries() {
+    let repo = seed_dashboard_repo_with_duckdb_events();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          checkpoints(first: 5) {
+            totalCount
+            edges {
+              node {
+                id
+                sessionId
+                commitSha
+                branch
+                agent
+              }
+            }
+          }
+          telemetry(first: 5) {
+            totalCount
+            edges {
+              node {
+                eventType
+                agent
+                branch
+              }
+            }
+          }
+          users
+          agents
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["checkpoints"]["totalCount"], 2);
+    let checkpoints = payload["data"]["checkpoints"]["edges"]
+        .as_array()
+        .expect("checkpoint edges should be an array");
+    assert!(
+        checkpoints.iter().any(|edge| {
+            edge["node"]["branch"] == "main"
+                && edge["node"]["id"]
+                    .as_str()
+                    .is_some_and(|value| !value.trim().is_empty())
+        }),
+        "expected a main-branch checkpoint, got {checkpoints:?}"
+    );
+    assert_eq!(payload["data"]["telemetry"]["totalCount"], 2);
+    assert_eq!(
+        payload["data"]["telemetry"]["edges"][0]["node"]["eventType"],
+        "checkpoint_committed"
+    );
+    assert_eq!(payload["data"]["users"], json!(["alice@example.com"]));
+
+    let agents = payload["data"]["agents"]
+        .as_array()
+        .expect("agents should be an array");
+    assert!(
+        agents.iter().any(|value| value == "claude-code"),
+        "expected claude-code in agents: {agents:?}"
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_knowledge_queries() {
+    let repo = seed_graphql_devql_repo();
+    let seeded = seed_graphql_knowledge_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          jiraOnly: knowledge(provider: JIRA, first: 10) {
+            totalCount
+          }
+          knowledge(first: 10) {
+            totalCount
+            edges {
+              node {
+                id
+                provider
+                title
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["jiraOnly"]["totalCount"], 1);
+    assert_eq!(payload["data"]["knowledge"]["totalCount"], 2);
+    assert_eq!(
+        payload["data"]["knowledge"]["edges"][0]["node"]["id"],
+        seeded.primary_item_id
+    );
+    assert_eq!(
+        payload["data"]["knowledge"]["edges"][1]["node"]["id"],
+        seeded.secondary_item_id
+    );
+    assert_eq!(
+        payload["data"]["knowledge"]["edges"][0]["node"]["provider"],
+        "JIRA"
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_clone_queries() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          clones(filter: { minScore: 0.75 }, first: 10) {
+            totalCount
+            edges {
+              node {
+                relationKind
+                score
+                sourceArtefact {
+                  symbolFqn
+                }
+                targetArtefact {
+                  symbolFqn
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["clones"]["totalCount"], 0);
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_test_harness_stage_queries() {
+    let repo = seed_graphql_devql_repo();
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::caller",
+            "artefact::caller",
+            "src/caller.ts",
+            "caller_tests",
+        )],
+    );
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          tests(
+            filter: { symbolFqn: "src/caller.ts::caller" },
+            minConfidence: 0.8,
+            linkageSource: "static_analysis",
+            first: 5
+          ) {
+            artefact {
+              artefactId
+              filePath
+            }
+            coveringTests {
+              testName
+              linkageSource
+            }
+            summary {
+              totalCoveringTests
+            }
+          }
+          coverage(filter: { symbolFqn: "src/caller.ts::caller" }, first: 5) {
+            artefact {
+              artefactId
+            }
+            coverage {
+              coverageSource
+              lineCoveragePct
+              branchDataAvailable
+              uncoveredLines
+            }
+            summary {
+              uncoveredLineCount
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(
+        payload["data"]["tests"][0]["artefact"]["artefactId"],
+        "artefact::caller"
+    );
+    assert_eq!(
+        payload["data"]["tests"][0]["coveringTests"][0]["testName"],
+        "caller_tests"
+    );
+    assert_eq!(
+        payload["data"]["tests"][0]["coveringTests"][0]["linkageSource"],
+        "static_analysis"
+    );
+    assert_eq!(
+        payload["data"]["tests"][0]["summary"]["totalCoveringTests"],
+        1
+    );
+    assert_eq!(
+        payload["data"]["coverage"][0]["coverage"]["coverageSource"],
+        "lcov"
+    );
+    assert_eq!(
+        payload["data"]["coverage"][0]["coverage"]["lineCoveragePct"],
+        50.0
+    );
+    assert_eq!(
+        payload["data"]["coverage"][0]["coverage"]["branchDataAvailable"],
+        true
+    );
+    assert_eq!(
+        payload["data"]["coverage"][0]["coverage"]["uncoveredLines"],
+        json!([5])
+    );
+    assert_eq!(
+        payload["data"]["coverage"][0]["summary"]["uncoveredLineCount"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_executes_slim_as_of_queries_and_surfaces_validation_errors() {
+    let seeded = seed_graphql_temporal_repo();
+    let app = build_dashboard_router(test_state(
+        seeded.repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        seeded.repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app.clone(),
+        seeded.repo.path(),
+        &format!(
+            r#"
+            {{
+              asOf(input: {{ commit: "{}" }}) {{
+                resolvedCommit
+                file(path: "packages/api/src/caller.ts") {{
+                  path
+                }}
+              }}
+            }}
+            "#,
+            seeded.first_commit
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(
+        payload["data"]["asOf"]["resolvedCommit"],
+        seeded.first_commit.as_str()
+    );
+    assert_eq!(
+        payload["data"]["asOf"]["file"]["path"],
+        "packages/api/src/caller.ts"
+    );
+
+    let (_, error_payload) = request_slim_query(
+        app,
+        seeded.repo.path(),
+        r#"
+        {
+          badRange: commits(
+            since: "2026-03-27T00:00:00Z",
+            until: "2026-03-26T00:00:00Z",
+            first: 1
+          ) {
+            totalCount
+          }
+          badCursor: commits(first: 1, after: "missing-cursor") {
+            totalCount
+          }
+          badAsOf: asOf(input: { ref: "refs/heads/missing-temporal-branch" }) {
+            resolvedCommit
+          }
+        }
+        "#,
+    )
+    .await;
+
+    let errors = error_payload["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert_eq!(errors.len(), 3, "unexpected errors: {errors:?}");
+    let messages = errors
+        .iter()
+        .filter_map(|error| error["message"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`since` must be earlier than or equal to `until`")),
+        "expected invalid time range error, got {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("cursor `missing-cursor`")),
+        "expected bad cursor error, got {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("unknown")
+                || message.contains("missing-temporal-branch")),
+        "expected bad asOf error, got {messages:?}"
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_surfaces_slim_stage_validation_errors() {
+    let repo = seed_graphql_devql_repo();
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::caller",
+            "artefact::caller",
+            "src/caller.ts",
+            "caller_tests",
+        )],
+    );
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (_, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          badTests: tests(minConfidence: 1.1, first: 5) {
+            artefact {
+              artefactId
+            }
+          }
+          badCoverage: coverage(first: 0) {
+            artefact {
+              artefactId
+            }
+          }
+          badTestsSummary: testsSummary {
+            commitSha
+          }
+        }
+        "#,
+    )
+    .await;
+
+    let errors = payload["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert_eq!(errors.len(), 3, "unexpected errors: {errors:?}");
+    let messages = errors
+        .iter()
+        .filter_map(|error| error["message"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`minConfidence` must be between 0 and 1")),
+        "expected minConfidence validation error, got {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("`first` must be greater than 0")),
+        "expected coverage limit validation error, got {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("requires a resolved commit")),
+        "expected testsSummary commit error, got {messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -388,13 +1077,18 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
             }
         }),
     );
-    let context = crate::graphql::DevqlGraphqlContext::new(
+    let context = crate::graphql::DevqlGraphqlContext::for_slim_request(
         repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        Some("main".to_string()),
+        None,
+        None,
+        true,
         super::super::db::DashboardDbPools::default(),
     );
     let mut progress_rx = context.subscriptions().subscribe_progress();
     let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
-    let schema = crate::graphql::build_schema(context);
+    let schema = crate::graphql::build_slim_schema(context);
 
     let response = schema
         .execute(async_graphql::Request::new(

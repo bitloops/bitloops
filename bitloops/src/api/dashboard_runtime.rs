@@ -1,15 +1,14 @@
 use super::{
-    DashboardServerConfig, DashboardStartupMode, DashboardState, DashboardTransport,
-    FALLBACK_LOCAL_HOST, LocalDashboardDiscovery, PREFERRED_LOCAL_HOST, ServeMode, db, hosts,
-    router, tls,
+    DashboardReadyInfo, DashboardRuntimeOptions, DashboardServerConfig, DashboardStartupMode,
+    DashboardState, DashboardTransport, FALLBACK_LOCAL_HOST, LocalDashboardDiscovery, ServeMode,
+    db, router, tls,
 };
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_dashboard_config};
-use crate::graphql::{self, DevqlGraphqlContext};
+use crate::config::{persist_dashboard_tls_hint, resolve_dashboard_config_for_repo};
+use crate::graphql;
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex};
 use crate::utils::paths;
 use anyhow::{Context, Result, anyhow, bail};
 use std::env;
-use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,10 +25,19 @@ fn is_dev_mode() -> bool {
     env::var("BITLOOPS_DEV").is_ok()
 }
 
-pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
+pub(super) async fn run(
+    config: DashboardServerConfig,
+    options: DashboardRuntimeOptions,
+) -> Result<()> {
     let mut startup_warnings: Vec<String> = Vec::new();
     let mut discovery = LocalDashboardDiscovery::default();
-    let dashboard_cfg = resolve_dashboard_config();
+    let config_root = options
+        .config_root
+        .clone()
+        .or_else(|| paths::repo_root().ok())
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dashboard_cfg = resolve_dashboard_config_for_repo(&config_root);
     let local_dashboard_cfg = dashboard_cfg.local_dashboard.as_ref();
     let explicit_host = config
         .host
@@ -44,37 +52,14 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
         );
     }
 
-    let mut selected_host = match startup_mode {
+    let selected_host = match startup_mode {
         DashboardStartupMode::FastHttpLoopback => FALLBACK_LOCAL_HOST.to_string(),
-        DashboardStartupMode::FastConfiguredHttps => explicit_host.clone().unwrap_or_else(|| {
-            if local_dashboard_cfg.and_then(|cfg| cfg.bitloops_local) == Some(false) {
-                FALLBACK_LOCAL_HOST.to_string()
-            } else {
-                PREFERRED_LOCAL_HOST.to_string()
-            }
-        }),
-        DashboardStartupMode::SlowProbe => explicit_host
-            .clone()
-            .unwrap_or_else(|| PREFERRED_LOCAL_HOST.to_string()),
-    };
-
-    if matches!(startup_mode, DashboardStartupMode::SlowProbe)
-        && explicit_host.is_none()
-        && selected_host == PREFERRED_LOCAL_HOST
-    {
-        match hosts::ensure_default_dashboard_host_mapping()? {
-            hosts::HostMappingOutcome::AlreadyCorrect | hosts::HostMappingOutcome::Updated => {
-                discovery.bitloops_local = true;
-            }
-            hosts::HostMappingOutcome::NeedsFallback { reason } => {
-                startup_warnings.push(format!(
-                    "Warning: could not map {PREFERRED_LOCAL_HOST} in the hosts file: {reason}\n\
-                     Falling back to localhost for this run."
-                ));
-                selected_host = FALLBACK_LOCAL_HOST.to_string();
-            }
+        DashboardStartupMode::FastConfiguredHttps | DashboardStartupMode::SlowProbe => {
+            explicit_host
+                .clone()
+                .unwrap_or_else(|| FALLBACK_LOCAL_HOST.to_string())
         }
-    }
+    };
 
     let bind_addr = resolve_bind_addr(&selected_host, config.port)?;
 
@@ -95,7 +80,7 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
                 .with_context(|| {
                     format!(
                         "dashboard fast TLS path failed for host {browser_host}; \
-                         run `bitloops dashboard --recheck-local-dashboard-net` once"
+                         run `bitloops daemon start --recheck-local-dashboard-net` once"
                     )
                 })?;
             log::debug!(
@@ -112,7 +97,7 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
             if !tls::mkcert_on_path() {
                 startup_warnings.push(
                     "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
-                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
                         .to_string(),
                 );
                 (DashboardTransport::Http, None)
@@ -134,7 +119,7 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
                         startup_warnings.push(format!(
                             "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
                              Falling back to local HTTP.\n\
-                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for mkcert and /etc/hosts setup instructions."
+                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
                         ));
                         (DashboardTransport::Http, None)
                     }
@@ -143,18 +128,19 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
         }
     };
 
-    let bundle_dir = resolve_bundle_dir(config.bundle_dir.as_deref());
+    let bundle_dir = resolve_bundle_dir(
+        config.bundle_dir.as_deref(),
+        dashboard_cfg.bundle_dir.as_deref(),
+    );
     let serve_mode = if has_bundle_index(&bundle_dir) {
         ServeMode::Bundle(bundle_dir.clone())
     } else {
         ServeMode::HelloWorld
     };
-    let repo_root = paths::repo_root()
-        .or_else(|_| env::current_dir().context("Getting current directory for dashboard state"))
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let repo_root = config_root.clone();
 
     if matches!(startup_mode, DashboardStartupMode::SlowProbe)
-        && (discovery.tls || discovery.bitloops_local)
+        && discovery.tls
         && let Err(err) = persist_local_dashboard_discovery(&repo_root, discovery)
     {
         startup_warnings.push(format!(
@@ -163,64 +149,91 @@ pub(super) async fn run(config: DashboardServerConfig) -> Result<()> {
     }
 
     let url = format_dashboard_url(transport, &browser_host, local_addr.port());
-    let devql_schema = graphql::build_schema(DevqlGraphqlContext::new(
-        repo_root.clone(),
-        db_init.pools.clone(),
-    ));
+    let devql_schema = graphql::build_global_schema_template();
+    let devql_slim_schema = graphql::build_slim_schema_template();
 
-    println!();
-    println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
-    println!();
-    print!("📊 Dashboard ");
-    print!("{}", color_hex("ready ", "#22c55e"));
-    print!("at ");
-    println!("{}", color_hex(&clickable_url(&url), BITLOOPS_PURPLE_HEX));
-    if !startup_warnings.is_empty() {
-        eprintln!();
+    if options.print_ready_banner {
+        println!();
+        println!("{}", color_hex(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX));
+        println!();
+        print!("📊 {} ", options.ready_subject);
+        print!("{}", color_hex("ready ", "#22c55e"));
+        print!("at ");
+        println!("{}", color_hex(&clickable_url(&url), BITLOOPS_PURPLE_HEX));
+        if !startup_warnings.is_empty() {
+            eprintln!();
+        }
     }
     for warning in &startup_warnings {
         print_warning_message(warning);
     }
-    match &serve_mode {
-        ServeMode::HelloWorld => {
-            println!(
-                "Bundle not found. Bundle expected at {}",
-                bundle_dir.display()
-            );
-        }
-        ServeMode::Bundle(path) => {
-            log::debug!("Serving dashboard bundle from {}", path.display());
-            if is_dev_mode() {
-                println!("Serving dashboard bundle from {}", path.display());
+    if options.print_ready_banner {
+        match &serve_mode {
+            ServeMode::HelloWorld => {
+                println!(
+                    "Bundle not found. Bundle expected at {}",
+                    bundle_dir.display()
+                );
             }
-            println!();
-            println!("To exit, press Ctrl+C");
+            ServeMode::Bundle(path) => {
+                log::debug!("Serving dashboard bundle from {}", path.display());
+                if is_dev_mode() {
+                    println!("Serving dashboard bundle from {}", path.display());
+                }
+                println!();
+                println!("To exit, press Ctrl+C");
+            }
         }
     }
 
-    if !config.no_open
+    let ready_info = DashboardReadyInfo {
+        url: url.clone(),
+        host: browser_host.clone(),
+        port: local_addr.port(),
+        bundle_dir: bundle_dir.clone(),
+        repo_root: repo_root.clone(),
+    };
+
+    if let Some(on_ready) = options.on_ready.as_ref() {
+        on_ready(&ready_info)?;
+    }
+
+    if options.open_browser
+        && !config.no_open
         && let Err(err) = open_in_default_browser(&url)
     {
         print_warning_message(&format!("Warning: failed to open default browser: {err:#}"));
     }
 
     let state = DashboardState {
+        config_root: config_root.clone(),
         repo_root,
+        repo_registry_path: options.repo_registry_path.clone(),
         mode: serve_mode,
         db: db_init.pools,
         bundle_dir,
+        subscription_hub: graphql::SubscriptionHub::new_arc(),
         devql_schema,
+        devql_slim_schema,
     };
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {
-            serve_until_ctrl_c_tls(listener, acceptor, state).await
+            serve_until_shutdown_tls(listener, acceptor, state, options.shutdown_message).await
         }
-        (DashboardTransport::Http, _) => serve_until_ctrl_c_http(listener, state).await,
+        (DashboardTransport::Http, _) => {
+            serve_until_shutdown_http(listener, state, options.shutdown_message).await
+        }
         (DashboardTransport::Https, None) => {
             Err(anyhow!("dashboard HTTPS selected without a TLS acceptor"))
         }
+    }?;
+
+    if let Some(on_shutdown) = options.on_shutdown.as_ref() {
+        on_shutdown();
     }
+
+    Ok(())
 }
 
 pub(super) fn select_startup_mode(
@@ -248,95 +261,25 @@ fn persist_local_dashboard_discovery(
     repo_root: &Path,
     discovery: LocalDashboardDiscovery,
 ) -> Result<()> {
-    if !discovery.tls && !discovery.bitloops_local {
+    let _ = repo_root;
+    if !discovery.tls {
         return Ok(());
     }
-
-    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating config directory {}", parent.display()))?;
-    }
-
-    let mut root = if config_path.is_file() {
-        let data = fs::read(&config_path)
-            .with_context(|| format!("reading config file {}", config_path.display()))?;
-        serde_json::from_slice::<serde_json::Value>(&data)
-            .with_context(|| format!("parsing config file {}", config_path.display()))?
-    } else {
-        serde_json::json!({})
-    };
-
-    let Some(root_obj) = root.as_object_mut() else {
-        bail!(
-            "config file {} must be a JSON object",
-            config_path.display()
-        );
-    };
-    root_obj.insert(
-        "version".to_string(),
-        serde_json::Value::String("1.0".to_string()),
-    );
-    root_obj.insert(
-        "scope".to_string(),
-        serde_json::Value::String("project".to_string()),
-    );
-
-    let settings = root_obj
-        .entry("settings".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(settings_obj) = settings.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings` field",
-            config_path.display()
-        );
-    };
-    let dashboard = settings_obj
-        .entry("dashboard".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(dashboard_obj) = dashboard.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings.dashboard` field",
-            config_path.display()
-        );
-    };
-    let local_dashboard = dashboard_obj
-        .entry("local_dashboard".to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(local_dashboard_obj) = local_dashboard.as_object_mut() else {
-        bail!(
-            "config file {} has non-object `settings.dashboard.local_dashboard` field",
-            config_path.display()
-        );
-    };
-
-    if discovery.tls {
-        local_dashboard_obj.insert("tls".to_string(), serde_json::Value::Bool(true));
-    }
-    if discovery.bitloops_local {
-        local_dashboard_obj.insert("bitloops_local".to_string(), serde_json::Value::Bool(true));
-    }
-
-    let mut serialized =
-        serde_json::to_string_pretty(&root).context("serialising dashboard discovery config")?;
-    serialized.push('\n');
-    fs::write(&config_path, serialized)
-        .with_context(|| format!("writing config file {}", config_path.display()))?;
-
-    Ok(())
+    persist_dashboard_tls_hint(true).map(|_| ())
 }
 
-async fn serve_until_ctrl_c_tls(
+async fn serve_until_shutdown_tls(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,
     state: DashboardState,
+    shutdown_message: Option<String>,
 ) -> Result<()> {
     use hyper::server::conn::http1::Builder as Http1Builder;
     use hyper_util::rt::TokioIo;
     use hyper_util::service::TowerToHyperService;
 
     let app = router::build_dashboard_router(state);
-    serve_until_ctrl_c_with_handler(listener, move |stream| {
+    serve_until_shutdown_with_handler(listener, shutdown_message, move |stream| {
         let tls_acceptor = tls_acceptor.clone();
         let app = app.clone();
         async move {
@@ -369,13 +312,17 @@ async fn serve_until_ctrl_c_tls(
     .await
 }
 
-async fn serve_until_ctrl_c_http(listener: TcpListener, state: DashboardState) -> Result<()> {
+async fn serve_until_shutdown_http(
+    listener: TcpListener,
+    state: DashboardState,
+    shutdown_message: Option<String>,
+) -> Result<()> {
     use hyper::server::conn::http1::Builder as Http1Builder;
     use hyper_util::rt::TokioIo;
     use hyper_util::service::TowerToHyperService;
 
     let app = router::build_dashboard_router(state);
-    serve_until_ctrl_c_with_handler(listener, move |stream| {
+    serve_until_shutdown_with_handler(listener, shutdown_message, move |stream| {
         let app = app.clone();
         async move {
             let io = TokioIo::new(stream);
@@ -392,17 +339,51 @@ async fn serve_until_ctrl_c_http(listener: TcpListener, state: DashboardState) -
     .await
 }
 
-async fn serve_until_ctrl_c_with_handler<F, Fut>(
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+        let ctrl_c = async {
+            if tokio::signal::ctrl_c().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = async {
+                if let Some(sigterm) = sigterm.as_mut() {
+                    sigterm.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+async fn serve_until_shutdown_with_handler<F, Fut>(
     listener: TcpListener,
+    shutdown_message: Option<String>,
     mut on_stream: F,
 ) -> Result<()>
 where
     F: FnMut(tokio::net::TcpStream) -> Fut,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
+    let shutdown = wait_for_shutdown_signal();
+    tokio::pin!(shutdown);
+
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = &mut shutdown => {
                 break;
             }
             accept = listener.accept() => {
@@ -414,7 +395,9 @@ where
 
     drop(listener);
     tokio::time::sleep(Duration::from_secs(5)).await;
-    println!("Dashboard server stopped.");
+    if let Some(message) = shutdown_message {
+        println!("{message}");
+    }
     Ok(())
 }
 
@@ -467,7 +450,7 @@ fn print_warning_message(warning: &str) {
     }
 }
 
-fn open_in_default_browser(url: &str) -> Result<()> {
+pub(super) fn open_in_default_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");

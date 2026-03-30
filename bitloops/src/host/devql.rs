@@ -18,8 +18,7 @@ use crate::capability_packs::semantic_clones::{
 };
 use crate::config::{
     EventsBackendConfig, RelationalBackendConfig, StoreBackendConfig, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo, resolve_store_embedding_config,
-    resolve_store_semantic_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,
@@ -59,7 +58,8 @@ pub use self::commands_projection::{
     run_checkpoint_file_snapshot_backfill,
 };
 pub(crate) use self::commands_query::{
-    RegisteredStageCompositionContext, execute_query_json_with_composition,
+    RegisteredStageCompositionContext, compile_query_document, execute_query_json_with_composition,
+    format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
 pub use self::commands_refresh::{
@@ -90,6 +90,8 @@ pub fn build_capability_host(
 const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 #[cfg(test)]
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
+#[cfg(test)]
+const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -513,6 +515,7 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
         embedding_provider: cfg.embedding_provider.clone(),
         embedding_model: cfg.embedding_model.clone(),
         embedding_api_key: cfg.embedding_api_key.clone(),
+        embedding_cache_dir: cfg.embedding_cache_dir.clone(),
     }
 }
 
@@ -520,7 +523,7 @@ async fn initialise_devql_schema_for_command(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
 
@@ -637,9 +640,9 @@ pub(crate) use self::core_contracts::CanonicalKindProjection;
 use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
-    clickhouse_query_data, duckdb_query_rows_path, esc_ch, esc_pg, escape_like_pattern,
-    glob_to_sql_like, postgres_exec, sql_like_with_escape, sqlite_exec_path_allow_create,
-    sqlite_query_rows_path,
+    clickhouse_query_data, duckdb_query_rows_path, duckdb_value_to_json, esc_ch, esc_pg,
+    escape_like_pattern, glob_to_sql_like, postgres_exec, sql_like_with_escape,
+    sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
 };
 use self::deps_query::*;
 use self::ingestion_artefact_identity::*;
@@ -664,8 +667,9 @@ pub(crate) use self::ingestion_types::{
     IngestedCheckpointNotification, IngestionCounters, IngestionObserver, IngestionProgressPhase,
     IngestionProgressUpdate,
 };
+pub(crate) use self::query_dsl_compiler::GraphqlCompileMode;
+pub(crate) use self::query_dsl_compiler::compile_devql_to_graphql_with_mode;
 use self::query_executor::*;
-#[cfg(test)]
 pub(crate) use self::query_parser::parse_devql_query;
 use self::query_parser::*;
 pub(crate) use self::query_parser::{AsOfSelector as DevqlAsOfSelector, ParsedDevqlQuery};

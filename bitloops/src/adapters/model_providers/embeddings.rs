@@ -37,9 +37,10 @@ pub fn build_embedding_provider(
     model: String,
     api_key: Option<String>,
     repo_root: Option<&Path>,
+    cache_dir: Option<&Path>,
 ) -> Result<Box<dyn EmbeddingProvider>> {
     if embeddings_local::supports_provider(provider) {
-        embeddings_local::build(provider, model, repo_root)
+        embeddings_local::build(provider, model, repo_root, cache_dir)
     } else {
         embeddings_http::build(provider, model, api_key)
     }

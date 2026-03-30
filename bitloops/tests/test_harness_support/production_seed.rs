@@ -193,6 +193,7 @@ pub fn execute(
     commit_sha: &str,
 ) -> Result<IngestProductionSummary> {
     let repo = resolve_repository_record(repo_dir)?;
+    let branch_name = default_branch_name(repo_dir);
     let production_files = find_production_files(repo_dir)?;
     let committed_at = chrono::Utc::now().to_rfc3339();
 
@@ -300,6 +301,7 @@ pub fn execute(
     persist_production_rows(
         db_path,
         &repo,
+        branch_name.as_str(),
         &CommitRecord {
             commit_sha: commit_sha.to_string(),
             repo_id: repo.repo_id.clone(),
@@ -357,6 +359,7 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
 fn persist_production_rows(
     db_path: &Path,
     repository: &RepositoryRecord,
+    branch_name: &str,
     commit: &CommitRecord,
     batch: &ProductionBatchBuilder,
 ) -> Result<()> {
@@ -565,7 +568,7 @@ INSERT INTO artefacts_current (
   language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
   start_byte, end_byte, signature, modifiers, docstring, content_hash
 ) VALUES (
-  ?1, 'main', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
 )
 ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
   artefact_id = excluded.artefact_id,
@@ -590,6 +593,7 @@ ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
 "#,
             params![
                 artefact.repo_id,
+                branch_name,
                 artefact.symbol_id,
                 artefact.artefact_id,
                 artefact.commit_sha,

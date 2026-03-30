@@ -1,15 +1,20 @@
-//! Bitloops project configuration (.bitloops/config.json).
+//! Thin-CLI policy settings resolved from repo policy TOML plus global daemon CLI config.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
+
+use super::{
+    REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy, load_daemon_settings,
+};
 
 pub const SETTINGS_DIR: &str = ".bitloops";
-pub const SETTINGS_FILE: &str = "config.json";
-pub const SETTINGS_LOCAL_FILE: &str = "config.local.json";
+pub const SETTINGS_FILE: &str = REPO_POLICY_FILE_NAME;
+pub const SETTINGS_LOCAL_FILE: &str = REPO_POLICY_LOCAL_FILE_NAME;
 pub const DEFAULT_STRATEGY: &str = "manual-commit";
 
 fn default_enabled() -> bool {
@@ -32,32 +37,19 @@ fn is_empty_map(m: &HashMap<String, Value>) -> bool {
     m.is_empty()
 }
 
-/// Project configuration stored in `.bitloops/config.json`.
-///
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BitloopsSettings {
-    /// Active session strategy. Defaults to "manual-commit".
     #[serde(default = "default_strategy")]
     pub strategy: String,
-
-    /// Whether Bitloops is active. Defaults to true when field is absent.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-
-    /// Use local dev binary for hooks (development only).
     #[serde(default, skip_serializing_if = "is_false")]
     pub local_dev: bool,
-
-    /// Logging verbosity.
     #[serde(default, skip_serializing_if = "is_empty_str")]
     pub log_level: String,
-
-    /// Strategy-specific configuration.
     #[serde(default, skip_serializing_if = "is_empty_map")]
     pub strategy_options: HashMap<String, Value>,
-
-    /// Telemetry opt-in state. `None` means not asked yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<bool>,
 }
@@ -75,121 +67,76 @@ impl Default for BitloopsSettings {
     }
 }
 
-/// Returns path to `.bitloops/config.json` under `repo_root`.
 pub fn settings_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(SETTINGS_DIR).join(SETTINGS_FILE)
+    repo_root.join(SETTINGS_FILE)
 }
 
-/// Returns path to `.bitloops/config.local.json` under `repo_root`.
 pub fn settings_local_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(SETTINGS_DIR).join(SETTINGS_LOCAL_FILE)
+    repo_root.join(SETTINGS_LOCAL_FILE)
 }
 
-/// Loads merged settings: project file + local overrides.
-///
 pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
-    let base_path = settings_path(repo_root);
-    let mut settings = load_from_file(&base_path)?;
+    let policy = discover_repo_policy(repo_root)?;
+    let daemon = load_daemon_settings(None)?;
 
-    let local_path = settings_local_path(repo_root);
-    match fs::read(&local_path) {
-        Ok(data) => {
-            let settings_data =
-                extract_settings_bytes(&data).context("extracting settings from local config")?;
-            merge_json(&mut settings, &settings_data).context("merging local config")?;
+    let mut settings = BitloopsSettings {
+        local_dev: daemon.cli.local_dev,
+        log_level: daemon.cli.log_level,
+        telemetry: daemon.cli.telemetry,
+        ..BitloopsSettings::default()
+    };
+
+    if let Some(capture) = policy.capture.as_object() {
+        if let Some(enabled) = capture.get("enabled").and_then(Value::as_bool) {
+            settings.enabled = enabled;
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(e).context("reading local config file");
+        if let Some(strategy) = capture
+            .get("strategy")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            settings.strategy = strategy.to_string();
         }
+
+        let mut strategy_options = capture.clone();
+        strategy_options.remove("enabled");
+        strategy_options.remove("strategy");
+        settings.strategy_options = strategy_options.into_iter().collect();
     }
 
-    apply_defaults(&mut settings);
     Ok(settings)
 }
 
-/// Extracts the `settings` block from a config envelope, or returns the
-/// raw data as-is if the file uses flat format.
-pub(crate) fn extract_settings_bytes(data: &[u8]) -> Result<Vec<u8>> {
-    let raw: Value = serde_json::from_slice(data).context("parsing JSON")?;
-    if raw.get("version").is_some()
-        && let Some(settings) = raw.get("settings")
-    {
-        return serde_json::to_vec(settings).context("re-serializing settings block");
-    }
-    Ok(data.to_vec())
+pub fn current_config_fingerprint(repo_root: &Path) -> Result<String> {
+    Ok(discover_repo_policy(repo_root)?.fingerprint)
 }
 
-/// Loads settings from a single file path without local overrides.
-fn load_from_file(path: &Path) -> Result<BitloopsSettings> {
-    match fs::read(path) {
-        Ok(data) => {
-            let settings_data = extract_settings_bytes(&data)
-                .with_context(|| format!("extracting settings from: {}", path.display()))?;
-            let settings: BitloopsSettings = serde_json::from_slice(&settings_data)
-                .with_context(|| format!("parsing config file: {}", path.display()))?;
-            Ok(settings)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BitloopsSettings::default()),
-        Err(e) => Err(e).with_context(|| format!("reading config file: {}", path.display())),
-    }
+pub fn current_policy_root(repo_root: &Path) -> Result<Option<PathBuf>> {
+    Ok(discover_repo_policy(repo_root)?.root)
 }
 
-/// Merges JSON data into existing settings field-by-field.
-/// Only non-zero / non-empty values from JSON override existing settings.
-///
-fn merge_json(settings: &mut BitloopsSettings, data: &[u8]) -> Result<()> {
-    // Validate unknown keys first
-    let _: BitloopsSettings = serde_json::from_slice(data).context("parsing JSON")?;
+pub fn is_enabled(repo_root: &Path) -> Result<bool> {
+    load_settings(repo_root).map(|settings| settings.enabled)
+}
 
-    // Parse as raw map to know which keys are present
-    let raw: HashMap<String, Value> = serde_json::from_slice(data).context("parsing JSON")?;
-
-    if let Some(v) = raw.get("strategy")
-        && let Some(s) = v.as_str()
-        && !s.is_empty()
+pub fn save_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == SETTINGS_FILE || name == SETTINGS_LOCAL_FILE)
     {
-        settings.strategy = s.to_string();
+        return save_repo_policy_settings(settings, path);
     }
-
-    if let Some(v) = raw.get("enabled")
-        && let Some(b) = v.as_bool()
-    {
-        settings.enabled = b;
-    }
-
-    if let Some(v) = raw.get("local_dev")
-        && let Some(b) = v.as_bool()
-    {
-        settings.local_dev = b;
-    }
-
-    if let Some(v) = raw.get("log_level")
-        && let Some(s) = v.as_str()
-        && !s.is_empty()
-    {
-        settings.log_level = s.to_string();
-    }
-
-    if let Some(v) = raw.get("strategy_options")
-        && let Some(opts) = v.as_object()
-    {
-        for (k, val) in opts {
-            settings.strategy_options.insert(k.clone(), val.clone());
-        }
-    }
-
-    if let Some(v) = raw.get("telemetry")
-        && let Some(b) = v.as_bool()
-    {
-        settings.telemetry = Some(b);
-    }
-
-    Ok(())
+    bail!(
+        "unsupported settings target {}; repo policy settings must be written to `{}` or `{}`",
+        path.display(),
+        SETTINGS_FILE,
+        SETTINGS_LOCAL_FILE
+    );
 }
 
 impl BitloopsSettings {
-    /// Returns true when strategy option `summarize.enabled` is explicitly true.
     pub fn is_summarize_enabled(&self) -> bool {
         self.strategy_options
             .get("summarize")
@@ -199,7 +146,6 @@ impl BitloopsSettings {
             .unwrap_or(false)
     }
 
-    /// Returns true when strategy option `push_sessions` is explicitly false.
     pub fn is_push_sessions_disabled(&self) -> bool {
         self.strategy_options
             .get("push_sessions")
@@ -209,411 +155,61 @@ impl BitloopsSettings {
     }
 }
 
-fn apply_defaults(settings: &mut BitloopsSettings) {
-    if settings.strategy.is_empty() {
-        settings.strategy = DEFAULT_STRATEGY.to_string();
-    }
-}
-
-/// Saves settings to the given path using the config envelope format.
-///
-/// Preserves any existing non-settings keys (e.g. stores, knowledge) in
-/// the envelope so that a partial settings update does not wipe store config.
-pub fn save_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
+fn save_repo_policy_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating config directory: {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!("creating repo policy parent directory {}", parent.display())
+        })?;
     }
 
-    let scope = if path.file_name().is_some_and(|f| f == SETTINGS_LOCAL_FILE) {
-        "project_local"
-    } else {
-        "project"
-    };
+    let mut doc = DocumentMut::new();
+    doc["capture"] = Item::Table(Table::new());
+    doc["capture"]["enabled"] = Item::Value(TomlValue::from(settings.enabled));
+    doc["capture"]["strategy"] = Item::Value(TomlValue::from(settings.strategy.as_str()));
+    for (key, value) in &settings.strategy_options {
+        if value.is_null() {
+            continue;
+        }
+        doc["capture"][key] = json_value_to_toml_item(value)?;
+    }
 
-    // Read existing envelope to preserve non-settings data (stores, etc.)
-    let mut envelope: serde_json::Map<String, Value> = path
-        .exists()
-        .then(|| fs::read(path).ok())
-        .flatten()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-        .unwrap_or_default();
+    fs::write(path, doc.to_string())
+        .with_context(|| format!("writing repo policy {}", path.display()))
+}
 
-    envelope.insert("version".into(), Value::String("1.0".into()));
-    envelope.insert("scope".into(), Value::String(scope.into()));
-
-    let new_settings = serde_json::to_value(settings).context("serializing settings")?;
-    match envelope.get_mut("settings") {
-        Some(Value::Object(existing)) => {
-            if let Value::Object(new) = new_settings {
-                for (k, v) in new {
-                    existing.insert(k, v);
-                }
+fn json_value_to_toml_item(value: &Value) -> Result<Item> {
+    match value {
+        Value::Null => Ok(Item::None),
+        Value::Bool(value) => Ok(Item::Value(TomlValue::from(*value))),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                return Ok(Item::Value(TomlValue::from(value)));
             }
+            if let Some(value) = number.as_u64() {
+                return Ok(Item::Value(TomlValue::from(value as i64)));
+            }
+            if let Some(value) = number.as_f64() {
+                return Ok(Item::Value(TomlValue::from(value)));
+            }
+            bail!("unsupported numeric repo policy value `{number}`")
         }
-        _ => {
-            envelope.insert("settings".into(), new_settings);
+        Value::String(value) => Ok(Item::Value(TomlValue::from(value.as_str()))),
+        Value::Array(values) => {
+            let mut array = Array::new();
+            for value in values {
+                array.push(match json_value_to_toml_item(value)? {
+                    Item::Value(value) => value,
+                    _ => bail!("repo policy arrays may only contain TOML scalar values"),
+                });
+            }
+            Ok(Item::Value(TomlValue::Array(array)))
         }
-    }
-
-    let mut data =
-        serde_json::to_string_pretty(&Value::Object(envelope)).context("serializing config")?;
-    data.push('\n');
-    fs::write(path, data).with_context(|| format!("writing config file: {}", path.display()))?;
-    Ok(())
-}
-
-/// Returns true when Bitloops is enabled (defaults to true if no settings file).
-///
-pub fn is_enabled(repo_root: &Path) -> Result<bool> {
-    load_settings(repo_root).map(|s| s.enabled)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    /// Create a temp dir and pre-create the .bitloops/ subdirectory.
-    fn setup() -> TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
-        dir
-    }
-
-    fn write_settings(dir: &TempDir, content: &str) {
-        let path = settings_path(dir.path());
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, content).unwrap();
-    }
-
-    fn write_local_settings(dir: &TempDir, content: &str) {
-        let path = settings_local_path(dir.path());
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, content).unwrap();
-    }
-
-    #[test]
-    fn load_settings_enabled_defaults_to_true() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // No settings file — defaults to enabled
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(
-            settings.enabled,
-            "enabled should default to true when no settings file"
-        );
-
-        // Settings without enabled field — defaults to true
-        fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
-        fs::write(
-            settings_path(dir.path()),
-            r#"{"strategy": "manual-commit"}"#,
-        )
-        .unwrap();
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(
-            settings.enabled,
-            "enabled should default to true when field is missing"
-        );
-
-        // Settings with enabled: false — should be false
-        fs::write(
-            settings_path(dir.path()),
-            r#"{"strategy": "manual-commit", "enabled": false}"#,
-        )
-        .unwrap();
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(
-            !settings.enabled,
-            "enabled should be false when explicitly set to false"
-        );
-
-        // Settings with enabled: true — should be true
-        fs::write(
-            settings_path(dir.path()),
-            r#"{"strategy": "manual-commit", "enabled": true}"#,
-        )
-        .unwrap();
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(
-            settings.enabled,
-            "enabled should be true when explicitly set to true"
-        );
-    }
-
-    #[test]
-    fn save_settings_preserves_enabled() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let settings = BitloopsSettings {
-            strategy: "manual-commit".into(),
-            enabled: false,
-            ..Default::default()
-        };
-        save_settings(&settings, &settings_path(dir.path())).unwrap();
-
-        let loaded = load_settings(dir.path()).unwrap();
-        assert!(
-            !loaded.enabled,
-            "enabled should be false after saving as false"
-        );
-    }
-
-    #[test]
-    fn is_enabled_test() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // No settings file — defaults to true
-        assert!(
-            is_enabled(dir.path()).unwrap(),
-            "should return true when no settings file"
-        );
-
-        fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
-
-        // enabled: false
-        fs::write(settings_path(dir.path()), r#"{"enabled": false}"#).unwrap();
-        assert!(
-            !is_enabled(dir.path()).unwrap(),
-            "should return false when disabled"
-        );
-
-        // enabled: true
-        fs::write(settings_path(dir.path()), r#"{"enabled": true}"#).unwrap();
-        assert!(
-            is_enabled(dir.path()).unwrap(),
-            "should return true when enabled"
-        );
-    }
-
-    #[test]
-    fn load_settings_local_overrides_strategy() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
-        write_local_settings(&dir, r#"{"strategy": "auto-commit"}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(
-            settings.strategy, "auto-commit",
-            "local should override strategy"
-        );
-        assert!(settings.enabled, "base enabled should be preserved");
-    }
-
-    #[test]
-    fn load_settings_local_overrides_enabled() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
-        write_local_settings(&dir, r#"{"enabled": false}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(!settings.enabled, "local should override enabled to false");
-        assert_eq!(
-            settings.strategy, "manual-commit",
-            "base strategy should be preserved"
-        );
-    }
-
-    #[test]
-    fn load_settings_local_overrides_local_dev() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit"}"#);
-        write_local_settings(&dir, r#"{"local_dev": true}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert!(
-            settings.local_dev,
-            "local_dev should be true from local override"
-        );
-    }
-
-    #[test]
-    fn load_settings_local_merges_strategy_options() {
-        let dir = setup();
-        write_settings(
-            &dir,
-            r#"{"strategy": "manual-commit", "strategy_options": {"key1": "value1", "key2": "value2"}}"#,
-        );
-        write_local_settings(
-            &dir,
-            r#"{"strategy_options": {"key2": "overridden", "key3": "value3"}}"#,
-        );
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(
-            settings.strategy_options["key1"].as_str(),
-            Some("value1"),
-            "key1 should remain from base"
-        );
-        assert_eq!(
-            settings.strategy_options["key2"].as_str(),
-            Some("overridden"),
-            "key2 should be overridden by local"
-        );
-        assert_eq!(
-            settings.strategy_options["key3"].as_str(),
-            Some("value3"),
-            "key3 should be added from local"
-        );
-    }
-
-    #[test]
-    fn load_settings_only_local_file_exists() {
-        let dir = setup();
-        // No base file, only local
-        write_local_settings(&dir, r#"{"strategy": "auto-commit"}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(settings.strategy, "auto-commit");
-        assert!(settings.enabled, "enabled should default to true");
-    }
-
-    #[test]
-    fn load_settings_no_local_file_uses_base() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit", "enabled": true}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(settings.strategy, "manual-commit");
-    }
-
-    #[test]
-    fn load_settings_empty_strategy_in_local_does_not_override() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit"}"#);
-        write_local_settings(&dir, r#"{"strategy": ""}"#);
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(
-            settings.strategy, "manual-commit",
-            "empty strategy in local should not override base"
-        );
-    }
-
-    #[test]
-    fn load_settings_neither_file_exists_returns_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let settings = load_settings(dir.path()).unwrap();
-        assert_eq!(settings.strategy, DEFAULT_STRATEGY);
-        assert!(settings.enabled);
-    }
-
-    #[test]
-    fn load_settings_rejects_unknown_keys_in_base() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit", "bogus_key": true}"#);
-
-        let err = load_settings(dir.path()).unwrap_err();
-        // Check full error chain (anyhow wraps the serde error with context)
-        assert!(
-            format!("{err:#}").contains("unknown field"),
-            "expected 'unknown field' error, got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn load_settings_rejects_unknown_keys_in_local() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit"}"#);
-        write_local_settings(&dir, r#"{"bogus_key": "value"}"#);
-
-        let err = load_settings(dir.path()).unwrap_err();
-        // Check full error chain (anyhow wraps the serde error with context)
-        assert!(
-            format!("{err:#}").contains("unknown field"),
-            "expected 'unknown field' error, got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn load_rejects_unknown_keys() {
-        let dir = setup();
-        write_settings(
-            &dir,
-            r#"{"strategy": "manual-commit", "unknown_key": "value"}"#,
-        );
-
-        let err = load_settings(dir.path()).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("unknown field"),
-            "expected unknown-field error, got: {err:#}"
-        );
-    }
-
-    #[test]
-    fn load_accepts_valid_keys() {
-        let dir = setup();
-        write_settings(
-            &dir,
-            r#"{
-                "strategy": "auto-commit",
-                "enabled": true,
-                "local_dev": false,
-                "log_level": "debug",
-                "strategy_options": {"key": "value"},
-                "telemetry": true
-            }"#,
-        );
-
-        let settings = load_settings(dir.path()).expect("expected valid settings to load");
-        assert_eq!(settings.strategy, "auto-commit");
-        assert!(settings.enabled);
-        assert_eq!(settings.log_level, "debug");
-        assert_eq!(settings.telemetry, Some(true));
-    }
-
-    #[test]
-    fn load_local_settings_rejects_unknown_keys() {
-        let dir = setup();
-        write_settings(&dir, r#"{"strategy": "manual-commit"}"#);
-        write_local_settings(&dir, r#"{"bad_key": true}"#);
-
-        let err = load_settings(dir.path()).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("unknown field"),
-            "expected unknown-field error, got: {err:#}"
-        );
-    }
-
-    // ── CLI-1469: unified config file pair ──────────────────────────────
-
-    #[test]
-    fn unified_config_file_constant_is_config_json() {
-        assert_eq!(
-            SETTINGS_FILE, "config.json",
-            "SETTINGS_FILE should be 'config.json' for unified config model"
-        );
-    }
-
-    #[test]
-    fn unified_config_local_file_constant_is_config_local_json() {
-        assert_eq!(
-            SETTINGS_LOCAL_FILE, "config.local.json",
-            "SETTINGS_LOCAL_FILE should be 'config.local.json' for unified config model"
-        );
-    }
-
-    #[test]
-    fn unified_config_settings_path_returns_config_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = settings_path(dir.path());
-        assert!(
-            path.ends_with(".bitloops/config.json"),
-            "settings_path should return .bitloops/config.json, got: {}",
-            path.display()
-        );
-    }
-
-    #[test]
-    fn unified_config_settings_local_path_returns_config_local_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = settings_local_path(dir.path());
-        assert!(
-            path.ends_with(".bitloops/config.local.json"),
-            "settings_local_path should return .bitloops/config.local.json, got: {}",
-            path.display()
-        );
+        Value::Object(map) => {
+            let mut table = Table::new();
+            for (key, value) in map {
+                table[key] = json_value_to_toml_item(value)?;
+            }
+            Ok(Item::Table(table))
+        }
     }
 }

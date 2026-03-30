@@ -20,8 +20,8 @@ pub use repo::{
 };
 pub use storage::{
     default_blob_store_path, default_embedding_model_cache_dir, default_events_db_path,
-    default_relational_db_path, extract_session_id_from_transcript_path,
-    session_metadata_dir_from_session_id,
+    default_relational_db_path, default_runtime_state_dir, default_session_tmp_dir,
+    extract_session_id_from_transcript_path, session_metadata_dir_from_session_id,
 };
 pub use worktree::{get_main_repo_root, get_worktree_id, is_inside_worktree};
 

@@ -47,8 +47,8 @@ pub(super) fn seed_graphql_monorepo_repo() -> TempDir {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open GraphQL monorepo sqlite");
     conn.execute(
         "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
-         VALUES (?1, 'local', 'local', 'graphql-monorepo', 'main')",
-        rusqlite::params![repo_id.as_str()],
+         VALUES (?1, 'local', 'local', ?2, 'main')",
+        rusqlite::params![repo_id.as_str(), SEEDED_REPO_NAME],
     )
     .expect("insert repository row");
     conn.execute(

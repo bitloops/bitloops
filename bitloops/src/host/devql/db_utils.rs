@@ -433,7 +433,7 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
     .context("joining SQLite query task")?
 }
 
-pub(super) fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
+pub(crate) fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
     use rusqlite::types::ValueRef as SqlValueRef;
     match value {
         SqlValueRef::Null => Value::Null,
@@ -451,7 +451,7 @@ pub(super) fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Valu
     }
 }
 
-pub(super) fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
+pub(crate) fn duckdb_value_to_json(value: duckdb::types::Value) -> Value {
     use duckdb::types::Value as DuckValue;
     match value {
         DuckValue::Null => Value::Null,

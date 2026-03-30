@@ -2,14 +2,10 @@
 //!
 //! Distinct from the per-artefact `summary` object on the `tests()` stage (linkage counts only).
 
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::capability_packs::test_harness::storage::{
-    BitloopsTestHarnessRepository, TestHarnessQueryRepository,
-};
+use crate::capability_packs::test_harness::storage::TestHarnessQueryRepository;
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_CAPABILITY_ID, TEST_HARNESS_TESTS_SUMMARY_STAGE_ID,
     test_harness_commit_sha_required_response,
@@ -54,17 +50,16 @@ fn build_test_harness_commit_snapshot(
     Ok((value, human))
 }
 
-pub struct TestsSummaryStageHandler(pub Option<Arc<Mutex<BitloopsTestHarnessRepository>>>);
+pub struct TestsSummaryStageHandler;
 
 impl StageHandler for TestsSummaryStageHandler {
     fn execute<'a>(
         &'a self,
         request: StageRequest,
-        _ctx: &'a mut dyn CapabilityExecutionContext,
+        ctx: &'a mut dyn CapabilityExecutionContext,
     ) -> BoxFuture<'a, anyhow::Result<StageResponse>> {
-        let store = self.0.clone();
         Box::pin(async move {
-            let Some(store) = store else {
+            let Some(store) = ctx.test_harness_store() else {
                 return Ok(test_harness_relational_store_unavailable_stage_response());
             };
 
@@ -92,7 +87,6 @@ impl StageHandler for TestsSummaryStageHandler {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
     use serde_json::json;
@@ -111,6 +105,7 @@ mod tests {
     struct DummyExecCtx {
         repo: RepoIdentity,
         graph: LocalCanonicalGraphGateway,
+        store: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     }
 
     impl CapabilityExecutionContext for DummyExecCtx {
@@ -129,6 +124,10 @@ mod tests {
         fn host_relational(&self) -> &dyn RelationalGateway {
             panic!("test context does not provide host relational access")
         }
+
+        fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+            self.store.as_ref()
+        }
     }
 
     fn test_repo() -> RepoIdentity {
@@ -143,10 +142,11 @@ mod tests {
 
     #[tokio::test]
     async fn summary_stage_without_store_reports_unavailable() {
-        let handler = TestsSummaryStageHandler(None);
+        let handler = TestsSummaryStageHandler;
         let mut ctx = DummyExecCtx {
             repo: test_repo(),
             graph: LocalCanonicalGraphGateway,
+            store: None,
         };
         let req = StageRequest::new(json!({
             "limit": 10,
@@ -168,10 +168,11 @@ mod tests {
         let repo = BitloopsTestHarnessRepository::Sqlite(
             SqliteTestHarnessRepository::open_existing(&db_path).expect("open"),
         );
-        let handler = TestsSummaryStageHandler(Some(Arc::new(Mutex::new(repo))));
+        let handler = TestsSummaryStageHandler;
         let mut ctx = DummyExecCtx {
             repo: test_repo(),
             graph: LocalCanonicalGraphGateway,
+            store: Some(std::sync::Mutex::new(repo)),
         };
         let req = StageRequest::new(json!({
             "limit": 5,
@@ -189,10 +190,11 @@ mod tests {
         let repo = BitloopsTestHarnessRepository::Sqlite(
             SqliteTestHarnessRepository::open_existing(&db_path).expect("open"),
         );
-        let handler = TestsSummaryStageHandler(Some(Arc::new(Mutex::new(repo))));
+        let handler = TestsSummaryStageHandler;
         let mut ctx = DummyExecCtx {
             repo: test_repo(),
             graph: LocalCanonicalGraphGateway,
+            store: Some(std::sync::Mutex::new(repo)),
         };
         let req = StageRequest::new(json!({
             "limit": 10,
@@ -219,10 +221,11 @@ mod tests {
         );
         seed_pack_owned_rows(&mut repo, "commit-123").expect("seed pack rows");
 
-        let handler = TestsSummaryStageHandler(Some(Arc::new(Mutex::new(repo))));
+        let handler = TestsSummaryStageHandler;
         let mut ctx = DummyExecCtx {
             repo: test_repo(),
             graph: LocalCanonicalGraphGateway,
+            store: Some(std::sync::Mutex::new(repo)),
         };
         let req = StageRequest::new(json!({
             "limit": 10,

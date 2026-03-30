@@ -1,4 +1,7 @@
 use super::*;
+use crate::config::{
+    resolve_store_embedding_config_for_repo, resolve_store_semantic_config_for_repo,
+};
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -11,6 +14,7 @@ pub struct RepoIdentity {
 
 #[derive(Debug, Clone)]
 pub struct DevqlConfig {
+    pub(crate) config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
     pub(crate) repo: RepoIdentity,
     pub(crate) pg_dsn: Option<String>,
@@ -25,15 +29,25 @@ pub struct DevqlConfig {
     pub(crate) embedding_provider: Option<String>,
     pub(crate) embedding_model: Option<String>,
     pub(crate) embedding_api_key: Option<String>,
+    pub(crate) embedding_cache_dir: Option<PathBuf>,
 }
 
 impl DevqlConfig {
     pub fn from_env(repo_root: PathBuf, repo: RepoIdentity) -> Result<Self> {
-        let backend_cfg = resolve_store_backend_config_for_repo(&repo_root)
+        Self::from_roots(repo_root.clone(), repo_root, repo)
+    }
+
+    pub fn from_roots(
+        config_root: PathBuf,
+        repo_root: PathBuf,
+        repo: RepoIdentity,
+    ) -> Result<Self> {
+        let backend_cfg = resolve_store_backend_config_for_repo(&config_root)
             .context("resolving backend config for DevQL runtime")?;
-        let semantic_cfg = resolve_store_semantic_config();
-        let embedding_cfg = resolve_store_embedding_config();
+        let semantic_cfg = resolve_store_semantic_config_for_repo(&config_root);
+        let embedding_cfg = resolve_store_embedding_config_for_repo(&config_root);
         Ok(Self {
+            config_root,
             repo_root,
             repo,
             pg_dsn: backend_cfg.relational.postgres_dsn,
@@ -54,6 +68,7 @@ impl DevqlConfig {
             embedding_provider: embedding_cfg.embedding_provider,
             embedding_model: embedding_cfg.embedding_model,
             embedding_api_key: embedding_cfg.embedding_api_key,
+            embedding_cache_dir: embedding_cfg.embedding_cache_dir,
         })
     }
 
@@ -164,6 +179,7 @@ mod tests {
 
     fn sample_cfg(repo_root: PathBuf) -> DevqlConfig {
         DevqlConfig {
+            config_root: repo_root.clone(),
             repo_root,
             repo: RepoIdentity {
                 provider: "git".to_string(),
@@ -184,6 +200,7 @@ mod tests {
             embedding_provider: None,
             embedding_model: None,
             embedding_api_key: None,
+            embedding_cache_dir: None,
         }
     }
 

@@ -1,12 +1,12 @@
 use anyhow::{Result, bail, ensure};
 use serde_json::json;
-use std::path::Path;
 
 use crate::capability_packs::knowledge::{
     AssociateKnowledgeResult, IngestKnowledgeResult, KnowledgeItemStatus, KnowledgeVersionStatus,
     RefreshSourceResult, format_knowledge_add_result, format_knowledge_associate_result,
     format_knowledge_refresh_result,
 };
+use crate::devql_transport::SlimCliRepoScope;
 
 use super::graphql::execute_devql_graphql;
 
@@ -129,13 +129,12 @@ struct GraphqlKnowledgeRelationSummary {
 }
 
 pub(super) async fn run_knowledge_add_via_graphql(
-    repo_root: &Path,
-    repo_identity: &str,
+    scope: &SlimCliRepoScope,
     url: &str,
     commit: Option<&str>,
 ) -> Result<()> {
     let response: AddKnowledgeMutationData = execute_devql_graphql(
-        repo_root,
+        scope,
         ADD_KNOWLEDGE_MUTATION,
         json!({
             "input": {
@@ -157,7 +156,7 @@ pub(super) async fn run_knowledge_add_via_graphql(
             &response.add_knowledge.knowledge_item.source_kind,
         )?
         .to_string(),
-        repo_identity: repo_identity.to_string(),
+        repo_identity: scope.repo.identity.clone(),
         knowledge_item_id: response.add_knowledge.knowledge_item.id,
         knowledge_item_version_id: response.add_knowledge.knowledge_item_version_id,
         item_status: if response.add_knowledge.item_created {
@@ -185,12 +184,12 @@ pub(super) async fn run_knowledge_add_via_graphql(
 }
 
 pub(super) async fn run_knowledge_associate_via_graphql(
-    repo_root: &Path,
+    scope: &SlimCliRepoScope,
     source_ref: &str,
     target_ref: &str,
 ) -> Result<()> {
     let response: AssociateKnowledgeMutationData = execute_devql_graphql(
-        repo_root,
+        scope,
         ASSOCIATE_KNOWLEDGE_MUTATION,
         json!({
             "input": {
@@ -211,11 +210,11 @@ pub(super) async fn run_knowledge_associate_via_graphql(
 }
 
 pub(super) async fn run_knowledge_refresh_via_graphql(
-    repo_root: &Path,
+    scope: &SlimCliRepoScope,
     knowledge_ref: &str,
 ) -> Result<()> {
     let response: RefreshKnowledgeMutationData = execute_devql_graphql(
-        repo_root,
+        scope,
         REFRESH_KNOWLEDGE_MUTATION,
         json!({
             "input": {

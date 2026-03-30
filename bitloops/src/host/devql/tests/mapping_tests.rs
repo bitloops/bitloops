@@ -1,4 +1,8 @@
 use super::*;
+use crate::adapters::languages::python::canonical::{
+    PYTHON_CANONICAL_MAPPINGS, PYTHON_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::adapters::languages::python::extraction::extract_python_artefacts;
 use crate::adapters::languages::rust::canonical::{
     RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS,
 };
@@ -9,6 +13,7 @@ use crate::host::language_adapter::{is_supported_language_kind, resolve_canonica
 
 fn extension_runtime_cfg() -> DevqlConfig {
     DevqlConfig {
+        config_root: PathBuf::from("/tmp/repo"),
         repo_root: PathBuf::from("/tmp/repo"),
         repo: RepoIdentity {
             provider: "github".to_string(),
@@ -29,6 +34,7 @@ fn extension_runtime_cfg() -> DevqlConfig {
         embedding_provider: None,
         embedding_model: None,
         embedding_api_key: None,
+        embedding_cache_dir: None,
     }
 }
 
@@ -283,6 +289,90 @@ impl Repository for User {
 }
 
 #[test]
+fn python_canonical_mapping_covers_supported_kind_table() {
+    let expected = [
+        (("function_definition", false), true, Some("function")),
+        (("function_definition", true), true, Some("method")),
+        (("class_definition", false), true, Some("type")),
+        (("import_statement", false), true, Some("import")),
+        (("import_from_statement", false), true, Some("import")),
+        (("future_import_statement", false), true, Some("import")),
+        (("assignment", false), true, Some("variable")),
+        (("decorated_definition", false), false, None),
+        (("call", false), false, None),
+    ];
+
+    for ((language_kind, inside_parent), supported, canonical_kind) in expected {
+        assert_eq!(
+            is_supported_language_kind(PYTHON_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(PYTHON_CANONICAL_MAPPINGS, language_kind, inside_parent)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
+    }
+}
+
+#[test]
+fn python_canonical_mapping_extracts_functions_methods_types_and_docstrings() {
+    let content = r#"
+"""module docs"""
+
+from pkg.helpers import helper as imported_helper
+import os
+
+VALUE = 1
+
+class Greeter(BaseGreeter):
+    """class docs"""
+
+    @staticmethod
+    def helper():
+        return imported_helper()
+
+    async def greet(self):
+        """method docs"""
+        return self.helper()
+
+def run():
+    """function docs"""
+    return imported_helper()
+"#;
+
+    let artefacts = extract_python_artefacts(content, "src/main.py").unwrap();
+
+    let import = artefact_by_language_kind(&artefacts, "import_from_statement");
+    assert_eq!(canonical_kind(import), Some("import"));
+
+    let class = artefact_by_name_and_language_kind(&artefacts, "class_definition", "Greeter");
+    assert_eq!(canonical_kind(class), Some("type"));
+    assert_eq!(class.docstring.as_deref(), Some("class docs"));
+
+    let variable = artefact_by_name_and_language_kind(&artefacts, "assignment", "VALUE");
+    assert_eq!(canonical_kind(variable), Some("variable"));
+
+    let function = artefact_by_name_and_language_kind(&artefacts, "function_definition", "run");
+    assert_eq!(canonical_kind(function), Some("function"));
+    assert_eq!(function.docstring.as_deref(), Some("function docs"));
+
+    let method = artefact_by_name_and_language_kind(&artefacts, "function_definition", "greet");
+    assert_eq!(canonical_kind(method), Some("method"));
+    assert_eq!(method.docstring.as_deref(), Some("method docs"));
+
+    let static_method =
+        artefact_by_name_and_language_kind(&artefacts, "function_definition", "helper");
+    assert_eq!(canonical_kind(static_method), Some("method"));
+    assert!(
+        static_method
+            .modifiers
+            .iter()
+            .any(|modifier| modifier == "staticmethod")
+    );
+}
+
+#[test]
 fn devql_extension_host_resolves_built_in_language_pack_ownership() {
     assert_eq!(
         resolve_language_pack_owner("rust"),
@@ -296,7 +386,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_pack_owner("javascript"),
         Some(TS_JS_LANGUAGE_PACK_ID)
     );
-    assert!(resolve_language_pack_owner("python").is_none());
+    assert_eq!(
+        resolve_language_pack_owner("python"),
+        Some(PYTHON_LANGUAGE_PACK_ID)
+    );
     assert_eq!(
         resolve_language_id_for_file_path("src/lib.rs"),
         Some("rust")
@@ -309,6 +402,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/main.jsx"),
         Some("javascript")
     );
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.py"),
+        Some("python")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -317,15 +414,20 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     let registry = language_adapter_registry().expect("initialize language adapter registry");
     assert_eq!(
         registry.registered_pack_ids(),
-        vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]
+        vec![
+            PYTHON_LANGUAGE_PACK_ID,
+            RUST_LANGUAGE_PACK_ID,
+            TS_JS_LANGUAGE_PACK_ID
+        ]
     );
     assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(TS_JS_LANGUAGE_PACK_ID).is_some());
+    assert!(registry.get(PYTHON_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get("unknown-pack").is_none());
 }
 
 #[test]
-fn devql_language_adapter_registry_executes_rust_and_ts_js_built_ins() {
+fn devql_language_adapter_registry_executes_rust_ts_js_and_python_built_ins() {
     let registry = language_adapter_registry().expect("initialize language adapter registry");
     let rust_pack = registry
         .get(RUST_LANGUAGE_PACK_ID)
@@ -378,6 +480,56 @@ function helper() {
             .any(|edge| edge.edge_kind == EdgeKind::Calls),
         "ts/js built-in registry pack should emit call edges"
     );
+
+    let python_pack = registry
+        .get(PYTHON_LANGUAGE_PACK_ID)
+        .expect("resolve python built-in language adapter pack");
+    let python_content = r#"
+"""module docs"""
+
+from pkg.helpers import helper
+
+class Greeter(BaseGreeter):
+    def greet(self):
+        return helper()
+
+def run():
+    return helper()
+"#;
+    let python_artefacts = python_pack
+        .extract_artefacts(python_content, "src/main.py")
+        .expect("extract python artefacts via language adapter registry");
+    assert!(
+        python_artefacts
+            .iter()
+            .any(|artefact| artefact.name == "run"),
+        "python built-in registry pack should surface function artefacts"
+    );
+    assert!(
+        python_pack.extract_file_docstring(python_content).is_some(),
+        "python built-in registry pack should expose module docstrings"
+    );
+    let python_edges = python_pack
+        .extract_dependency_edges(python_content, "src/main.py", &python_artefacts)
+        .expect("extract python dependency edges via language adapter registry");
+    assert!(
+        python_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
+        "python built-in registry pack should emit call edges"
+    );
+    assert!(
+        python_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Imports),
+        "python built-in registry pack should emit import edges"
+    );
+    assert!(
+        python_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
+        "python built-in registry pack should emit extends edges"
+    );
 }
 
 #[test]
@@ -415,7 +567,11 @@ fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
         .collect::<Vec<_>>();
     assert_eq!(
         pack_ids,
-        vec![RUST_LANGUAGE_PACK_ID, TS_JS_LANGUAGE_PACK_ID]
+        vec![
+            PYTHON_LANGUAGE_PACK_ID,
+            RUST_LANGUAGE_PACK_ID,
+            TS_JS_LANGUAGE_PACK_ID
+        ]
     );
     assert!(
         lifecycle
@@ -449,6 +605,7 @@ fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_a
     assert_eq!(
         report.language_adapter_pack_ids,
         vec![
+            PYTHON_LANGUAGE_PACK_ID.to_string(),
             RUST_LANGUAGE_PACK_ID.to_string(),
             TS_JS_LANGUAGE_PACK_ID.to_string()
         ]

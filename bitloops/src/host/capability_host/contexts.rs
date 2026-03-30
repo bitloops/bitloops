@@ -5,12 +5,13 @@ use anyhow::{Result, anyhow, bail};
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeRelationalRepository,
 };
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::RepoIdentity;
 
 use super::config_view::CapabilityConfigView;
 use super::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, ConnectorRegistry, ProvenanceBuilder,
-    RelationalGateway, StoreHealthGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, ConnectorRegistry, EmptyLanguageServicesGateway,
+    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
 };
 
 pub trait CapabilityExecutionContext: Send {
@@ -18,6 +19,15 @@ pub trait CapabilityExecutionContext: Send {
     fn repo_root(&self) -> &Path;
     fn graph(&self) -> &dyn CanonicalGraphGateway;
     fn host_relational(&self) -> &dyn RelationalGateway;
+
+    fn languages(&self) -> &dyn LanguageServicesGateway {
+        static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
+        &EMPTY
+    }
+
+    fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+        None
+    }
 }
 
 pub trait CapabilityIngestContext: Send {
@@ -29,6 +39,22 @@ pub trait CapabilityIngestContext: Send {
     fn connector_context(&self) -> &dyn super::gateways::ConnectorContext;
     fn provenance(&self) -> &dyn ProvenanceBuilder;
     fn host_relational(&self) -> &dyn RelationalGateway;
+    fn languages(&self) -> &dyn LanguageServicesGateway {
+        static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
+        &EMPTY
+    }
+
+    fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+        None
+    }
+
+    fn clone_rebuild_relational(&self) -> Result<&crate::host::devql::RelationalStorage> {
+        let capability_id = self.invoking_capability_id().unwrap_or("<unknown>");
+        let ingester_id = self.invoking_ingester_id().unwrap_or("<unknown>");
+        bail!(
+            "clone rebuild relational access is not available for capability `{capability_id}` ingester `{ingester_id}`"
+        );
+    }
 
     fn devql_relational(&self) -> Option<&crate::host::devql::RelationalStorage> {
         None

@@ -1,33 +1,160 @@
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
-use tempfile::TempDir;
 
-pub fn new_isolated_bitloops_command(
-    bin_path: &Path,
-    repo: &Path,
-    args: &[&str],
-) -> (Command, TempDir) {
-    let isolated_home = tempfile::tempdir().expect("create isolated home for test command");
-    let xdg_config_home = isolated_home.path().join("xdg");
-    fs::create_dir_all(&xdg_config_home).expect("create isolated xdg config home");
-
+pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(bin_path);
     cmd.args(args)
         .current_dir(repo)
-        .env("HOME", isolated_home.path())
-        .env("USERPROFILE", isolated_home.path())
-        .env("XDG_CONFIG_HOME", &xdg_config_home)
-        .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
-        .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
         .env_remove("BITLOOPS_DEVQL_CH_URL")
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
         .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+    apply_repo_app_env(&mut cmd, repo);
 
-    (cmd, isolated_home)
+    cmd
+}
+
+pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
+    let paths = repo_app_paths(repo);
+    apply_repo_app_paths(cmd, &paths);
+}
+
+pub fn apply_repo_app_paths(cmd: &mut Command, paths: &RepoAppPaths) {
+    cmd.env("HOME", &paths.home)
+        .env("USERPROFILE", &paths.home)
+        .env("XDG_CONFIG_HOME", &paths.xdg_config)
+        .env("XDG_DATA_HOME", &paths.xdg_data)
+        .env("XDG_CACHE_HOME", &paths.xdg_cache)
+        .env("XDG_STATE_HOME", &paths.xdg_state)
+        .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
+        .env(DISABLE_VERSION_CHECK_ENV, "1");
+}
+
+pub fn repo_app_paths(repo: &Path) -> RepoAppPaths {
+    isolated_app_paths(repo)
+}
+
+pub fn isolated_repo_aux_dir(repo: &Path, name: &str) -> PathBuf {
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    name.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let parent = repo
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = parent.join(format!(".bitloops-test-{name}-{hash:016x}"));
+    fs::create_dir_all(&dir).expect("create isolated Bitloops test helper dir");
+    dir
+}
+
+pub fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
+    let _guard = enter_repo_app_env(repo);
+    f()
+}
+
+pub fn enter_repo_app_env(repo: &Path) -> RepoAppEnvGuard {
+    let paths = repo_app_paths(repo);
+    enter_repo_app_paths(&paths)
+}
+
+pub fn enter_repo_app_paths(paths: &RepoAppPaths) -> RepoAppEnvGuard {
+    let lock_guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous_env = apply_env_vars(&[
+        ("HOME", Some(paths.home.as_os_str())),
+        ("USERPROFILE", Some(paths.home.as_os_str())),
+        ("XDG_CONFIG_HOME", Some(paths.xdg_config.as_os_str())),
+        ("XDG_DATA_HOME", Some(paths.xdg_data.as_os_str())),
+        ("XDG_CACHE_HOME", Some(paths.xdg_cache.as_os_str())),
+        ("XDG_STATE_HOME", Some(paths.xdg_state.as_os_str())),
+    ]);
+    RepoAppEnvGuard {
+        _lock_guard: lock_guard,
+        previous_env,
+    }
+}
+
+pub struct RepoAppEnvGuard {
+    _lock_guard: MutexGuard<'static, ()>,
+    previous_env: Vec<(String, Option<OsString>)>,
+}
+
+impl Drop for RepoAppEnvGuard {
+    fn drop(&mut self) {
+        restore_env_vars(&self.previous_env);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RepoAppPaths {
+    pub home: PathBuf,
+    pub xdg_config: PathBuf,
+    pub xdg_data: PathBuf,
+    pub xdg_cache: PathBuf,
+    pub xdg_state: PathBuf,
+}
+
+fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
+    let home = isolated_repo_aux_dir(repo, "home");
+    let paths = RepoAppPaths {
+        xdg_config: home.join("xdg-config"),
+        xdg_data: home.join("xdg-data"),
+        xdg_cache: home.join("xdg-cache"),
+        xdg_state: home.join("xdg-state"),
+        home,
+    };
+    for dir in [
+        &paths.home,
+        &paths.xdg_config,
+        &paths.xdg_data,
+        &paths.xdg_cache,
+        &paths.xdg_state,
+    ] {
+        fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
+    }
+    paths
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn apply_env_vars(vars: &[(&str, Option<&std::ffi::OsStr>)]) -> Vec<(String, Option<OsString>)> {
+    let mut previous = Vec::with_capacity(vars.len());
+    for (key, value) in vars {
+        previous.push(((*key).to_string(), std::env::var_os(key)));
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+    previous
+}
+
+fn restore_env_vars(previous: &[(String, Option<OsString>)]) {
+    for (key, value) in previous.iter().rev() {
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 }
