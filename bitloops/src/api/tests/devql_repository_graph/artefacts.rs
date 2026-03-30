@@ -222,6 +222,107 @@ async fn devql_artefact_connection_supports_cursor_pagination_for_graphql_artefa
 }
 
 #[tokio::test]
+async fn devql_artefact_connection_supports_reverse_pagination_for_graphql_artefacts() {
+    let repo = seed_graphql_devql_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let tail_page = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                artefacts(filter: { kind: FUNCTION }, last: 1) {
+                  totalCount
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                  }
+                  edges {
+                    node {
+                      symbolId
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        tail_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        tail_page.errors
+    );
+
+    let tail_json = tail_page.data.into_json().expect("graphql data to json");
+    assert_eq!(tail_json["repo"]["artefacts"]["totalCount"], 4);
+    assert_eq!(
+        tail_json["repo"]["artefacts"]["pageInfo"]["hasNextPage"],
+        false
+    );
+    assert_eq!(
+        tail_json["repo"]["artefacts"]["pageInfo"]["hasPreviousPage"],
+        true
+    );
+    assert_eq!(
+        tail_json["repo"]["artefacts"]["edges"][0]["node"]["symbolId"],
+        "sym::target"
+    );
+
+    let before_cursor = tail_json["repo"]["artefacts"]["pageInfo"]["startCursor"]
+        .as_str()
+        .expect("tail artefact cursor")
+        .to_string();
+
+    let before_page = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                artefacts(filter: {{ kind: FUNCTION }}, last: 1, before: "{before_cursor}") {{
+                  pageInfo {{
+                    hasNextPage
+                    hasPreviousPage
+                  }}
+                  edges {{
+                    node {{
+                      symbolId
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        before_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        before_page.errors
+    );
+
+    let before_json = before_page.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        before_json["repo"]["artefacts"]["pageInfo"]["hasNextPage"],
+        true
+    );
+    assert_eq!(
+        before_json["repo"]["artefacts"]["pageInfo"]["hasPreviousPage"],
+        true
+    );
+    assert_eq!(
+        before_json["repo"]["artefacts"]["edges"][0]["node"]["symbolId"],
+        "sym::orphan"
+    );
+}
+
+#[tokio::test]
 async fn devql_graphql_event_backed_artefact_connections_paginate_repository_scope() {
     let seeded = seed_graphql_event_backed_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(

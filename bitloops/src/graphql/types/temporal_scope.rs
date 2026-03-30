@@ -6,8 +6,8 @@ use crate::graphql::{
 };
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, FileContext, Project,
-    connection::PageInfo,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ConnectionPagination, FileContext,
+    Project,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -144,27 +144,25 @@ impl TemporalScope {
         &self,
         ctx: &Context<'_>,
         filter: Option<ArtefactFilterInput>,
-        #[graphql(default = 100)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<ArtefactConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
         }
-        if first <= 0 {
-            return Err(bad_user_input_error("`first` must be greater than zero"));
-        }
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        let total_count = context
-            .count_artefacts(None, filter.as_ref(), &self.scope)
-            .await
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to query temporally scoped artefacts: {err:#}"
-                ))
-            })?;
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
 
-        if let Some(cursor) = after.as_deref() {
+        if let Some(cursor) = pagination.after().or_else(|| pagination.before()) {
             let cursor_exists = context
                 .artefact_cursor_exists(None, filter.as_ref(), &self.scope, cursor)
                 .await
@@ -180,33 +178,18 @@ impl TemporalScope {
             }
         }
 
-        let mut artefacts = context
-            .list_artefacts_window(
-                None,
-                filter.as_ref(),
-                &self.scope,
-                after.as_deref(),
-                first as usize + 1,
-            )
+        let (artefacts, page_info, total_count) = context
+            .query_artefact_connection(None, filter.as_ref(), &self.scope, &pagination)
             .await
             .map_err(|err| {
                 backend_error(format!(
                     "failed to query temporally scoped artefacts: {err:#}"
                 ))
             })?;
-        let has_next_page = artefacts.len() > first as usize;
-        artefacts.truncate(first as usize);
-        let start_cursor = artefacts.first().map(|artefact| artefact.cursor());
-        let end_cursor = artefacts.last().map(|artefact| artefact.cursor());
 
         Ok(ArtefactConnection::new(
             artefacts.into_iter().map(ArtefactEdge::new).collect(),
-            PageInfo {
-                has_next_page,
-                has_previous_page: after.is_some(),
-                start_cursor,
-                end_cursor,
-            },
+            page_info,
             total_count,
         ))
     }

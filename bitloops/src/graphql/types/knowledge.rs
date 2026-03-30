@@ -5,8 +5,8 @@ use crate::capability_packs::knowledge::KnowledgePayloadEnvelope;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, loaders::DataLoaders};
 
 use super::{
-    DateTimeScalar, JsonScalar, KnowledgeRelationConnection, KnowledgeRelationEdge,
-    KnowledgeVersionConnection, KnowledgeVersionEdge, paginate_items,
+    ConnectionPagination, DateTimeScalar, JsonScalar, KnowledgeRelationConnection,
+    KnowledgeRelationEdge, KnowledgeVersionConnection, KnowledgeVersionEdge, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -164,9 +164,18 @@ impl KnowledgeItem {
     async fn versions(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = 10)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<KnowledgeVersionConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            10,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let versions = ctx
             .data_unchecked::<DataLoaders>()
             .load_knowledge_versions_by_item(self.id.as_ref())
@@ -177,9 +186,7 @@ impl KnowledgeItem {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&versions, first, after.as_deref(), |version| {
-            version.cursor()
-        })?;
+        let page = paginate_items(&versions, &pagination, |version| version.cursor())?;
         Ok(KnowledgeVersionConnection::new(
             page.items
                 .into_iter()
@@ -193,9 +200,18 @@ impl KnowledgeItem {
     async fn relations(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = 25)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<KnowledgeRelationConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            25,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let relations = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_knowledge_relations(&self.scope, self.id.as_ref())
@@ -206,9 +222,7 @@ impl KnowledgeItem {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&relations, first, after.as_deref(), |relation| {
-            relation.cursor()
-        })?;
+        let page = paginate_items(&relations, &pagination, |relation| relation.cursor())?;
         Ok(KnowledgeRelationConnection::new(
             page.items
                 .into_iter()
