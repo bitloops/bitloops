@@ -99,7 +99,7 @@ pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -
 }
 
 pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
-    let client = match daemon_http_client() {
+    let client = match daemon_http_client(&state.url) {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -112,11 +112,14 @@ pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn daemon_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+pub(super) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if should_accept_invalid_daemon_certs(url) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder
         .build()
-        .context("building local Bitloops daemon HTTP client")
+        .context("building Bitloops daemon HTTP client")
 }
 
 pub(super) async fn query_health(state: &DaemonRuntimeState) -> Result<DaemonHealthSummary> {
@@ -167,4 +170,35 @@ pub(super) async fn query_health(state: &DaemonRuntimeState) -> Result<DaemonHea
             .and_then(|value| value.backend.clone()),
         blob_connected: payload.health.blob.and_then(|value| value.connected),
     })
+}
+
+fn should_accept_invalid_daemon_certs(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+
+    matches!(
+        parsed.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_accept_invalid_daemon_certs;
+
+    #[test]
+    fn daemon_http_client_only_relaxes_loopback_https_urls() {
+        assert!(should_accept_invalid_daemon_certs("https://localhost:5667"));
+        assert!(should_accept_invalid_daemon_certs("https://127.0.0.1:5667"));
+        assert!(should_accept_invalid_daemon_certs("https://[::1]:5667"));
+        assert!(!should_accept_invalid_daemon_certs("http://127.0.0.1:5667"));
+        assert!(!should_accept_invalid_daemon_certs(
+            "https://dev.internal:5667"
+        ));
+        assert!(!should_accept_invalid_daemon_certs("not-a-url"));
+    }
 }

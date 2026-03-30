@@ -42,7 +42,7 @@ async fn execute_graphql_request<T: DeserializeOwned>(
     }
 
     let client_started = Instant::now();
-    let client = daemon_http_client()?;
+    let client = daemon_http_client(&runtime.url)?;
     if let Some(trace) = trace.as_ref() {
         trace.record(
             "client.daemon.build_http_client",

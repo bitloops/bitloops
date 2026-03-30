@@ -187,8 +187,8 @@ Example:
 
 CLI interaction:
 
-- `bitloops dashboard --recheck-local-dashboard-net` forces a full local dashboard TLS recheck.
-- `bitloops dashboard --http --host 127.0.0.1` explicitly forces loopback HTTP mode (no TLS).
+- `bitloops daemon start --recheck-local-dashboard-net` forces a full local dashboard TLS recheck.
+- `bitloops daemon start --http --host 127.0.0.1` explicitly forces loopback HTTP mode (no TLS).
 
 ## 4) Manual knowledge ingestion
 

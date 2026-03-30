@@ -1,5 +1,7 @@
 use super::*;
 
+const SUPERVISOR_READY_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub(super) async fn ensure_supervisor_available() -> Result<SupervisorRuntimeState> {
     let metadata = install_or_update_supervisor_service()?;
     let current = current_binary_fingerprint().unwrap_or_default();
@@ -41,7 +43,10 @@ pub(super) async fn wait_until_supervisor_ready(
 }
 
 async fn supervisor_http_ready(runtime: &SupervisorRuntimeState) -> bool {
-    reqwest::Client::new()
+    reqwest::Client::builder()
+        .timeout(SUPERVISOR_READY_REQUEST_TIMEOUT)
+        .build()
+        .expect("supervisor readiness client should build")
         .get(format!(
             "{}/health",
             runtime.control_url.trim_end_matches('/')
@@ -128,4 +133,15 @@ async fn decode_supervisor_response<T: DeserializeOwned>(response: reqwest::Resp
         .json::<T>()
         .await
         .context("decoding Bitloops daemon supervisor response")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SUPERVISOR_READY_REQUEST_TIMEOUT;
+    use std::time::Duration;
+
+    #[test]
+    fn supervisor_readiness_probe_timeout_is_short() {
+        assert_eq!(SUPERVISOR_READY_REQUEST_TIMEOUT, Duration::from_millis(500));
+    }
 }

@@ -73,5 +73,106 @@ pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(value)
         .with_context(|| format!("serialising {}", path.display()))?;
     bytes.push(b'\n');
-    fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
+    atomic_write(path, &bytes)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .context("resolving daemon state parent directory")?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temp_path = parent.join(format!(
+        ".{}.tmp.{}.{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("state"),
+        std::process::id(),
+        nanos
+    ));
+
+    {
+        let mut file = fs::File::create(&temp_path).with_context(|| {
+            format!(
+                "creating temporary daemon state file {}",
+                temp_path.display()
+            )
+        })?;
+        std::io::Write::write_all(&mut file, bytes).with_context(|| {
+            format!(
+                "writing temporary daemon state file {}",
+                temp_path.display()
+            )
+        })?;
+        file.sync_all().with_context(|| {
+            format!(
+                "syncing temporary daemon state file {}",
+                temp_path.display()
+            )
+        })?;
+    }
+
+    if let Err(err) = fs::rename(&temp_path, path) {
+        #[cfg(windows)]
+        {
+            if path.exists() {
+                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+                fs::rename(&temp_path, path).with_context(|| {
+                    format!("renaming {} to {}", temp_path.display(), path.display())
+                })?;
+                return Ok(());
+            }
+        }
+        let _ = fs::remove_file(&temp_path);
+        return Err(err)
+            .with_context(|| format!("renaming {} to {}", temp_path.display(), path.display()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_json, write_json};
+    use serde::{Deserialize, Serialize};
+    use tempfile::tempdir;
+
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct TestState {
+        value: String,
+    }
+
+    #[test]
+    fn write_json_replaces_existing_file_atomically() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("runtime.json");
+
+        write_json(
+            &path,
+            &TestState {
+                value: "first".to_string(),
+            },
+        )
+        .expect("write initial state");
+        write_json(
+            &path,
+            &TestState {
+                value: "second".to_string(),
+            },
+        )
+        .expect("replace state");
+
+        let state = read_json::<TestState>(&path)
+            .expect("read state")
+            .expect("state must exist");
+        assert_eq!(
+            state,
+            TestState {
+                value: "second".to_string(),
+            }
+        );
+    }
 }
