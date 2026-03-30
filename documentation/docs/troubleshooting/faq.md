@@ -7,7 +7,7 @@ title: FAQ
 
 ### Do I still run `bitloops init` inside every repo?
 
-You can, but `init` now prepares the global daemon config rather than repo hooks. Run `bitloops enable` inside each repo to install hooks.
+Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and runs the initial baseline sync through the daemon.
 
 ### Where does Bitloops keep its data now?
 
@@ -26,11 +26,11 @@ Use:
 bitloops uninstall --full
 ```
 
-Use `bitloops disable` if you only want to remove hooks from the current repository.
+Use `bitloops disable` if you only want to stop capture for the current project while leaving hooks installed.
 
 ### Do I need a repo config file?
 
-No. If no `.bitloops.toml` exists, Bitloops uses built-in thin-CLI defaults.
+Yes for project-scoped commands. `bitloops init` creates `.bitloops.local.toml`, and Bitloops discovers the nearest `.bitloops.local.toml` or `.bitloops.toml` while walking up to the enclosing `.git` root.
 
 ### What should go in `.bitloops.toml`?
 
@@ -54,6 +54,10 @@ Machine-scoped settings such as:
 ### Does `bitloops dashboard` still run the server?
 
 No. It launches the browser and ensures the daemon is running.
+
+### What creates the daemon config now?
+
+`bitloops start` and `bitloops daemon start` do. When you use the default config path and it does not exist yet, Bitloops creates it automatically.
 
 ### What replaced `bitloops status` for repo capture status?
 

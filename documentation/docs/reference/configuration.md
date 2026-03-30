@@ -5,10 +5,10 @@ title: Configuration
 
 # Configuration Reference
 
-Bitloops now uses two separate TOML configuration surfaces:
+Bitloops uses two separate TOML configuration surfaces:
 
 - A global daemon config in the platform config directory.
-- An optional repo policy file discovered by walking upwards to the nearest `.bitloops.toml`.
+- A project policy discovered by walking upwards to the nearest `.bitloops.local.toml` or `.bitloops.toml`.
 
 This is a hard break from the older JSON model. There is no automatic migration or legacy fallback. See the [upgrade note](./upgrading-to-the-daemon-architecture.md).
 
@@ -19,11 +19,9 @@ Bitloops stores daemon configuration at:
 - Linux: `${XDG_CONFIG_HOME:-~/.config}/bitloops/config.toml`
 - macOS and Windows: the platform-equivalent config directory returned by the OS
 
-Create it with:
+`bitloops start` and `bitloops daemon start` use this file. If you start Bitloops without `--config` and the default file does not exist yet, Bitloops creates it automatically.
 
-```bash
-bitloops init
-```
+Use `--config /path/to/config.toml` when you want an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it silently.
 
 The daemon config owns:
 
@@ -94,18 +92,21 @@ The default repo footprint is now limited to optional policy files at the repo r
 
 If you want to remove these platform directories again, use `bitloops uninstall` with explicit targets or `bitloops uninstall --full`.
 
-## Repo Policy
+## Project Policy
 
-The thin CLI and hook layer look for repo policy by walking upwards until they find the nearest `.bitloops.toml`.
+`bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, installing hooks, and running the initial baseline sync through the daemon.
+
+The thin CLI and hook layer resolve project policy by walking upwards from the current working directory towards the enclosing `.git` root.
 
 Resolution rules:
 
-- Load the nearest `.bitloops.toml`.
-- If a sibling `.bitloops.local.toml` exists in the same directory, load it as the only higher-precedence local override.
-- Stop at the first matching directory. Bitloops does not merge policy files from multiple ancestors.
-- If no `.bitloops.toml` exists, the CLI uses built-in defaults.
+- In each directory, check `.bitloops.local.toml` first, then `.bitloops.toml`.
+- A standalone `.bitloops.local.toml` is a valid project root.
+- If both files exist in the same directory, `.bitloops.toml` is loaded first and `.bitloops.local.toml` overlays it.
+- Discovery stops at the first matching directory. Bitloops does not merge policy from multiple ancestors.
+- If Bitloops reaches the enclosing `.git` root without finding either file, project-scoped commands tell you to run `bitloops init`.
 
-Repo policy controls what the slim CLI and hooks send to the daemon. It does not configure store backends or daemon runtime paths.
+Project policy controls what the slim CLI and hooks send to the daemon. It does not configure store backends or daemon runtime paths.
 
 Example shared policy:
 
@@ -135,7 +136,18 @@ normalise_branches = true
 knowledge = ["bitloops/knowledge.toml"]
 ```
 
-Example local override:
+Example local project file created by `bitloops init`:
+
+```toml title=".bitloops.local.toml"
+[capture]
+enabled = true
+strategy = "manual-commit"
+
+[agents]
+supported = ["claude-code"]
+```
+
+Example local override layered on top of a shared project file:
 
 ```toml title=".bitloops.local.toml"
 [capture]
@@ -175,11 +187,11 @@ Daemon config precedence:
 2. Global daemon config `config.toml`
 3. Platform default paths and built-in defaults
 
-Repo policy precedence:
+Project policy precedence:
 
 1. `.bitloops.local.toml`
 2. `.bitloops.toml`
-3. Built-in thin-CLI defaults
+3. No active project policy
 
 Arrays replace lower-precedence arrays. They are not deep-merged.
 
@@ -191,14 +203,14 @@ Use the global daemon config for:
 - Provider credentials and service defaults
 - Dashboard bundle overrides and TLS hints
 
-Use repo policy for:
+Use project policy for:
 
 - Capture enablement and checkpoint strategy
 - Watch behaviour
 - Monorepo scope rules
 - Agent-side policy and knowledge imports
 
-Do not put the following in repo policy:
+Do not put the following in project policy:
 
 - Store paths
 - Dashboard runtime paths

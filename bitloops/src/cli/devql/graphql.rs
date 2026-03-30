@@ -21,6 +21,18 @@ const INIT_SCHEMA_MUTATION: &str = r#"
     }
 "#;
 
+const BOOTSTRAP_PROJECT_MUTATION: &str = r#"
+    mutation BootstrapProject($skipBaseline: Boolean!) {
+      bootstrapProject(skipBaseline: $skipBaseline) {
+        success
+        repoIdentity
+        repoId
+        relationalBackend
+        eventsBackend
+      }
+    }
+"#;
+
 const INGEST_MUTATION: &str = r#"
     mutation Ingest($input: IngestInput!) {
       ingest(input: $input) {
@@ -45,6 +57,12 @@ const INGEST_MUTATION: &str = r#"
 #[serde(rename_all = "camelCase")]
 struct InitSchemaMutationData {
     init_schema: InitSchemaSummary,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapProjectMutationData {
+    bootstrap_project: InitSchemaSummary,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -85,6 +103,25 @@ pub(super) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
     Ok(())
 }
 
+pub(crate) async fn run_project_bootstrap_via_graphql(
+    scope: &SlimCliRepoScope,
+    skip_baseline: bool,
+) -> Result<()> {
+    let response: BootstrapProjectMutationData = execute_devql_graphql(
+        scope,
+        BOOTSTRAP_PROJECT_MUTATION,
+        json!({
+            "skipBaseline": skip_baseline,
+        }),
+    )
+    .await?;
+    println!(
+        "{}",
+        format_init_schema_summary(&response.bootstrap_project)
+    );
+    Ok(())
+}
+
 pub(super) async fn run_ingest_via_graphql(
     scope: &SlimCliRepoScope,
     init: bool,
@@ -106,7 +143,7 @@ pub(super) async fn run_ingest_via_graphql(
 }
 
 #[cfg(test)]
-pub(super) fn with_graphql_executor_hook<T>(
+pub(crate) fn with_graphql_executor_hook<T>(
     hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
     f: impl FnOnce() -> T,
 ) -> T {

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::env;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
@@ -67,7 +68,8 @@ fn run_auto_commit(args: &DebugAutoCommitArgs) -> Result<()> {
     };
     writeln!(out, "Repository: {}\n", repo_root.display())?;
 
-    let strategy_name = settings::load_settings(&repo_root)
+    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.clone());
+    let strategy_name = settings::load_settings(&policy_start)
         .map(|s| s.strategy)
         .unwrap_or_else(|_| settings::DEFAULT_STRATEGY.to_string());
     let is_auto_commit = strategy_name == "auto-commit";

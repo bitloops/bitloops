@@ -22,39 +22,51 @@ bitloops help
 
 ### `bitloops init`
 
-Bootstraps the global daemon config.
+Bootstraps the current project or subproject.
 
 ```bash
 bitloops init
-bitloops init --telemetry false
 ```
 
 Notes:
 
-- `init` no longer installs hooks.
-- Deprecated flags such as `--agent` and `--force` are accepted only to keep old invocations from failing loudly.
+- Run `bitloops start` first. `init` requires a running daemon.
+- `init` treats the current working directory as the Bitloops project root.
+- `init` creates or updates `.bitloops.local.toml`.
+- `.bitloops.local.toml` is added to `.git/info/exclude`.
+- `init` installs git hooks plus the selected agent hooks.
+- `init` replaces `[agents].supported` with the current selection on rerun.
+- `init` triggers daemon-backed schema initialisation and the baseline sync into `artefacts_current`.
+- Use `--agent <name>` to pin the supported agent set or `--skip-baseline` when you want hooks and config without the initial baseline ingestion.
 
 ### `bitloops enable`
 
-Installs git hooks and supported agent hooks for the current repository.
+Enables capture in the nearest discovered project policy.
 
 ```bash
 bitloops enable
-bitloops enable --agent claude-code
 ```
 
 Notes:
 
-- `enable` no longer writes repo settings files.
-- `.bitloops.local.toml` is added to `.git/info/exclude` so local overrides stay untracked by default.
+- `enable` edits the nearest discovered `.bitloops.local.toml` or `.bitloops.toml` in place.
+- `enable` only toggles `[capture].enabled = true`.
+- Installed hooks stay in place and resume capturing without reinstallation.
+- If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
 
 ### `bitloops disable`
 
-Removes Bitloops hooks from the current repository.
+Disables capture in the nearest discovered project policy.
 
 ```bash
 bitloops disable
 ```
+
+Notes:
+
+- `disable` only toggles `[capture].enabled = false`.
+- Hooks and watchers remain installed and become no-ops while capture is disabled.
+- Use `bitloops uninstall --agent-hooks --git-hooks` if you want to remove hooks themselves.
 
 ### `bitloops uninstall`
 
@@ -87,7 +99,7 @@ Notes:
 
 - No flags opens an interactive multi-select picker when running in a TTY.
 - In non-interactive environments, you must pass explicit flags.
-- `disable` remains the repo-scoped hook-off command. Use `uninstall` for machine-wide cleanup.
+- `disable` is a capture toggle. Use `uninstall` for hook removal or machine-wide cleanup.
 - See [Uninstalling Bitloops](./uninstall.md) for target-by-target behaviour and caveats.
 
 ## Daemon Lifecycle
@@ -117,6 +129,11 @@ Key flags:
 | `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
+
+Notes:
+
+- When you use the default daemon config path and it does not exist yet, `start` creates it automatically.
+- When you pass `--config` and the file does not exist, `start` fails.
 
 ### `bitloops stop`
 

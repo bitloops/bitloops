@@ -9,9 +9,9 @@ Bitloops now follows a daemon-first architecture.
 
 ## High-Level Flow
 
-1. `bitloops init` prepares the global daemon config.
-2. `bitloops enable` installs repo hooks.
-3. Hooks and the slim CLI resolve repo policy locally.
+1. `bitloops start` launches the global daemon and bootstraps the default daemon config when needed.
+2. `bitloops init` bootstraps the current project or subproject, installs hooks, and runs the initial baseline sync.
+3. Hooks and the slim CLI resolve the nearest project policy locally.
 4. The daemon receives mutations and queries over the local transport.
 5. The daemon stores durable data in configured backends and serves the dashboard and DevQL.
 

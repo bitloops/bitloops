@@ -19,11 +19,12 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 
 ## Core Ideas
 
-- `bitloops init` prepares the global daemon configuration
-- `bitloops enable` installs hooks in the current repository
+- `bitloops start` launches the global daemon and auto-creates the default daemon config if needed
+- `bitloops init` bootstraps the current project or subproject
+- `bitloops enable` and `bitloops disable` toggle capture in the current project policy
 - `bitloops dashboard` opens the dashboard and starts the daemon if needed
 - DevQL commands talk to the daemon over the local HTTP and GraphQL transport
 
 ## Next Step
 
-Follow the [quickstart](./quickstart.md) to set up the daemon, enable a repository, and open the dashboard.
+Follow the [quickstart](./quickstart.md) to start the daemon, initialise a project, and open the dashboard.

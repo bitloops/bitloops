@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
+use crate::config::ensure_daemon_config_exists;
 use crate::daemon::{self, DaemonMode};
 pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
 
@@ -99,6 +100,9 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 
 pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
     print_legacy_repo_data_warnings();
+    if args.config.is_none() {
+        let _ = ensure_daemon_config_exists()?;
+    }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
 

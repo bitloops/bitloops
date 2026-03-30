@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -63,7 +64,8 @@ pub fn run(args: &RewindArgs) -> Result<()> {
 
     {
         let mut out = io::stdout().lock();
-        if enable::check_disabled_guard(&repo_root, &mut out) {
+        let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.clone());
+        if enable::check_disabled_guard(&policy_start, &mut out) {
             return Ok(());
         }
     }
@@ -177,10 +179,11 @@ fn run_to(repo_root: &Path, target: &str, logs_only: bool, reset: bool) -> Resul
 }
 
 fn requires_clean_worktree_for_rewind(repo_root: &Path) -> bool {
-    let strategy_name = settings::load_settings(repo_root)
+    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let strategy_name = settings::load_settings(&policy_start)
         .map(|settings| settings.strategy)
         .or_else(|_| {
-            crate::config::discover_repo_policy(repo_root).map(|policy| {
+            crate::config::discover_repo_policy(&policy_start).map(|policy| {
                 policy
                     .capture
                     .as_object()

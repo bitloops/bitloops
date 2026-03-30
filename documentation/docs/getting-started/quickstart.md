@@ -25,27 +25,29 @@ brew tap bitloops/tap && brew install bitloops
 cargo install bitloops
 ```
 
-## 2. Initialise The Daemon Config
+## 2. Start The Daemon
+
+```bash
+bitloops start
+```
+
+If the default daemon config does not exist yet, `start` creates it at the platform config location, for example `~/.config/bitloops/config.toml` on Linux.
+
+## 3. Initialise A Project
+
+From inside a git repository or subproject:
 
 ```bash
 bitloops init
 ```
 
-This creates the global daemon config at the platform config location, for example `~/.config/bitloops/config.toml` on Linux.
+This creates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync through the daemon.
 
-## 3. Enable A Repository
+If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
-From inside a git repository:
+## 4. Add Optional Shared Project Policy
 
-```bash
-bitloops enable
-```
-
-This installs git hooks and supported agent hooks for that repository.
-
-## 4. Add Optional Repo Policy
-
-Create `.bitloops.toml` at the repo root if you want shared capture policy:
+If you want shared capture policy in git, create `.bitloops.toml` in the project root:
 
 ```toml title=".bitloops.toml"
 [capture]
@@ -57,7 +59,7 @@ watch_debounce_ms = 750
 watch_poll_fallback_ms = 2500
 ```
 
-Use `.bitloops.local.toml` for local-only overrides.
+Keep `.bitloops.local.toml` for local-only overrides.
 
 ## 5. Start Or Open Bitloops
 
@@ -67,21 +69,16 @@ Open the dashboard:
 bitloops dashboard
 ```
 
-Or start the daemon yourself:
+Or manage the daemon yourself:
 
 ```bash
-bitloops start
 bitloops start -d
 bitloops start --until-stopped
 ```
 
-## 6. Initialise DevQL Storage
+## 6. Query And Ingest
 
-```bash
-bitloops devql init
-```
-
-Then ingest and query:
+Initial project bootstrap already initialises the schema. You can then ingest and query:
 
 ```bash
 bitloops devql ingest
@@ -97,9 +94,18 @@ bitloops checkpoints status --detailed
 
 `bitloops status` reports daemon status. `bitloops checkpoints status` reports repo capture status and shows the resolved policy root and fingerprint.
 
+## Toggle Capture Later
+
+```bash
+bitloops disable
+bitloops enable
+```
+
+These commands edit the nearest discovered project policy and leave installed hooks in place.
+
 ## Remove Bitloops Later
 
-Use `bitloops disable` to remove hooks from the current repository.
+Use `bitloops disable` when you want hooks and watchers to stay installed but stop capturing.
 
 Use `bitloops uninstall` when you want to remove Bitloops-managed machine artefacts as well:
 

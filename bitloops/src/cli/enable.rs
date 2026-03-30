@@ -8,25 +8,28 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use crate::adapters::agents::AgentAdapterRegistry;
+#[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
-use crate::cli::init::detect_or_select_agent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
+#[cfg(test)]
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
+use crate::config::discover_repo_policy;
 #[cfg(test)]
 use crate::config::settings::BitloopsSettings;
 use crate::config::settings::{
-    self, SETTINGS_DIR, load_settings, settings_local_path, settings_path,
+    self, SETTINGS_DIR, load_settings, set_capture_enabled, settings_local_path, settings_path,
 };
 use crate::host::checkpoints::session::create_session_backend_or_local;
+use crate::host::devql::watch;
 
 #[derive(Args)]
 pub struct EnableArgs {
-    /// Deprecated: repo policy files are no longer written by this command.
+    /// Deprecated: the nearest discovered project policy is edited automatically.
     #[arg(long)]
     pub local: bool,
 
-    /// Deprecated: repo policy files are no longer written by this command.
+    /// Deprecated: the nearest discovered project policy is edited automatically.
     #[arg(long)]
     pub project: bool,
 
@@ -53,15 +56,24 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
-fn ensure_repo_local_policy_excluded(repo_root: &Path) -> Result<()> {
-    let exclude_path = repo_root.join(".git").join("info").join("exclude");
+#[cfg(test)]
+fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Result<()> {
+    use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
+
+    let exclude_path = git_root.join(".git").join("info").join("exclude");
     if let Some(parent) = exclude_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating git exclude directory {}", parent.display()))?;
     }
 
     let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
-    for entry in [REPO_POLICY_LOCAL_FILE_NAME, ".bitloops/"] {
+    let relative_local_policy = project_root
+        .strip_prefix(git_root)
+        .unwrap_or(project_root)
+        .join(REPO_POLICY_LOCAL_FILE_NAME);
+    let relative_local_policy = relative_local_policy.to_string_lossy().replace('\\', "/");
+
+    for entry in [relative_local_policy.as_str(), ".bitloops/"] {
         if content.lines().any(|line| line.trim() == entry) {
             continue;
         }
@@ -75,6 +87,12 @@ fn ensure_repo_local_policy_excluded(repo_root: &Path) -> Result<()> {
         .with_context(|| format!("writing {}", exclude_path.display()))?;
 
     Ok(())
+}
+
+fn restart_watcher_if_running(repo_root: &Path, config_root: &Path) {
+    if let Err(err) = watch::restart_watcher(repo_root, config_root) {
+        log::debug!("skipping watcher restart after policy change: {err:#}");
+    }
 }
 
 #[cfg(test)]
@@ -110,49 +128,29 @@ pub async fn run(args: EnableArgs) -> Result<()> {
     }
 
     let cwd = env::current_dir().context("getting current directory")?;
-    let repo_root = find_repo_root(&cwd)?;
-
-    ensure_repo_local_policy_excluded(&repo_root)?;
+    let git_root = find_repo_root(&cwd)?;
 
     if args.local || args.project {
         eprintln!(
             "Note: `bitloops enable` no longer edits repo policy files. Edit `{}` or `{}` directly if needed.",
-            settings_path(&repo_root).display(),
-            settings_local_path(&repo_root).display()
+            settings_path(&cwd).display(),
+            settings_local_path(&cwd).display()
         );
     }
 
-    let settings = load_settings(&repo_root).unwrap_or_default();
-    let git_count = git_hooks::install_git_hooks(&repo_root, settings.local_dev)?;
-    if git_count > 0 {
-        println!("Installed {git_count} git hook(s).");
-    }
-
-    let selected_agents = if let Some(agent) = args.agent.as_deref() {
-        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
-    } else {
-        let mut out = io::stdout();
-        detect_or_select_agent(&repo_root, &mut out, None)?
-    };
-    let mut selected_labels = Vec::new();
-    for agent in &selected_agents {
-        let (label, installed) = AgentAdapterRegistry::builtin().install_agent_hooks(
-            &repo_root,
-            agent,
-            settings.local_dev,
-            args.force,
-        )?;
-        selected_labels.push(label.to_string());
-        if installed > 0 {
-            println!("Installed {installed} {label} hook(s).");
-        } else {
-            println!("{label} hooks are already initialised.");
-        }
-    }
+    let policy = discover_repo_policy(&cwd)?;
+    let target_path = policy
+        .local_path
+        .clone()
+        .or(policy.shared_path.clone())
+        .context("resolving editable Bitloops project config")?;
+    let policy_root = policy.root.unwrap_or_else(|| cwd.clone());
+    set_capture_enabled(&target_path, true)?;
+    let settings = load_settings(&cwd).unwrap_or_default();
+    restart_watcher_if_running(&git_root, &policy_root);
 
     println!("Bitloops is enabled (strategy: {}).", settings.strategy);
-    println!("Repo local overrides are ignored via .git/info/exclude.");
-    println!("Initialized agents: {}", selected_labels.join(", "));
+    println!("Updated project config: {}", target_path.display());
     Ok(())
 }
 
@@ -163,25 +161,30 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
 // ── internal helpers used by tests ──────────────────────────────────────────
 
 /// Sets `enabled = false` and writes to the appropriate file.
-pub fn run_disable(
-    repo_root: &Path,
-    out: &mut dyn Write,
-    use_project_settings: bool,
-) -> Result<()> {
+pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool) -> Result<()> {
     let _ = use_project_settings;
-    remove_agent_hooks(repo_root, out)?;
-    let removed = git_hooks::uninstall_git_hooks(repo_root).unwrap_or(0);
-    if removed > 0 {
-        writeln!(out, "Removed git hooks ({removed}).")?;
-    }
-    writeln!(out, "Bitloops hooks are now disabled for this repository.")?;
+    let policy = discover_repo_policy(start)?;
+    let target_path = policy
+        .local_path
+        .clone()
+        .or(policy.shared_path.clone())
+        .context("resolving editable Bitloops project config")?;
+    let policy_root = policy.root.unwrap_or_else(|| start.to_path_buf());
+    set_capture_enabled(&target_path, false)?;
+    let repo_root = find_repo_root(start)?;
+    restart_watcher_if_running(&repo_root, &policy_root);
+    writeln!(
+        out,
+        "Bitloops capture is now disabled for this project ({})",
+        target_path.display()
+    )?;
     Ok(())
 }
 
 /// Returns `true` (is disabled) and prints a message when Bitloops is disabled.
 /// Returns `false` when enabled (default when no settings file).
-pub fn check_disabled_guard(repo_root: &Path, out: &mut dyn Write) -> bool {
-    match settings::is_enabled(repo_root) {
+pub fn check_disabled_guard(start: &Path, out: &mut dyn Write) -> bool {
+    match settings::is_enabled(start) {
         Ok(true) | Err(_) => false,
         Ok(false) => {
             let _ = writeln!(

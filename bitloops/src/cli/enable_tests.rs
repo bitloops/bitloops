@@ -135,14 +135,15 @@ enabled = true
             .is_ok(),
         "sanity check git command should still work"
     );
-    assert!(!git_hooks::is_git_hook_installed(dir.path()));
-    assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
-    assert!(settings::is_enabled(dir.path()).unwrap());
+    assert!(git_hooks::is_git_hook_installed(dir.path()));
+    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(!settings::is_enabled(dir.path()).unwrap());
 }
 
 #[test]
 fn run_disable_already_disabled() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -215,6 +216,7 @@ enabled = false
 #[test]
 fn run_disable_leaves_local_policy_unchanged() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -234,14 +236,15 @@ enabled = true
 
     let local_content = fs::read_to_string(settings_local_path(dir.path())).unwrap();
     assert!(
-        local_content.contains("enabled = true"),
-        "local policy should remain unchanged: {local_content}"
+        local_content.contains("enabled = false"),
+        "local policy should be disabled in place: {local_content}"
     );
 }
 
 #[test]
 fn run_disable_with_project_flag_leaves_policy_unchanged() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -262,19 +265,20 @@ enabled = true
     let project_content = fs::read_to_string(settings_path(dir.path())).unwrap();
     assert!(
         project_content.contains("enabled = true"),
-        "shared policy should remain unchanged: {project_content}"
+        "shared policy should remain unchanged when local override exists: {project_content}"
     );
 
     let local_content = fs::read_to_string(settings_local_path(dir.path())).unwrap();
     assert!(
-        local_content.contains("enabled = true"),
-        "local settings should remain untouched: {local_content}"
+        local_content.contains("enabled = false"),
+        "local settings should be toggled even when --project is passed: {local_content}"
     );
 }
 
 #[test]
 fn run_disable_does_not_create_local_policy_when_missing() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -290,8 +294,8 @@ enabled = true
 
     let project_content = fs::read_to_string(settings_path(dir.path())).unwrap();
     assert!(
-        project_content.contains("enabled = true"),
-        "project settings should remain enabled: {project_content}"
+        project_content.contains("enabled = false"),
+        "project settings should be disabled in place: {project_content}"
     );
 }
 
@@ -352,7 +356,20 @@ some_other_option = "value"
     let merged = load_settings(dir.path()).unwrap();
     assert_eq!(merged.strategy, "auto-commit");
     assert!(merged.enabled);
-    assert!(merged.strategy_options.is_empty());
+    assert_eq!(
+        merged
+            .strategy_options
+            .get("push")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        merged
+            .strategy_options
+            .get("some_other_option")
+            .and_then(serde_json::Value::as_str),
+        Some("value")
+    );
 }
 
 #[test]
@@ -746,23 +763,17 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     with_repo_cwd(dir.path(), || {
-        run_enable_command(EnableArgs {
+        let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: None,
         })
-        .unwrap();
+        .unwrap_err();
 
-        assert!(dir.path().join(".claude/settings.json").exists());
-        assert!(!dir.path().join(".codex/hooks.json").exists());
-        assert!(!dir.path().join(".cursor/hooks.json").exists());
-        assert!(!dir.path().join(".gemini/settings.json").exists());
-        assert!(!dir.path().join(".opencode/plugins/bitloops.ts").exists());
-        assert!(git_hooks::is_git_hook_installed(dir.path()));
-        let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
-        assert!(exclude.contains(".bitloops.local.toml"));
-        assert!(exclude.contains(".bitloops/"));
+        assert!(format!("{err:#}").contains("bitloops init"));
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(!git_hooks::is_git_hook_installed(dir.path()));
     });
 }
 
@@ -771,18 +782,17 @@ fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     with_repo_cwd(dir.path(), || {
-        run_enable_command(EnableArgs {
+        let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: Some("cursor".to_string()),
         })
-        .unwrap();
+        .unwrap_err();
 
-        assert!(dir.path().join(".cursor/hooks.json").exists());
-        assert!(!dir.path().join(".claude/settings.json").exists());
-        assert!(!dir.path().join(".codex/hooks.json").exists());
-        assert!(git_hooks::is_git_hook_installed(dir.path()));
+        assert!(format!("{err:#}").contains("bitloops init"));
+        assert!(!dir.path().join(".cursor/hooks.json").exists());
+        assert!(!git_hooks::is_git_hook_installed(dir.path()));
     });
 }
 
@@ -849,7 +859,7 @@ fn initialized_agents_detects_copilot() {
 fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    ensure_repo_local_policy_excluded(dir.path()).unwrap();
+    ensure_repo_local_policy_excluded(dir.path(), dir.path()).unwrap();
 
     let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains(".bitloops.local.toml"));
@@ -860,7 +870,7 @@ fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
 fn repo_local_policy_exclude_does_not_add_legacy_names() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    ensure_repo_local_policy_excluded(dir.path()).unwrap();
+    ensure_repo_local_policy_excluded(dir.path(), dir.path()).unwrap();
 
     let gitignore = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(
@@ -875,13 +885,14 @@ fn enable_does_not_create_shared_repo_policy_file() {
     setup_git_repo(&dir);
 
     with_repo_cwd(dir.path(), || {
-        run_enable_command(EnableArgs {
+        let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: None,
         })
-        .unwrap();
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("bitloops init"));
     });
 
     assert!(!settings_path(dir.path()).exists());
@@ -893,13 +904,14 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
     setup_git_repo(&dir);
 
     with_repo_cwd(dir.path(), || {
-        run_enable_command(EnableArgs {
+        let err = run_enable_command(EnableArgs {
             local: true,
             project: false,
             force: false,
             agent: None,
         })
-        .unwrap();
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("bitloops init"));
     });
 
     assert!(!settings_local_path(dir.path()).exists());
@@ -908,6 +920,7 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
 #[test]
 fn disable_does_not_create_local_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -920,11 +933,14 @@ enabled = true
     run_disable(dir.path(), &mut out, false).unwrap();
 
     assert!(!settings_local_path(dir.path()).exists());
+    let content = fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(content.contains("enabled = false"));
 }
 
 #[test]
 fn disable_with_project_flag_does_not_rewrite_shared_repo_policy() {
     let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
     setup_settings(
         &dir,
         r#"[capture]
@@ -939,8 +955,8 @@ enabled = true
     let content =
         fs::read_to_string(settings_path(dir.path())).expect("shared policy should still exist");
     assert!(
-        content.contains("enabled = true"),
-        "shared repo policy should remain unchanged, got: {content}"
+        content.contains("enabled = false"),
+        "shared repo policy should be toggled when it is the nearest config, got: {content}"
     );
 }
 

@@ -198,6 +198,26 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
+    async fn bootstrap_project(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = false)] skip_baseline: bool,
+    ) -> Result<InitSchemaResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context.require_repo_write_scope().map_err(|err| {
+            operation_error("BAD_USER_INPUT", "validation", "bootstrapProject", err)
+        })?;
+        let cfg = context.devql_config().map_err(|err| {
+            operation_error("BACKEND_ERROR", "configuration", "bootstrapProject", err)
+        })?;
+        let summary = crate::host::devql::execute_project_bootstrap(&cfg, skip_baseline)
+            .await
+            .map_err(|err| {
+                operation_error("BACKEND_ERROR", "initialisation", "bootstrapProject", err)
+            })?;
+        Ok(summary.into())
+    }
+
     async fn add_knowledge(
         &self,
         ctx: &Context<'_>,

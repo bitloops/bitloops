@@ -5,6 +5,7 @@ use super::telemetry::{
     TELEMETRY_OPTOUT_ENV, maybe_capture_telemetry_consent, prompt_telemetry_consent,
 };
 use super::*;
+use crate::cli::devql::graphql::with_graphql_executor_hook;
 use crate::cli::{Cli, Commands};
 use crate::config::load_daemon_settings;
 use crate::test_support::process_state::with_process_state;
@@ -51,6 +52,21 @@ fn with_temp_app_dirs<T>(repo_root: &std::path::Path, temp: &TempDir, f: impl Fn
     with_process_state(Some(repo_root), &env_refs, f)
 }
 
+fn with_temp_app_dirs_and_env<T>(
+    repo_root: &std::path::Path,
+    temp: &TempDir,
+    extra_env: &[(&str, Option<&str>)],
+    f: impl FnOnce() -> T,
+) -> T {
+    let env_vars = app_dir_env(temp);
+    let mut env_refs = env_vars
+        .iter()
+        .map(|(key, value)| (*key, value.as_deref()))
+        .collect::<Vec<_>>();
+    env_refs.extend_from_slice(extra_env);
+    with_process_state(Some(repo_root), &env_refs, f)
+}
+
 #[test]
 fn init_args_supports_agent_flag() {
     let parsed =
@@ -83,61 +99,104 @@ fn init_cmd_agent_flag_no_value_errors() {
 }
 
 #[test]
-fn run_init_creates_global_daemon_config() {
+fn run_init_creates_project_local_policy_and_bootstraps_selected_agents() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
 
-    with_temp_app_dirs(repo.path(), &app_dirs, || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: false,
-                agent: None,
-                telemetry: true,
-                skip_baseline: false,
-            },
-            &mut out,
-            None,
-        )
-        .expect("run init");
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
+        || {
+            with_graphql_executor_hook(
+                |_repo_root, _query, _variables| {
+                    Ok(serde_json::json!({
+                        "bootstrapProject": {
+                            "success": true,
+                            "repoIdentity": "local://local/repo",
+                            "repoId": "repo-id",
+                            "relationalBackend": "sqlite",
+                            "eventsBackend": "duckdb"
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    run_with_writer(
+                        InitArgs {
+                            force: false,
+                            agent: None,
+                            telemetry: true,
+                            skip_baseline: false,
+                        },
+                        &mut out,
+                        None,
+                    )
+                    .expect("run init");
 
-        let loaded = load_daemon_settings(None).expect("load daemon settings");
-        assert!(loaded.path.exists(), "daemon config should exist");
-
-        let rendered = String::from_utf8(out).expect("utf8 output");
-        assert!(rendered.contains("Daemon config:"));
-        assert!(rendered.contains("Bitloops daemon configuration is ready."));
-    });
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(rendered.contains("Project config:"));
+                    assert!(rendered.contains("Bitloops project bootstrap is ready."));
+                    assert!(repo.path().join(".bitloops.local.toml").exists());
+                    assert!(repo.path().join(".claude/settings.json").exists());
+                    let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                        .expect("read git exclude");
+                    assert!(exclude.contains(".bitloops.local.toml"));
+                    assert!(!exclude.contains("config.local.json"));
+                    assert!(!exclude.contains(".bitloops/config.local.json"));
+                },
+            );
+        },
+    );
 }
 
 #[test]
-fn run_init_with_deprecated_flags_prints_note_and_does_not_install_hooks() {
+fn run_init_with_agent_flag_installs_requested_hooks_and_skips_baseline_when_requested() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
 
-    with_temp_app_dirs(repo.path(), &app_dirs, || {
-        let mut out = Vec::new();
-        run_with_writer(
-            InitArgs {
-                force: true,
-                agent: Some(AGENT_CLAUDE_CODE.to_string()),
-                telemetry: true,
-                skip_baseline: true,
-            },
-            &mut out,
-            None,
-        )
-        .expect("run init");
+    with_temp_app_dirs_and_env(
+        repo.path(),
+        &app_dirs,
+        &[("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1"))],
+        || {
+            with_graphql_executor_hook(
+                |_repo_root, _query, variables| {
+                    assert_eq!(variables["skipBaseline"], true);
+                    Ok(serde_json::json!({
+                        "bootstrapProject": {
+                            "success": true,
+                            "repoIdentity": "local://local/repo",
+                            "repoId": "repo-id",
+                            "relationalBackend": "sqlite",
+                            "eventsBackend": "duckdb"
+                        }
+                    }))
+                },
+                || {
+                    let mut out = Vec::new();
+                    run_with_writer(
+                        InitArgs {
+                            force: true,
+                            agent: Some(AGENT_CURSOR.to_string()),
+                            telemetry: true,
+                            skip_baseline: true,
+                        },
+                        &mut out,
+                        None,
+                    )
+                    .expect("run init");
 
-        let rendered = String::from_utf8(out).expect("utf8 output");
-        assert!(rendered.contains("Use `bitloops enable` for hooks."));
-        assert!(!repo.path().join(".claude/settings.json").exists());
-        assert!(!repo.path().join(".cursor/hooks.json").exists());
-        assert!(!repo.path().join(".codex/hooks.json").exists());
-        assert!(!repo.path().join(".gemini/settings.json").exists());
-    });
+                    let rendered = String::from_utf8(out).expect("utf8 output");
+                    assert!(rendered.contains("Initialised agents: cursor"));
+                    assert!(repo.path().join(".cursor/hooks.json").exists());
+                    assert!(!repo.path().join(".claude/settings.json").exists());
+                },
+            );
+        },
+    );
 }
 
 #[test]

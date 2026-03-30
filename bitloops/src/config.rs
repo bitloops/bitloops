@@ -19,7 +19,7 @@ pub use daemon_config::{
 };
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
-    RepoPolicySnapshot, discover_repo_policy,
+    RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
 };
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,

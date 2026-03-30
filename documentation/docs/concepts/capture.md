@@ -10,21 +10,24 @@ Capture is the repo-side part of Bitloops. Hooks and the slim CLI collect contex
 ## Enabling Capture
 
 ```bash
-bitloops enable
+bitloops init
 ```
 
-This installs:
+Project bootstrap installs:
 
 - git hooks
-- supported agent hooks for the current repository
+- supported agent hooks for the current project
 
-Disable them again with:
+After that, use capture toggles:
 
 ```bash
+bitloops enable
 bitloops disable
 ```
 
-Use `bitloops uninstall` if you want to remove Bitloops beyond the current repo hook setup.
+These commands edit `[capture].enabled` in the nearest discovered project policy. Installed hooks stay in place and no-op while capture is disabled.
+
+Use `bitloops uninstall` if you want to remove Bitloops hook integration itself.
 
 ## Policy
 
@@ -36,7 +39,7 @@ enabled = true
 strategy = "manual-commit"
 ```
 
-Local overrides live in `.bitloops.local.toml`.
+Local overrides live in `.bitloops.local.toml`, which can also stand on its own without a sibling shared file.
 
 ## What Capture Does Not Configure
 

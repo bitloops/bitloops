@@ -165,13 +165,14 @@ pub async fn run(args: GitHooksArgs, strategy_registry: &StrategyRegistry) -> Re
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
+    let config_start = std::env::current_dir().unwrap_or_else(|_| repo_root.clone());
 
     // Skip silently when Bitloops is disabled.
-    if !settings::is_enabled(&repo_root).unwrap_or(true) {
+    if !settings::is_enabled_for_hooks(&config_start) {
         return Ok(());
     }
 
-    let strategy_name = settings::load_settings(&repo_root)
+    let strategy_name = settings::load_settings(&config_start)
         .map(|s| s.strategy)
         .unwrap_or_else(|_| registry::STRATEGY_NAME_MANUAL_COMMIT.to_string());
     let strategy: Box<dyn Strategy> = strategy_registry

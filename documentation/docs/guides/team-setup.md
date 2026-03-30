@@ -26,11 +26,13 @@ Each developer may also keep:
 
 ## Team Onboarding Flow
 
-### 1. Initialise the daemon config
+### 1. Start the daemon once on each machine
 
 ```bash
-bitloops init
+bitloops start
 ```
+
+The first start creates the default global daemon config if needed.
 
 ### 2. Configure machine-specific stores and credentials
 
@@ -45,7 +47,19 @@ duckdb_path = "/Users/alex/.local/share/bitloops/stores/event/events.duckdb"
 token = "${GITHUB_TOKEN}"
 ```
 
-### 3. Commit shared repo policy
+### 3. Bootstrap a project locally
+
+From the repository root or a subproject directory:
+
+```bash
+bitloops init
+```
+
+This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync.
+
+Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
+
+### 4. Commit shared project policy when you need it
 
 ```toml title=".bitloops.toml"
 [capture]
@@ -60,13 +74,9 @@ watch_poll_fallback_ms = 2500
 knowledge = ["bitloops/knowledge.toml"]
 ```
 
-### 4. Enable the repo locally
+One simple workflow is to start from the generated `.bitloops.local.toml`, rename or copy the relevant sections into `.bitloops.toml`, and commit the shared file.
 
-```bash
-bitloops enable
-```
-
-### 5. Open the dashboard or start the daemon
+### 5. Open the dashboard or keep using the daemon
 
 ```bash
 bitloops dashboard
@@ -74,7 +84,7 @@ bitloops dashboard
 
 ## Local Overrides
 
-Personal overrides go in `.bitloops.local.toml`, which `bitloops enable` ensures is ignored through `.git/info/exclude`.
+Personal overrides go in `.bitloops.local.toml`, which `bitloops init` ensures is ignored through `.git/info/exclude`.
 
 Example:
 
@@ -82,6 +92,8 @@ Example:
 [capture]
 enabled = false
 ```
+
+Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks.
 
 ## What Not To Commit
 
