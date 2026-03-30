@@ -6,7 +6,9 @@ use anyhow::Result;
 use clap::Parser;
 use tempfile::TempDir;
 
-use super::targets::{UninstallTarget, collect_requested_targets, validate_scope_flags};
+use super::targets::{
+    ALL_TARGETS, UninstallTarget, collect_requested_targets, validate_scope_flags,
+};
 use super::{
     BinaryCandidatesFn, NO_FLAGS_ERROR, RunContext, ServiceUninstaller, UninstallArgs,
     UninstallSelector, run_with_context,
@@ -162,6 +164,49 @@ fn no_flags_without_tty_errors() {
 }
 
 #[test]
+fn full_flag_collects_every_known_target() {
+    let mut out = Vec::new();
+    let targets = collect_requested_targets(
+        &UninstallArgs {
+            full: true,
+            ..UninstallArgs::default()
+        },
+        &mut out,
+        None,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(targets, BTreeSet::from(ALL_TARGETS));
+}
+
+#[test]
+fn explicit_flags_collect_requested_targets_without_prompting() {
+    let mut out = Vec::new();
+    let targets = collect_requested_targets(
+        &UninstallArgs {
+            data: true,
+            config: true,
+            git_hooks: true,
+            ..UninstallArgs::default()
+        },
+        &mut out,
+        None,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        targets,
+        BTreeSet::from([
+            UninstallTarget::Data,
+            UninstallTarget::Config,
+            UninstallTarget::GitHooks,
+        ])
+    );
+}
+
+#[test]
 fn only_current_project_requires_hook_targets() {
     let targets = BTreeSet::from([UninstallTarget::Data]);
     let err = validate_scope_flags(
@@ -173,6 +218,19 @@ fn only_current_project_requires_hook_targets() {
     )
     .unwrap_err();
     assert!(format!("{err:#}").contains("--only-current-project"));
+}
+
+#[test]
+fn only_current_project_accepts_hook_only_targets() {
+    let targets = BTreeSet::from([UninstallTarget::AgentHooks, UninstallTarget::GitHooks]);
+    validate_scope_flags(
+        &UninstallArgs {
+            only_current_project: true,
+            ..UninstallArgs::default()
+        },
+        &targets,
+    )
+    .expect("hook-only targets should be valid");
 }
 
 #[test]
