@@ -183,7 +183,35 @@ pub fn ensure_claude_auth_for_repo(world: &mut QatWorld, repo_name: &str) -> Res
 
 pub fn run_devql_init_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_bitloops_success(world, &["devql", "init"], "bitloops devql init")
+    let mut attempts: u32 = 0;
+    loop {
+        let output = run_command_capture(
+            world,
+            "bitloops devql init",
+            build_bitloops_command(world, &["devql", "init"])?,
+        )?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let daemon_missing = stdout.contains("Bitloops daemon is not running")
+            || stderr.contains("Bitloops daemon is not running");
+
+        if daemon_missing && attempts < 2 {
+            attempts += 1;
+            run_bitloops_success(
+                world,
+                &["daemon", "start", "-d", "--host", "127.0.0.1", "--http"],
+                "bitloops daemon start -d --host 127.0.0.1 --http",
+            )?;
+            std::thread::sleep(StdDuration::from_millis(500 * u64::from(attempts)));
+            continue;
+        }
+
+        return ensure_success(&output, "bitloops devql init");
+    }
 }
 
 pub fn run_devql_ingest_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
