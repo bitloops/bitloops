@@ -25,9 +25,7 @@ impl LanguageTestSupport for PythonLanguageTestSupport {
     }
 
     fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
-        PythonTestMappingHelper::new()
-            .map(|helper| helper.supports_path(absolute_path, relative_path))
-            .unwrap_or(false)
+        PythonTestMappingHelper::supports_path(absolute_path, relative_path)
     }
 
     fn discover_tests(
@@ -56,7 +54,7 @@ impl PythonTestMappingHelper {
         Ok(Self { parser })
     }
 
-    pub(crate) fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(_absolute_path: &Path, relative_path: &str) -> bool {
         let file_name = Path::new(relative_path)
             .file_name()
             .and_then(|name| name.to_str())

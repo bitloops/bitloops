@@ -25,9 +25,7 @@ impl LanguageTestSupport for TsJsLanguageTestSupport {
     }
 
     fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
-        TypeScriptTestMappingHelper::new()
-            .map(|helper| helper.supports_path(absolute_path, relative_path))
-            .unwrap_or(false)
+        TypeScriptTestMappingHelper::supports_path(absolute_path, relative_path)
     }
 
     fn discover_tests(
@@ -56,7 +54,7 @@ impl TypeScriptTestMappingHelper {
         Ok(Self { parser })
     }
 
-    pub(crate) fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(_absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.ts")
             || relative_path.ends_with(".spec.ts")
             || relative_path.contains("/__tests__/")

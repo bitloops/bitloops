@@ -38,9 +38,7 @@ impl LanguageTestSupport for RustLanguageTestSupport {
     }
 
     fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
-        RustTestMappingHelper::new()
-            .map(|helper| helper.supports_path(absolute_path, relative_path))
-            .unwrap_or(false)
+        RustTestMappingHelper::supports_path(absolute_path, relative_path)
     }
 
     fn discover_tests(
@@ -123,9 +121,7 @@ impl LanguageTestSupport for RustLanguageTestSupport {
         source_files: &[DiscoveredTestFile],
         enumeration: EnumerationResult,
     ) -> ReconciledDiscovery {
-        RustTestMappingHelper::new()
-            .map(|helper| helper.reconcile(source_files, enumeration))
-            .unwrap_or_else(|_| ReconciledDiscovery::default())
+        RustTestMappingHelper::reconcile(source_files, enumeration)
     }
 }
 
@@ -146,7 +142,7 @@ impl RustTestMappingHelper {
         Ok(Self { parser })
     }
 
-    pub(crate) fn supports_path(&self, absolute_path: &Path, relative_path: &str) -> bool {
+    pub(crate) fn supports_path(absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.rs")
             || relative_path.ends_with(".spec.rs")
             || ((relative_path.starts_with("tests/") || relative_path.contains("/tests/"))
@@ -192,7 +188,6 @@ impl RustTestMappingHelper {
     }
 
     pub(crate) fn reconcile(
-        &self,
         source_files: &[DiscoveredTestFile],
         enumeration: EnumerationResult,
     ) -> ReconciledDiscovery {
