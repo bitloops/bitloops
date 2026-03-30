@@ -179,7 +179,10 @@ fn run_to(repo_root: &Path, target: &str, logs_only: bool, reset: bool) -> Resul
 }
 
 fn requires_clean_worktree_for_rewind(repo_root: &Path) -> bool {
-    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+    let policy_start = env::current_dir()
+        .ok()
+        .filter(|cwd| cwd.starts_with(repo_root))
+        .unwrap_or_else(|| repo_root.to_path_buf());
     let strategy_name = settings::load_settings(&policy_start)
         .map(|settings| settings.strategy)
         .or_else(|_| {

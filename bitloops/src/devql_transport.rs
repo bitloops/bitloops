@@ -7,7 +7,7 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::config::discover_repo_policy;
+use crate::config::discover_repo_policy_optional;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{RepoIdentity, resolve_repo_identity};
 
@@ -64,7 +64,7 @@ pub(crate) fn discover_slim_cli_repo_scope(cwd: Option<&Path>) -> Result<SlimCli
     let git_dir_relative_path = relative_path(&cwd, &repo_root.join(".git"))
         .to_string_lossy()
         .replace('\\', "/");
-    let config_fingerprint = discover_repo_policy(&cwd)?.fingerprint;
+    let config_fingerprint = discover_repo_policy_optional(&cwd)?.fingerprint;
 
     Ok(SlimCliRepoScope {
         repo,

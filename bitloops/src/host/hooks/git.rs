@@ -257,6 +257,7 @@ fn read_pre_push_stdin_lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::settings::{self, BitloopsSettings};
     use crate::host::checkpoints::session::backend::SessionBackend;
     use crate::host::checkpoints::session::local_backend::LocalFileBackend;
     use crate::host::checkpoints::session::phase::SessionPhase;
@@ -295,6 +296,16 @@ mod tests {
             &[(TEST_STATE_DIR_OVERRIDE_ENV, Some(state_root_value.as_str()))],
             f,
         )
+    }
+
+    fn write_strategy_config(repo_root: &Path, strategy: &str) {
+        let settings = BitloopsSettings {
+            strategy: strategy.to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        settings::save_settings(&settings, &settings::settings_path(repo_root))
+            .expect("write repo policy");
     }
 
     #[test]
@@ -336,6 +347,7 @@ mod tests {
     fn run_post_commit_writes_non_empty_log_at_default_level() {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
+        write_strategy_config(dir.path(), "manual-commit");
         let state_root_value = dir.path().join("state-root").display().to_string();
 
         with_process_state(

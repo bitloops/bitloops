@@ -463,6 +463,7 @@ type MigrationRecord {
 type MutationRoot {
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
+	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
