@@ -9,27 +9,32 @@ use clap::Args;
 
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::init::detect_or_select_agent;
+#[cfg(test)]
+use crate::config::REPO_POLICY_FILE_NAME;
+use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
+#[cfg(test)]
+use crate::config::settings::BitloopsSettings;
 use crate::config::settings::{
-    self, BitloopsSettings, SETTINGS_DIR, SETTINGS_LOCAL_FILE, extract_settings_bytes,
-    load_settings, save_settings, settings_local_path, settings_path,
+    self, SETTINGS_DIR, load_settings, settings_local_path, settings_path,
 };
 use crate::host::checkpoints::session::create_session_backend_or_local;
 
 #[derive(Args)]
 pub struct EnableArgs {
-    /// Write to .bitloops/config.local.json (local override, gitignored)
+    /// Deprecated: repo policy files are no longer written by this command.
     #[arg(long)]
     pub local: bool,
 
-    /// Force write to .bitloops/config.json even if it already exists
+    /// Deprecated: repo policy files are no longer written by this command.
     #[arg(long)]
     pub project: bool,
 
-    /// Deprecated: no-op. Use `bitloops init` to initialize agents.
+    /// Remove and reinstall existing hooks for selected agents.
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
-    /// Deprecated: no-op. Use `bitloops init --agent <name>` to initialize agents.
+    /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
     #[arg(long, hide = true)]
     pub agent: Option<String>,
 }
@@ -48,50 +53,38 @@ pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Entries that must be present in `.bitloops/.gitignore`.
-const GITIGNORE_ENTRIES: &[&str] = &[
-    "tmp/",
-    SETTINGS_LOCAL_FILE,
-    "metadata/",
-    "logs/",
-    "stores/",
-    "embeddings/",
-];
+fn ensure_repo_local_policy_excluded(repo_root: &Path) -> Result<()> {
+    let exclude_path = repo_root.join(".git").join("info").join("exclude");
+    if let Some(parent) = exclude_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating git exclude directory {}", parent.display()))?;
+    }
 
-/// Ensures the `.bitloops/` directory and its `.gitignore` exist.
-fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
-    let dir = repo_root.join(SETTINGS_DIR);
-    fs::create_dir_all(&dir).with_context(|| format!("creating {SETTINGS_DIR}/ directory"))?;
-
-    let gitignore = dir.join(".gitignore");
-    let mut content = fs::read_to_string(&gitignore).unwrap_or_default();
-
-    let mut changed = false;
-    for entry in GITIGNORE_ENTRIES {
-        if !content.contains(entry) {
-            if !content.ends_with('\n') && !content.is_empty() {
-                content.push('\n');
-            }
-            content.push_str(entry);
-            content.push('\n');
-            changed = true;
+    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+    for entry in [REPO_POLICY_LOCAL_FILE_NAME, ".bitloops/"] {
+        if content.lines().any(|line| line.trim() == entry) {
+            continue;
         }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
     }
-
-    if changed || !gitignore.exists() {
-        fs::write(&gitignore, &content).context("writing .bitloops/.gitignore")?;
-    }
+    fs::write(&exclude_path, content)
+        .with_context(|| format!("writing {}", exclude_path.display()))?;
 
     Ok(())
 }
 
-/// Determines which settings file to write to.
-///
-/// Returns `(path, show_notification)`:
-/// - `--local`  → local file, no notification
-/// - `--project` → project file, no notification
-/// - neither + config.json exists → local file, show notification
-/// - neither + no config.json → project file, no notification
+#[cfg(test)]
+fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
+    fs::create_dir_all(repo_root.join(SETTINGS_DIR))
+        .with_context(|| format!("creating {SETTINGS_DIR}/ directory"))?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn determine_settings_target(
     repo_root: &Path,
     use_local: bool,
@@ -119,44 +112,47 @@ pub async fn run(args: EnableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let repo_root = find_repo_root(&cwd)?;
 
-    setup_bitloops_dir(&repo_root)?;
+    ensure_repo_local_policy_excluded(&repo_root)?;
 
-    let mut merged = load_settings(&repo_root).unwrap_or_default();
-    merged.strategy = settings::DEFAULT_STRATEGY.to_string();
-    merged.enabled = true;
-
-    let (target_path, show_notification) =
-        determine_settings_target(&repo_root, args.local, args.project);
-
-    save_settings(&merged, &target_path)?;
-
-    if show_notification {
+    if args.local || args.project {
         eprintln!(
-            "Note: writing local override to {} (shared config.json already exists)",
-            target_path.display()
+            "Note: `bitloops enable` no longer edits repo policy files. Edit `{}` or `{}` directly if needed.",
+            settings_path(&repo_root).display(),
+            settings_local_path(&repo_root).display()
         );
     }
 
-    if args.agent.is_some() || args.force {
-        eprintln!(
-            "Note: agent initialization moved to `bitloops init`; `bitloops enable` no longer initializes agents."
-        );
-    }
-
-    let git_count = git_hooks::install_git_hooks(&repo_root, merged.local_dev)?;
+    let settings = load_settings(&repo_root).unwrap_or_default();
+    let git_count = git_hooks::install_git_hooks(&repo_root, settings.local_dev)?;
     if git_count > 0 {
         println!("Installed {git_count} git hook(s).");
     }
 
-    let agents = initialized_agents(&repo_root);
-    if agents.is_empty() {
-        println!("Bitloops enabled, but no agents are initialized.");
-        println!("Run `bitloops init` to initialize agent integrations.");
+    let selected_agents = if let Some(agent) = args.agent.as_deref() {
+        vec![AgentAdapterRegistry::builtin().normalise_agent_name(agent)?]
     } else {
-        println!("Initialized agents: {}", agents.join(", "));
+        let mut out = io::stdout();
+        detect_or_select_agent(&repo_root, &mut out, None)?
+    };
+    let mut selected_labels = Vec::new();
+    for agent in &selected_agents {
+        let (label, installed) = AgentAdapterRegistry::builtin().install_agent_hooks(
+            &repo_root,
+            agent,
+            settings.local_dev,
+            args.force,
+        )?;
+        selected_labels.push(label.to_string());
+        if installed > 0 {
+            println!("Installed {installed} {label} hook(s).");
+        } else {
+            println!("{label} hooks are already initialised.");
+        }
     }
 
-    println!("Bitloops is enabled (strategy: manual-commit).");
+    println!("Bitloops is enabled (strategy: {}).", settings.strategy);
+    println!("Repo local overrides are ignored via .git/info/exclude.");
+    println!("Initialized agents: {}", selected_labels.join(", "));
     Ok(())
 }
 
@@ -172,19 +168,13 @@ pub fn run_disable(
     out: &mut dyn Write,
     use_project_settings: bool,
 ) -> Result<()> {
-    if use_project_settings {
-        let path = settings_path(repo_root);
-        let mut settings = load_from_file_or_default(&path);
-        settings.enabled = false;
-        save_settings(&settings, &path)?;
-    } else {
-        // Write to local settings file (creates it if absent).
-        let local_path = settings_local_path(repo_root);
-        let mut settings = load_from_file_or_default(&local_path);
-        settings.enabled = false;
-        save_settings(&settings, &local_path)?;
+    let _ = use_project_settings;
+    remove_agent_hooks(repo_root, out)?;
+    let removed = git_hooks::uninstall_git_hooks(repo_root).unwrap_or(0);
+    if removed > 0 {
+        writeln!(out, "Removed git hooks ({removed}).")?;
     }
-    writeln!(out, "Bitloops is now disabled.")?;
+    writeln!(out, "Bitloops hooks are now disabled for this repository.")?;
     Ok(())
 }
 
@@ -203,21 +193,6 @@ pub fn check_disabled_guard(repo_root: &Path, out: &mut dyn Write) -> bool {
     }
 }
 
-fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
-    if !path.exists() {
-        return BitloopsSettings::default();
-    }
-    let data = match fs::read(path) {
-        Ok(d) => d,
-        Err(_) => return BitloopsSettings::default(),
-    };
-    let settings_data = match extract_settings_bytes(&data) {
-        Ok(d) => d,
-        Err(_) => return BitloopsSettings::default(),
-    };
-    serde_json::from_slice(&settings_data).unwrap_or_default()
-}
-
 pub const SHELL_COMPLETION_COMMENT: &str = "# Bitloops CLI shell completion";
 
 #[cfg(test)]
@@ -227,113 +202,16 @@ pub fn run_enable_with_strategy(
     use_local_settings: bool,
     use_project_settings: bool,
 ) -> Result<PathBuf> {
-    setup_bitloops_dir(repo_root)?;
-    let mut merged = load_settings(repo_root).unwrap_or_default();
-    merged.strategy = selected_strategy.to_string();
-    merged.enabled = true;
-    let (target_path, _) =
-        determine_settings_target(repo_root, use_local_settings, use_project_settings);
-    save_settings(&merged, &target_path)?;
+    let _ = use_local_settings;
+    let _ = use_project_settings;
+    let target_path = settings_path(repo_root);
+    let settings = BitloopsSettings {
+        strategy: selected_strategy.to_string(),
+        enabled: true,
+        ..BitloopsSettings::default()
+    };
+    crate::config::settings::save_settings(&settings, &target_path)?;
     Ok(target_path)
-}
-
-pub fn run_uninstall(
-    repo_root: &Path,
-    out: &mut dyn Write,
-    err_out: &mut dyn Write,
-    force: bool,
-) -> Result<()> {
-    if !repo_root.join(".git").exists() {
-        writeln!(err_out, "Not a git repository. Nothing to uninstall.")?;
-        return Err(crate::cli::SilentError.into());
-    }
-
-    let bitloops_dir_exists = check_bitloops_dir_exists(repo_root);
-    let session_state_count = count_session_states(repo_root);
-    let git_hooks_installed = git_hooks::is_git_hook_installed(repo_root);
-    let installed_agents = AgentAdapterRegistry::builtin().installed_agents(repo_root);
-    let installed_agent_labels = installed_agents
-        .iter()
-        .map(|agent| {
-            AgentAdapterRegistry::builtin()
-                .agent_display(agent)
-                .unwrap_or("Unknown")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-
-    if !bitloops_dir_exists
-        && !git_hooks_installed
-        && session_state_count == 0
-        && installed_agents.is_empty()
-    {
-        writeln!(out, "Bitloops is not installed in this repository.")?;
-        return Ok(());
-    }
-
-    if !force {
-        writeln!(
-            out,
-            "\nThis will completely remove Bitloops from this repository:"
-        )?;
-        if bitloops_dir_exists {
-            writeln!(out, "  - .bitloops/ directory")?;
-        }
-        if git_hooks_installed {
-            writeln!(
-                out,
-                "  - Git hooks (prepare-commit-msg, commit-msg, post-commit, post-merge, post-checkout, pre-push, reference-transaction)"
-            )?;
-        }
-        if session_state_count > 0 {
-            writeln!(out, "  - Session state files ({session_state_count})")?;
-        }
-        if !installed_agent_labels.is_empty() {
-            writeln!(
-                out,
-                "  - Agent hooks ({})",
-                installed_agent_labels.join(", ")
-            )?;
-        }
-
-        write!(
-            out,
-            "\nAre you sure you want to uninstall Bitloops? [y/N]: "
-        )?;
-        out.flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let confirmed = matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-        if !confirmed {
-            writeln!(out, "Uninstall cancelled.")?;
-            return Ok(());
-        }
-    }
-
-    writeln!(out, "\nUninstalling Bitloops CLI...")?;
-
-    if let Err(err) = remove_agent_hooks(repo_root, out) {
-        writeln!(err_out, "Warning: failed to remove agent hooks: {err}")?;
-    }
-
-    let removed = git_hooks::uninstall_git_hooks(repo_root).unwrap_or(0);
-    if removed > 0 {
-        writeln!(out, "  Removed git hooks ({removed})")?;
-    }
-
-    let states_removed = remove_all_session_states(repo_root).unwrap_or(0);
-    if states_removed > 0 {
-        writeln!(out, "  Removed session states ({states_removed})")?;
-    }
-
-    if bitloops_dir_exists {
-        remove_bitloops_directory(repo_root)?;
-        writeln!(out, "  Removed .bitloops directory")?;
-    }
-
-    writeln!(out, "\nBitloops CLI uninstalled successfully.")?;
-    Ok(())
 }
 
 pub fn count_session_states(repo_root: &Path) -> usize {
@@ -347,23 +225,7 @@ pub fn count_shadow_branches(repo_root: &Path) -> usize {
     0
 }
 
-fn remove_all_session_states(repo_root: &Path) -> Result<usize> {
-    let backend = create_session_backend_or_local(repo_root);
-    let sessions = backend.list_sessions().context("listing session states")?;
-
-    let mut removed = 0usize;
-    for session in sessions {
-        let session_id = session.session_id;
-        backend
-            .delete_session(&session_id)
-            .with_context(|| format!("removing session state {}", session_id))?;
-        removed += 1;
-    }
-
-    Ok(removed)
-}
-
-fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
+pub(crate) fn remove_agent_hooks(repo_root: &Path, out: &mut dyn Write) -> Result<()> {
     let registry = AgentAdapterRegistry::builtin();
     for agent in registry.available_agents() {
         if registry.are_agent_hooks_installed(repo_root, &agent)? {
@@ -397,9 +259,9 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         return (false, String::new(), String::new());
     }
     let config = if settings_local_path(repo_root).exists() {
-        "config.local.json"
+        REPO_POLICY_LOCAL_FILE_NAME
     } else {
-        "config.json"
+        REPO_POLICY_FILE_NAME
     };
     let agent = registry
         .agent_display(&enabled_agents[0])
@@ -413,6 +275,14 @@ pub fn remove_bitloops_directory(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
     fs::remove_dir_all(&bitloops_dir).context("removing .bitloops directory")
+}
+
+#[cfg(test)]
+fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
+    let Some(repo_root) = path.parent() else {
+        return BitloopsSettings::default();
+    };
+    settings::load_settings(repo_root).unwrap_or_default()
 }
 
 pub fn shell_completion_target(home: &Path) -> Result<(String, PathBuf, String)> {

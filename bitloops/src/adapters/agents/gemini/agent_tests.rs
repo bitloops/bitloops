@@ -1102,6 +1102,152 @@ fn TestReadAndParse_AgentHookInput() {
     assert_eq!("before-agent", parsed.hook_event_name);
 }
 
+#[test]
+#[allow(non_snake_case)]
+fn TestHookMatcherHelpers() {
+    assert!(GeminiCliAgent::is_bitloops_hook(
+        "bitloops hooks gemini before-agent"
+    ));
+    assert!(GeminiCliAgent::is_bitloops_hook(
+        "cargo run -- hooks gemini before-agent"
+    ));
+    assert!(!GeminiCliAgent::is_bitloops_hook("echo hello"));
+
+    let original = vec![
+        GeminiHookMatcher {
+            matcher: "".to_string(),
+            hooks: vec![
+                GeminiHookEntry {
+                    name: "bitloops-before-agent".to_string(),
+                    kind: "command".to_string(),
+                    command: "bitloops hooks gemini before-agent".to_string(),
+                },
+                GeminiHookEntry {
+                    name: "user-hook".to_string(),
+                    kind: "command".to_string(),
+                    command: "echo hello".to_string(),
+                },
+            ],
+        },
+        GeminiHookMatcher {
+            matcher: "*".to_string(),
+            hooks: vec![GeminiHookEntry {
+                name: "bitloops-before-tool".to_string(),
+                kind: "command".to_string(),
+                command: "cargo run -- hooks gemini before-tool".to_string(),
+            }],
+        },
+    ];
+
+    assert!(GeminiCliAgent::has_bitloops_hook(&original));
+    assert_eq!(
+        GeminiCliAgent::get_first_bitloops_hook_command(&original),
+        "bitloops hooks gemini before-agent"
+    );
+
+    let cleaned = GeminiCliAgent::remove_bitloops_hooks(original);
+    assert_eq!(cleaned.len(), 1);
+    assert_eq!(cleaned[0].matcher, "");
+    assert_eq!(cleaned[0].hooks.len(), 1);
+    assert_eq!(cleaned[0].hooks[0].command, "echo hello");
+
+    let added = GeminiCliAgent::add_gemini_hook(
+        cleaned,
+        "",
+        "bitloops-after-agent",
+        "bitloops hooks gemini after-agent".to_string(),
+    );
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].hooks.len(), 2);
+    assert!(
+        added[0]
+            .hooks
+            .iter()
+            .any(|hook| hook.command == "bitloops hooks gemini after-agent")
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestMarshalAndParseHookTypeHelpers() {
+    let mut raw_hooks = Map::new();
+    let matchers = vec![GeminiHookMatcher {
+        matcher: "*".to_string(),
+        hooks: vec![GeminiHookEntry {
+            name: "bitloops-before-tool".to_string(),
+            kind: "command".to_string(),
+            command: "bitloops hooks gemini before-tool".to_string(),
+        }],
+    }];
+
+    GeminiCliAgent::marshal_gemini_hook_type(&mut raw_hooks, "BeforeTool", &matchers);
+    let parsed = GeminiCliAgent::parse_gemini_hook_type(&raw_hooks, "BeforeTool");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].matcher, "*");
+    assert_eq!(parsed[0].hooks.len(), 1);
+    assert_eq!(parsed[0].hooks[0].name, "bitloops-before-tool");
+    assert_eq!(
+        parsed[0].hooks[0].command,
+        "bitloops hooks gemini before-tool"
+    );
+
+    raw_hooks.insert(
+        "Broken".to_string(),
+        Value::String("not-an-array".to_string()),
+    );
+    let broken = GeminiCliAgent::parse_gemini_hook_type(&raw_hooks, "Broken");
+    assert!(broken.is_empty());
+
+    GeminiCliAgent::marshal_gemini_hook_type(&mut raw_hooks, "BeforeTool", &[]);
+    assert!(!raw_hooks.contains_key("BeforeTool"));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTranscriptHelpersHandleEmptyAndMissingInputs() {
+    let agent = GeminiCliAgent;
+
+    let pos = agent
+        .get_transcript_position("")
+        .expect("empty transcript path should be tolerated");
+    assert_eq!(pos, 0);
+
+    let (files, pos) = agent
+        .extract_modified_files_from_offset("", 0)
+        .expect("empty transcript path should be tolerated");
+    assert!(files.is_empty());
+    assert_eq!(pos, 0);
+
+    let missing_path = "/tmp/bitloops-gemini-missing-transcript.json";
+    let err = agent
+        .extract_prompts(missing_path, 0)
+        .expect_err("missing transcript should fail prompt extraction");
+    assert!(err.to_string().contains("failed to read transcript"));
+
+    let err = agent
+        .extract_summary(missing_path)
+        .expect_err("missing transcript should fail summary extraction");
+    assert!(err.to_string().contains("failed to read transcript"));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestDateHelpers() {
+    assert_eq!(GeminiCliAgent::unix_to_ymdhms(0), (1970, 1, 1, 0, 0, 0));
+    assert_eq!(GeminiCliAgent::unix_to_ymdhms(60), (1970, 1, 1, 0, 1, 0));
+    assert!(GeminiCliAgent::is_leap(2000));
+    assert!(GeminiCliAgent::is_leap(2024));
+    assert!(!GeminiCliAgent::is_leap(1900));
+    assert!(!GeminiCliAgent::is_leap(2025));
+
+    let ts = GeminiCliAgent::current_utc_session_timestamp();
+    assert_eq!(ts.len(), 16);
+    assert_eq!(&ts[4..5], "-");
+    assert_eq!(&ts[7..8], "-");
+    assert_eq!(&ts[10..11], "T");
+    assert_eq!(&ts[13..14], "-");
+}
+
 fn read_gemini_settings(root: &Path) -> GeminiSettings {
     let settings_path = root.join(".gemini").join("settings.json");
     let data = std::fs::read(&settings_path).expect("failed to read settings.json");

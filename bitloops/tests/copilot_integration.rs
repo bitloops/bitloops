@@ -9,25 +9,51 @@ use bitloops::host::checkpoints::strategy::manual_commit::{
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use rusqlite::Connection;
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn bitloops_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bitloops"))
 }
 
-fn run_cmd_with_home(repo: &Path, home: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    let xdg_config_home = home.join("xdg");
-    fs::create_dir_all(&xdg_config_home).expect("create xdg config home");
+struct HomeEnvPaths {
+    xdg_config: PathBuf,
+    xdg_data: PathBuf,
+    xdg_cache: PathBuf,
+    xdg_state: PathBuf,
+}
 
-    let mut cmd = Command::new(bitloops_bin());
-    cmd.args(args)
-        .current_dir(repo)
-        .env("HOME", home)
+fn home_env_paths(home: &Path) -> HomeEnvPaths {
+    let paths = HomeEnvPaths {
+        xdg_config: home.join("xdg-config"),
+        xdg_data: home.join("xdg-data"),
+        xdg_cache: home.join("xdg-cache"),
+        xdg_state: home.join("xdg-state"),
+    };
+    for dir in [
+        home,
+        &paths.xdg_config,
+        &paths.xdg_data,
+        &paths.xdg_cache,
+        &paths.xdg_state,
+    ] {
+        fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
+    }
+    paths
+}
+
+fn apply_home_env(cmd: &mut Command, home: &Path) {
+    let paths = home_env_paths(home);
+    cmd.env("HOME", home)
         .env("USERPROFILE", home)
-        .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("XDG_CONFIG_HOME", paths.xdg_config)
+        .env("XDG_DATA_HOME", paths.xdg_data)
+        .env("XDG_CACHE_HOME", paths.xdg_cache)
+        .env("XDG_STATE_HOME", paths.xdg_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
@@ -35,6 +61,84 @@ fn run_cmd_with_home(repo: &Path, home: &Path, args: &[&str], stdin: Option<&str
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
         .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct HomeEnvGuard {
+    _lock_guard: MutexGuard<'static, ()>,
+    previous_env: Vec<(String, Option<OsString>)>,
+}
+
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        restore_env_vars(&self.previous_env);
+    }
+}
+
+fn apply_env_vars(vars: &[(&str, Option<&OsStr>)]) -> Vec<(String, Option<OsString>)> {
+    let mut previous = Vec::with_capacity(vars.len());
+    for (key, value) in vars {
+        previous.push(((*key).to_string(), env::var_os(key)));
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => env::set_var(key, v),
+                None => env::remove_var(key),
+            }
+        }
+    }
+    previous
+}
+
+fn restore_env_vars(previous: &[(String, Option<OsString>)]) {
+    for (key, value) in previous.iter().rev() {
+        // SAFETY: integration tests serialise process env mutation through env_lock().
+        unsafe {
+            match value {
+                Some(v) => env::set_var(key, v),
+                None => env::remove_var(key),
+            }
+        }
+    }
+}
+
+fn enter_home_env(home: &Path) -> HomeEnvGuard {
+    let lock_guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let paths = home_env_paths(home);
+    let previous_env = apply_env_vars(&[
+        ("HOME", Some(home.as_os_str())),
+        ("USERPROFILE", Some(home.as_os_str())),
+        ("XDG_CONFIG_HOME", Some(paths.xdg_config.as_os_str())),
+        ("XDG_DATA_HOME", Some(paths.xdg_data.as_os_str())),
+        ("XDG_CACHE_HOME", Some(paths.xdg_cache.as_os_str())),
+        ("XDG_STATE_HOME", Some(paths.xdg_state.as_os_str())),
+        ("BITLOOPS_DEVQL_PG_DSN", None),
+        ("BITLOOPS_DEVQL_CH_URL", None),
+        ("BITLOOPS_DEVQL_CH_DATABASE", None),
+        ("BITLOOPS_DEVQL_CH_USER", None),
+        ("BITLOOPS_DEVQL_CH_PASSWORD", None),
+    ]);
+    HomeEnvGuard {
+        _lock_guard: lock_guard,
+        previous_env,
+    }
+}
+
+fn with_home_env<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+    let _guard = enter_home_env(home);
+    f()
+}
+
+fn run_cmd_with_home(repo: &Path, home: &Path, args: &[&str], stdin: Option<&str>) -> Output {
+    let mut cmd = Command::new(bitloops_bin());
+    cmd.args(args).current_dir(repo);
+    apply_home_env(&mut cmd, home);
 
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
@@ -61,7 +165,7 @@ fn assert_success(output: &Output, context: &str) {
     );
 }
 
-fn run_git_output(repo: &Path, args: &[&str]) -> Output {
+fn run_git_output(repo: &Path, home: &Path, args: &[&str]) -> Output {
     let mut search_paths = vec![
         bitloops_bin()
             .parent()
@@ -73,16 +177,14 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     }
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
-    Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .env("PATH", path)
-        .output()
-        .expect("failed to run git")
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo).env("PATH", path);
+    apply_home_env(&mut cmd, home);
+    cmd.output().expect("failed to run git")
 }
 
-fn run_git(repo: &Path, args: &[&str]) -> String {
-    let out = run_git_output(repo, args);
+fn run_git(repo: &Path, home: &Path, args: &[&str]) -> String {
+    let out = run_git_output(repo, home, args);
     assert!(
         out.status.success(),
         "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
@@ -93,8 +195,8 @@ fn run_git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-fn run_git_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
-    let out = run_git_output(repo, args);
+fn run_git_expect_success(repo: &Path, home: &Path, args: &[&str], context: &str) -> Output {
+    let out = run_git_output(repo, home, args);
     assert!(
         out.status.success(),
         "{context}\nstdout:\n{}\nstderr:\n{}",
@@ -104,19 +206,37 @@ fn run_git_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
     out
 }
 
-fn git_commit_message(repo: &Path, rev: &str) -> String {
-    run_git(repo, &["show", "-s", "--format=%B", rev])
+fn run_git_without_hooks_expect_success(
+    repo: &Path,
+    home: &Path,
+    args: &[&str],
+    context: &str,
+) -> Output {
+    let no_hooks_dir = home.join("git-hooks-disabled");
+    fs::create_dir_all(&no_hooks_dir).expect("create empty hooks directory");
+
+    let mut prefixed_args = Vec::with_capacity(args.len() + 2);
+    prefixed_args.push("-c");
+    let hooks_path_override = format!("core.hooksPath={}", no_hooks_dir.display());
+    prefixed_args.push(hooks_path_override.as_str());
+    prefixed_args.extend_from_slice(args);
+
+    run_git_expect_success(repo, home, &prefixed_args, context)
 }
 
-fn init_repo(repo: &Path) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "t@t.com"]);
-    run_git(repo, &["config", "user.name", "Test"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "tag.gpgsign", "false"]);
+fn git_commit_message(repo: &Path, home: &Path, rev: &str) -> String {
+    run_git(repo, home, &["show", "-s", "--format=%B", rev])
+}
+
+fn init_repo(repo: &Path, home: &Path) {
+    run_git(repo, home, &["init"]);
+    run_git(repo, home, &["config", "user.email", "t@t.com"]);
+    run_git(repo, home, &["config", "user.name", "Test"]);
+    run_git(repo, home, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, home, &["config", "tag.gpgsign", "false"]);
     fs::write(repo.join("README.md"), "init\n").unwrap();
-    run_git(repo, &["add", "."]);
-    run_git(repo, &["commit", "-m", "initial"]);
+    run_git(repo, home, &["add", "."]);
+    run_git(repo, home, &["commit", "-m", "initial"]);
 }
 
 fn write_transcript(path: &Path, prompt: &str, response: &str, file_path: &str) {
@@ -160,17 +280,19 @@ fn append_transcript_shutdown(path: &Path) {
     file.write_all(payload.as_bytes()).unwrap();
 }
 
-fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
-    let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
-    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-        resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
-    } else {
-        bitloops::utils::paths::default_relational_db_path(repo_root)
-    }
+fn checkpoint_sqlite_path(repo_root: &Path, home: &Path) -> PathBuf {
+    with_home_env(home, || {
+        let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+            resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
+        } else {
+            bitloops::utils::paths::default_relational_db_path(repo_root)
+        }
+    })
 }
 
-fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
-    let conn = Connection::open(checkpoint_sqlite_path(repo_root)).expect("open sqlite");
+fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -> i64 {
+    let conn = Connection::open(checkpoint_sqlite_path(repo_root, home)).expect("open sqlite");
     conn.query_row(
         "SELECT COUNT(*) FROM temporary_checkpoints WHERE session_id = ?1",
         [session_id],
@@ -183,7 +305,7 @@ fn temporary_checkpoint_count(repo_root: &Path, session_id: &str) -> i64 {
 fn copilot_basic_workflow() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
+    init_repo(dir.path(), home.path());
 
     let init_out = run_cmd_with_home(
         dir.path(),
@@ -193,16 +315,23 @@ fn copilot_basic_workflow() {
     );
     assert_success(&init_out, "bitloops init --agent copilot");
 
-    let enable_out = run_cmd_with_home(dir.path(), home.path(), &["enable"], None);
-    assert_success(&enable_out, "bitloops enable");
+    let enable_out = run_cmd_with_home(
+        dir.path(),
+        home.path(),
+        &["enable", "--agent", "copilot"],
+        None,
+    );
+    assert_success(&enable_out, "bitloops enable --agent copilot");
 
     run_git_expect_success(
         dir.path(),
-        &["add", ".github/hooks/bitloops.json", ".bitloops"],
-        "stage copilot infra files",
+        home.path(),
+        &["add", ".github/hooks/bitloops.json"],
+        "stage copilot hook file",
     );
-    run_git_expect_success(
+    run_git_without_hooks_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "seed copilot bitloops infra files"],
         "commit copilot infra files",
     );
@@ -251,7 +380,7 @@ fn copilot_basic_workflow() {
     );
     assert_success(&out, "hooks copilot agent-stop");
 
-    let backend = create_session_backend_or_local(dir.path());
+    let backend = with_home_env(home.path(), || create_session_backend_or_local(dir.path()));
     let pre_commit_state = backend
         .load_session("copilot-basic-1")
         .expect("load pre-commit copilot session")
@@ -262,7 +391,7 @@ fn copilot_basic_workflow() {
         "turn id should be initialized before commit"
     );
     assert_eq!(
-        temporary_checkpoint_count(dir.path(), "copilot-basic-1"),
+        temporary_checkpoint_count(dir.path(), home.path(), "copilot-basic-1"),
         1,
         "Copilot turn end should write one temporary checkpoint before commit"
     );
@@ -277,26 +406,31 @@ fn copilot_basic_workflow() {
 
     run_git_expect_success(
         dir.path(),
+        home.path(),
         &["add", "copilot_hello.txt"],
         "stage copilot output file",
     );
     run_git_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "add copilot hello file"],
         "commit copilot output file",
     );
 
-    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let mappings =
-        read_commit_checkpoint_mappings(dir.path()).expect("read commit-checkpoint mappings");
+    let head_sha = run_git(dir.path(), home.path(), &["rev-parse", "HEAD"]);
+    let mappings = with_home_env(home.path(), || {
+        read_commit_checkpoint_mappings(dir.path()).expect("read commit-checkpoint mappings")
+    });
     let checkpoint_id = mappings
         .get(&head_sha)
         .cloned()
         .expect("copilot workflow should map HEAD to a committed checkpoint");
 
-    let summary = read_committed(dir.path(), &checkpoint_id)
-        .expect("read committed checkpoint")
-        .expect("committed checkpoint should exist");
+    let summary = with_home_env(home.path(), || {
+        read_committed(dir.path(), &checkpoint_id)
+            .expect("read committed checkpoint")
+            .expect("committed checkpoint should exist")
+    });
     assert_eq!(summary.checkpoint_id, checkpoint_id);
     assert_eq!(summary.strategy, "manual-commit");
     assert!(
@@ -306,7 +440,9 @@ fn copilot_basic_workflow() {
         "committed checkpoint should include Copilot-created file"
     );
 
-    let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
+    let session = with_home_env(home.path(), || {
+        read_session_content(dir.path(), &checkpoint_id, 0).expect("read session")
+    });
     assert_eq!(session.metadata["agent"], "copilot");
     assert_eq!(session.prompts, "Create copilot_hello.txt");
     assert!(
@@ -326,7 +462,7 @@ fn copilot_basic_workflow() {
         "condensed session should record last checkpoint id"
     );
 
-    let head_message = git_commit_message(dir.path(), "HEAD");
+    let head_message = git_commit_message(dir.path(), home.path(), "HEAD");
     assert!(
         !head_message.contains("Bitloops-Checkpoint"),
         "manual-commit uses commit-checkpoint DB mappings, not commit messages\n{head_message}"
@@ -337,7 +473,7 @@ fn copilot_basic_workflow() {
 fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
+    init_repo(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -349,17 +485,24 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         "bitloops init --agent copilot",
     );
     assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["enable", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops enable --agent copilot",
     );
 
     run_git_expect_success(
         dir.path(),
-        &["add", ".github/hooks/bitloops.json", ".bitloops"],
-        "stage copilot infra files",
+        home.path(),
+        &["add", ".github/hooks/bitloops.json"],
+        "stage copilot hook file",
     );
-    run_git_expect_success(
+    run_git_without_hooks_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "seed copilot infra"],
         "commit copilot infra files",
     );
@@ -410,7 +553,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         ),
         "hooks copilot agent-stop",
     );
-    assert_eq!(temporary_checkpoint_count(dir.path(), sid), 1);
+    assert_eq!(temporary_checkpoint_count(dir.path(), home.path(), sid), 1);
 
     assert_success(
         &run_cmd_with_home(
@@ -422,15 +565,23 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
         "hooks copilot session-end",
     );
 
-    run_git_expect_success(dir.path(), &["add", "fallback.txt"], "stage fallback");
     run_git_expect_success(
         dir.path(),
+        home.path(),
+        &["add", "fallback.txt"],
+        "stage fallback",
+    );
+    run_git_expect_success(
+        dir.path(),
+        home.path(),
         &["commit", "-m", "add fallback file"],
         "commit fallback",
     );
 
-    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let mappings = read_commit_checkpoint_mappings(dir.path()).expect("read mappings");
+    let head_sha = run_git(dir.path(), home.path(), &["rev-parse", "HEAD"]);
+    let mappings = with_home_env(home.path(), || {
+        read_commit_checkpoint_mappings(dir.path()).expect("read mappings")
+    });
     assert!(
         mappings.contains_key(&head_sha),
         "Copilot fallback transcript path should still produce a commit mapping"
@@ -441,7 +592,7 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
 fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
+    init_repo(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -453,17 +604,24 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
         "bitloops init --agent copilot",
     );
     assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["enable", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops enable --agent copilot",
     );
 
     run_git_expect_success(
         dir.path(),
-        &["add", ".github/hooks/bitloops.json", ".bitloops"],
-        "stage copilot infra files",
+        home.path(),
+        &["add", ".github/hooks/bitloops.json"],
+        "stage copilot hook file",
     );
-    run_git_expect_success(
+    run_git_without_hooks_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "seed copilot infra"],
         "commit copilot infra files",
     );
@@ -481,7 +639,7 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
         "hooks copilot session-start",
     );
 
-    let backend = create_session_backend_or_local(dir.path());
+    let backend = with_home_env(home.path(), || create_session_backend_or_local(dir.path()));
     let state = backend
         .load_session(sid)
         .expect("load session")
@@ -493,7 +651,7 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
 fn copilot_multi_turn_session_condenses_both_prompts() {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
+    init_repo(dir.path(), home.path());
 
     assert_success(
         &run_cmd_with_home(
@@ -505,17 +663,24 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
         "bitloops init --agent copilot",
     );
     assert_success(
-        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
-        "bitloops enable",
+        &run_cmd_with_home(
+            dir.path(),
+            home.path(),
+            &["enable", "--agent", "copilot"],
+            None,
+        ),
+        "bitloops enable --agent copilot",
     );
 
     run_git_expect_success(
         dir.path(),
-        &["add", ".github/hooks/bitloops.json", ".bitloops"],
-        "stage copilot infra files",
+        home.path(),
+        &["add", ".github/hooks/bitloops.json"],
+        "stage copilot hook file",
     );
-    run_git_expect_success(
+    run_git_without_hooks_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "seed copilot infra"],
         "commit copilot infra files",
     );
@@ -615,28 +780,36 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
 
     run_git_expect_success(
         dir.path(),
+        home.path(),
         &["add", "first.txt", "second.txt"],
         "stage multi-turn files",
     );
     run_git_expect_success(
         dir.path(),
+        home.path(),
         &["commit", "-m", "add multi-turn files"],
         "commit multi-turn files",
     );
 
-    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let mappings = read_commit_checkpoint_mappings(dir.path()).expect("read mappings");
+    let head_sha = run_git(dir.path(), home.path(), &["rev-parse", "HEAD"]);
+    let mappings = with_home_env(home.path(), || {
+        read_commit_checkpoint_mappings(dir.path()).expect("read mappings")
+    });
     let checkpoint_id = mappings
         .get(&head_sha)
         .cloned()
         .expect("checkpoint mapping should exist");
-    let session = read_session_content(dir.path(), &checkpoint_id, 0).expect("read session");
+    let session = with_home_env(home.path(), || {
+        read_session_content(dir.path(), &checkpoint_id, 0).expect("read session")
+    });
     assert!(session.prompts.contains("Create first.txt"));
     assert!(session.prompts.contains("Create second.txt"));
 
-    let summary = read_committed(dir.path(), &checkpoint_id)
-        .expect("read committed checkpoint")
-        .expect("committed checkpoint should exist");
+    let summary = with_home_env(home.path(), || {
+        read_committed(dir.path(), &checkpoint_id)
+            .expect("read committed checkpoint")
+            .expect("committed checkpoint should exist")
+    });
     assert!(summary.files_touched.contains(&"first.txt".to_string()));
     assert!(summary.files_touched.contains(&"second.txt".to_string()));
 }

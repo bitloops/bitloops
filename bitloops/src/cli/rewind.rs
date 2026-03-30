@@ -179,6 +179,17 @@ fn run_to(repo_root: &Path, target: &str, logs_only: bool, reset: bool) -> Resul
 fn requires_clean_worktree_for_rewind(repo_root: &Path) -> bool {
     let strategy_name = settings::load_settings(repo_root)
         .map(|settings| settings.strategy)
+        .or_else(|_| {
+            crate::config::discover_repo_policy(repo_root).map(|policy| {
+                policy
+                    .capture
+                    .as_object()
+                    .and_then(|capture| capture.get("strategy"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(settings::DEFAULT_STRATEGY)
+                    .to_string()
+            })
+        })
         .unwrap_or_else(|_| settings::DEFAULT_STRATEGY.to_string());
     strategy_name != "manual-commit"
 }
@@ -529,17 +540,16 @@ impl EmptyFallback for String {
 mod tests {
     use super::*;
     use crate::cli::explain::RewindPoint;
-    use std::fs;
+    use crate::config::settings::{self, BitloopsSettings};
     use tempfile::TempDir;
 
     fn write_strategy_config(repo_root: &Path, strategy: &str) {
-        let config_dir = repo_root.join(".bitloops");
-        fs::create_dir_all(&config_dir).expect("create .bitloops");
-        fs::write(
-            config_dir.join("config.json"),
-            format!(r#"{{"strategy":"{strategy}"}}"#),
-        )
-        .expect("write config");
+        let settings = BitloopsSettings {
+            strategy: strategy.to_string(),
+            ..Default::default()
+        };
+        settings::save_settings(&settings, &settings::settings_path(repo_root))
+            .expect("write repo policy");
     }
 
     fn sample_point() -> RewindPoint {

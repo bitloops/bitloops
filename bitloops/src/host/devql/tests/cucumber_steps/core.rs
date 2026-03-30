@@ -16,7 +16,7 @@ use crate::models::{
 use crate::telemetry::logging;
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use crate::test_support::logger_lock::with_logger_test_lock;
-use crate::test_support::process_state::{enter_process_state, with_cwd};
+use crate::test_support::process_state::enter_process_state;
 use anyhow::Context;
 use cucumber::{codegen::LocalBoxFuture, step::Collection};
 use regex::Regex;
@@ -264,13 +264,21 @@ fn when_execute_query_without_pg_client(
     Box::pin(async move {
         world.init_test_logger();
         let workspace = world.logger_workspace_path().to_path_buf();
+        let state_root_value = workspace.join("state-root").display().to_string();
         let parsed = world
             .parsed_query
             .clone()
             .expect("query should be parsed before execution");
         let cfg = world.cfg.clone();
 
-        let error = with_cwd(&workspace, || {
+        let error = {
+            let _guard = enter_process_state(
+                Some(&workspace),
+                &[(
+                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                    Some(state_root_value.as_str()),
+                )],
+            );
             with_logger_test_lock(|| {
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
@@ -286,7 +294,7 @@ fn when_execute_query_without_pg_client(
                 logging::close();
                 result.expect_err("query should fail without a Postgres client")
             })
-        });
+        };
         world.query_error = Some(error);
     })
 }
@@ -298,6 +306,7 @@ fn when_extract_artefacts_and_edges_with_logger(
     Box::pin(async move {
         world.init_test_logger();
         let workspace = world.logger_workspace_path().to_path_buf();
+        let state_root_value = workspace.join("state-root").display().to_string();
         let source_content = world
             .source_content
             .clone()
@@ -307,7 +316,14 @@ fn when_extract_artefacts_and_edges_with_logger(
             .clone()
             .expect("typescript source path should be set");
 
-        let (artefacts, edges) = with_cwd(&workspace, || {
+        let (artefacts, edges) = {
+            let _guard = enter_process_state(
+                Some(&workspace),
+                &[(
+                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                    Some(state_root_value.as_str()),
+                )],
+            );
             with_logger_test_lock(|| {
                 logging::reset_logger_for_tests();
                 logging::init("bdd-devql-session").expect("initialize test logger");
@@ -319,7 +335,7 @@ fn when_extract_artefacts_and_edges_with_logger(
                 logging::close();
                 (artefacts, edges)
             })
-        });
+        };
 
         world.artefacts = artefacts;
         world.edges = edges;
@@ -721,22 +737,12 @@ fn write_repo_sources(repo_root: &Path, world: &DevqlBddWorld) {
 }
 
 fn write_repo_config(repo_root: &Path, sqlite_path: &Path) {
-    let config_dir = repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create .bitloops config dir");
     std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
     )
     .expect("write config");
 }
@@ -984,6 +990,7 @@ async fn execute_registered_stage_query(
     let commit_sha = git_ok(&repo_root, &["rev-parse", "HEAD"]);
 
     let mut cfg = DevqlBddWorld::test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root.clone();
     let sqlite_path = temp.path().join("relational.sqlite");
     write_repo_config(&repo_root, &sqlite_path);

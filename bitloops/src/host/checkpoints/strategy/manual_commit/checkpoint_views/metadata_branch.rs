@@ -184,10 +184,6 @@ pub(crate) fn get_commit_author(repo_root: &Path, commit_ref: &str) -> Option<(S
 
 #[allow(dead_code)]
 pub(crate) fn metadata_read_ref(repo_root: &Path) -> Option<String> {
-    if !crate::host::checkpoints::session::legacy_local_backend_enabled() {
-        return None;
-    }
-
     let local = format!("refs/heads/{}", paths::METADATA_BRANCH_NAME);
     if run_git(repo_root, &["rev-parse", &local]).is_ok() {
         return Some(local);

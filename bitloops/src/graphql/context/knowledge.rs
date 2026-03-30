@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use serde_json::Value;
 
@@ -12,9 +12,7 @@ use crate::graphql::types::{
     DateTimeScalar, KnowledgeItem, KnowledgeProvider, KnowledgeRelation, KnowledgeSourceKind,
     KnowledgeTargetType, KnowledgeVersion,
 };
-use crate::host::devql::{
-    duckdb_query_rows_path, esc_pg, knowledge_schema_sql_sqlite, sqlite_query_rows_path,
-};
+use crate::host::devql::{esc_pg, knowledge_schema_sql_sqlite};
 
 impl DevqlGraphqlContext {
     pub(crate) async fn find_knowledge_item_by_id(
@@ -33,7 +31,7 @@ LIMIT 1",
             esc_pg(knowledge_item_id)
         );
 
-        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
         rows.into_iter()
             .next()
             .map(knowledge_item_from_row)
@@ -43,13 +41,11 @@ LIMIT 1",
     pub(crate) async fn list_knowledge_items(
         &self,
         provider: Option<KnowledgeProvider>,
-        _scope: &ResolverScope,
+        scope: &ResolverScope,
     ) -> Result<Vec<KnowledgeItem>> {
         let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
-        let mut conditions = vec![format!(
-            "i.repo_id = '{}'",
-            esc_pg(self.repo_identity.repo_id.as_str())
-        )];
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let mut conditions = vec![format!("i.repo_id = '{}'", esc_pg(&repo_id))];
         if let Some(provider) = provider {
             conditions.push(format!(
                 "s.provider = '{}'",
@@ -67,26 +63,31 @@ ORDER BY i.updated_at DESC, i.knowledge_item_id DESC",
             conditions.join(" AND ")
         );
 
-        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
-        rows.into_iter().map(knowledge_item_from_row).collect()
+        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
+        rows.into_iter()
+            .map(knowledge_item_from_row)
+            .map(|result| result.map(|item| item.with_scope(scope.clone())))
+            .collect()
     }
 
     pub(crate) async fn list_knowledge_relations(
         &self,
+        scope: &ResolverScope,
         knowledge_item_id: &str,
     ) -> Result<Vec<KnowledgeRelation>> {
         let sqlite_path = self.ensure_knowledge_sqlite_schema().await?;
+        let repo_id = self.repo_id_for_scope(scope)?;
         let sql = format!(
             "SELECT relation_assertion_id, source_knowledge_item_version_id, target_type, target_id, \
 target_knowledge_item_version_id, relation_type, association_method, confidence, provenance_json \
 FROM knowledge_relation_assertions \
 WHERE repo_id = '{}' AND knowledge_item_id = '{}' \
 ORDER BY created_at DESC, relation_assertion_id DESC",
-            esc_pg(self.repo_identity.repo_id.as_str()),
+            esc_pg(&repo_id),
             esc_pg(knowledge_item_id)
         );
 
-        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
         rows.into_iter().map(knowledge_relation_from_row).collect()
     }
 
@@ -105,7 +106,7 @@ LIMIT 1",
             esc_pg(relation_assertion_id)
         );
 
-        let rows = sqlite_query_rows_path(&sqlite_path, &sql).await?;
+        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
         rows.into_iter()
             .next()
             .map(knowledge_relation_from_row)
@@ -134,7 +135,7 @@ WHERE knowledge_item_id IN ({ids}) \
 ORDER BY knowledge_item_id ASC, created_at DESC, knowledge_item_version_id DESC"
         );
 
-        let rows = duckdb_query_rows_path(&duckdb_path, &sql).await?;
+        let rows = self.query_duckdb_rows_at_path(&duckdb_path, &sql).await?;
         let mut versions_by_item = knowledge_item_ids
             .iter()
             .cloned()
@@ -182,31 +183,14 @@ ORDER BY knowledge_item_id ASC, created_at DESC, knowledge_item_version_id DESC"
             .as_ref()
             .context("store backend configuration unavailable")?
             .events
-            .resolve_duckdb_db_path_for_repo(&self.repo_root))
+            .resolve_duckdb_db_path_for_repo(&self.config_root))
     }
 
     async fn ensure_knowledge_sqlite_schema(&self) -> Result<PathBuf> {
         let sqlite_path = self.devql_sqlite_path()?;
-        let db_path = sqlite_path.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            if !db_path.is_file() {
-                bail!(
-                    "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
-                    db_path.display()
-                );
-            }
-
-            let conn = rusqlite::Connection::open_with_flags(
-                &db_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-            )
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-            conn.execute_batch(knowledge_schema_sql_sqlite())
-                .context("initialising SQLite knowledge schema")?;
-            Ok(())
-        })
-        .await
-        .context("joining SQLite knowledge schema task")??;
+        self.execute_sqlite_batch_at_path(&sqlite_path, knowledge_schema_sql_sqlite())
+            .await
+            .context("initialising SQLite knowledge schema")?;
 
         Ok(sqlite_path)
     }
@@ -231,6 +215,7 @@ fn knowledge_item_from_row(row: Value) -> Result<KnowledgeItem> {
             &row,
             "latest_knowledge_item_version_id",
         )?,
+        scope: crate::graphql::ResolverScope::default(),
     })
 }
 

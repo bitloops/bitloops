@@ -189,8 +189,7 @@ pub(crate) fn write_temporary(
     };
     let mut tree = tree;
     if !metadata_entries.is_empty() {
-        let staging_dir = repo_root
-            .join(paths::BITLOOPS_TMP_DIR)
+        let staging_dir = paths::default_session_tmp_dir(repo_root)
             .join(format!("temp-metadata-{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir_all(&staging_dir).context("creating temporary metadata staging dir")?;
 
@@ -273,8 +272,7 @@ pub(crate) fn write_temporary_task(
 
     let session_metadata_dir = paths::session_metadata_dir_from_session_id(&opts.session_id);
     let task_metadata_dir = format!("{session_metadata_dir}/tasks/{}", opts.tool_use_id);
-    let staging_dir = repo_root
-        .join(paths::BITLOOPS_TMP_DIR)
+    let staging_dir = paths::default_session_tmp_dir(repo_root)
         .join(format!("task-metadata-{}", uuid::Uuid::new_v4().simple()));
     fs::create_dir_all(&staging_dir).context("creating task metadata staging directory")?;
     let mut file_pairs: Vec<(PathBuf, String)> = Vec::new();

@@ -1,6 +1,6 @@
 use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 
-use crate::graphql::{DevqlGraphqlContext, backend_error};
+use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error};
 
 use super::{CheckpointConnection, CheckpointEdge, DateTimeScalar, paginate_items};
 
@@ -14,11 +14,18 @@ pub struct Commit {
     pub commit_message: String,
     pub committed_at: DateTimeScalar,
     pub branch: Option<String>,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 impl Commit {
     pub fn cursor(&self) -> String {
         self.sha.clone()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
     }
 }
 
@@ -26,7 +33,7 @@ impl Commit {
 impl Commit {
     async fn files_changed(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_commit_files_changed(&self.sha)
+            .list_commit_files_changed(&self.scope, &self.sha)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -44,7 +51,7 @@ impl Commit {
     ) -> Result<CheckpointConnection> {
         let checkpoints = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_commit_checkpoints(&self.sha)
+            .list_commit_checkpoints(&self.scope, &self.sha)
             .await
             .map_err(|err| {
                 backend_error(format!(

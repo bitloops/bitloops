@@ -14,7 +14,9 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::agent::CodexAgent;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
+use crate::adapters::agents::copilot::hooks as copilot_hooks;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::adapters::agents::cursor::hooks as cursor_hooks;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 
@@ -140,12 +142,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 config_schema: AgentConfigSchema::empty("adapter.copilot"),
             },
             || Box::new(CopilotCliAgent),
-            |_repo_root| HookSupport::are_hooks_installed(&CopilotCliAgent),
-            |_repo_root| HookSupport::are_hooks_installed(&CopilotCliAgent),
-            |_repo_root, local_dev, force| {
-                HookSupport::install_hooks(&CopilotCliAgent, local_dev, force)
-            },
-            |_repo_root| HookSupport::uninstall_hooks(&CopilotCliAgent),
+            copilot_hooks::are_hooks_installed_at,
+            copilot_hooks::are_hooks_installed_at,
+            copilot_hooks::install_hooks_at,
+            copilot_hooks::uninstall_hooks_at,
             |session_id| {
                 if session_id.trim().is_empty() {
                     "copilot".to_string()
@@ -217,11 +217,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             },
             || Box::new(CursorAgent),
             |repo_root| repo_root.join(".cursor").is_dir(),
-            |_repo_root| HookSupport::are_hooks_installed(&CursorAgent),
-            |_repo_root, local_dev, force| {
-                HookSupport::install_hooks(&CursorAgent, local_dev, force)
-            },
-            |_repo_root| HookSupport::uninstall_hooks(&CursorAgent),
+            cursor_hooks::are_hooks_installed_at,
+            cursor_hooks::install_hooks_at,
+            cursor_hooks::uninstall_hooks_at,
             |_session_id| "Open this project in Cursor to continue the session.".to_string(),
         ),
         AgentAdapterRegistration::new(

@@ -2,7 +2,7 @@ use async_graphql::types::Json;
 use async_graphql::{ComplexObject, Context, Enum, ID, Result, SimpleObject};
 
 use crate::capability_packs::knowledge::KnowledgePayloadEnvelope;
-use crate::graphql::{DevqlGraphqlContext, backend_error, loaders::DataLoaders};
+use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, loaders::DataLoaders};
 
 use super::{
     DateTimeScalar, JsonScalar, KnowledgeRelationConnection, KnowledgeRelationEdge,
@@ -110,11 +110,18 @@ pub struct KnowledgeItem {
     pub external_url: String,
     #[graphql(skip)]
     pub(crate) latest_knowledge_item_version_id: String,
+    #[graphql(skip)]
+    pub(crate) scope: ResolverScope,
 }
 
 impl KnowledgeItem {
     pub fn cursor(&self) -> String {
         self.id.to_string()
+    }
+
+    pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     async fn latest_version_opt(&self, ctx: &Context<'_>) -> Result<Option<KnowledgeVersion>> {
@@ -191,7 +198,7 @@ impl KnowledgeItem {
     ) -> Result<KnowledgeRelationConnection> {
         let relations = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_knowledge_relations(self.id.as_ref())
+            .list_knowledge_relations(&self.scope, self.id.as_ref())
             .await
             .map_err(|err| {
                 backend_error(format!(

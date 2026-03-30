@@ -1,5 +1,23 @@
 use super::*;
 
+fn resolved_path(root: &Path, relative: &str) -> String {
+    let candidate = root.join(relative);
+    let canonical_path = if candidate.extension().is_some() {
+        let parent = candidate.parent().expect("file path parent");
+        fs::create_dir_all(parent).expect("create parent directory");
+        parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf())
+            .join(candidate.file_name().expect("file name"))
+    } else {
+        fs::create_dir_all(&candidate).expect("create directory");
+        candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone())
+    };
+    canonical_path.to_string_lossy().to_string()
+}
+
 #[test]
 fn backend_config_defaults_to_sqlite_duckdb_and_local_blob() {
     let cfg = resolve_store_backend_config_for_tests(StoreFileConfig::default()).expect("cfg");
@@ -89,33 +107,36 @@ fn backend_config_resolves_from_current_repo_root() {
     assert!(cfg.events.has_clickhouse());
     assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
     assert!(!cfg.blobs.has_remote());
-    assert_eq!(cfg.blobs.local_path.as_deref(), Some("data/blobs"));
+    assert_eq!(
+        cfg.blobs.local_path.as_deref(),
+        Some(resolved_path(temp.path(), "data/blobs").as_str())
+    );
 }
 
 #[test]
-fn store_file_config_load_reads_repo_config_file() {
+fn store_file_config_load_reads_daemon_config_file() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let config_dir = temp.path().join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
-    fs::write(
-        config_dir.join("config.json"),
+    let config_root = temp.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root.as_str()),
+        )],
+    );
+    write_repo_config(
+        &temp.path().join("bitloops"),
         serde_json::json!({
             "stores": {
                 "relational": {
-
                     "sqlite_path": "data/relational.sqlite"
                 },
                 "events": {
-
                     "duckdb_path": "data/events.duckdb"
                 }
             }
-        })
-        .to_string(),
-    )
-    .expect("write repo config");
-
-    let _guard = enter_process_state(Some(temp.path()), &[]);
+        }),
+    );
     let cfg = StoreFileConfig::load();
 
     assert_eq!(cfg.sqlite_path.as_deref(), Some("data/relational.sqlite"));
@@ -156,7 +177,10 @@ fn resolve_store_backend_config_reads_repo_config_from_current_dir() {
         assert!(cfg.events.has_clickhouse());
         assert_eq!(cfg.events.clickhouse_database.as_deref(), Some("bitloops"));
         assert!(!cfg.blobs.has_remote());
-        assert_eq!(cfg.blobs.local_path.as_deref(), Some("tmp/blobs"));
+        assert_eq!(
+            cfg.blobs.local_path.as_deref(),
+            Some(resolved_path(temp.path(), "tmp/blobs").as_str())
+        );
     });
 }
 
@@ -183,11 +207,21 @@ fn resolve_store_backend_config_for_repo_uses_repo_root_parameter() {
     assert!(!cfg.relational.has_postgres());
     assert_eq!(
         cfg.relational.sqlite_path.as_deref(),
-        Some("data/devql.sqlite")
+        Some(
+            temp.path()
+                .join("data/devql.sqlite")
+                .to_string_lossy()
+                .as_ref()
+        )
     );
     assert!(!cfg.events.has_clickhouse());
     assert_eq!(
         cfg.events.duckdb_path.as_deref(),
-        Some("data/events.duckdb")
+        Some(
+            temp.path()
+                .join("data/events.duckdb")
+                .to_string_lossy()
+                .as_ref()
+        )
     );
 }

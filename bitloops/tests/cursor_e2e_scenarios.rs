@@ -15,8 +15,7 @@ fn bitloops_bin() -> PathBuf {
 
 fn run_cmd(repo: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     let bin = bitloops_bin();
-    let (mut cmd, _isolated_home) =
-        test_command_support::new_isolated_bitloops_command(&bin, repo, args);
+    let mut cmd = test_command_support::new_isolated_bitloops_command(&bin, repo, args);
     if let Some(input) = stdin {
         cmd.stdin(Stdio::piped());
         let mut child = cmd.spawn().expect("failed to spawn bitloops command");
@@ -54,12 +53,10 @@ fn run_git_output(repo: &Path, args: &[&str]) -> Output {
     }
     let path = env::join_paths(search_paths).expect("failed to construct PATH");
 
-    Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .env("PATH", path)
-        .output()
-        .expect("failed to run git")
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo).env("PATH", path);
+    test_command_support::apply_repo_app_env(&mut cmd, repo);
+    cmd.output().expect("failed to run git")
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> String {
@@ -85,6 +82,18 @@ fn run_git_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
     out
 }
 
+fn run_git_without_hooks_expect_success(repo: &Path, args: &[&str], context: &str) -> Output {
+    let no_hooks_dir = test_command_support::isolated_repo_aux_dir(repo, "no-hooks");
+
+    let mut prefixed_args = Vec::with_capacity(args.len() + 2);
+    prefixed_args.push("-c");
+    let hooks_path_override = format!("core.hooksPath={}", no_hooks_dir.display());
+    prefixed_args.push(hooks_path_override.as_str());
+    prefixed_args.extend_from_slice(args);
+
+    run_git_expect_success(repo, &prefixed_args, context)
+}
+
 fn git_ref_exists(repo: &Path, reference: &str) -> bool {
     run_git_output(repo, &["show-ref", "--verify", "--quiet", reference])
         .status
@@ -93,19 +102,23 @@ fn git_ref_exists(repo: &Path, reference: &str) -> bool {
 
 fn checkpoint_id_for_head(repo: &Path) -> Option<String> {
     let head = run_git(repo, &["rev-parse", "HEAD"]);
-    read_commit_checkpoint_mappings(repo)
-        .expect("failed to read commit-checkpoint mappings")
-        .get(&head)
-        .cloned()
+    test_command_support::with_repo_app_env(repo, || {
+        read_commit_checkpoint_mappings(repo)
+            .expect("failed to read commit-checkpoint mappings")
+            .get(&head)
+            .cloned()
+    })
 }
 
 fn all_checkpoint_ids_from_history(repo: &Path) -> Vec<String> {
-    let mappings =
-        read_commit_checkpoint_mappings(repo).expect("failed to read commit-checkpoint mappings");
-    let mut ids: Vec<String> = mappings.into_values().collect();
-    ids.sort();
-    ids.dedup();
-    ids
+    test_command_support::with_repo_app_env(repo, || {
+        let mappings = read_commit_checkpoint_mappings(repo)
+            .expect("failed to read commit-checkpoint mappings");
+        let mut ids: Vec<String> = mappings.into_values().collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    })
 }
 
 fn init_repo(repo: &Path) {
@@ -122,24 +135,20 @@ fn init_and_enable_cursor(repo: &Path) {
     let init_out = run_cmd(repo, &["init", "--agent", "cursor"], None);
     assert_success(&init_out, "bitloops init --agent cursor");
 
-    let out = run_cmd(repo, &["enable"], None);
-    assert_success(&out, "bitloops enable");
+    let out = run_cmd(repo, &["enable", "--agent", "cursor"], None);
+    assert_success(&out, "bitloops enable --agent cursor");
 
     run_git_expect_success(
         repo,
-        &["add", ".cursor/hooks.json", ".bitloops"],
-        "stage cursor infra files",
+        &["add", ".cursor/hooks.json"],
+        "stage cursor hook file",
     );
-    let commit_out = run_git_output(repo, &["commit", "-m", "seed cursor bitloops infra files"]);
-    if !commit_out.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_out.stderr);
-        assert!(
-            stderr.contains("nothing to commit") || stderr.contains("no changes added to commit"),
-            "unexpected failure committing cursor infra files\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&commit_out.stdout),
-            stderr
-        );
-    }
+    let commit_out = run_git_without_hooks_expect_success(
+        repo,
+        &["commit", "-m", "seed cursor bitloops infra files"],
+        "commit cursor infra files",
+    );
+    let _ = commit_out;
 }
 
 fn cursor_before_submit_prompt(
@@ -270,9 +279,11 @@ fn cursor_checkpoint_metadata() {
 
     let checkpoint_id =
         checkpoint_id_for_head(dir.path()).expect("HEAD commit should map to a checkpoint");
-    let summary = read_committed(dir.path(), &checkpoint_id)
-        .expect("reading committed checkpoint should succeed")
-        .expect("committed checkpoint should exist");
+    let summary = test_command_support::with_repo_app_env(dir.path(), || {
+        read_committed(dir.path(), &checkpoint_id)
+            .expect("reading committed checkpoint should succeed")
+            .expect("committed checkpoint should exist")
+    });
 
     assert!(
         summary.files_touched.iter().any(|f| f == "cursor_meta.rs"),
@@ -399,8 +410,10 @@ fn cursor_intermediate_commit_without_new_prompt_has_no_checkpoint_mapping() {
         "cursor intermediate commit",
     );
     let second_head = run_git(dir.path(), &["rev-parse", "HEAD"]);
-    let mappings = read_commit_checkpoint_mappings(dir.path())
-        .expect("reading commit-checkpoint mappings should succeed");
+    let mappings = test_command_support::with_repo_app_env(dir.path(), || {
+        read_commit_checkpoint_mappings(dir.path())
+            .expect("reading commit-checkpoint mappings should succeed")
+    });
     assert!(
         !mappings.contains_key(&second_head),
         "cursor intermediate commit without new prompt should not map to a checkpoint"

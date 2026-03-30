@@ -1,4 +1,4 @@
-use super::super::store_config_utils::{expand_home_prefix_with, user_home_dir};
+use super::super::store_config_utils::expand_home_prefix_with;
 use super::*;
 
 #[test]
@@ -24,9 +24,14 @@ fn sqlite_path_resolution_resolves_relative_path_against_repo_root() {
 
 #[test]
 fn sqlite_path_resolution_expands_tilde_prefix() {
-    let Some(home) = user_home_dir() else {
-        return;
-    };
+    let temp = tempfile::tempdir().expect("temp dir");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create fake home");
+    let home_str = home.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        None,
+        &[("HOME", Some(home_str.as_str())), ("USERPROFILE", None)],
+    );
 
     let resolved =
         resolve_sqlite_db_path(Some("~/devql.sqlite")).expect("tilde sqlite path should resolve");

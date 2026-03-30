@@ -90,35 +90,21 @@ impl Strategy for ManualCommitStrategy {
         } else {
             ctx.transcript_path.clone()
         };
-        let legacy_metadata_enabled =
-            crate::host::checkpoints::session::legacy_local_backend_enabled();
-        let default_metadata_dir = if legacy_metadata_enabled {
-            paths::session_metadata_dir_from_session_id(&ctx.session_id)
-        } else {
-            String::new()
-        };
+        let default_metadata_dir = paths::session_metadata_dir_from_session_id(&ctx.session_id);
         let mut metadata_dir = ctx.metadata_dir.trim().to_string();
         let mut metadata_dir_abs = ctx.metadata_dir_abs.trim().to_string();
 
-        if legacy_metadata_enabled && metadata_dir.is_empty() {
+        if metadata_dir.is_empty() {
             metadata_dir = default_metadata_dir.clone();
         }
-        if legacy_metadata_enabled && metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
+        if metadata_dir_abs.is_empty() && !metadata_dir.is_empty() {
             metadata_dir_abs = self
                 .repo_root
                 .join(&metadata_dir)
                 .to_string_lossy()
                 .to_string();
         }
-        if !legacy_metadata_enabled && (metadata_dir.is_empty() || metadata_dir_abs.is_empty()) {
-            metadata_dir.clear();
-            metadata_dir_abs.clear();
-        }
-        // Legacy compatibility: only materialise session metadata files when explicitly enabled.
-        if legacy_metadata_enabled
-            && metadata_dir == default_metadata_dir
-            && !transcript_path.trim().is_empty()
-        {
+        if metadata_dir == default_metadata_dir && !transcript_path.trim().is_empty() {
             let _ = write_session_metadata(&self.repo_root, &ctx.session_id, &transcript_path);
         }
 

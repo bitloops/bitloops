@@ -182,12 +182,7 @@ impl ManualCommitStrategy {
             new_head,
             &committed_touched,
         );
-        let transcript_content =
-            if crate::host::checkpoints::session::legacy_local_backend_enabled() {
-                read_transcript_from_disk(&self.repo_root, &state.session_id)
-            } else {
-                None
-            }
+        let transcript_content = read_transcript_from_disk(&self.repo_root, &state.session_id)
             .or_else(|| {
                 if state.transcript_path.trim().is_empty() {
                     return None;

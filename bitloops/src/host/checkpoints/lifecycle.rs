@@ -443,17 +443,21 @@ pub fn handle_lifecycle_turn_end(
 
     let repo_root = crate::utils::paths::repo_root()?;
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
-
     let meta_rel = crate::utils::paths::session_metadata_dir_from_session_id(&session_id);
-    let meta_dir_abs = repo_root.join(&meta_rel);
-    std::fs::create_dir_all(&meta_dir_abs)
-        .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
+    let meta_dir_abs = {
+        let path = repo_root.join(&meta_rel);
+        std::fs::create_dir_all(&path)
+            .map_err(|e| anyhow!("failed to create session directory: {e}"))?;
+        Some(path)
+    };
 
     let transcript_data =
         std::fs::read(&event.session_ref).map_err(|e| anyhow!("failed to read transcript: {e}"))?;
-    let log_path = meta_dir_abs.join(crate::utils::paths::TRANSCRIPT_FILE_NAME);
-    std::fs::write(&log_path, &transcript_data)
-        .map_err(|e| anyhow!("failed to write transcript: {e}"))?;
+    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
+        let log_path = meta_dir_abs.join(crate::utils::paths::TRANSCRIPT_FILE_NAME);
+        std::fs::write(&log_path, &transcript_data)
+            .map_err(|e| anyhow!("failed to write transcript: {e}"))?;
+    }
 
     let transcript_ref_canon = Path::new(&event.session_ref)
         .canonicalize()
@@ -538,14 +542,16 @@ pub fn handle_lifecycle_turn_end(
         summary = s;
     }
 
-    let prompt_file = meta_dir_abs.join(crate::utils::paths::PROMPT_FILE_NAME);
     let prompt_content = all_prompts.join("\n\n---\n\n");
-    std::fs::write(&prompt_file, &prompt_content)
-        .map_err(|e| anyhow!("failed to write prompt file: {e}"))?;
+    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
+        let prompt_file = meta_dir_abs.join(crate::utils::paths::PROMPT_FILE_NAME);
+        std::fs::write(&prompt_file, &prompt_content)
+            .map_err(|e| anyhow!("failed to write prompt file: {e}"))?;
 
-    let summary_file = meta_dir_abs.join(crate::utils::paths::SUMMARY_FILE_NAME);
-    std::fs::write(&summary_file, &summary)
-        .map_err(|e| anyhow!("failed to write summary file: {e}"))?;
+        let summary_file = meta_dir_abs.join(crate::utils::paths::SUMMARY_FILE_NAME);
+        std::fs::write(&summary_file, &summary)
+            .map_err(|e| anyhow!("failed to write summary file: {e}"))?;
+    }
 
     let last_prompt = all_prompts.last().cloned().unwrap_or_default();
     let commit_message = if last_prompt.len() > 72 {
@@ -554,14 +560,16 @@ pub fn handle_lifecycle_turn_end(
         last_prompt.clone()
     };
 
-    let context_path = meta_dir_abs.join(crate::utils::paths::CONTEXT_FILE_NAME);
-    create_context_file(
-        &context_path,
-        &commit_message,
-        &session_id,
-        &all_prompts,
-        &summary,
-    )?;
+    if let Some(meta_dir_abs) = meta_dir_abs.as_ref() {
+        let context_path = meta_dir_abs.join(crate::utils::paths::CONTEXT_FILE_NAME);
+        create_context_file(
+            &context_path,
+            &commit_message,
+            &session_id,
+            &all_prompts,
+            &summary,
+        )?;
+    }
 
     let author = crate::git::get_git_author().unwrap_or(crate::git::GitAuthor {
         name: "Unknown".to_string(),
@@ -585,7 +593,11 @@ pub fn handle_lifecycle_turn_end(
             .ok()
     });
 
-    let metadata_dir_abs_str = meta_dir_abs.to_str().unwrap_or("").to_string();
+    let metadata_dir_abs_str = meta_dir_abs
+        .as_ref()
+        .and_then(|path| path.to_str())
+        .unwrap_or("")
+        .to_string();
 
     let ctx = crate::host::checkpoints::strategy::StepContext {
         session_id: session_id.to_string(),

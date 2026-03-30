@@ -1,204 +1,49 @@
 ---
+sidebar_position: 2
 title: Dashboard Local HTTPS Setup
 ---
 
 # Dashboard Local HTTPS Setup
 
-This guide configures local HTTPS for `bitloops dashboard` at `https://bitloops.local:5667`.
+This guide configures local HTTPS for the Bitloops daemon and dashboard.
 
-It covers:
+## 1. Prepare Local Certificates
 
-- Installing `mkcert` on macOS, Linux, and Windows
-- Trusting the local development CA (`mkcert -install`)
-- Mapping `bitloops.local` in your OS hosts file
-- Configuring Bitloops dashboard local network hints
+Create or install the local certificate material required by your operating system and browser. Bitloops does not generate certificate authorities for you.
 
-## 1) Install `mkcert`
+## 2. Enable The TLS Hint
 
-### macOS
+Persist the local HTTPS hint in the daemon config:
 
-Homebrew:
+```toml title="config.toml"
+[dashboard.local_dashboard]
+tls = true
+```
+
+This tells Bitloops that HTTPS should be preferred for loopback dashboard traffic when the local setup is already in place.
+
+## 3. Recheck The Local Network Setup
 
 ```bash
-brew install mkcert
-brew install nss
+bitloops daemon start --recheck-local-dashboard-net
 ```
 
-Alternative options:
-
-- MacPorts: `sudo port install mkcert`
-- Manual binary: download `mkcert` for macOS and place it on your `PATH`
-
-Then trust the local CA:
-
-```bash
-mkcert -install
-```
-
-### Linux
-
-Homebrew:
-
-```bash
-brew install mkcert
-brew install nss
-```
-
-Common distro packages:
-
-```bash
-# Debian / Ubuntu
-sudo apt update && sudo apt install -y mkcert libnss3-tools
-
-# Fedora / RHEL
-sudo dnf install -y mkcert nss-tools
-
-# Arch
-sudo pacman -S mkcert nss
-```
-
-Alternative option:
-
-- Manual binary: download `mkcert` for Linux and place it on your `PATH`
-
-Then trust the local CA:
-
-```bash
-mkcert -install
-```
-
-### Windows
-
-If you use Homebrew in your shell environment:
-
-```bash
-brew install mkcert
-```
-
-Alternative options:
-
-```powershell
-# Chocolatey
-choco install mkcert
-
-# Scoop
-scoop install mkcert
-```
-
-Or download `mkcert.exe` manually and add it to `PATH`.
-
-Then trust the local CA (PowerShell or Command Prompt):
-
-```powershell
-mkcert -install
-```
-
-## 2) Map `bitloops.local` in your hosts file
-
-Add these entries:
-
-```text
-127.0.0.1 bitloops.local
-::1 bitloops.local
-```
-
-Use your OS hosts file:
-
-- macOS: `/etc/hosts`
-- Linux: `/etc/hosts`
-- Windows: `C:\Windows\System32\drivers\etc\hosts`
-
-Examples:
-
-```bash
-# macOS / Linux
-sudo sh -c 'printf "\n127.0.0.1 bitloops.local\n::1 bitloops.local\n" >> /etc/hosts'
-```
-
-```powershell
-# Windows (run PowerShell as Administrator)
-Add-Content -Path "C:\Windows\System32\drivers\etc\hosts" -Value "`n127.0.0.1 bitloops.local`n::1 bitloops.local"
-```
-
-`bitloops.local` must be in your OS **hosts** file. It is not configured via SSH `known_hosts`.
-
-## 3) Optional dashboard config hints
-
-When these values are set, Bitloops uses the configured HTTPS fast path (unless you pass `--recheck-local-dashboard-net`):
-
-```json title=".bitloops/config.json"
-{
-  "version": "1.0",
-  "scope": "project",
-  "settings": {
-    "dashboard": {
-      "local_dashboard": {
-        "tls": true,
-        "bitloops_local": true
-      }
-    }
-  }
-}
-```
-
-Meaning:
-
-- `dashboard.local_dashboard.tls: true` assumes local TLS material is already valid
-- `dashboard.local_dashboard.bitloops_local: true` assumes `bitloops.local` host mapping is already valid
-
-## 4) Start dashboard
-
-Standard path:
+Or open the dashboard directly:
 
 ```bash
 bitloops dashboard
 ```
 
-Force HTTP loopback (no TLS, explicit opt-in):
+## 4. Force HTTP If Needed
+
+If you want a local HTTP run instead:
 
 ```bash
-bitloops dashboard --http --host 127.0.0.1
+bitloops daemon start --http --host 127.0.0.1
 ```
 
-Force a full local network/TLS recheck and refresh hints:
+## Notes
 
-```bash
-bitloops dashboard --recheck-local-dashboard-net
-```
-
-## 5) Verify and troubleshoot
-
-Verify host resolution:
-
-```bash
-# macOS / Linux
-ping -c 1 bitloops.local
-```
-
-```powershell
-# Windows
-ping bitloops.local
-```
-
-If browser trust still fails:
-
-1. Run `mkcert -install` again.
-2. Fully quit and reopen your browser.
-3. Re-run `bitloops dashboard --recheck-local-dashboard-net`.
-
-If DNS cache is stale:
-
-```bash
-# macOS
-sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
-```
-
-```bash
-# Linux (systemd-resolved)
-sudo resolvectl flush-caches
-```
-
-```powershell
-# Windows (Administrator)
-ipconfig /flushdns
-```
+- Dashboard bundle assets belong in the cache directory by default
+- HTTPS hints belong in the global daemon config, not in repo policy
+- `bitloops dashboard` is a launcher, not the long-lived server command

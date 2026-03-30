@@ -40,7 +40,7 @@ pub(crate) async fn execute_query_json_with_composition(
     composition: Option<RegisteredStageCompositionContext>,
 ) -> Result<Value> {
     let parsed = parse_devql_query(query)?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for `devql query`")?;
     let relational = if parsed.has_checkpoints_stage || parsed.has_telemetry_stage {
         None
@@ -58,7 +58,15 @@ pub(crate) async fn execute_query_json_with_composition(
     Ok(Value::Array(rows))
 }
 
-fn compile_query_document(query: &str, raw_graphql: bool) -> Result<String> {
+pub(crate) fn compile_query_document(query: &str, raw_graphql: bool) -> Result<String> {
+    compile_query_document_for_mode(query, raw_graphql, GraphqlCompileMode::Global)
+}
+
+pub(crate) fn compile_query_document_for_mode(
+    query: &str,
+    raw_graphql: bool,
+    mode: GraphqlCompileMode,
+) -> Result<String> {
     if use_raw_graphql_mode(query, raw_graphql) {
         let trimmed = query.trim();
         if trimmed.is_empty() {
@@ -67,18 +75,23 @@ fn compile_query_document(query: &str, raw_graphql: bool) -> Result<String> {
         return Ok(trimmed.to_string());
     }
 
-    compile_devql_query_to_graphql(query)
+    let parsed = parse_devql_query(query)?;
+    compile_devql_to_graphql_with_mode(&parsed, mode)
 }
 
 fn looks_like_devql_pipeline(query: &str) -> bool {
     query.contains("->")
 }
 
-fn use_raw_graphql_mode(query: &str, raw_graphql: bool) -> bool {
+pub(crate) fn use_raw_graphql_mode(query: &str, raw_graphql: bool) -> bool {
     raw_graphql || !looks_like_devql_pipeline(query)
 }
 
-fn format_query_output(data: &Value, compact: bool, raw_graphql: bool) -> Result<String> {
+pub(crate) fn format_query_output(
+    data: &Value,
+    compact: bool,
+    raw_graphql: bool,
+) -> Result<String> {
     if raw_graphql {
         return if compact {
             Ok(serde_json::to_string(data)?)

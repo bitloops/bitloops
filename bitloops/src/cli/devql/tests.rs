@@ -20,16 +20,35 @@ fn test_runtime() -> tokio::runtime::Runtime {
 }
 
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
-    let config_dir = repo_root.join(".bitloops");
-    fs::create_dir_all(&config_dir).expect("create config dir");
+    let sqlite_path = settings["stores"]["relational"]["sqlite_path"]
+        .as_str()
+        .expect("relational sqlite path");
+    let duckdb_path = settings["stores"]["events"]["duckdb_path"]
+        .as_str()
+        .expect("events duckdb path");
+    let embedding_provider = settings["stores"]["embedding_provider"]
+        .as_str()
+        .expect("embedding provider");
+    let semantic_provider = settings["semantic"]["provider"]
+        .as_str()
+        .expect("semantic provider");
+
     fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": settings
-        }))
-        .expect("serialise config"),
+        repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        format!(
+            r#"[stores]
+embedding_provider = {embedding_provider:?}
+
+[stores.relational]
+sqlite_path = {sqlite_path:?}
+
+[stores.events]
+duckdb_path = {duckdb_path:?}
+
+[semantic]
+provider = {semantic_provider:?}
+"#
+        ),
     )
     .expect("write config");
 }
@@ -283,7 +302,7 @@ fn devql_run_init_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "initSchema": {
@@ -314,33 +333,20 @@ fn devql_run_init_executes_graphql_mutation() {
 }
 
 #[test]
-fn devql_run_init_executes_graphql_mutation_and_is_idempotent() {
+fn devql_run_init_requires_running_daemon() {
     let repo = seed_devql_cli_repo();
-    let sqlite_path = sqlite_path_for_repo(repo.path());
     let _guard = enter_process_state(Some(repo.path()), &[]);
 
-    test_runtime()
+    let err = test_runtime()
         .block_on(run(DevqlArgs {
             command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
         }))
-        .expect("devql init should succeed");
-    test_runtime()
-        .block_on(run(DevqlArgs {
-            command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
-        }))
-        .expect("second devql init should succeed");
+        .expect_err("devql init should require a running daemon");
 
-    let conn = Connection::open(sqlite_path).expect("open sqlite");
-    for table in ["repositories", "artefacts", "artefacts_current"] {
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                [table],
-                |row| row.get(0),
-            )
-            .expect("query sqlite schema");
-        assert_eq!(count, 1, "expected sqlite table `{table}`");
-    }
+    assert!(
+        err.to_string().contains("Bitloops daemon is not running"),
+        "expected daemon-required error, got: {err:#}"
+    );
 }
 
 #[test]
@@ -352,7 +358,7 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "ingest": {
@@ -402,25 +408,23 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
 }
 
 #[test]
-fn devql_run_ingest_executes_graphql_mutation_and_persists_repository_row() {
+fn devql_run_ingest_requires_running_daemon() {
     let repo = seed_devql_cli_repo();
-    let sqlite_path = sqlite_path_for_repo(repo.path());
     let _guard = enter_process_state(Some(repo.path()), &[]);
 
-    test_runtime()
+    let err = test_runtime()
         .block_on(run(DevqlArgs {
             command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
                 init: true,
                 max_checkpoints: 500,
             })),
         }))
-        .expect("devql ingest should succeed");
+        .expect_err("devql ingest should require a running daemon");
 
-    let conn = Connection::open(sqlite_path).expect("open sqlite");
-    let repository_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))
-        .expect("count repositories");
-    assert_eq!(repository_count, 1, "expected one repository row");
+    assert!(
+        err.to_string().contains("Bitloops daemon is not running"),
+        "expected daemon-required error, got: {err:#}"
+    );
 }
 
 #[test]
@@ -463,7 +467,7 @@ fn devql_run_knowledge_add_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "addKnowledge": {
@@ -516,7 +520,7 @@ fn devql_run_knowledge_associate_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "associateKnowledge": {
@@ -564,7 +568,7 @@ fn devql_run_knowledge_refresh_executes_graphql_mutation() {
     with_graphql_executor_hook(
         {
             let captured = Rc::clone(&captured);
-            move |_repo_root, query, variables| {
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
                 *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
                 Ok(json!({
                     "refreshKnowledge": {

@@ -18,6 +18,7 @@ pub(super) fn seed_dashboard_repo_without_commit_mapping() -> TempDir {
     git_ok(repo_root, &["add", "app.rs"]);
     git_ok(repo_root, &["commit", "-m", "Checkpoint commit"]);
     let checkpoint_commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+    seed_repository_catalog_row(repo_root, SEEDED_REPO_NAME, "main");
 
     git_ok(
         repo_root,
@@ -143,6 +144,7 @@ pub(super) fn seed_dashboard_repo_multi_session() -> TempDir {
     git_ok(repo_root, &["add", "app.rs"]);
     git_ok(repo_root, &["commit", "-m", "Checkpoint commit"]);
     let checkpoint_commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+    seed_repository_catalog_row(repo_root, SEEDED_REPO_NAME, "main");
 
     git_ok(
         repo_root,
@@ -355,6 +357,33 @@ pub(super) async fn request_json_with_method_and_content_type(
                 .body(body)
                 .expect("request"),
         )
+        .await
+        .expect("router response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let parsed = serde_json::from_slice::<Value>(&body).unwrap_or_else(|_| json!({}));
+    (status, parsed)
+}
+
+pub(super) async fn request_json_with_method_content_type_and_headers(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    content_type: &str,
+    headers: &[(&str, &str)],
+    body: Body,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", content_type);
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let response = app
+        .oneshot(builder.body(body).expect("request"))
         .await
         .expect("router response");
     let status = response.status();

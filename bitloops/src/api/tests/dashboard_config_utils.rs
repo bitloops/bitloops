@@ -1,24 +1,6 @@
 use super::*;
 
 #[test]
-fn select_host_prefers_bitloops_local_when_config_enabled() {
-    let selected = select_host_with_dashboard_preference(None, true);
-    assert_eq!(selected, "bitloops.local");
-}
-
-#[test]
-fn select_host_falls_back_to_localhost_when_config_disabled() {
-    let selected = select_host_with_dashboard_preference(None, false);
-    assert_eq!(selected, "127.0.0.1");
-}
-
-#[test]
-fn select_host_respects_explicit_host() {
-    let selected = select_host_with_dashboard_preference(Some("localhost"), true);
-    assert_eq!(selected, "localhost");
-}
-
-#[test]
 fn startup_mode_fast_http_requires_loopback_host() {
     let config = DashboardServerConfig {
         host: None,
@@ -59,10 +41,7 @@ fn startup_mode_uses_configured_https_fast_path() {
         recheck_local_dashboard_net: false,
         bundle_dir: None,
     };
-    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
-        tls: Some(true),
-        bitloops_local: Some(true),
-    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig { tls: Some(true) };
 
     let mode =
         select_startup_mode(&config, Some(&local_dashboard), None).expect("configured https mode");
@@ -79,19 +58,16 @@ fn startup_mode_recheck_flag_forces_slow_probe() {
         recheck_local_dashboard_net: true,
         bundle_dir: None,
     };
-    let local_dashboard = crate::config::DashboardLocalDashboardConfig {
-        tls: Some(true),
-        bitloops_local: Some(true),
-    };
+    let local_dashboard = crate::config::DashboardLocalDashboardConfig { tls: Some(true) };
 
     let mode = select_startup_mode(&config, Some(&local_dashboard), None).expect("slow probe");
     assert_eq!(mode, DashboardStartupMode::SlowProbe);
 }
 
 #[test]
-fn default_bundle_dir_uses_home_directory() {
-    let path = default_bundle_dir_from_home(Some(Path::new("/tmp/home")));
-    assert_eq!(path, PathBuf::from("/tmp/home/.bitloops/dashboard/bundle"));
+fn default_bundle_dir_uses_cache_directory() {
+    let path = default_bundle_dir_from_cache_dir(Some(Path::new("/tmp/cache/bitloops")));
+    assert_eq!(path, PathBuf::from("/tmp/cache/bitloops/dashboard/bundle"));
 }
 
 #[test]

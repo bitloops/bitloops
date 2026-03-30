@@ -164,9 +164,10 @@ mod tests {
     }
 
     fn make_context(config_root: Value) -> TestHealthContext {
+        let repo_root = std::env::temp_dir().join("bitloops-test-harness-health");
         TestHealthContext {
             repo: test_repo(),
-            repo_root: PathBuf::from("."),
+            repo_root,
             config_root,
             connectors: DummyConnectors {
                 provider_config: ProviderConfig::default(),

@@ -515,6 +515,7 @@ type Repository {
 	provider: String!
 	organization: String!
 	project(path: String!): Project!
+	branch(name: String!): Repository!
 	asOf(input: AsOfInput!): TemporalScope!
 	defaultBranch: String!
 	commits(branch: String, author: String, since: DateTime, until: DateTime, first: Int! = 50, after: String): CommitConnection!

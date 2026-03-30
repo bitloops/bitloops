@@ -13,6 +13,7 @@ use crate::host::language_adapter::{is_supported_language_kind, resolve_canonica
 
 fn extension_runtime_cfg() -> DevqlConfig {
     DevqlConfig {
+        config_root: PathBuf::from("/tmp/repo"),
         repo_root: PathBuf::from("/tmp/repo"),
         repo: RepoIdentity {
             provider: "github".to_string(),
@@ -33,6 +34,7 @@ fn extension_runtime_cfg() -> DevqlConfig {
         embedding_provider: None,
         embedding_model: None,
         embedding_api_key: None,
+        embedding_cache_dir: None,
     }
 }
 

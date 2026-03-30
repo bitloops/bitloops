@@ -105,7 +105,7 @@ impl TemporalScope {
     async fn project(&self, ctx: &Context<'_>, path: String) -> Result<Project> {
         let project_path = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .validate_project_path(&path)
+            .validate_project_path(&self.scope, &path)
             .map_err(bad_user_input_error)?;
         Ok(Project::new(
             project_path.clone(),

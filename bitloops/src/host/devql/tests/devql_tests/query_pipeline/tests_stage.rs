@@ -152,30 +152,20 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let events_cfg = default_events_cfg();
     let sqlite_path = temp.path().join("relational.sqlite");
     if let Some(parent) = sqlite_path.parent() {
         std::fs::create_dir_all(parent).expect("create relational parent dir");
     }
-    let config_dir = cfg.repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_repo_daemon_config(
+        &cfg.repo_root,
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
+    );
     // Use _for_repo to avoid cwd dependency under parallel test execution.
     let backends = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
         .expect("resolve backend config");
@@ -417,29 +407,19 @@ async fn execute_registered_tests_stage_scopes_asof_commit_links_by_commit() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let mut cfg = test_cfg();
+    cfg.config_root = repo_root.clone();
     cfg.repo_root = repo_root;
     let sqlite_path = temp.path().join("relational.sqlite");
     if let Some(parent) = sqlite_path.parent() {
         std::fs::create_dir_all(parent).expect("create relational parent dir");
     }
-    let config_dir = cfg.repo_root.join(".bitloops");
-    std::fs::create_dir_all(&config_dir).expect("create config dir");
-    std::fs::write(
-        config_dir.join("config.json"),
-        serde_json::to_vec_pretty(&json!({
-            "version": "1.0",
-            "scope": "project",
-            "settings": {
-                "stores": {
-                    "relational": {
-                        "sqlite_path": sqlite_path.to_string_lossy()
-                    }
-                }
-            }
-        }))
-        .expect("serialise config"),
-    )
-    .expect("write config");
+    write_repo_daemon_config(
+        &cfg.repo_root,
+        format!(
+            "[stores.relational]\nsqlite_path = {path:?}\n",
+            path = sqlite_path.to_string_lossy()
+        ),
+    );
     crate::capability_packs::test_harness::storage::init_schema_for_repo(&cfg.repo_root)
         .expect("initialise test harness schema");
 

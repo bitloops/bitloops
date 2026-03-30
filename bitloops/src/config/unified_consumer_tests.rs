@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::path::Path;
 
 use super::unified_config::{
     UnifiedSettings, merge_layers, resolve_dashboard_from_unified, resolve_embedding_from_unified,
@@ -145,7 +146,7 @@ fn embedding_from_unified_reads_values() {
         })),
         ..Default::default()
     };
-    let cfg = resolve_embedding_from_unified(&settings, no_env);
+    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
 
     assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
     assert_eq!(
@@ -158,7 +159,7 @@ fn embedding_from_unified_reads_values() {
 #[test]
 fn embedding_from_unified_defaults_provider_to_local() {
     let settings = UnifiedSettings::default();
-    let cfg = resolve_embedding_from_unified(&settings, no_env);
+    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
 
     assert_eq!(
         cfg.embedding_provider.as_deref(),
@@ -275,26 +276,22 @@ fn dashboard_from_unified_reads_local_dashboard_flags() {
     let settings = UnifiedSettings {
         dashboard: Some(json!({
             "local_dashboard": {
-                "tls": true,
-                "bitloops_local": true
+                "tls": true
             }
         })),
         ..Default::default()
     };
-    let cfg = resolve_dashboard_from_unified(&settings);
+    let cfg = resolve_dashboard_from_unified(&settings, Path::new("/config"));
     assert_eq!(
         cfg.local_dashboard,
-        Some(DashboardLocalDashboardConfig {
-            tls: Some(true),
-            bitloops_local: Some(true),
-        })
+        Some(DashboardLocalDashboardConfig { tls: Some(true) })
     );
 }
 
 #[test]
 fn dashboard_from_unified_defaults_when_absent() {
     let settings = UnifiedSettings::default();
-    let cfg = resolve_dashboard_from_unified(&settings);
+    let cfg = resolve_dashboard_from_unified(&settings, Path::new("/config"));
     assert_eq!(cfg.local_dashboard, None);
 }
 
