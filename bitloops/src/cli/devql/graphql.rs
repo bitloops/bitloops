@@ -106,7 +106,7 @@ pub(super) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
 pub(crate) async fn run_project_bootstrap_via_graphql(
     scope: &SlimCliRepoScope,
     skip_baseline: bool,
-) -> Result<()> {
+) -> Result<String> {
     let response: BootstrapProjectMutationData = execute_devql_graphql(
         scope,
         BOOTSTRAP_PROJECT_MUTATION,
@@ -115,11 +115,7 @@ pub(crate) async fn run_project_bootstrap_via_graphql(
         }),
     )
     .await?;
-    println!(
-        "{}",
-        format_init_schema_summary(&response.bootstrap_project)
-    );
-    Ok(())
+    Ok(format_init_schema_summary(&response.bootstrap_project))
 }
 
 pub(super) async fn run_ingest_via_graphql(

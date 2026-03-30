@@ -17,9 +17,9 @@ use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
 use crate::config::discover_repo_policy;
 #[cfg(test)]
 use crate::config::settings::BitloopsSettings;
-use crate::config::settings::{
-    self, SETTINGS_DIR, load_settings, set_capture_enabled, settings_local_path, settings_path,
-};
+use crate::config::settings::{self, SETTINGS_DIR, load_settings, set_capture_enabled};
+#[cfg(test)]
+use crate::config::settings::{settings_local_path, settings_path};
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::devql::watch;
 
@@ -132,9 +132,8 @@ pub async fn run(args: EnableArgs) -> Result<()> {
 
     if args.local || args.project {
         eprintln!(
-            "Note: `bitloops enable` no longer edits repo policy files. Edit `{}` or `{}` directly if needed.",
-            settings_path(&cwd).display(),
-            settings_local_path(&cwd).display()
+            "Note: `--local` and `--project` are deprecated and ignored. \
+`bitloops enable` updates the nearest discovered project policy file."
         );
     }
 
@@ -149,7 +148,8 @@ pub async fn run(args: EnableArgs) -> Result<()> {
     let settings = load_settings(&cwd).unwrap_or_default();
     restart_watcher_if_running(&git_root, &policy_root);
 
-    println!("Bitloops is enabled (strategy: {}).", settings.strategy);
+    println!("Bitloops enabled in this project! :)");
+    println!("Strategy: {}.", settings.strategy);
     println!("Updated project config: {}", target_path.display());
     Ok(())
 }

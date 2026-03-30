@@ -129,11 +129,10 @@ pub fn is_enabled(repo_root: &Path) -> Result<bool> {
 }
 
 pub fn is_enabled_for_hooks(start: &Path) -> bool {
-    load_settings(start)
-        .map(|settings| {
-            discover_repo_policy_optional(start)
-                .map(|policy| policy.root.is_some() && settings.enabled)
-                .unwrap_or(false)
+    discover_repo_policy_optional(start)
+        .and_then(|policy| {
+            let has_root = policy.root.is_some();
+            load_settings_from_policy(policy).map(|settings| has_root && settings.enabled)
         })
         .unwrap_or(false)
 }

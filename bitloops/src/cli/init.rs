@@ -96,8 +96,10 @@ async fn run_with_writer_async(
     )?;
 
     let scope = discover_slim_cli_repo_scope(Some(&project_root))?;
-    crate::cli::devql::graphql::run_project_bootstrap_via_graphql(&scope, args.skip_baseline)
-        .await?;
+    let bootstrap_summary =
+        crate::cli::devql::graphql::run_project_bootstrap_via_graphql(&scope, args.skip_baseline)
+            .await?;
+    writeln!(out, "{bootstrap_summary}")?;
 
     writeln!(out)?;
     writeln!(out, "Project config: {}", local_policy_path.display())?;
