@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -6,10 +6,9 @@ use clap::Args;
 
 mod agent_hooks;
 mod agent_selection;
-#[cfg(test)]
-mod telemetry;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::telemetry_consent;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
@@ -34,9 +33,17 @@ pub struct InitArgs {
     #[arg(long)]
     pub agent: Option<String>,
 
-    /// Enable anonymous usage analytics
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub telemetry: bool,
+    /// Enable anonymous telemetry for this CLI version.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub telemetry: Option<bool>,
+
+    /// Disable anonymous telemetry for this CLI version.
+    #[arg(
+        long = "no-telemetry",
+        conflicts_with = "telemetry",
+        default_value_t = false
+    )]
+    pub no_telemetry: bool,
 
     /// Skip the initial baseline sync into DevQL current state.
     #[arg(long, default_value_t = false)]
@@ -45,7 +52,9 @@ pub struct InitArgs {
 
 pub async fn run(args: InitArgs) -> Result<()> {
     let mut out = io::stdout().lock();
-    run_with_writer_async(args, &mut out, None).await
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    run_with_io_async(args, &mut out, &mut input, None).await
 }
 
 #[cfg(test)]
@@ -55,19 +64,51 @@ fn run_with_writer(
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().context("creating runtime for `bitloops init`")?;
-    runtime.block_on(run_with_writer_async(args, out, select_fn))
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    runtime.block_on(run_with_io_async(args, out, &mut input, select_fn))
 }
 
-async fn run_with_writer_async(
+async fn run_with_io_async(
     args: InitArgs,
     out: &mut dyn Write,
+    input: &mut dyn BufRead,
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
     let project_root = std::env::current_dir().context("getting current directory")?;
     let git_root = crate::cli::enable::find_repo_root(&project_root)?;
+    let daemon_config_existed_at_entry = default_daemon_config_exists()?;
+    let telemetry_choice =
+        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
+
+    if !daemon_config_existed_at_entry
+        && args.install_default_daemon
+        && telemetry_choice.is_none()
+        && !telemetry_consent::can_prompt_interactively()
+    {
+        bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
+    }
 
     maybe_install_default_daemon(args.install_default_daemon).await?;
-    ensure_daemon_running().await?;
+    telemetry_consent::ensure_default_daemon_running().await?;
+    if daemon_config_existed_at_entry {
+        telemetry_consent::ensure_existing_config_telemetry_consent(
+            project_root.as_path(),
+            telemetry_choice,
+            out,
+            input,
+        )
+        .await?;
+    } else if let Some(choice) = telemetry_choice {
+        let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
+            project_root.as_path(),
+            Some(choice),
+        )
+        .await?;
+        if persisted.needs_prompt {
+            bail!("failed to persist telemetry consent");
+        }
+    }
     ensure_repo_local_policy_excluded(&git_root, &project_root)?;
 
     let selected_agents = if let Some(agent) = args.agent.as_deref() {
@@ -108,29 +149,6 @@ async fn run_with_writer_async(
     Ok(())
 }
 
-async fn ensure_daemon_running() -> Result<()> {
-    #[cfg(test)]
-    if std::env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
-    {
-        return Ok(());
-    }
-
-    let status = crate::daemon::status().await?;
-    if status.runtime.is_some() {
-        return Ok(());
-    }
-
-    if default_daemon_config_exists()? {
-        bail!("Bitloops daemon is not running. Start it with `bitloops start`.")
-    }
-
-    bail!(
-        "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
-    )
-}
-
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {
     if !install_default_daemon {
         return Ok(());
@@ -151,7 +169,7 @@ async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()
         recheck_local_dashboard_net: false,
         bundle_dir: None,
     };
-    let _ = crate::daemon::start_service(&daemon_config, config).await?;
+    let _ = crate::daemon::start_service(&daemon_config, config, None).await?;
     Ok(())
 }
 

@@ -6,11 +6,14 @@ pub(super) async fn run_internal_process(args: InternalDaemonProcessArgs) -> Res
     run_server(
         &daemon_config,
         args.server_config(),
-        mode,
-        args.service_name,
-        false,
-        "Bitloops daemon",
-        false,
+        RunServerOptions {
+            mode,
+            service_name: args.service_name,
+            open_browser: false,
+            ready_subject: "Bitloops daemon",
+            print_banner: false,
+            telemetry: args.telemetry,
+        },
     )
     .await
 }
@@ -20,16 +23,20 @@ pub(super) async fn start_foreground(
     config: DashboardServerConfig,
     open_browser: bool,
     ready_subject: &str,
+    telemetry: Option<bool>,
 ) -> Result<()> {
     ensure_can_start(daemon_config.config_root.as_path(), false)?;
     run_server(
         daemon_config,
         config,
-        DaemonMode::Foreground,
-        None,
-        open_browser,
-        ready_subject,
-        true,
+        RunServerOptions {
+            mode: DaemonMode::Foreground,
+            service_name: None,
+            open_browser,
+            ready_subject,
+            print_banner: true,
+            telemetry,
+        },
     )
     .await
 }
@@ -37,6 +44,7 @@ pub(super) async fn start_foreground(
 pub(super) async fn start_detached(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
     ensure_can_start(daemon_config.config_root.as_path(), false)?;
     let args = InternalDaemonProcessArgs::from_server_config(
@@ -44,6 +52,7 @@ pub(super) async fn start_detached(
         DaemonMode::Detached,
         None,
         &config,
+        telemetry,
     );
     let mut command = build_daemon_spawn_command(&args)?;
     command
@@ -65,8 +74,9 @@ pub(super) async fn start_detached(
 pub(super) async fn start_service(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
-    supervisor_start_repo(daemon_config, config).await
+    supervisor_start_repo(daemon_config, config, telemetry).await
 }
 
 pub(super) async fn restart(
@@ -109,7 +119,7 @@ pub(super) async fn restart(
         None => resolve_daemon_config(Some(runtime.config_path.as_path()))?,
     };
     match runtime.mode {
-        DaemonMode::Detached => start_detached(&daemon_config, config).await,
+        DaemonMode::Detached => start_detached(&daemon_config, config, None).await,
         DaemonMode::Foreground => {
             bail!(
                 "cannot restart a foreground daemon from another process; run `bitloops daemon start` again"

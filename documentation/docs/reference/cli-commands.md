@@ -40,6 +40,10 @@ Notes:
 - `init` replaces `[agents].supported` with the current selection on rerun.
 - `init` triggers daemon-backed schema initialisation and the baseline sync into `artefacts_current`.
 - Use `--agent <name>` to pin the supported agent set or `--skip-baseline` when you want hooks and config without the initial baseline ingestion.
+- `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
+- First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
+- `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
+- In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag.
 
 ### `bitloops enable`
 
@@ -55,6 +59,9 @@ Notes:
 - `enable` only toggles `[capture].enabled = true`.
 - Installed hooks stay in place and resume capturing without reinstallation.
 - If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
+- `enable` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
+- `enable` only prompts for telemetry when the daemon config already existed and consent is unresolved.
+- In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag and Bitloops fails before editing project policy.
 
 ### `bitloops disable`
 
@@ -133,13 +140,16 @@ Key flags:
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
 | `--create-default-config` | Create the default global daemon config plus local default store files before starting |
+| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
 
 Notes:
 
-- Plain `start` does not create the default daemon config.
-- On a fresh machine, run `bitloops start --create-default-config` once to create the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
+- In interactive mode, plain `start` prompts to create the default daemon config when it is missing. Answering `yes` behaves the same as `--create-default-config`; answering `no` returns the usual missing-config error.
+- On a fresh machine, `bitloops start --create-default-config` remains the explicit non-interactive bootstrap path for the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
 - When you pass `--config` and the file does not exist, `start` fails.
 - `--create-default-config` only works with the default daemon config location. It cannot be combined with `--config`.
+- When `start` creates the default daemon config and no explicit telemetry flag is present, interactive mode prompts for telemetry consent before the daemon continues.
+- In non-interactive mode, creating the default daemon config requires an explicit telemetry flag.
 
 ### `bitloops stop`
 

@@ -21,10 +21,11 @@ Bitloops stores daemon configuration at:
 
 `bitloops start` and `bitloops daemon start` use this file.
 
-- Plain `bitloops start` requires the default file to already exist.
+- In interactive mode, plain `bitloops start` prompts to create the default file when it is missing.
 - `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
 - `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
 - `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
+- `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
 
 The daemon config owns:
 
@@ -38,6 +39,7 @@ Example:
 ```toml title="config.toml"
 [runtime]
 local_dev = false
+cli_version = "1.2.3"
 
 [telemetry]
 enabled = true
@@ -79,6 +81,18 @@ bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
 [dashboard.local_dashboard]
 tls = true
 ```
+
+### Telemetry Consent
+
+Telemetry consent is stored in the global daemon config.
+
+- `[telemetry].enabled = true` means telemetry is enabled.
+- `[telemetry].enabled = false` means the current CLI version was explicitly opted out.
+- If `[telemetry].enabled` is absent, consent is unresolved and interactive commands may prompt.
+- `[runtime].cli_version` stores the CLI version that most recently reconciled telemetry consent.
+- When a newer CLI version starts and the stored value is `false`, Bitloops clears the stored opt-out and asks again on a later interactive `init` or `enable`.
+- A stored opt-in (`true`) carries forward across CLI upgrades.
+- First-run consent is asked during `bitloops start` when the default daemon config is being created.
 
 ### Default Path Categories
 

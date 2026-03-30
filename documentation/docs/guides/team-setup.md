@@ -34,6 +34,8 @@ bitloops start --create-default-config
 
 On a fresh machine, use `--create-default-config` once. That writes the default global daemon config and creates the default local SQLite, DuckDB, and blob-store paths.
 
+Interactive `bitloops start` can also prompt to create the default config when it is missing. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
+
 ### 2. Configure machine-specific stores and credentials
 
 ```toml title="config.toml"
@@ -61,6 +63,8 @@ Use plain `bitloops init` when the daemon is already running. Use `bitloops init
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync.
 
 Use `--agent <name>` when a team wants to pin the supported agent set during bootstrap.
+
+If telemetry consent later becomes unresolved for an existing daemon config, interactive `bitloops init` can ask again. Non-interactive runs require an explicit telemetry flag.
 
 ### 4. Commit shared project policy when you need it
 
@@ -96,7 +100,7 @@ Example:
 enabled = false
 ```
 
-Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks.
+Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks. If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask before it edits project policy.
 
 ## What Not To Commit
 

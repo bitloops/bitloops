@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
@@ -13,8 +14,16 @@ use super::unified_config::{UnifiedSettings, resolve_store_backend_from_unified}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DaemonCliSettings {
     pub local_dev: bool,
+    pub cli_version: String,
     pub telemetry: Option<bool>,
     pub log_level: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonTelemetryConsentState {
+    pub telemetry: Option<bool>,
+    pub cli_version: String,
+    pub needs_prompt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +58,7 @@ struct DaemonTomlFile {
 struct RuntimeToml {
     #[serde(default)]
     local_dev: bool,
+    cli_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -97,6 +107,7 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
 
     let cli = DaemonCliSettings {
         local_dev: file.runtime.local_dev,
+        cli_version: file.runtime.cli_version.unwrap_or_default(),
         telemetry: file.telemetry.enabled,
         log_level: file.logging.level.unwrap_or_default(),
     };
@@ -149,7 +160,42 @@ pub fn bootstrap_default_daemon_environment() -> Result<PathBuf> {
 }
 
 pub fn persist_daemon_cli_settings(update: &DaemonCliSettings) -> Result<PathBuf> {
+    persist_daemon_cli_settings_at(None, update)
+}
+
+pub fn update_daemon_telemetry_consent(
+    explicit_path: Option<&Path>,
+    current_cli_version: &str,
+    telemetry_override: Option<bool>,
+) -> Result<DaemonTelemetryConsentState> {
+    let loaded = load_daemon_settings(explicit_path)?;
+    let current = normalise_cli_version(current_cli_version)?;
+    let mut cli = loaded.cli;
+
+    if let Some(choice) = telemetry_override {
+        cli.telemetry = Some(choice);
+    } else if cli.telemetry == Some(false)
+        && should_clear_telemetry_for_version(cli.cli_version.as_str(), &current)
+    {
+        cli.telemetry = None;
+    }
+
+    cli.cli_version = current;
+    persist_daemon_cli_settings_at(Some(loaded.path.as_path()), &cli)?;
+
+    Ok(DaemonTelemetryConsentState {
+        telemetry: cli.telemetry,
+        cli_version: cli.cli_version,
+        needs_prompt: cli.telemetry.is_none(),
+    })
+}
+
+fn persist_daemon_cli_settings_at(
+    explicit_path: Option<&Path>,
+    update: &DaemonCliSettings,
+) -> Result<PathBuf> {
     let path = default_daemon_config_path()?;
+    let path = explicit_path.map(Path::to_path_buf).unwrap_or(path);
     ensure_parent_dir(&path)?;
 
     let mut doc = match fs::read_to_string(&path) {
@@ -166,6 +212,11 @@ pub fn persist_daemon_cli_settings(update: &DaemonCliSettings) -> Result<PathBuf
     {
         let runtime = ensure_table(&mut doc, "runtime");
         runtime["local_dev"] = Item::Value(update.local_dev.into());
+        if update.cli_version.trim().is_empty() {
+            runtime.remove("cli_version");
+        } else {
+            runtime["cli_version"] = Item::Value(update.cli_version.clone().into());
+        }
     }
 
     {
@@ -245,6 +296,30 @@ fn default_daemon_config_toml() -> Result<String> {
         Item::Value(blob_path.to_string_lossy().to_string().into());
 
     Ok(doc.to_string())
+}
+
+fn normalise_cli_version(current_cli_version: &str) -> Result<String> {
+    let trimmed = current_cli_version.trim();
+    if trimmed.is_empty() {
+        bail!("current CLI version must not be empty");
+    }
+    Version::parse(trimmed).context("current CLI version must be valid semver")?;
+    Ok(trimmed.to_string())
+}
+
+fn should_clear_telemetry_for_version(stored_cli_version: &str, current: &str) -> bool {
+    let trimmed = stored_cli_version.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let Ok(stored) = Version::parse(trimmed) else {
+        return true;
+    };
+    let Ok(current) = Version::parse(current) else {
+        return false;
+    };
+    stored < current
 }
 
 fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {

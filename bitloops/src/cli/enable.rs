@@ -10,6 +10,7 @@ use clap::Args;
 use crate::adapters::agents::AgentAdapterRegistry;
 #[cfg(test)]
 use crate::adapters::agents::claude_code::git_hooks;
+use crate::cli::telemetry_consent;
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
 #[cfg(test)]
@@ -40,6 +41,18 @@ pub struct EnableArgs {
     /// Target a specific agent setup (claude-code|copilot|cursor|gemini|opencode).
     #[arg(long, hide = true)]
     pub agent: Option<String>,
+
+    /// Enable anonymous telemetry for this CLI version.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub telemetry: Option<bool>,
+
+    /// Disable anonymous telemetry for this CLI version.
+    #[arg(
+        long = "no-telemetry",
+        conflicts_with = "telemetry",
+        default_value_t = false
+    )]
+    pub no_telemetry: bool,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -127,8 +140,26 @@ pub async fn run(args: EnableArgs) -> Result<()> {
         bail!("cannot use both --local and --project flags");
     }
 
+    let stdin = io::stdin();
+    let mut input = BufReader::new(stdin.lock());
+    run_with_input(args, &mut input).await
+}
+
+async fn run_with_input(args: EnableArgs, input: &mut dyn BufRead) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
+    let telemetry_choice =
+        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
+
+    telemetry_consent::ensure_default_daemon_running().await?;
+    let mut out = io::stdout().lock();
+    telemetry_consent::ensure_existing_config_telemetry_consent(
+        cwd.as_path(),
+        telemetry_choice,
+        &mut out,
+        input,
+    )
+    .await?;
 
     if args.local || args.project {
         eprintln!(

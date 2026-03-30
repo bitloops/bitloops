@@ -15,6 +15,7 @@ pub mod reset;
 pub mod resume;
 pub mod rewind;
 pub mod root;
+pub(crate) mod telemetry_consent;
 pub mod testlens;
 pub mod uninstall;
 pub mod versioncheck;

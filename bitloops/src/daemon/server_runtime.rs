@@ -1,14 +1,25 @@
 use super::*;
 
+pub(super) struct RunServerOptions<'a> {
+    pub mode: DaemonMode,
+    pub service_name: Option<String>,
+    pub open_browser: bool,
+    pub ready_subject: &'a str,
+    pub print_banner: bool,
+    pub telemetry: Option<bool>,
+}
+
 pub(super) async fn run_server(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
-    mode: DaemonMode,
-    service_name: Option<String>,
-    open_browser: bool,
-    ready_subject: &str,
-    print_banner: bool,
+    options: RunServerOptions<'_>,
 ) -> Result<()> {
+    crate::config::update_daemon_telemetry_consent(
+        Some(daemon_config.config_path.as_path()),
+        crate::cli::telemetry_consent::CURRENT_CLI_VERSION,
+        options.telemetry,
+    )?;
+
     let config_root = daemon_config
         .config_root
         .canonicalize()
@@ -19,7 +30,7 @@ pub(super) async fn run_server(
     let on_ready_config = daemon_config.clone();
     let on_ready_runtime_path = runtime_path.clone();
     let on_ready_service_metadata_path = service_metadata_path.clone();
-    let on_ready_service_name = service_name.clone();
+    let on_ready_service_name = options.service_name.clone();
     let ready_hook: DashboardReadyHook = std::sync::Arc::new(move |ready| {
         write_runtime_state(
             &on_ready_runtime_path,
@@ -28,7 +39,7 @@ pub(super) async fn run_server(
                 config_path: on_ready_config.config_path.clone(),
                 config_root: on_ready_config.config_root.clone(),
                 pid: std::process::id(),
-                mode,
+                mode: options.mode,
                 service_name: on_ready_service_name.clone(),
                 url: ready.url.clone(),
                 host: ready.host.clone(),
@@ -43,7 +54,7 @@ pub(super) async fn run_server(
             },
         )?;
 
-        if matches!(mode, DaemonMode::Service)
+        if matches!(options.mode, DaemonMode::Service)
             && let Ok(Some(mut metadata)) =
                 read_service_metadata_for_path(&on_ready_service_metadata_path)
         {
@@ -62,9 +73,9 @@ pub(super) async fn run_server(
     api::run_with_options(
         config,
         DashboardRuntimeOptions {
-            ready_subject: ready_subject.to_string(),
-            print_ready_banner: print_banner,
-            open_browser,
+            ready_subject: options.ready_subject.to_string(),
+            print_ready_banner: options.print_banner,
+            open_browser: options.open_browser,
             shutdown_message: Some("Bitloops daemon stopped.".to_string()),
             on_ready: Some(ready_hook),
             on_shutdown: Some(on_shutdown),
@@ -78,6 +89,7 @@ pub(super) async fn run_server(
 pub(super) async fn ensure_service_managed_repo_runtime(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
     let config_root = daemon_config
         .config_root
@@ -107,6 +119,7 @@ pub(super) async fn ensure_service_managed_repo_runtime(
         DaemonMode::Service,
         Some(binding.service_name.clone()),
         &config,
+        telemetry,
     );
     let mut command = build_daemon_spawn_command(&args)?;
     command
@@ -154,7 +167,7 @@ pub(super) async fn restart_service_managed_repo_runtime(
     if read_runtime_state(daemon_config.config_root.as_path())?.is_some() {
         stop_service_managed_repo_runtime()?;
     }
-    ensure_service_managed_repo_runtime(daemon_config, config).await
+    ensure_service_managed_repo_runtime(daemon_config, config, None).await
 }
 
 pub(super) fn install_or_update_repo_service_binding(

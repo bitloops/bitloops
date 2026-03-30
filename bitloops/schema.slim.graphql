@@ -461,6 +461,7 @@ type MigrationRecord {
 }
 
 type MutationRoot {
+	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
@@ -642,6 +643,11 @@ type TestHarnessTestsSummary {
 	crossCutting: Boolean!
 	dataSources: [String!]!
 	diagnosticCount: Int!
+}
+
+type UpdateCliTelemetryConsentResult {
+	telemetry: Boolean
+	needsPrompt: Boolean!
 }
 
 """

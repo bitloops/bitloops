@@ -45,6 +45,12 @@ pub struct InitSchemaResult {
     pub events_backend: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct UpdateCliTelemetryConsentResult {
+    pub telemetry: Option<bool>,
+    pub needs_prompt: bool,
+}
+
 impl From<crate::host::devql::InitSchemaSummary> for InitSchemaResult {
     fn from(value: crate::host::devql::InitSchemaSummary) -> Self {
         Self {
@@ -155,6 +161,64 @@ struct RefreshKnowledgeIngesterPayload {
 
 #[Object]
 impl MutationRoot {
+    async fn update_cli_telemetry_consent(
+        &self,
+        ctx: &Context<'_>,
+        cli_version: String,
+        telemetry: Option<bool>,
+    ) -> Result<UpdateCliTelemetryConsentResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context.require_global_write_scope().map_err(|err| {
+            operation_error(
+                "BAD_USER_INPUT",
+                "validation",
+                "updateCliTelemetryConsent",
+                err,
+            )
+        })?;
+
+        let cli_version =
+            require_non_empty_input(cli_version, "cliVersion", "updateCliTelemetryConsent")?;
+        let runtime = crate::daemon::status()
+            .await
+            .map_err(|err| {
+                operation_error(
+                    "BACKEND_ERROR",
+                    "configuration",
+                    "updateCliTelemetryConsent",
+                    err,
+                )
+            })?
+            .runtime
+            .ok_or_else(|| {
+                operation_error(
+                    "BACKEND_ERROR",
+                    "configuration",
+                    "updateCliTelemetryConsent",
+                    "Bitloops daemon runtime state is unavailable",
+                )
+            })?;
+
+        let state = crate::config::update_daemon_telemetry_consent(
+            Some(runtime.config_path.as_path()),
+            &cli_version,
+            telemetry,
+        )
+        .map_err(|err| {
+            operation_error(
+                "BACKEND_ERROR",
+                "configuration",
+                "updateCliTelemetryConsent",
+                err,
+            )
+        })?;
+
+        Ok(UpdateCliTelemetryConsentResult {
+            telemetry: state.telemetry,
+            needs_prompt: state.needs_prompt,
+        })
+    }
+
     async fn init_schema(&self, ctx: &Context<'_>) -> Result<InitSchemaResult> {
         let cfg = ctx
             .data_unchecked::<DevqlGraphqlContext>()

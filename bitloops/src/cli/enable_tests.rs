@@ -4,9 +4,14 @@ use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::cursor::agent::CursorAgent;
+use crate::cli::telemetry_consent::{
+    NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
+};
 use crate::cli::{Cli, Commands};
 use crate::config::settings::{SETTINGS_DIR, save_settings, settings_local_path, settings_path};
-use crate::test_support::process_state::{git_command, with_cwd, with_env_var, with_env_vars};
+use crate::test_support::process_state::{
+    git_command, with_cwd, with_env_var, with_env_vars, with_process_state,
+};
 use clap::Parser;
 use tempfile::TempDir;
 
@@ -45,6 +50,49 @@ fn run_enable_command(args: EnableArgs) -> Result<()> {
         .build()
         .expect("tokio runtime");
     runtime.block_on(run(args))
+}
+
+fn with_ready_daemon_and_repo_cwd<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+    with_process_state(
+        Some(path),
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, _variables| {
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": true,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                f,
+            )
+        },
+    )
+}
+
+fn with_enable_test_process_state<T>(
+    path: &Path,
+    telemetry_response: serde_json::Value,
+    f: impl FnOnce() -> T,
+) -> T {
+    with_process_state(
+        Some(path),
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            with_global_graphql_executor_hook(
+                move |_runtime_root, _query, _variables| Ok(telemetry_response.clone()),
+                f,
+            )
+        },
+    )
 }
 
 /// Sets `enabled = true` in the project settings file and prints a confirmation.
@@ -759,15 +807,34 @@ fn enable_args_accepts_legacy_agent_flag() {
 }
 
 #[test]
+fn enable_args_support_telemetry_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "enable", "--telemetry=false"])
+        .expect("enable telemetry flag should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+    assert_eq!(args.telemetry, Some(false));
+
+    let parsed = Cli::try_parse_from(["bitloops", "enable", "--no-telemetry"])
+        .expect("enable no telemetry flag should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+    assert!(args.no_telemetry);
+}
+
+#[test]
 fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    with_repo_cwd(dir.path(), || {
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
         let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: None,
+            telemetry: None,
+            no_telemetry: false,
         })
         .unwrap_err();
 
@@ -781,12 +848,14 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
 fn run_enable_with_legacy_agent_flag_installs_requested_agent_hooks() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    with_repo_cwd(dir.path(), || {
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
         let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: Some("cursor".to_string()),
+            telemetry: None,
+            no_telemetry: false,
         })
         .unwrap_err();
 
@@ -884,12 +953,14 @@ fn enable_does_not_create_shared_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
-    with_repo_cwd(dir.path(), || {
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
         let err = run_enable_command(EnableArgs {
             local: false,
             project: false,
             force: false,
             agent: None,
+            telemetry: None,
+            no_telemetry: false,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -903,18 +974,106 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
 
-    with_repo_cwd(dir.path(), || {
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
         let err = run_enable_command(EnableArgs {
             local: true,
             project: false,
             force: false,
             agent: None,
+            telemetry: None,
+            no_telemetry: false,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
     });
 
     assert!(!settings_local_path(dir.path()).exists());
+}
+
+#[test]
+fn run_enable_noninteractive_requires_explicit_telemetry_when_unresolved() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = false
+"#,
+    );
+
+    with_enable_test_process_state(
+        dir.path(),
+        serde_json::json!({
+            "updateCliTelemetryConsent": {
+                "telemetry": serde_json::Value::Null,
+                "needsPrompt": true
+            }
+        }),
+        || {
+            let err = run_enable_command(EnableArgs {
+                local: false,
+                project: false,
+                force: false,
+                agent: None,
+                telemetry: None,
+                no_telemetry: false,
+            })
+            .unwrap_err();
+
+            assert_eq!(err.to_string(), NON_INTERACTIVE_TELEMETRY_ERROR);
+            let content = fs::read_to_string(settings_path(dir.path())).unwrap();
+            assert!(content.contains("enabled = false"));
+        },
+    );
+}
+
+#[test]
+fn run_enable_with_explicit_no_telemetry_updates_project_config() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"[capture]
+strategy = "manual-commit"
+enabled = false
+"#,
+    );
+
+    with_process_state(
+        Some(dir.path()),
+        &[
+            ("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING", Some("1")),
+            ("BITLOOPS_TEST_TTY", Some("0")),
+        ],
+        || {
+            with_global_graphql_executor_hook(
+                |_runtime_root, _query, variables| {
+                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                    Ok(serde_json::json!({
+                        "updateCliTelemetryConsent": {
+                            "telemetry": false,
+                            "needsPrompt": false
+                        }
+                    }))
+                },
+                || {
+                    run_enable_command(EnableArgs {
+                        local: false,
+                        project: false,
+                        force: false,
+                        agent: None,
+                        telemetry: Some(false),
+                        no_telemetry: false,
+                    })
+                    .expect("enable should succeed");
+
+                    let settings = load_settings(dir.path()).unwrap();
+                    assert!(settings.enabled);
+                },
+            )
+        },
+    );
 }
 
 #[test]
