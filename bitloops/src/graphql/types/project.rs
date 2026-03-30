@@ -163,6 +163,7 @@ impl Project {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn checkpoints(
         &self,
         ctx: &Context<'_>,

@@ -150,6 +150,7 @@ impl SlimQueryRoot {
             .map_err(|err| backend_error(format!("failed to query repository branches: {err:#}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn checkpoints(
         &self,
         ctx: &Context<'_>,
@@ -183,6 +184,7 @@ impl SlimQueryRoot {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn telemetry(
         &self,
         ctx: &Context<'_>,

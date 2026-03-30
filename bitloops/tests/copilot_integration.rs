@@ -280,25 +280,51 @@ fn append_transcript_shutdown(path: &Path) {
     file.write_all(payload.as_bytes()).unwrap();
 }
 
-fn checkpoint_sqlite_path(repo_root: &Path, home: &Path) -> PathBuf {
-    with_home_env(home, || {
-        let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
-        if let Some(path) = cfg.relational.sqlite_path.as_deref() {
-            resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
-        } else {
-            bitloops::utils::paths::default_relational_db_path(repo_root)
-        }
-    })
+fn checkpoint_sqlite_path(repo_root: &Path, _home: &Path) -> PathBuf {
+    let cfg = resolve_store_backend_config_for_repo(repo_root).expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        resolve_sqlite_db_path_for_repo(repo_root, Some(path)).expect("resolve sqlite path")
+    } else {
+        bitloops::utils::paths::default_relational_db_path(repo_root)
+    }
+}
+
+fn ensure_relational_store_file(repo_root: &Path, home: &Path) {
+    let sqlite =
+        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root, home))
+            .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+}
+
+fn init(repo: &Path, home: &Path) {
+    let _guard = enter_home_env(home);
+    ensure_relational_store_file(repo, home);
+    let policy_path = repo.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
+    bitloops::config::settings::write_project_bootstrap_settings(
+        &policy_path,
+        bitloops::config::settings::DEFAULT_STRATEGY,
+        &[String::from("copilot")],
+    )
+    .expect("write project bootstrap settings");
+    bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo, false)
+        .expect("install git hooks");
+    bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+        .install_agent_hooks(repo, "copilot", false, false)
+        .expect("install Copilot hooks");
 }
 
 fn temporary_checkpoint_count(repo_root: &Path, home: &Path, session_id: &str) -> i64 {
-    let conn = Connection::open(checkpoint_sqlite_path(repo_root, home)).expect("open sqlite");
-    conn.query_row(
-        "SELECT COUNT(*) FROM temporary_checkpoints WHERE session_id = ?1",
-        [session_id],
-        |row| row.get(0),
-    )
-    .expect("count temporary checkpoints")
+    with_home_env(home, || {
+        let conn = Connection::open(checkpoint_sqlite_path(repo_root, home)).expect("open sqlite");
+        conn.query_row(
+            "SELECT COUNT(*) FROM temporary_checkpoints WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .expect("count temporary checkpoints")
+    })
 }
 
 #[test]
@@ -307,21 +333,10 @@ fn copilot_basic_workflow() {
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path(), home.path());
 
-    let init_out = run_cmd_with_home(
-        dir.path(),
-        home.path(),
-        &["init", "--agent", "copilot"],
-        None,
-    );
-    assert_success(&init_out, "bitloops init --agent copilot");
+    init(dir.path(), home.path());
 
-    let enable_out = run_cmd_with_home(
-        dir.path(),
-        home.path(),
-        &["enable", "--agent", "copilot"],
-        None,
-    );
-    assert_success(&enable_out, "bitloops enable --agent copilot");
+    let enable_out = run_cmd_with_home(dir.path(), home.path(), &["enable"], None);
+    assert_success(&enable_out, "bitloops enable");
 
     run_git_expect_success(
         dir.path(),
@@ -475,23 +490,10 @@ fn copilot_agent_stop_without_transcript_path_uses_session_fallback() {
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path(), home.path());
 
+    init(dir.path(), home.path());
     assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["init", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops init --agent copilot",
-    );
-    assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["enable", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops enable --agent copilot",
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
     );
 
     run_git_expect_success(
@@ -594,23 +596,10 @@ fn copilot_session_start_initial_prompt_bootstraps_first_prompt() {
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path(), home.path());
 
+    init(dir.path(), home.path());
     assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["init", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops init --agent copilot",
-    );
-    assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["enable", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops enable --agent copilot",
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
     );
 
     run_git_expect_success(
@@ -653,23 +642,10 @@ fn copilot_multi_turn_session_condenses_both_prompts() {
     let home = tempfile::tempdir().unwrap();
     init_repo(dir.path(), home.path());
 
+    init(dir.path(), home.path());
     assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["init", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops init --agent copilot",
-    );
-    assert_success(
-        &run_cmd_with_home(
-            dir.path(),
-            home.path(),
-            &["enable", "--agent", "copilot"],
-            None,
-        ),
-        "bitloops enable --agent copilot",
+        &run_cmd_with_home(dir.path(), home.path(), &["enable"], None),
+        "bitloops enable",
     );
 
     run_git_expect_success(
