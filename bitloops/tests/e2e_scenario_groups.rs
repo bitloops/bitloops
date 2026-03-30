@@ -417,8 +417,7 @@ fn set_strategy(repo: &Path, strategy: &str) {
     } else {
         bitloops::config::settings::settings_path(repo)
     };
-    bitloops::config::settings::save_settings(&settings, &target_path)
-        .expect("write repo policy");
+    bitloops::config::settings::save_settings(&settings, &target_path).expect("write repo policy");
 }
 
 fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {

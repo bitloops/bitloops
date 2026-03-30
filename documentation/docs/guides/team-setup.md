@@ -29,10 +29,10 @@ Each developer may also keep:
 ### 1. Start the daemon once on each machine
 
 ```bash
-bitloops start
+bitloops start --create-default-config
 ```
 
-The first start creates the default global daemon config if needed.
+On a fresh machine, use `--create-default-config` once. That writes the default global daemon config and creates the default local SQLite, DuckDB, and blob-store paths.
 
 ### 2. Configure machine-specific stores and credentials
 
@@ -53,7 +53,10 @@ From the repository root or a subproject directory:
 
 ```bash
 bitloops init
+bitloops init --install-default-daemon
 ```
+
+Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service before continuing.
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync.
 

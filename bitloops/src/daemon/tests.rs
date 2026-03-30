@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
+use crate::config::bootstrap_default_daemon_environment;
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
 
@@ -153,4 +154,48 @@ fn resolve_daemon_config_uses_default_global_config_path() {
         resolved.relational_db_path,
         canonical_root.join(".bitloops/stores/daemon.sqlite")
     );
+}
+
+#[test]
+fn bootstrap_default_daemon_environment_creates_config_and_local_store_files() {
+    let config_root = TempDir::new().expect("temp dir");
+    let data_root = TempDir::new().expect("temp dir");
+    let cache_root = TempDir::new().expect("temp dir");
+    let state_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let data_root_str = data_root.path().to_string_lossy().to_string();
+    let cache_root_str = cache_root.path().to_string_lossy().to_string();
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            ),
+        ],
+    );
+
+    let config_path = bootstrap_default_daemon_environment().expect("bootstrap default daemon");
+    let rendered = fs::read_to_string(&config_path).expect("read daemon config");
+    let resolved = resolve_daemon_config(Some(config_path.as_path())).expect("resolve config");
+
+    assert!(rendered.contains("[stores.relational]"));
+    assert!(rendered.contains("[stores.events]"));
+    assert!(rendered.contains("[stores.blob]"));
+    assert!(resolved.relational_db_path.is_file());
+    assert!(resolved.events_db_path.is_file());
+    assert!(resolved.blob_store_path.is_dir());
 }

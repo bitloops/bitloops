@@ -5,8 +5,7 @@ use rusqlite::{Connection, params};
 use serde_json::Value;
 use test_harness_support::{
     Workspace, bootstrap_codex_workspace, load_symbol_fqn, run_bitloops_or_panic,
-    seed_production_artefacts,
-    write_rust_coverage_fixture,
+    seed_production_artefacts, write_rust_coverage_fixture,
 };
 
 #[test]

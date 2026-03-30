@@ -26,11 +26,13 @@ Bootstraps the current project or subproject.
 
 ```bash
 bitloops init
+bitloops init --install-default-daemon
 ```
 
 Notes:
 
-- Run `bitloops start` first. `init` requires a running daemon.
+- Run `bitloops start` first when the daemon is already configured.
+- Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
 - `init` treats the current working directory as the Bitloops project root.
 - `init` creates or updates `.bitloops.local.toml`.
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
@@ -112,6 +114,7 @@ Starts the Bitloops daemon.
 
 ```bash
 bitloops start
+bitloops start --create-default-config
 bitloops daemon start
 bitloops daemon start -d
 bitloops daemon start --until-stopped
@@ -129,11 +132,14 @@ Key flags:
 | `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
+| `--create-default-config` | Create the default global daemon config plus local default store files before starting |
 
 Notes:
 
-- When you use the default daemon config path and it does not exist yet, `start` creates it automatically.
+- Plain `start` does not create the default daemon config.
+- On a fresh machine, run `bitloops start --create-default-config` once to create the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
 - When you pass `--config` and the file does not exist, `start` fails.
+- `--create-default-config` only works with the default daemon config location. It cannot be combined with `--config`.
 
 ### `bitloops stop`
 

@@ -19,7 +19,8 @@ If you are upgrading from the older repo-local JSON model, read the [upgrade not
 
 ## Core Ideas
 
-- `bitloops start` launches the global daemon and auto-creates the default daemon config if needed
+- `bitloops start` launches the global daemon once it has been bootstrapped
+- `bitloops start --create-default-config` bootstraps the default daemon config plus local default store files
 - `bitloops init` bootstraps the current project or subproject
 - `bitloops enable` and `bitloops disable` toggle capture in the current project policy
 - `bitloops dashboard` opens the dashboard and starts the daemon if needed

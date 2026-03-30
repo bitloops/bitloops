@@ -57,7 +57,7 @@ No. It launches the browser and ensures the daemon is running.
 
 ### What creates the daemon config now?
 
-`bitloops start` and `bitloops daemon start` do. When you use the default config path and it does not exist yet, Bitloops creates it automatically.
+Use `bitloops start --create-default-config` to create the default daemon config and default local store files. `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
 
 ### What replaced `bitloops status` for repo capture status?
 

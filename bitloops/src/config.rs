@@ -13,9 +13,9 @@ pub mod unified_config;
 
 pub use constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 pub use daemon_config::{
-    DaemonCliSettings, LoadedDaemonSettings, default_daemon_config_path,
-    ensure_daemon_config_exists, load_daemon_settings, persist_daemon_cli_settings,
-    persist_dashboard_tls_hint,
+    DaemonCliSettings, LoadedDaemonSettings, bootstrap_default_daemon_environment,
+    default_daemon_config_exists, default_daemon_config_path, ensure_daemon_config_exists,
+    load_daemon_settings, persist_daemon_cli_settings, persist_dashboard_tls_hint,
 };
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,

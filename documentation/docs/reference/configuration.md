@@ -19,9 +19,12 @@ Bitloops stores daemon configuration at:
 - Linux: `${XDG_CONFIG_HOME:-~/.config}/bitloops/config.toml`
 - macOS and Windows: the platform-equivalent config directory returned by the OS
 
-`bitloops start` and `bitloops daemon start` use this file. If you start Bitloops without `--config` and the default file does not exist yet, Bitloops creates it automatically.
+`bitloops start` and `bitloops daemon start` use this file.
 
-Use `--config /path/to/config.toml` when you want an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it silently.
+- Plain `bitloops start` requires the default file to already exist.
+- `bitloops start --create-default-config` creates the default file and the matching default local SQLite, DuckDB, and blob-store paths.
+- `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+- `--config /path/to/config.toml` uses an explicit daemon config file. If that explicit path is missing, `start` fails instead of creating it.
 
 The daemon config owns:
 

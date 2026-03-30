@@ -78,6 +78,16 @@ fn init_args_supports_agent_flag() {
 }
 
 #[test]
+fn init_args_supports_install_default_daemon_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--install-default-daemon"])
+        .expect("parse init install-default-daemon flag");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert!(args.install_default_daemon);
+}
+
+#[test]
 fn init_args_supports_skip_baseline_flag() {
     let parsed = Cli::try_parse_from(["bitloops", "init", "--skip-baseline"]).expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
@@ -125,6 +135,7 @@ fn run_init_creates_project_local_policy_and_bootstraps_selected_agents() {
                     let mut out = Vec::new();
                     run_with_writer(
                         InitArgs {
+                            install_default_daemon: false,
                             force: false,
                             agent: None,
                             telemetry: true,
@@ -179,6 +190,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_and_skips_baseline_when_req
                     let mut out = Vec::new();
                     run_with_writer(
                         InitArgs {
+                            install_default_daemon: false,
                             force: true,
                             agent: Some(AGENT_CURSOR.to_string()),
                             telemetry: true,

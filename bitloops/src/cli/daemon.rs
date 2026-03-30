@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
-use crate::config::ensure_daemon_config_exists;
+use crate::config::{bootstrap_default_daemon_environment, default_daemon_config_exists};
 use crate::daemon::{self, DaemonMode};
 pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
 
@@ -29,6 +29,10 @@ pub struct DaemonStartArgs {
     /// Path to the Bitloops daemon config file.
     #[arg(long, value_name = "PATH")]
     pub config: Option<std::path::PathBuf>,
+
+    /// Create the default global daemon config and local default stores if missing.
+    #[arg(long, default_value_t = false, conflicts_with = "config")]
+    pub create_default_config: bool,
 
     /// Start detached instead of holding the current terminal open.
     #[arg(
@@ -100,8 +104,10 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
 
 pub async fn run_start(args: DaemonStartArgs) -> Result<()> {
     print_legacy_repo_data_warnings();
-    if args.config.is_none() {
-        let _ = ensure_daemon_config_exists()?;
+    if args.create_default_config {
+        let _ = bootstrap_default_daemon_environment()?;
+    } else if args.config.is_none() && !default_daemon_config_exists()? {
+        bail!(missing_default_daemon_bootstrap_message());
     }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
@@ -198,6 +204,10 @@ pub async fn launch_dashboard() -> Result<()> {
         return Ok(());
     }
 
+    if !default_daemon_config_exists()? {
+        bail!(missing_default_daemon_bootstrap_message());
+    }
+
     let daemon_config = daemon::resolve_daemon_config(None)?;
     let report = daemon::status().await?;
     let config = DashboardServerConfig {
@@ -250,6 +260,10 @@ fn build_server_config(args: &DaemonStartArgs) -> DashboardServerConfig {
         recheck_local_dashboard_net: args.recheck_local_dashboard_net,
         bundle_dir: args.bundle_dir.clone(),
     }
+}
+
+fn missing_default_daemon_bootstrap_message() -> &'static str {
+    "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
 }
 
 fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
@@ -392,7 +406,9 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
+    use crate::test_support::process_state::enter_process_state;
     use clap::Parser;
+    use tempfile::TempDir;
 
     #[test]
     fn daemon_start_cli_parses_lifecycle_and_server_flags() {
@@ -400,6 +416,7 @@ mod tests {
             "bitloops",
             "daemon",
             "start",
+            "--create-default-config",
             "-d",
             "--host",
             "127.0.0.1",
@@ -419,6 +436,7 @@ mod tests {
             panic!("expected daemon start command");
         };
 
+        assert!(start.create_default_config);
         assert!(start.detached);
         assert!(!start.until_stopped);
         assert_eq!(start.host.as_deref(), Some("127.0.0.1"));
@@ -429,6 +447,71 @@ mod tests {
             start.bundle_dir,
             Some(std::path::PathBuf::from("/tmp/bundle"))
         );
+    }
+
+    #[test]
+    fn daemon_start_rejects_create_default_config_with_explicit_config() {
+        let err = Cli::try_parse_from([
+            "bitloops",
+            "daemon",
+            "start",
+            "--config",
+            "/tmp/bitloops.toml",
+            "--create-default-config",
+        ])
+        .err()
+        .expect("daemon start should reject conflicting config bootstrap flags");
+
+        assert!(err.to_string().contains("--create-default-config"));
+    }
+
+    #[tokio::test]
+    async fn run_start_requires_explicit_bootstrap_when_default_config_is_missing() {
+        let config_root = TempDir::new().expect("temp dir");
+        let data_root = TempDir::new().expect("temp dir");
+        let cache_root = TempDir::new().expect("temp dir");
+        let state_root = TempDir::new().expect("temp dir");
+        let config_root_str = config_root.path().to_string_lossy().to_string();
+        let data_root_str = data_root.path().to_string_lossy().to_string();
+        let cache_root_str = cache_root.path().to_string_lossy().to_string();
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[
+                (
+                    "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                    Some(config_root_str.as_str()),
+                ),
+                (
+                    "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                    Some(data_root_str.as_str()),
+                ),
+                (
+                    "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                    Some(cache_root_str.as_str()),
+                ),
+                (
+                    "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                    Some(state_root_str.as_str()),
+                ),
+            ],
+        );
+
+        let err = run_start(DaemonStartArgs {
+            config: None,
+            create_default_config: false,
+            detached: false,
+            until_stopped: false,
+            host: None,
+            port: crate::api::DEFAULT_DASHBOARD_PORT,
+            http: false,
+            recheck_local_dashboard_net: false,
+            bundle_dir: None,
+        })
+        .await
+        .expect_err("plain start should require explicit bootstrap");
+
+        assert_eq!(err.to_string(), missing_default_daemon_bootstrap_message());
     }
 
     #[test]

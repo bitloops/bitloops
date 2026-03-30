@@ -11,7 +11,9 @@ mod telemetry;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
-use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_path};
+use crate::config::{
+    REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
+};
 use crate::devql_transport::discover_slim_cli_repo_scope;
 
 pub use agent_selection::detect_or_select_agent;
@@ -20,6 +22,10 @@ pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, S
 
 #[derive(Args)]
 pub struct InitArgs {
+    /// Bootstrap and start the default Bitloops daemon service if it is not already running.
+    #[arg(long, default_value_t = false)]
+    pub install_default_daemon: bool,
+
     /// Remove and reinstall existing hooks for selected agents.
     #[arg(long, short = 'f')]
     pub force: bool,
@@ -60,6 +66,7 @@ async fn run_with_writer_async(
     let project_root = std::env::current_dir().context("getting current directory")?;
     let git_root = crate::cli::enable::find_repo_root(&project_root)?;
 
+    maybe_install_default_daemon(args.install_default_daemon).await?;
     ensure_daemon_running().await?;
     ensure_repo_local_policy_excluded(&git_root, &project_root)?;
 
@@ -113,18 +120,37 @@ async fn ensure_daemon_running() -> Result<()> {
         return Ok(());
     }
 
-    let config_path = default_daemon_config_path()?;
+    if default_daemon_config_exists()? {
+        bail!("Bitloops daemon is not running. Start it with `bitloops start`.")
+    }
+
     bail!(
-        "Bitloops daemon is not running. Start it with `bitloops start`{}.",
-        if config_path.exists() {
-            String::new()
-        } else {
-            format!(
-                " to auto-create the default daemon config at {}",
-                config_path.display()
-            )
-        }
+        "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
     )
+}
+
+async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {
+    if !install_default_daemon {
+        return Ok(());
+    }
+
+    let status = crate::daemon::status().await?;
+    if status.runtime.is_some() {
+        return Ok(());
+    }
+
+    let config_path = bootstrap_default_daemon_environment()?;
+    let daemon_config = crate::daemon::resolve_daemon_config(Some(config_path.as_path()))?;
+    let config = crate::api::DashboardServerConfig {
+        host: None,
+        port: crate::api::DEFAULT_DASHBOARD_PORT,
+        no_open: true,
+        force_http: false,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+    let _ = crate::daemon::start_service(&daemon_config, config).await?;
+    Ok(())
 }
 
 fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Result<()> {

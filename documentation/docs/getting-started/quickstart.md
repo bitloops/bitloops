@@ -28,10 +28,10 @@ cargo install bitloops
 ## 2. Start The Daemon
 
 ```bash
-bitloops start
+bitloops start --create-default-config
 ```
 
-If the default daemon config does not exist yet, `start` creates it at the platform config location, for example `~/.config/bitloops/config.toml` on Linux.
+On a fresh machine, use `--create-default-config` once. This writes the default global daemon config at the platform config location and creates the default local SQLite, DuckDB, and blob-store paths.
 
 ## 3. Initialise A Project
 
@@ -39,7 +39,10 @@ From inside a git repository or subproject:
 
 ```bash
 bitloops init
+bitloops init --install-default-daemon
 ```
+
+Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service first.
 
 This creates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync through the daemon.
 
