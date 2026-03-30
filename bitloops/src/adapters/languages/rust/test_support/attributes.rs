@@ -2,9 +2,7 @@ use std::collections::HashSet;
 
 use tree_sitter::Node;
 
-use crate::capability_packs::test_harness::mapping::model::{
-    ReferenceCandidate, ScenarioDiscoverySource,
-};
+use crate::host::language_adapter::{ReferenceCandidate, ScenarioDiscoverySource};
 
 use super::scenarios::RustScenarioSeed;
 

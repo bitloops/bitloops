@@ -1,14 +1,28 @@
+mod attributes;
+mod doctests;
+pub(crate) mod enumeration;
+pub(crate) mod imports;
+pub(crate) mod macros;
+mod matching;
+mod rstest;
+pub(crate) mod scenarios;
+
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use tree_sitter::Parser;
+use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 
-use crate::capability_packs::test_harness::mapping::languages::rust::{
-    RustTestMappingHelper,
-    enumeration::{parse_enumerated_doctests, parse_enumerated_host_tests},
+use self::enumeration::{parse_enumerated_doctests, parse_enumerated_host_tests};
+use self::matching::{
+    doctest_match_keys, normalized_enumerated_doctest_key, normalized_enumerated_test_key,
+    source_scenario_match_keys,
 };
 use crate::host::language_adapter::{
     DiscoveredTestFile, EnumerationMode, EnumerationResult, LanguageAdapterContext,
-    LanguageTestSupport, ReconciledDiscovery,
+    LanguageTestSupport, ReconciledDiscovery, ReferenceCandidate, ScenarioDiscoverySource,
 };
 
 #[derive(Default)]
@@ -117,4 +131,204 @@ impl LanguageTestSupport for RustLanguageTestSupport {
 
 pub(crate) fn rust_test_support() -> Arc<dyn LanguageTestSupport> {
     Arc::new(RustLanguageTestSupport)
+}
+
+pub(crate) struct RustTestMappingHelper {
+    parser: Parser,
+}
+
+impl RustTestMappingHelper {
+    pub(crate) fn new() -> Result<Self> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&LANGUAGE_RUST.into())
+            .context("failed to load Rust parser")?;
+        Ok(Self { parser })
+    }
+
+    pub(crate) fn supports_path(&self, absolute_path: &Path, relative_path: &str) -> bool {
+        relative_path.ends_with(".test.rs")
+            || relative_path.ends_with(".spec.rs")
+            || ((relative_path.starts_with("tests/") || relative_path.contains("/tests/"))
+                && relative_path.ends_with(".rs"))
+            || looks_like_inline_rust_test_source(absolute_path, relative_path)
+    }
+
+    pub(crate) fn discover_tests(
+        &mut self,
+        absolute_path: &Path,
+        relative_path: &str,
+    ) -> Result<DiscoveredTestFile> {
+        let source = read_source_file(absolute_path)?;
+        let tree = self
+            .parser
+            .parse(&source, None)
+            .with_context(|| format!("failed parsing test file {}", absolute_path.display()))?;
+        let bytes = source.as_bytes();
+        let root = tree.root_node();
+
+        let mut reference_candidates: Vec<ReferenceCandidate> =
+            imports::collect_rust_import_paths_for(root, bytes, relative_path)
+                .into_iter()
+                .map(ReferenceCandidate::SourcePath)
+                .collect();
+        reference_candidates.extend(
+            imports::collect_rust_scoped_call_import_paths_for(root, bytes, relative_path)
+                .into_iter()
+                .map(ReferenceCandidate::SourcePath),
+        );
+        reference_candidates.extend(
+            imports::rust_test_context_source_paths(relative_path)
+                .into_iter()
+                .map(ReferenceCandidate::SourcePath),
+        );
+
+        Ok(DiscoveredTestFile {
+            relative_path: relative_path.to_string(),
+            language: "rust".to_string(),
+            reference_candidates,
+            suites: scenarios::collect_rust_suites(root, &source, relative_path),
+        })
+    }
+
+    pub(crate) fn reconcile(
+        &self,
+        source_files: &[DiscoveredTestFile],
+        enumeration: EnumerationResult,
+    ) -> ReconciledDiscovery {
+        let mut source_scenario_keys = std::collections::HashSet::new();
+        let mut source_doctest_keys = std::collections::HashSet::new();
+
+        for file in source_files {
+            if file.language != "rust" {
+                continue;
+            }
+
+            for suite in &file.suites {
+                for scenario in &suite.scenarios {
+                    source_scenario_keys.extend(source_scenario_match_keys(
+                        &file.relative_path,
+                        &suite.name,
+                        &scenario.name,
+                    ));
+                    if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
+                        source_doctest_keys.extend(doctest_match_keys(
+                            &file.relative_path,
+                            &scenario.name,
+                            &scenario.reference_candidates,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let enumerated_scenarios = enumeration
+            .scenarios
+            .into_iter()
+            .filter(|scenario| {
+                let normalized_key =
+                    if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
+                        scenario
+                            .reference_candidates
+                            .iter()
+                            .find_map(|candidate| match candidate {
+                                ReferenceCandidate::ExplicitTarget { path, start_line } => {
+                                    Some(normalized_enumerated_doctest_key(
+                                        path,
+                                        &scenario.scenario_name,
+                                        *start_line,
+                                    ))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                normalized_enumerated_doctest_key(
+                                    &scenario.relative_path,
+                                    &scenario.scenario_name,
+                                    0,
+                                )
+                            })
+                    } else {
+                        normalized_enumerated_test_key(&format!(
+                            "{}::{}",
+                            scenario.suite_name, scenario.scenario_name
+                        ))
+                    };
+
+                if scenario.discovery_source == ScenarioDiscoverySource::Doctest {
+                    !source_doctest_keys.contains(&normalized_key)
+                } else {
+                    !source_scenario_keys.contains(&normalized_key)
+                }
+            })
+            .collect();
+
+        ReconciledDiscovery {
+            enumerated_scenarios,
+        }
+    }
+}
+
+fn looks_like_inline_rust_test_source(absolute_path: &Path, relative_path: &str) -> bool {
+    if !relative_path.ends_with(".rs") {
+        return false;
+    }
+    if !(relative_path.starts_with("src/") || relative_path.contains("/src/")) {
+        return false;
+    }
+
+    let Ok(source) = fs::read_to_string(absolute_path) else {
+        return false;
+    };
+
+    rust_source_contains_test_markers(&source) || rust_source_contains_doctest_markers(&source)
+}
+
+fn rust_source_contains_test_markers(source: &str) -> bool {
+    source.contains("#[cfg(test)]")
+        || source.contains("#[test")
+        || source.contains("::test")
+        || source.contains("#[test_case")
+        || source.contains("::test_case")
+        || source.contains("#[rstest")
+        || source.contains("::rstest")
+        || source.contains("#[wasm_bindgen_test")
+        || source.contains("::wasm_bindgen_test")
+        || source.contains("#[quickcheck")
+        || source.contains("::quickcheck")
+        || source.contains("proptest!")
+}
+
+pub(crate) fn rust_source_contains_doctest_markers(source: &str) -> bool {
+    let mut in_block_doc = false;
+
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("/// ```") || trimmed.starts_with("//! ```") {
+            return true;
+        }
+
+        if trimmed.starts_with("/**") || trimmed.starts_with("/*!") {
+            in_block_doc = true;
+            if trimmed.contains("```") {
+                return true;
+            }
+        } else if in_block_doc && trimmed.contains("```") {
+            return true;
+        }
+
+        if in_block_doc && trimmed.contains("*/") {
+            in_block_doc = false;
+        }
+    }
+
+    false
+}
+
+fn read_source_file(path: &Path) -> Result<String> {
+    fs::read_to_string(path).with_context(|| format!("failed reading test file {}", path.display()))
+}
+
+fn normalize_rel_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
