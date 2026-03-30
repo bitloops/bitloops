@@ -23,7 +23,7 @@ pub use clone::{ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
-    CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge,
+    CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge, ConnectionPagination,
     DependencyConnectionEdge, DependencyEdgeConnection, KnowledgeItemConnection, KnowledgeItemEdge,
     KnowledgeRelationConnection, KnowledgeRelationEdge, KnowledgeVersionConnection,
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,

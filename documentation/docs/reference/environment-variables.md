@@ -11,7 +11,7 @@ Bitloops prefers daemon config and repo policy over environment variables, but a
 
 | Variable | Meaning |
 | --- | --- |
-| `BITLOOPS_TELEMETRY_OPTOUT` | Disables anonymous telemetry prompts and telemetry dispatch |
+| `BITLOOPS_TELEMETRY_OPTOUT` | Disables telemetry dispatch at runtime. It does not answer the CLI consent prompt or rewrite stored daemon-config consent. |
 | `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
 | `BITLOOPS_LOG_LEVEL` | Overrides the effective log level |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |

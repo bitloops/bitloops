@@ -42,6 +42,13 @@ bitloops devql query --compact '{ health { relational { backend connected } } }'
 
 Without `--compact`, raw GraphQL output is printed as formatted JSON. DSL queries keep the CLI table rendering where that still fits the result shape.
 
+Connection fields support both forward and reverse cursor pagination:
+
+- Forward: `first` with optional `after`
+- Reverse: `last` with optional `before`
+
+Do not mix the two modes in the same field call.
+
 ## Query Examples
 
 ### Repository artefacts
@@ -144,6 +151,27 @@ Without `--compact`, raw GraphQL output is printed as formatted JSON. DSL querie
         summary {
           uncoveredLineCount
           uncoveredBranchCount
+        }
+      }
+    }
+  }
+}
+```
+
+### Reverse pagination
+
+```graphql
+{
+  repo(name: "bitloops") {
+    commits(last: 10, before: "commit-sha-cursor") {
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+      }
+      edges {
+        node {
+          sha
+          commitMessage
         }
       }
     }

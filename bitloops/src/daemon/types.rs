@@ -68,6 +68,9 @@ pub struct InternalDaemonProcessArgs {
 
     #[arg(long)]
     pub service_name: Option<String>,
+
+    #[arg(long)]
+    pub telemetry: Option<bool>,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -79,6 +82,7 @@ impl InternalDaemonProcessArgs {
         mode: DaemonMode,
         service_name: Option<String>,
         config: &DashboardServerConfig,
+        telemetry: Option<bool>,
     ) -> Self {
         Self {
             config_path: daemon_config.config_path.clone(),
@@ -93,6 +97,7 @@ impl InternalDaemonProcessArgs {
             recheck_local_dashboard_net: config.recheck_local_dashboard_net,
             bundle_dir: config.bundle_dir.clone(),
             service_name,
+            telemetry,
         }
     }
 
@@ -137,6 +142,10 @@ impl InternalDaemonProcessArgs {
         if let Some(service_name) = &self.service_name {
             argv.push(OsString::from("--service-name"));
             argv.push(OsString::from(service_name));
+        }
+        if let Some(telemetry) = self.telemetry {
+            argv.push(OsString::from("--telemetry"));
+            argv.push(OsString::from(telemetry.to_string()));
         }
         argv
     }
@@ -232,6 +241,7 @@ pub struct DaemonStatusReport {
 pub(super) struct SupervisorStartRequest {
     pub(super) config_path: PathBuf,
     pub(super) config: DashboardServerConfig,
+    pub(super) telemetry: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -12,7 +12,7 @@ Bitloops runs as a single global user-level daemon. The CLI is a thin control su
 - starting and stopping the daemon
 - opening the dashboard
 - sending DevQL requests
-- installing and removing repository hooks
+- bootstrapping projects and toggling capture
 
 ## Repo Policy Without Repo Runtime State
 
@@ -37,4 +37,4 @@ By default Bitloops separates paths by intent:
 
 ## Agent And Hook Integration
 
-`bitloops enable` installs git hooks and supported agent hooks for the current repo. `bitloops disable` removes those repo hooks again. `bitloops uninstall` handles wider cleanup across global directories, services, binaries, shell integration, and known repositories.
+`bitloops init` installs git hooks and the selected agent hooks for the current project. `bitloops enable` and `bitloops disable` then toggle capture on top of that installed hook setup. `bitloops uninstall` handles wider cleanup across global directories, services, binaries, shell integration, and known repositories.

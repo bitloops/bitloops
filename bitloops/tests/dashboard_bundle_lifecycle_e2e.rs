@@ -231,6 +231,8 @@ async fn e2e_dashboard_bundle_lifecycle_missing_install_served() {
         &[
             "daemon",
             "start",
+            "--create-default-config",
+            "--no-telemetry",
             "--http",
             "--host",
             "127.0.0.1",

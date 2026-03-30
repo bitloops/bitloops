@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::default_daemon_config_exists;
 
 pub(crate) const RELATIONAL_SQLITE_LABEL: &str = "Relational (SQLite)";
 pub(crate) const RELATIONAL_POSTGRES_LABEL: &str = "Relational (Postgres)";
@@ -6,6 +7,23 @@ pub(crate) const EVENTS_DUCKDB_LABEL: &str = "Events (DuckDB)";
 pub(crate) const EVENTS_CLICKHOUSE_LABEL: &str = "Events (ClickHouse)";
 
 pub async fn run_connection_status() -> Result<()> {
+    if !default_daemon_config_exists()? {
+        let rows = vec![
+            DatabaseStatusRow {
+                db: RELATIONAL_SQLITE_LABEL,
+                status: DatabaseConnectionStatus::NotConfigured,
+            },
+            DatabaseStatusRow {
+                db: EVENTS_DUCKDB_LABEL,
+                status: DatabaseConnectionStatus::NotConfigured,
+            },
+        ];
+        print_db_status_table(&rows);
+        bail!(
+            "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
+        );
+    }
+
     let cfg = resolve_store_backend_config()?;
     let rows = collect_connection_status_rows(&cfg).await;
 

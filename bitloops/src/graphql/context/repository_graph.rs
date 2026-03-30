@@ -14,7 +14,8 @@ use super::git_history::git_default_branch_name;
 use crate::artefact_query_planner::{ArtefactPagination, plan_graphql_artefact_query};
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
-    Artefact, ArtefactFilterInput, DependencyEdge, DepsDirection, DepsFilterInput, FileContext,
+    Artefact, ArtefactFilterInput, ConnectionPagination, DependencyEdge, DepsDirection,
+    DepsFilterInput, FileContext,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -177,8 +178,7 @@ impl DevqlGraphqlContext {
         path: Option<&str>,
         filter: Option<&ArtefactFilterInput>,
         scope: &ResolverScope,
-        after: Option<&str>,
-        limit: usize,
+        pagination: ArtefactPagination,
     ) -> Result<Vec<Artefact>> {
         let repo_id = self.repo_id_for_scope(scope)?;
         let spec = plan_graphql_artefact_query(
@@ -187,14 +187,76 @@ impl DevqlGraphqlContext {
             path,
             filter,
             scope,
-            Some(ArtefactPagination::new(after, limit)),
+            Some(pagination.clone()),
         );
         let sql = build_current_artefacts_window_sql(&spec);
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let mut rows = self.query_devql_sqlite_rows(&sql).await?;
+        if matches!(
+            pagination.direction,
+            crate::artefact_query_planner::ArtefactPaginationDirection::Backward
+        ) {
+            rows.reverse();
+        }
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
             .collect()
+    }
+
+    pub(crate) async fn query_artefact_connection(
+        &self,
+        path: Option<&str>,
+        filter: Option<&ArtefactFilterInput>,
+        scope: &ResolverScope,
+        pagination: &ConnectionPagination,
+    ) -> Result<(
+        Vec<Artefact>,
+        crate::graphql::types::connection::PageInfo,
+        usize,
+    )> {
+        let total_count = self.count_artefacts(path, filter, scope).await?;
+        let mut artefacts = self
+            .list_artefacts_window(
+                path,
+                filter,
+                scope,
+                match pagination {
+                    ConnectionPagination::Forward { after, .. } => {
+                        ArtefactPagination::forward(after.as_deref(), pagination.fetch_limit())
+                    }
+                    ConnectionPagination::Backward { before, .. } => {
+                        ArtefactPagination::backward(before.as_deref(), pagination.fetch_limit())
+                    }
+                },
+            )
+            .await?;
+
+        let page_info = match pagination {
+            ConnectionPagination::Forward { after, .. } => {
+                let has_next_page = artefacts.len() > pagination.limit();
+                artefacts.truncate(pagination.limit());
+                crate::graphql::types::connection::PageInfo {
+                    has_next_page,
+                    has_previous_page: after.is_some(),
+                    start_cursor: artefacts.first().map(|artefact| artefact.cursor()),
+                    end_cursor: artefacts.last().map(|artefact| artefact.cursor()),
+                }
+            }
+            ConnectionPagination::Backward { before, .. } => {
+                let has_previous_page = artefacts.len() > pagination.limit();
+                if has_previous_page {
+                    artefacts.remove(0);
+                }
+                crate::graphql::types::connection::PageInfo {
+                    has_next_page: before.is_some(),
+                    has_previous_page,
+                    start_cursor: artefacts.first().map(|artefact| artefact.cursor()),
+                    end_cursor: artefacts.last().map(|artefact| artefact.cursor()),
+                }
+            }
+        };
+
+        Ok((artefacts, page_info, total_count))
     }
 
     pub(crate) async fn load_artefacts_by_ids(

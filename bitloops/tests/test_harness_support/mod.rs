@@ -96,10 +96,7 @@ pub fn run_bitloops_or_panic(workdir: &Path, args: &[&str]) -> String {
 }
 
 pub fn prepare_graphql_workspace(workspace: &Workspace) {
-    run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &["init", "--agent", "codex", "--telemetry", "false"],
-    );
+    bootstrap_codex_workspace(workspace);
 
     with_repo_app_env(workspace.repo_dir(), || {
         let repo = bitloops::host::devql::resolve_repo_identity(workspace.repo_dir())
@@ -113,6 +110,25 @@ pub fn prepare_graphql_workspace(workspace: &Workspace) {
             .expect("build tokio runtime for GraphQL workspace")
             .block_on(bitloops::host::devql::run_init(&cfg))
             .expect("initialise DevQL schema for GraphQL workspace");
+    });
+}
+
+pub fn bootstrap_codex_workspace(workspace: &Workspace) {
+    let repo_root = workspace.repo_dir();
+    with_repo_app_env(repo_root, || {
+        ensure_relational_store_file(repo_root);
+        let policy_path = repo_root.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
+        bitloops::config::settings::write_project_bootstrap_settings(
+            &policy_path,
+            bitloops::config::settings::DEFAULT_STRATEGY,
+            &[String::from("codex")],
+        )
+        .expect("write project bootstrap settings");
+        bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo_root, false)
+            .expect("install git hooks");
+        bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+            .install_agent_hooks(repo_root, "codex", false, false)
+            .expect("install Codex hooks");
     });
 }
 
@@ -714,6 +730,26 @@ fn init_git_repo(repo_dir: &Path) {
         .status()
         .expect("run git init");
     assert!(status.success(), "git init should succeed");
+}
+
+fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        bitloops::utils::paths::default_relational_db_path(repo_root)
+    }
+}
+
+fn ensure_relational_store_file(repo_root: &Path) {
+    let sqlite =
+        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
 }
 
 fn run_bitloops(workdir: &Path, args: &[&str]) -> Output {

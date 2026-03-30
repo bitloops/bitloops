@@ -240,12 +240,46 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["commit", "-m", "initial"]);
 }
 
-fn init_and_enable(repo: &Path) {
-    let init_out = run_cmd(repo, &["init", "--agent", "claude-code"], None);
-    assert_success(&init_out, "bitloops init --agent claude-code");
+fn checkpoint_sqlite_path(repo_root: &Path) -> PathBuf {
+    let cfg = bitloops::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config");
+    if let Some(path) = cfg.relational.sqlite_path.as_deref() {
+        bitloops::config::resolve_sqlite_db_path_for_repo(repo_root, Some(path))
+            .expect("resolve configured sqlite path")
+    } else {
+        bitloops::utils::paths::default_relational_db_path(repo_root)
+    }
+}
 
-    let out = run_cmd(repo, &["enable", "--agent", "claude-code"], None);
-    assert_success(&out, "bitloops enable --agent claude-code");
+fn ensure_relational_store_file(repo_root: &Path) {
+    let sqlite =
+        bitloops::storage::SqliteConnectionPool::connect(checkpoint_sqlite_path(repo_root))
+            .expect("create relational sqlite file");
+    sqlite
+        .initialise_checkpoint_schema()
+        .expect("initialise checkpoint schema");
+}
+
+fn init_claude(repo: &Path) {
+    test_command_support::with_repo_app_env(repo, || {
+        ensure_relational_store_file(repo);
+        let policy_path = repo.join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME);
+        bitloops::config::settings::write_project_bootstrap_settings(
+            &policy_path,
+            bitloops::config::settings::DEFAULT_STRATEGY,
+            &[String::from("claude-code")],
+        )
+        .expect("write project bootstrap settings");
+        bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo, false)
+            .expect("install git hooks");
+        bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+            .install_agent_hooks(repo, "claude-code", false, false)
+            .expect("install Claude hooks");
+    });
+}
+
+fn init_and_enable(repo: &Path) {
+    init_claude(repo);
 
     // Keep agent infrastructure tracked so stash/pop scenarios do not conflict
     // on .claude control files. Repo-local runtime state is no longer part of
@@ -367,11 +401,17 @@ fn next_transcript_uuid(prefix: &str) -> String {
 }
 
 fn set_strategy(repo: &Path, strategy: &str) {
-    fs::write(
-        repo.join(".bitloops.toml"),
-        format!("[capture]\nstrategy = {strategy:?}\n"),
-    )
-    .expect("write repo policy");
+    let mut settings = bitloops::config::settings::load_settings(repo).unwrap_or_default();
+    settings.strategy = strategy.to_string();
+    let target_path = if repo
+        .join(bitloops::config::REPO_POLICY_LOCAL_FILE_NAME)
+        .exists()
+    {
+        bitloops::config::settings::settings_local_path(repo)
+    } else {
+        bitloops::config::settings::settings_path(repo)
+    };
+    bitloops::config::settings::save_settings(&settings, &target_path).expect("write repo policy");
 }
 
 fn commit_with_editor_overwrite_message(repo: &Path, message: &str) {

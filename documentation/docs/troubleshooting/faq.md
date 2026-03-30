@@ -7,7 +7,7 @@ title: FAQ
 
 ### Do I still run `bitloops init` inside every repo?
 
-You can, but `init` now prepares the global daemon config rather than repo hooks. Run `bitloops enable` inside each repo to install hooks.
+Yes. Run `bitloops init` in each repository or subproject you want Bitloops to manage. `init` creates `.bitloops.local.toml`, installs hooks, and runs the initial baseline sync through the daemon.
 
 ### Where does Bitloops keep its data now?
 
@@ -26,11 +26,11 @@ Use:
 bitloops uninstall --full
 ```
 
-Use `bitloops disable` if you only want to remove hooks from the current repository.
+Use `bitloops disable` if you only want to stop capture for the current project while leaving hooks installed.
 
 ### Do I need a repo config file?
 
-No. If no `.bitloops.toml` exists, Bitloops uses built-in thin-CLI defaults.
+Yes for project-scoped commands. `bitloops init` creates `.bitloops.local.toml`, and Bitloops discovers the nearest `.bitloops.local.toml` or `.bitloops.toml` while walking up to the enclosing `.git` root.
 
 ### What should go in `.bitloops.toml`?
 
@@ -54,6 +54,21 @@ Machine-scoped settings such as:
 ### Does `bitloops dashboard` still run the server?
 
 No. It launches the browser and ensures the daemon is running.
+
+### What creates the daemon config now?
+
+Interactive `bitloops start` prompts to create the default daemon config when it is missing. For scripted or non-interactive setups, use `bitloops start --create-default-config` together with an explicit telemetry flag. `bitloops init --install-default-daemon` uses that same bootstrap path before continuing project init.
+
+### When does Bitloops ask about telemetry?
+
+On a fresh machine, the first interactive prompt happens during `bitloops start` when the default daemon config is created.
+
+After that:
+
+- `bitloops init` and `bitloops enable` only ask when the daemon config already existed and telemetry consent is unresolved
+- non-interactive `start`, `init`, or `enable` require `--telemetry`, `--telemetry=false`, or `--no-telemetry` when consent is unresolved
+- a previous opt-in carries forward across CLI upgrades
+- a previous opt-out is cleared on a newer CLI version so Bitloops can ask again later
 
 ### What replaced `bitloops status` for repo capture status?
 

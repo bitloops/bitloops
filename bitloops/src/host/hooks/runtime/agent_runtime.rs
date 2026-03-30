@@ -320,7 +320,8 @@ fn ensure_hook_setup(repo_root: &Path) -> Result<()> {
         let _ = claude_hooks::install_hooks(repo_root, false);
     }
     if !git_hooks::is_git_hook_installed(repo_root) {
-        let local_dev = settings::load_settings(repo_root)
+        let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
+        let local_dev = settings::load_settings(&policy_start)
             .map(|s| s.local_dev)
             .unwrap_or(false);
         let _ = git_hooks::install_git_hooks(repo_root, local_dev);
