@@ -2,21 +2,21 @@
 
 This document explains how to run Bitloops QAT (Cucumber) journeys and how to inspect artifacts.
 
-QAT is behind a non-default Cargo feature. This means default `cargo test` or `cargo run`
-does not include the `qat` command unless you explicitly enable `--features qat`.
+QAT runs as a standard Cargo integration test. The production binary no longer exposes a
+`qat` subcommand, and no Cargo feature flag is required.
 
 ## Where to run from
 
 Run commands from the repository root:
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
+cargo test --manifest-path bitloops/Cargo.toml --test qat_acceptance qat_claude_code -- --ignored
 ```
 
 If you are already in `bitloops/` (the Rust crate directory), you can run:
 
 ```bash
-cargo run --features qat -- qat
+cargo test --test qat_acceptance qat_claude_code -- --ignored
 ```
 
 ## Test suites
@@ -26,25 +26,19 @@ QAT supports three main entry points:
 1. Default Claude Code suite (2 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
+cargo test --test qat_acceptance qat_claude_code -- --ignored
 ```
 
 2. Smoke suite (2 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --smoke
+cargo test --test qat_acceptance qat_smoke -- --ignored
 ```
 
 3. DevQL suite (23 scenarios):
 
 ```bash
-cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --devql
-```
-
-You can also run a single feature file:
-
-```bash
-cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat --feature bitloops/qat/features/devql/blast_radius_temporal.feature
+cargo test --test qat_acceptance qat_devql -- --ignored
 ```
 
 ## Claude auth behavior
@@ -94,20 +88,21 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 
 ## Runtime expectations
 
-- `--smoke`: usually short
-- default Claude suite: moderate
-- `--devql`: typically long (many scenarios; can take tens of minutes)
+- `qat_smoke`: usually short
+- `qat_claude_code`: moderate
+- `qat_devql`: typically long (many scenarios; can take tens of minutes)
 
 ## Useful options and env vars
 
-CLI options:
+Cargo test selectors:
 
-- `--feature <path>`: run one feature file or directory
-- `--runs-dir <path>`: custom artifacts root
-- `--concurrency <n>`: max concurrent scenarios
+- `qat_smoke`: run only the smoke suite
+- `qat_claude_code`: run only the Claude Code suite
+- `qat_devql`: run only the DevQL suite
 
 Environment variables:
 
+- `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
 - `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
@@ -120,7 +115,7 @@ Environment variables:
 Example:
 
 ```bash
-BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS=600 cargo run --manifest-path bitloops/Cargo.toml --features qat -- qat
+BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS=600 cargo test --test qat_acceptance qat_claude_code -- --ignored
 ```
 
 ## Troubleshooting
