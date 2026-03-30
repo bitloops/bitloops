@@ -57,6 +57,15 @@ fn systemd_unit_includes_hidden_supervisor_command() {
 fn read_runtime_state_drops_stale_file() {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo_root),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
     let runtime_path = runtime_state_path(repo_root);
     write_runtime_state(
         &runtime_path,
