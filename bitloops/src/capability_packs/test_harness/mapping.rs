@@ -3,7 +3,6 @@ pub(crate) mod languages;
 pub(crate) mod linker;
 pub(crate) mod materialize;
 pub(crate) mod model;
-pub(crate) mod registry;
 
 #[cfg(test)]
 mod tests;

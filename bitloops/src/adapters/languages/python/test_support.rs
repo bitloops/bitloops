@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::capability_packs::test_harness::mapping::languages::python::PythonLanguageProvider;
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
+use crate::capability_packs::test_harness::mapping::languages::python::PythonTestMappingHelper;
 use crate::host::language_adapter::{DiscoveredTestFile, LanguageTestSupport};
 
 #[derive(Default)]
@@ -19,8 +18,8 @@ impl LanguageTestSupport for PythonLanguageTestSupport {
     }
 
     fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
-        PythonLanguageProvider::new()
-            .map(|provider| provider.supports_path(absolute_path, relative_path))
+        PythonTestMappingHelper::new()
+            .map(|helper| helper.supports_path(absolute_path, relative_path))
             .unwrap_or(false)
     }
 
@@ -29,7 +28,7 @@ impl LanguageTestSupport for PythonLanguageTestSupport {
         absolute_path: &std::path::Path,
         relative_path: &str,
     ) -> Result<DiscoveredTestFile> {
-        PythonLanguageProvider::new()?.discover_tests(absolute_path, relative_path)
+        PythonTestMappingHelper::new()?.discover_tests(absolute_path, relative_path)
     }
 }
 

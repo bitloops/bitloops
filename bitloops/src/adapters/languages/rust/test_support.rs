@@ -3,10 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::capability_packs::test_harness::mapping::languages::rust::{
-    RustLanguageProvider,
+    RustTestMappingHelper,
     enumeration::{parse_enumerated_doctests, parse_enumerated_host_tests},
 };
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 use crate::host::language_adapter::{
     DiscoveredTestFile, EnumerationMode, EnumerationResult, LanguageAdapterContext,
     LanguageTestSupport, ReconciledDiscovery,
@@ -25,8 +24,8 @@ impl LanguageTestSupport for RustLanguageTestSupport {
     }
 
     fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
-        RustLanguageProvider::new()
-            .map(|provider| provider.supports_path(absolute_path, relative_path))
+        RustTestMappingHelper::new()
+            .map(|helper| helper.supports_path(absolute_path, relative_path))
             .unwrap_or(false)
     }
 
@@ -35,7 +34,7 @@ impl LanguageTestSupport for RustLanguageTestSupport {
         absolute_path: &std::path::Path,
         relative_path: &str,
     ) -> Result<DiscoveredTestFile> {
-        RustLanguageProvider::new()?.discover_tests(absolute_path, relative_path)
+        RustTestMappingHelper::new()?.discover_tests(absolute_path, relative_path)
     }
 
     fn enumerate_tests(&self, ctx: &LanguageAdapterContext) -> EnumerationResult {
@@ -110,8 +109,8 @@ impl LanguageTestSupport for RustLanguageTestSupport {
         source_files: &[DiscoveredTestFile],
         enumeration: EnumerationResult,
     ) -> ReconciledDiscovery {
-        RustLanguageProvider::new()
-            .map(|provider| provider.reconcile(source_files, enumeration))
+        RustTestMappingHelper::new()
+            .map(|helper| helper.reconcile(source_files, enumeration))
             .unwrap_or_else(|_| ReconciledDiscovery::default())
     }
 }
