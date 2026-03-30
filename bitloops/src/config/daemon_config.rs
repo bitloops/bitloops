@@ -258,16 +258,9 @@ pub fn persist_dashboard_tls_hint(enabled: bool) -> Result<PathBuf> {
         }
     };
 
-    if !doc["dashboard"].is_table() {
-        doc["dashboard"] = Item::Table(Table::new());
-    }
-    let dashboard = doc["dashboard"]
-        .as_table_mut()
-        .expect("dashboard should be a table");
-    if !dashboard["local_dashboard"].is_table() {
-        dashboard["local_dashboard"] = Item::Table(Table::new());
-    }
-    dashboard["local_dashboard"]["tls"] = Item::Value(enabled.into());
+    let dashboard = ensure_table(&mut doc, "dashboard");
+    let local_dashboard = ensure_child_table(dashboard, "local_dashboard");
+    local_dashboard["tls"] = Item::Value(enabled.into());
 
     fs::write(&path, doc.to_string())
         .with_context(|| format!("writing Bitloops daemon config {}", path.display()))?;
@@ -328,6 +321,15 @@ fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
         root.insert(key, Item::Table(Table::new()));
     }
     root[key]
+        .as_table_mut()
+        .expect("TOML item should be a table after initialisation")
+}
+
+fn ensure_child_table<'a>(table: &'a mut Table, key: &str) -> &'a mut Table {
+    if !table.contains_key(key) || !table[key].is_table() {
+        table.insert(key, Item::Table(Table::new()));
+    }
+    table[key]
         .as_table_mut()
         .expect("TOML item should be a table after initialisation")
 }

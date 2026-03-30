@@ -1,7 +1,8 @@
 use super::*;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::config::{
-    bootstrap_default_daemon_environment, load_daemon_settings, update_daemon_telemetry_consent,
+    bootstrap_default_daemon_environment, load_daemon_settings, persist_dashboard_tls_hint,
+    update_daemon_telemetry_consent,
 };
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
@@ -340,4 +341,29 @@ enabled = true
     assert!(!state.needs_prompt);
     assert_eq!(loaded.cli.telemetry, Some(true));
     assert_eq!(loaded.cli.cli_version, "1.2.3");
+}
+
+#[test]
+fn persist_dashboard_tls_hint_creates_missing_dashboard_tables() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+"#,
+    );
+
+    persist_dashboard_tls_hint(true).expect("persist dashboard tls hint");
+    let contents = fs::read_to_string(&config_path).expect("read daemon config");
+
+    assert!(contents.contains("[dashboard.local_dashboard]"));
+    assert!(contents.contains("tls = true"));
 }
