@@ -1,6 +1,5 @@
 use std::ffi::OsStr;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
