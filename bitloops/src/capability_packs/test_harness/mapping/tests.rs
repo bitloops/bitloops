@@ -1,20 +1,23 @@
+use crate::adapters::languages::python::test_support::{
+    collect_python_suites, resolve_python_import_to_repo_path,
+};
+use crate::adapters::languages::rust::test_support::enumeration::parse_enumerated_doctests;
+use crate::adapters::languages::rust::test_support::imports::{
+    collect_rust_import_paths_for, collect_rust_scoped_call_import_paths_for,
+    rust_test_context_source_paths,
+};
+use crate::adapters::languages::rust::test_support::macros::extract_rust_macro_invocation_body;
+use crate::adapters::languages::rust::test_support::rust_source_contains_doctest_markers;
+use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
+use crate::adapters::languages::ts_js::test_support::{
+    collect_typescript_suites, extract_import_specifier, resolve_import_to_repo_path, unquote,
+};
+
 use tree_sitter::Parser;
 use tree_sitter_python::LANGUAGE as LANGUAGE_PYTHON;
 use tree_sitter_rust::LANGUAGE as LANGUAGE_RUST;
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
-use super::file_discovery::rust_source_contains_doctest_markers;
-use super::languages::python::{collect_python_suites, resolve_python_import_to_repo_path};
-use super::languages::rust::enumeration::parse_enumerated_doctests;
-use super::languages::rust::imports::{
-    collect_rust_import_paths_for, collect_rust_scoped_call_import_paths_for,
-    rust_test_context_source_paths,
-};
-use super::languages::rust::macros::extract_rust_macro_invocation_body;
-use super::languages::rust::scenarios::collect_rust_suites;
-use super::languages::typescript::{
-    collect_typescript_suites, extract_import_specifier, resolve_import_to_repo_path, unquote,
-};
 use super::linker::{imported_path_matches_production_path, symbol_match_key};
 use super::model::{ReferenceCandidate, ScenarioDiscoverySource};
 
