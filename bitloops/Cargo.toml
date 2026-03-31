@@ -36,6 +36,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.24.1"
 sha2 = "0.11"
+sha1 = "0.10"
 hex = "0.4"
 tokio = { version = "1", features = ["full"] }
 utoipa = "5"
