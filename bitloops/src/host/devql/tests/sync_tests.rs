@@ -586,6 +586,31 @@ fn seed_full_sync_repo() -> tempfile::TempDir {
     dir
 }
 
+fn seed_supported_and_unsupported_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    fs::create_dir_all(dir.path().join("docs")).expect("create docs dir");
+
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
+    )
+    .expect("write supported source file");
+    fs::write(dir.path().join("docs/notes.foo"), "ignored content\n")
+        .expect("write unsupported source file");
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
 #[test]
 fn workspace_state_inspect_workspace_reads_head_tree() {
     let repo = seed_workspace_repo();
@@ -2163,6 +2188,195 @@ async fn branch_switch_reuses_cache() {
         )
     );
     assert_eq!(current_state.1, "head");
+}
+
+#[tokio::test]
+async fn staged_content_takes_precedence_over_head() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+    let staged_content = "pub fn greet(name: &str) -> String {\n    format!(\"staged {name}\")\n}\n";
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline full sync");
+
+    let baseline_supported_paths: i64 = Connection::open(&sqlite_path)
+        .expect("open sqlite db")
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count baseline supported paths");
+
+    fs::write(repo.path().join(path), staged_content).expect("edit tracked source file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", path]);
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync with staged content");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_state: (String, Option<String>, String, Option<String>) = db
+        .query_row(
+            "SELECT effective_content_id, index_content_id, effective_source, head_content_id \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read current_file_state for staged path");
+    let staged_blob =
+        crate::host::devql::sync::content_identity::compute_blob_oid(staged_content.as_bytes());
+
+    assert_eq!(result.paths_changed, 1);
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(
+        result.paths_changed + result.paths_unchanged,
+        baseline_supported_paths as usize
+    );
+    assert_eq!(current_state.0, staged_blob);
+    assert_eq!(current_state.1.as_deref(), Some(staged_blob.as_str()));
+    assert_eq!(current_state.2, "index");
+    assert_ne!(current_state.3.as_deref(), Some(staged_blob.as_str()));
+}
+
+#[tokio::test]
+async fn unborn_head_syncs_from_index_and_worktree() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn draft() -> bool {\n    true\n}\n",
+    )
+    .expect("write supported source file");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/lib.rs"]);
+    let staged_blob = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["rev-parse", ":src/lib.rs"],
+    )
+    .expect("resolve staged blob");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync for unborn HEAD repo");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+    let current_state: (String, Option<String>, Option<String>, Option<String>, String) = db
+        .query_row(
+            "SELECT effective_content_id, index_content_id, worktree_content_id, head_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/lib.rs"],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("read current_file_state for unborn HEAD path");
+
+    assert!(result.success, "unborn-head full sync should succeed");
+    assert!(result.paths_added >= 1);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(result.paths_changed, 0);
+    assert_eq!(current_paths, vec!["src/lib.rs".to_string()]);
+    assert_eq!(current_state.0, staged_blob);
+    assert_eq!(current_state.1.as_deref(), Some(staged_blob.as_str()));
+    assert_eq!(current_state.2.as_deref(), Some(staged_blob.as_str()));
+    assert_eq!(current_state.3, None);
+    assert_eq!(current_state.4, "index");
+}
+
+#[tokio::test]
+async fn unsupported_file_ignored_supported_file_added() {
+    let repo = seed_supported_and_unsupported_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_paths = {
+        let mut stmt = db
+            .prepare(
+                "SELECT path \
+                 FROM current_file_state \
+                 WHERE repo_id = ?1 \
+                 ORDER BY path",
+            )
+            .expect("prepare current_file_state path query");
+        stmt.query_map([cfg.repo.repo_id.as_str()], |row| row.get::<_, String>(0))
+            .expect("query current_file_state paths")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect current_file_state paths")
+    };
+    let unsupported_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "docs/notes.foo"],
+            |row| row.get(0),
+        )
+        .expect("count unsupported current_file_state rows");
+
+    assert!(result.success, "sync should succeed with ignored unsupported files");
+    assert_eq!(result.paths_added, 1);
+    assert_eq!(result.paths_changed, 0);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(result.paths_unchanged, 0);
+    assert_eq!(current_paths, vec!["src/lib.rs".to_string()]);
+    assert_eq!(unsupported_rows, 0);
 }
 
 #[tokio::test]
