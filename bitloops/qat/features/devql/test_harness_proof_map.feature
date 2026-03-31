@@ -6,6 +6,7 @@ Feature: Test Harness proof-map for pre-change safety assessment
 
   Background:
     Given I run CleanStart for flow "TestHarnessProofMap"
+    And I start the daemon in bitloops
     And I create a TypeScript project with tests and coverage in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

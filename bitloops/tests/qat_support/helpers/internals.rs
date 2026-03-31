@@ -658,8 +658,17 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
     let run_dir = world.run_dir();
     let home_dir = run_dir.join("home");
     let xdg_config_home = home_dir.join("xdg");
-    fs::create_dir_all(&xdg_config_home)
-        .with_context(|| format!("creating {}", xdg_config_home.display()))?;
+    let xdg_state_home = home_dir.join("xdg-state");
+    let xdg_cache_home = home_dir.join("xdg-cache");
+    let xdg_data_home = home_dir.join("xdg-data");
+    for dir in [
+        &xdg_config_home,
+        &xdg_state_home,
+        &xdg_cache_home,
+        &xdg_data_home,
+    ] {
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
 
     let mut command = Command::new(&world.run_config().binary_path);
     command
@@ -668,8 +677,12 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env("HOME", &home_dir)
         .env("USERPROFILE", &home_dir)
         .env("XDG_CONFIG_HOME", &xdg_config_home)
+        .env("XDG_STATE_HOME", &xdg_state_home)
+        .env("XDG_CACHE_HOME", &xdg_cache_home)
+        .env("XDG_DATA_HOME", &xdg_data_home)
         .env("ACCESSIBLE", "1")
         .env("BITLOOPS_QAT_ACTIVE", "1")
+        .env("BITLOOPS_TEST_TTY", "0")
         .env("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", "disabled")
         .env("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", "disabled")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")

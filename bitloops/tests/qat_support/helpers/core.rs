@@ -34,6 +34,90 @@ pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
+fn find_available_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("binding ephemeral port for qat daemon")?;
+    let port = listener
+        .local_addr()
+        .context("reading ephemeral daemon port")?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
+    let port = find_available_port()?;
+    let port_str = port.to_string();
+    let output = run_command_capture(
+        world,
+        &format!("bitloops daemon start (port {port})"),
+        build_bitloops_command(
+            world,
+            &[
+                "daemon",
+                "start",
+                "--create-default-config",
+                "--no-telemetry",
+                "-d",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &port_str,
+                "--http",
+            ],
+        )?,
+    )?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "failed to bootstrap and start daemon for QAT scenario (port {port})\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+
+    std::thread::sleep(StdDuration::from_millis(300));
+    world.daemon_url = Some(format!("http://127.0.0.1:{port}"));
+    append_world_log(
+        world,
+        &format!("Daemon started for scenario on port {port}.\n"),
+    )?;
+    Ok(())
+}
+
+pub fn stop_daemon_for_scenario(world: &QatWorld) -> Result<()> {
+    if world.run_dir.is_none() || world.repo_dir.is_none() || world.terminal_log_path.is_none() {
+        return Ok(());
+    }
+
+    match run_command_capture(
+        world,
+        "bitloops daemon stop",
+        build_bitloops_command(world, &["daemon", "stop"])?,
+    ) {
+        Ok(output) if output.status.success() => {
+            append_world_log(world, "Daemon stopped for scenario.\n")?;
+        }
+        Ok(output) => {
+            append_world_log(
+                world,
+                &format!(
+                    "Daemon stop returned non-zero (may already be stopped).\nstdout:\n{}\nstderr:\n{}\n",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                ),
+            )?;
+        }
+        Err(err) => {
+            append_world_log(
+                world,
+                &format!("Daemon stop failed (may already be stopped): {err:#}\n"),
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn run_clean_start(world: &mut QatWorld, flow_name: &str) -> Result<()> {
     let config = world.run_config().clone();
     let flow_slug = sanitize_name(flow_name);
@@ -183,35 +267,7 @@ pub fn ensure_claude_auth_for_repo(world: &mut QatWorld, repo_name: &str) -> Res
 
 pub fn run_devql_init_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mut attempts: u32 = 0;
-    loop {
-        let output = run_command_capture(
-            world,
-            "bitloops devql init",
-            build_bitloops_command(world, &["devql", "init"])?,
-        )?;
-        if output.status.success() {
-            return Ok(());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let daemon_missing = stdout.contains("Bitloops daemon is not running")
-            || stderr.contains("Bitloops daemon is not running");
-
-        if daemon_missing && attempts < 2 {
-            attempts += 1;
-            run_bitloops_success(
-                world,
-                &["daemon", "start", "-d", "--host", "127.0.0.1", "--http"],
-                "bitloops daemon start -d --host 127.0.0.1 --http",
-            )?;
-            std::thread::sleep(StdDuration::from_millis(500 * u64::from(attempts)));
-            continue;
-        }
-
-        return ensure_success(&output, "bitloops devql init");
-    }
+    run_bitloops_success(world, &["devql", "init"], "bitloops devql init")
 }
 
 pub fn run_devql_ingest_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {

@@ -9,6 +9,7 @@ Feature: Cross-capability change-planning smoke
   Scenario: Full change-planning workflow with Claude Code
     # Setup: create a rich project with tests, coverage, and knowledge
     Given I run CleanStart for flow "CrossCapabilitySmoke"
+    And I start the daemon in bitloops
     And I create a TypeScript project with tests and coverage in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
@@ -41,6 +42,7 @@ Feature: Cross-capability change-planning smoke
   @devql @semantic-clones @integration
   Scenario: Capability surfaces are independently queryable in same repo
     Given I run CleanStart for flow "CapabilitySurfaceCoherence"
+    And I start the daemon in bitloops
     And I create a TypeScript project with similar implementations in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

@@ -1,4 +1,4 @@
-use super::helpers::sanitize_name;
+use super::helpers::{sanitize_name, stop_daemon_for_scenario};
 use super::steps;
 use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
@@ -49,6 +49,18 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
             Box::pin(async move {
                 let slug = sanitize_name(&scenario.name);
                 world.prepare(config, &scenario.name, slug);
+            })
+        })
+        .after(|_, _, scenario, _, world| {
+            Box::pin(async move {
+                if let Some(world) = world
+                    && let Err(err) = stop_daemon_for_scenario(world)
+                {
+                    eprintln!(
+                        "warning: daemon teardown failed for scenario `{}`: {err:#}",
+                        scenario.name
+                    );
+                }
             })
         })
         .fail_on_skipped()

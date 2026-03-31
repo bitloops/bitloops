@@ -41,6 +41,20 @@ cargo test --test qat_acceptance qat_smoke -- --ignored
 cargo test --test qat_acceptance qat_devql -- --ignored
 ```
 
+## Daemon prerequisite
+
+Most QAT flows now require a running Bitloops daemon before `bitloops init`, `bitloops enable`,
+and `bitloops devql ...` commands.
+
+Feature setup should include:
+
+`And I start the daemon in bitloops`
+
+immediately after `Given I run CleanStart ...`.
+
+QAT starts one daemon per scenario (isolated `HOME`/`XDG_CONFIG_HOME`) and stops it in the
+scenario teardown hook.
+
 ## Claude auth behavior
 
 Claude-based scenarios include the step:

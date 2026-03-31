@@ -6,6 +6,7 @@ Feature: Bitloops QAT foundation
   @smoke
   Scenario: Bootstrap a fresh repo and create Bitloops stores
     Given I run CleanStart for flow "FoundationStores"
+    And I start the daemon in bitloops
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
@@ -15,6 +16,7 @@ Feature: Bitloops QAT foundation
   @smoke
   Scenario: Preserve relative-day commit timeline
     Given I run CleanStart for flow "FoundationCommitTimeline"
+    And I start the daemon in bitloops
     And I ran InitCommit yesterday for bitloops
     And I create a Vite app project in bitloops
     And I committed yesterday in bitloops

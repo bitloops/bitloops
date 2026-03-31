@@ -6,6 +6,7 @@ Feature: Workspace-aware blast radius and temporal correctness
 
   Background:
     Given I run CleanStart for flow "BlastRadiusTemporal"
+    And I start the daemon in bitloops
     And I create a TypeScript project with known dependencies in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

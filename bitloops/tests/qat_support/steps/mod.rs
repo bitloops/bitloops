@@ -23,6 +23,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I start the daemon in (\S+)$"),
+            step_fn(given_start_daemon),
+        )
+        .given(
+            None,
             regex(r"^I run InitCommit for (\S+)$"),
             step_fn(given_init_commit),
         )

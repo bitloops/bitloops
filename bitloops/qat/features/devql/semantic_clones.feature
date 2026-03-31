@@ -6,6 +6,7 @@ Feature: Semantic Clones pattern-reuse discovery
 
   Background:
     Given I run CleanStart for flow "SemanticClones"
+    And I start the daemon in bitloops
     And I create a TypeScript project with similar implementations in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

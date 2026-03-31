@@ -7,6 +7,7 @@ Feature: Agent enablement produces a queryable repository
   @devql @claude-code @integration
   Scenario: First Claude Code change is queryable through DevQL
     Given I run CleanStart for flow "AgentEnablementQueryable"
+    And I start the daemon in bitloops
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
@@ -24,6 +25,7 @@ Feature: Agent enablement produces a queryable repository
   @devql @claude-code @integration
   Scenario: Claude Code chat history is retrievable after edit and commit
     Given I run CleanStart for flow "AgentChatHistory"
+    And I start the daemon in bitloops
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

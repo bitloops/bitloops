@@ -18,6 +18,7 @@ pub struct QatWorld {
     pub repo_dir: Option<PathBuf>,
     pub terminal_log_path: Option<PathBuf>,
     pub metadata_path: Option<PathBuf>,
+    pub daemon_url: Option<String>,
     pub last_command_stdout: Option<String>,
     pub last_command_exit_code: Option<i32>,
     pub last_query_result_count: Option<usize>,
@@ -35,6 +36,7 @@ impl QatWorld {
         self.repo_dir = None;
         self.terminal_log_path = None;
         self.metadata_path = None;
+        self.daemon_url = None;
         self.last_command_stdout = None;
         self.last_command_exit_code = None;
         self.last_query_result_count = None;

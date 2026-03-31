@@ -5,6 +5,7 @@ Feature: Bitloops Claude Code workflows
 
   Scenario: Bootstrap Bitloops and persist a Claude Code session
     Given I run CleanStart for flow "ClaudeCodeSession"
+    And I start the daemon in bitloops
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
@@ -18,6 +19,7 @@ Feature: Bitloops Claude Code workflows
 
   Scenario: Claude Code follow-up edits create multiple checkpoints
     Given I run CleanStart for flow "ClaudeCodeProgression"
+    And I start the daemon in bitloops
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops

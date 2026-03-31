@@ -29,6 +29,20 @@ pub(super) fn given_default_clean_start(
     })
 }
 
+pub(super) fn given_start_daemon(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I start the daemon",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::ensure_daemon_for_scenario(world)),
+        );
+    })
+}
+
 pub(super) fn given_init_commit(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
