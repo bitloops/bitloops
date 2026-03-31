@@ -1,4 +1,8 @@
 use super::*;
+use crate::adapters::languages::go::canonical::{
+    GO_CANONICAL_MAPPINGS, GO_SUPPORTED_LANGUAGE_KINDS,
+};
+use crate::adapters::languages::go::extraction::extract_go_artefacts;
 use crate::adapters::languages::python::canonical::{
     PYTHON_CANONICAL_MAPPINGS, PYTHON_SUPPORTED_LANGUAGE_KINDS,
 };
@@ -373,6 +377,83 @@ def run():
 }
 
 #[test]
+fn go_canonical_mapping_covers_supported_kind_table() {
+    let expected = [
+        ("function_declaration", true, Some("function")),
+        ("method_declaration", true, Some("method")),
+        ("type_spec", true, Some("type")),
+        ("type_alias", true, Some("type")),
+        ("struct_type", true, Some("type")),
+        ("interface_type", true, Some("interface")),
+        ("import_spec", true, Some("import")),
+        ("var_spec", true, Some("variable")),
+        ("const_spec", true, Some("variable")),
+        ("call_expression", false, None),
+    ];
+
+    for (language_kind, supported, canonical_kind) in expected {
+        assert_eq!(
+            is_supported_language_kind(GO_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(GO_CANONICAL_MAPPINGS, language_kind, false)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
+    }
+}
+
+#[test]
+fn go_canonical_mapping_extracts_functions_methods_types_imports_and_values() {
+    let content = r#"package service
+
+import (
+    "context"
+    alias "net/http"
+)
+
+const DefaultPort = 8080
+
+type Handler struct{}
+type Runner interface {
+    Run(context.Context) error
+}
+
+func NewHandler() *Handler {
+    return &Handler{}
+}
+
+func (h *Handler) ServeHTTP() {}
+"#;
+
+    let artefacts = extract_go_artefacts(content, "service/handler.go").unwrap();
+
+    let import = artefact_by_name_and_language_kind(&artefacts, "import_spec", "alias");
+    assert_eq!(canonical_kind(import), Some("import"));
+
+    let struct_type = artefact_by_name_and_language_kind(&artefacts, "struct_type", "Handler");
+    assert_eq!(canonical_kind(struct_type), Some("type"));
+
+    let interface_type = artefact_by_name_and_language_kind(&artefacts, "interface_type", "Runner");
+    assert_eq!(canonical_kind(interface_type), Some("interface"));
+
+    let variable = artefact_by_name_and_language_kind(&artefacts, "const_spec", "DefaultPort");
+    assert_eq!(canonical_kind(variable), Some("variable"));
+
+    let function =
+        artefact_by_name_and_language_kind(&artefacts, "function_declaration", "NewHandler");
+    assert_eq!(canonical_kind(function), Some("function"));
+
+    let method = artefact_by_name_and_language_kind(&artefacts, "method_declaration", "ServeHTTP");
+    assert_eq!(canonical_kind(method), Some("method"));
+    assert_eq!(
+        method.parent_symbol_fqn.as_deref(),
+        Some("service/handler.go::Handler")
+    );
+}
+
+#[test]
 fn devql_extension_host_resolves_built_in_language_pack_ownership() {
     assert_eq!(
         resolve_language_pack_owner("rust"),
@@ -390,6 +471,7 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_pack_owner("python"),
         Some(PYTHON_LANGUAGE_PACK_ID)
     );
+    assert_eq!(resolve_language_pack_owner("go"), Some(GO_LANGUAGE_PACK_ID));
     assert_eq!(
         resolve_language_id_for_file_path("src/lib.rs"),
         Some("rust")
@@ -406,6 +488,7 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/main.py"),
         Some("python")
     );
+    assert_eq!(resolve_language_id_for_file_path("src/main.go"), Some("go"));
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 
@@ -415,11 +498,13 @@ fn devql_language_adapter_registry_resolves_built_in_pack_implementations() {
     assert_eq!(
         registry.registered_pack_ids(),
         vec![
+            GO_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
             RUST_LANGUAGE_PACK_ID,
             TS_JS_LANGUAGE_PACK_ID
         ]
     );
+    assert!(registry.get(GO_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(RUST_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(TS_JS_LANGUAGE_PACK_ID).is_some());
     assert!(registry.get(PYTHON_LANGUAGE_PACK_ID).is_some());
@@ -530,6 +615,60 @@ def run():
             .any(|edge| edge.edge_kind == EdgeKind::Extends),
         "python built-in registry pack should emit extends edges"
     );
+
+    let go_pack = registry
+        .get(GO_LANGUAGE_PACK_ID)
+        .expect("resolve go built-in language adapter pack");
+    let go_content = r#"package service
+
+import (
+    "context"
+    "net/http"
+)
+
+type Base interface {
+    Run(context.Context) error
+}
+
+type Handler struct {
+    Base
+}
+
+func helper() {}
+
+func Run() {
+    helper()
+    http.ListenAndServe(":8080", nil)
+}
+"#;
+    let go_artefacts = go_pack
+        .extract_artefacts(go_content, "service/run.go")
+        .expect("extract go artefacts via language adapter registry");
+    assert!(
+        go_artefacts.iter().any(|artefact| artefact.name == "Run"),
+        "go built-in registry pack should surface function artefacts"
+    );
+    let go_edges = go_pack
+        .extract_dependency_edges(go_content, "service/run.go", &go_artefacts)
+        .expect("extract go dependency edges via language adapter registry");
+    assert!(
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Calls),
+        "go built-in registry pack should emit call edges"
+    );
+    assert!(
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Imports),
+        "go built-in registry pack should emit import edges"
+    );
+    assert!(
+        go_edges
+            .iter()
+            .any(|edge| edge.edge_kind == EdgeKind::Extends),
+        "go built-in registry pack should emit embedding edges"
+    );
 }
 
 #[test]
@@ -568,6 +707,7 @@ fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
     assert_eq!(
         pack_ids,
         vec![
+            GO_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
             RUST_LANGUAGE_PACK_ID,
             TS_JS_LANGUAGE_PACK_ID
@@ -605,6 +745,7 @@ fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_a
     assert_eq!(
         report.language_adapter_pack_ids,
         vec![
+            GO_LANGUAGE_PACK_ID.to_string(),
             PYTHON_LANGUAGE_PACK_ID.to_string(),
             RUST_LANGUAGE_PACK_ID.to_string(),
             TS_JS_LANGUAGE_PACK_ID.to_string()
