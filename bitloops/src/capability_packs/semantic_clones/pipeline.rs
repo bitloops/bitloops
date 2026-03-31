@@ -278,7 +278,7 @@ ORDER BY a.path, a.start_line, a.symbol_id",
     )
 }
 
-async fn delete_repo_symbol_clone_edges(
+pub(crate) async fn delete_repo_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<()> {

@@ -226,6 +226,7 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Debug(_) => "debug",
         crate::cli::Commands::Devql(_) => "devql",
         crate::cli::Commands::Testlens(_) => "testlens",
+        crate::cli::Commands::Embeddings(_) => "embeddings",
         crate::cli::Commands::DevqlWatcher(_) => "__devql-watcher",
         crate::cli::Commands::DaemonProcess(_) => "__daemon-process",
         crate::cli::Commands::DaemonSupervisor(_) => "__daemon-supervisor",

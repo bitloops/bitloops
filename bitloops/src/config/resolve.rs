@@ -10,18 +10,20 @@ use super::daemon_config::load_daemon_settings;
 use super::repo_policy::discover_repo_policy;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
-    normalize_sqlite_path, read_non_empty_env, resolve_configured_path,
-    resolve_required_provider_string,
+    normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
+    resolve_configured_path, resolve_required_provider_string,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
-    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
-    WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EmbeddingCapabilityConfig,
+    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
+    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
+    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreEmbeddingConfig,
+    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 use super::unified_config::{
-    UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_from_unified,
-    resolve_provider_from_unified, resolve_semantic_from_unified,
+    UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
+    resolve_embeddings_from_unified, resolve_provider_from_unified,
+    resolve_semantic_clones_from_unified, resolve_semantic_from_unified,
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 
@@ -101,8 +103,25 @@ pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
 }
 
 pub fn resolve_store_embedding_config_for_repo(repo_root: &Path) -> StoreEmbeddingConfig {
+    let _ = repo_root;
+    StoreEmbeddingConfig::default()
+}
+
+pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClonesConfig {
+    let settings = daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
+    resolve_semantic_clones_from_unified(&settings, |key| env::var(key).ok())
+}
+
+pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig {
     let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
-    resolve_embedding_from_unified(&settings, &config_root, |key| env::var(key).ok())
+    resolve_embeddings_from_unified(&settings, &config_root, |key| env::var(key).ok())
+}
+
+pub fn resolve_embedding_capability_config_for_repo(repo_root: &Path) -> EmbeddingCapabilityConfig {
+    let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
+    resolve_embedding_capability_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -257,6 +276,156 @@ where
     }
 }
 
+pub(crate) fn resolve_semantic_clones_from_unified_with<F>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> SemanticClonesConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let root = settings.semantic_clones.as_ref().and_then(Value::as_object);
+    let summary_mode = root
+        .and_then(|map| read_any_string(map, &["summary_mode"]))
+        .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_SUMMARY_MODE"))
+        .map(|value| parse_summary_mode(&value))
+        .unwrap_or_default();
+    let embedding_mode = root
+        .and_then(|map| read_any_string(map, &["embedding_mode"]))
+        .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_MODE"))
+        .map(|value| parse_embedding_mode(&value))
+        .unwrap_or_default();
+    let embedding_profile = root
+        .and_then(|map| read_any_string(map, &["embedding_profile"]))
+        .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_PROFILE"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "none" | "disabled" | "off"
+            )
+        });
+
+    SemanticClonesConfig {
+        summary_mode,
+        embedding_mode,
+        embedding_profile,
+    }
+}
+
+pub(crate) fn resolve_embeddings_from_unified_with<F>(
+    settings: &UnifiedSettings,
+    config_root: &Path,
+    env_lookup: F,
+) -> EmbeddingsConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let root = settings.embeddings.as_ref().and_then(Value::as_object);
+    let runtime_root = root
+        .and_then(|map| map.get(EMBEDDINGS_RUNTIME_CONFIG_KEY))
+        .and_then(Value::as_object);
+    let profiles_root = root
+        .and_then(|map| map.get(EMBEDDINGS_PROFILES_CONFIG_KEY))
+        .and_then(Value::as_object);
+
+    let defaults = EmbeddingsRuntimeConfig::default();
+    let mut warnings = Vec::new();
+    let runtime = EmbeddingsRuntimeConfig {
+        command: resolve_runtime_string_opt(
+            runtime_root,
+            "command",
+            &env_lookup,
+            &mut warnings,
+            "embeddings.runtime.command",
+        )
+        .unwrap_or(defaults.command),
+        args: resolve_runtime_args(
+            runtime_root,
+            &env_lookup,
+            &mut warnings,
+            "embeddings.runtime.args",
+        )
+        .unwrap_or(defaults.args),
+        startup_timeout_secs: runtime_root
+            .and_then(|map| read_any_u64(map, &["startup_timeout_secs"]))
+            .unwrap_or(defaults.startup_timeout_secs),
+        request_timeout_secs: runtime_root
+            .and_then(|map| read_any_u64(map, &["request_timeout_secs"]))
+            .unwrap_or(defaults.request_timeout_secs),
+    };
+
+    let mut profiles = std::collections::BTreeMap::new();
+    if let Some(profiles_root) = profiles_root {
+        for (name, value) in profiles_root {
+            let Some(profile_root) = value.as_object() else {
+                warnings.push(format!(
+                    "embeddings.profiles.{name} must be a table and was ignored"
+                ));
+                continue;
+            };
+
+            let kind = resolve_runtime_string_opt(
+                Some(profile_root),
+                "kind",
+                &env_lookup,
+                &mut warnings,
+                &format!("embeddings.profiles.{name}.kind"),
+            )
+            .unwrap_or_default();
+            if kind.is_empty() {
+                warnings.push(format!(
+                    "embeddings.profiles.{name} is missing `kind` and was ignored"
+                ));
+                continue;
+            }
+
+            profiles.insert(
+                name.to_string(),
+                EmbeddingProfileConfig {
+                    name: name.to_string(),
+                    kind,
+                    model: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "model",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("embeddings.profiles.{name}.model"),
+                    ),
+                    api_key: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "api_key",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("embeddings.profiles.{name}.api_key"),
+                    ),
+                    base_url: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "base_url",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("embeddings.profiles.{name}.base_url"),
+                    ),
+                    cache_dir: resolve_runtime_string_opt(
+                        Some(profile_root),
+                        "cache_dir",
+                        &env_lookup,
+                        &mut warnings,
+                        &format!("embeddings.profiles.{name}.cache_dir"),
+                    )
+                    .map(|path| resolve_configured_path(&path, config_root)),
+                },
+            );
+        }
+    }
+
+    EmbeddingsConfig {
+        runtime,
+        profiles,
+        warnings,
+    }
+}
+
 fn parse_github_provider_config<F>(
     map: &Map<String, Value>,
     env_lookup: &F,
@@ -318,23 +487,8 @@ pub(crate) fn resolve_store_embedding_config_with<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    let embedding_model =
-        read_non_empty_env(&env_lookup, ENV_EMBEDDING_MODEL).or(file_cfg.embedding_model);
-    let embedding_api_key =
-        read_non_empty_env(&env_lookup, ENV_EMBEDDING_API_KEY).or(file_cfg.embedding_api_key);
-    let embedding_provider = read_non_empty_env(&env_lookup, ENV_EMBEDDING_PROVIDER)
-        .or(file_cfg.embedding_provider)
-        .or_else(|| Some(DEFAULT_EMBEDDING_PROVIDER.to_string()));
-
-    StoreEmbeddingConfig {
-        embedding_provider,
-        embedding_model,
-        embedding_api_key,
-        embedding_cache_dir: file_cfg
-            .embedding_cache_dir
-            .as_deref()
-            .map(|path| resolve_configured_path(path, config_root)),
-    }
+    let _ = (file_cfg, config_root, env_lookup);
+    StoreEmbeddingConfig::default()
 }
 
 #[cfg(test)]
@@ -358,6 +512,104 @@ pub(crate) fn resolve_store_semantic_config_for_tests(
             }
         })
     })
+}
+
+fn resolve_runtime_string_opt<F>(
+    root: Option<&Map<String, Value>>,
+    key: &str,
+    env_lookup: &F,
+    warnings: &mut Vec<String>,
+    field_name: &str,
+) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = root.and_then(|map| map.get(key)).and_then(Value::as_str)?;
+    match resolve_runtime_string(raw, env_lookup) {
+        Ok(Some(value)) => Some(value),
+        Ok(None) => None,
+        Err(err) => {
+            warnings.push(format!("{field_name}: {err}"));
+            None
+        }
+    }
+}
+
+fn resolve_runtime_args<F>(
+    root: Option<&Map<String, Value>>,
+    env_lookup: &F,
+    warnings: &mut Vec<String>,
+    field_name: &str,
+) -> Option<Vec<String>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let raw = root.and_then(|map| map.get("args"))?;
+    let Some(items) = raw.as_array() else {
+        warnings.push(format!("{field_name}: expected an array of strings"));
+        return None;
+    };
+    let mut resolved = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let Some(item) = item.as_str() else {
+            warnings.push(format!("{field_name}[{index}]: expected a string"));
+            continue;
+        };
+        match resolve_runtime_string(item, env_lookup) {
+            Ok(Some(value)) => resolved.push(value),
+            Ok(None) => {}
+            Err(err) => warnings.push(format!("{field_name}[{index}]: {err}")),
+        }
+    }
+    Some(resolved)
+}
+
+fn resolve_runtime_string<F>(raw: &str, env_lookup: &F) -> Result<Option<String>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(key) = trimmed
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        let Some(env_value) = env_lookup(key) else {
+            anyhow::bail!("environment variable `{key}` is not set");
+        };
+        let env_trimmed = env_value.trim();
+        if env_trimmed.is_empty() {
+            anyhow::bail!("environment variable `{key}` is empty");
+        }
+        return Ok(Some(env_trimmed.to_string()));
+    }
+
+    Ok(Some(trimmed.to_string()))
+}
+
+fn parse_summary_mode(raw: &str) -> SemanticSummaryMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => SemanticSummaryMode::Auto,
+        "off" | "disabled" | "none" => SemanticSummaryMode::Off,
+        _ => SemanticSummaryMode::Auto,
+    }
+}
+
+fn parse_embedding_mode(raw: &str) -> SemanticCloneEmbeddingMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "semantic_aware_once" | "semantic-aware-once" => {
+            SemanticCloneEmbeddingMode::SemanticAwareOnce
+        }
+        "off" | "disabled" | "none" => SemanticCloneEmbeddingMode::Off,
+        "deterministic" => SemanticCloneEmbeddingMode::Deterministic,
+        "refresh_on_upgrade" | "refresh-on-upgrade" => {
+            SemanticCloneEmbeddingMode::RefreshOnUpgrade
+        }
+        _ => SemanticCloneEmbeddingMode::SemanticAwareOnce,
+    }
 }
 
 #[cfg(test)]
@@ -397,14 +649,6 @@ pub(crate) fn resolve_store_embedding_config_for_tests(
     file_cfg: StoreFileConfig,
     env: &[(&str, &str)],
 ) -> StoreEmbeddingConfig {
-    let config_root = std::path::Path::new("/repo");
-    resolve_store_embedding_config_with(file_cfg, config_root, |key| {
-        env.iter().find_map(|(k, v)| {
-            if *k == key {
-                Some((*v).to_string())
-            } else {
-                None
-            }
-        })
-    })
+    let _ = (file_cfg, env);
+    StoreEmbeddingConfig::default()
 }

@@ -26,9 +26,13 @@ pub struct DevqlConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
+    #[allow(dead_code)]
     pub(crate) embedding_provider: Option<String>,
+    #[allow(dead_code)]
     pub(crate) embedding_model: Option<String>,
+    #[allow(dead_code)]
     pub(crate) embedding_api_key: Option<String>,
+    #[allow(dead_code)]
     pub(crate) embedding_cache_dir: Option<PathBuf>,
 }
 
@@ -101,7 +105,7 @@ pub struct RelationalStorage {
 }
 
 impl RelationalStorage {
-    pub(super) async fn connect(
+    pub(crate) async fn connect(
         cfg: &DevqlConfig,
         relational: &RelationalBackendConfig,
         command: &str,

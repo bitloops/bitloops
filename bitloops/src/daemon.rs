@@ -30,6 +30,8 @@ mod config;
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
+#[path = "daemon/enrichment.rs"]
+mod enrichment;
 #[path = "daemon/process.rs"]
 mod process;
 #[path = "daemon/server_runtime.rs"]
@@ -53,10 +55,12 @@ mod tests;
 
 pub use self::types::{
     DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
-    DaemonServiceMetadata, DaemonStatusReport, InternalDaemonProcessArgs,
-    InternalDaemonSupervisorArgs, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
-    SupervisorServiceMetadata,
+    DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
+    EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
+    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
 };
+pub use self::enrichment::EnrichmentControlResult;
+pub use self::enrichment::EnrichmentCoordinator;
 
 use self::process::*;
 use self::server_runtime::*;
@@ -150,6 +154,26 @@ pub fn uninstall_supervisor_service() -> Result<()> {
 
 pub async fn status() -> Result<DaemonStatusReport> {
     lifecycle::status().await
+}
+
+pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
+    enrichment::snapshot()
+}
+
+pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
+    enrichment::pause_enrichments(reason)
+}
+
+pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::resume_enrichments()
+}
+
+pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
+    enrichment::retry_failed_enrichments()
+}
+
+pub fn shared_enrichment_coordinator() -> Arc<EnrichmentCoordinator> {
+    EnrichmentCoordinator::shared()
 }
 
 pub async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeState> {

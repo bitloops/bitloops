@@ -1,12 +1,11 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::adapters::model_providers::embeddings::{
-    EmbeddingProvider, build_embedding_provider, default_embedding_model,
-    default_embedding_provider, embedding_provider_requires_api_key,
+    EmbeddingProvider, EmbeddingRuntimeClientConfig, build_embedding_provider,
 };
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
@@ -17,73 +16,45 @@ const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct EmbeddingProviderConfig {
-    pub embedding_provider: Option<String>,
-    pub embedding_model: Option<String>,
-    pub embedding_api_key: Option<String>,
-    pub embedding_cache_dir: Option<PathBuf>,
+    pub daemon_config_path: PathBuf,
+    pub embedding_profile: Option<String>,
+    pub runtime_command: String,
+    pub runtime_args: Vec<String>,
+    pub startup_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub warnings: Vec<String>,
 }
 
 pub fn build_symbol_embedding_provider(
     cfg: &EmbeddingProviderConfig,
     repo_root: Option<&Path>,
 ) -> Result<Option<Box<dyn EmbeddingProvider>>> {
-    let Some(provider) = resolve_embedding_provider(cfg) else {
+    let Some(profile_name) = resolve_embedding_profile(cfg) else {
         return Ok(None);
     };
 
-    let model = cfg
-        .embedding_model
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::trim)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            default_embedding_model(&provider)
-                .unwrap_or_default()
-                .to_string()
-        });
-    if model.is_empty() {
-        return Err(anyhow!(
-            "BITLOOPS_DEVQL_EMBEDDING_MODEL is required when embedding provider is configured"
-        ));
-    }
-
-    let api_key = cfg
-        .embedding_api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::trim)
-        .map(str::to_string);
-    if embedding_provider_requires_api_key(&provider) && api_key.is_none() {
-        return Err(anyhow!(
-            "BITLOOPS_DEVQL_EMBEDDING_API_KEY is required when embedding provider `{provider}` is configured"
-        ));
-    }
-
-    Ok(Some(build_embedding_provider(
-        &provider,
-        model,
-        api_key,
-        repo_root,
-        cfg.embedding_cache_dir.as_deref(),
-    )?))
+    Ok(Some(build_embedding_provider(&EmbeddingRuntimeClientConfig {
+        command: cfg.runtime_command.clone(),
+        args: cfg.runtime_args.clone(),
+        startup_timeout_secs: cfg.startup_timeout_secs,
+        request_timeout_secs: cfg.request_timeout_secs,
+        config_path: cfg.daemon_config_path.clone(),
+        profile_name,
+        repo_root: repo_root.map(Path::to_path_buf),
+    })?))
 }
 
-fn resolve_embedding_provider(cfg: &EmbeddingProviderConfig) -> Option<String> {
-    let provider = cfg
-        .embedding_provider
+fn resolve_embedding_profile(cfg: &EmbeddingProviderConfig) -> Option<String> {
+    let profile = cfg
+        .embedding_profile
         .as_deref()
         .unwrap_or_default()
         .trim()
-        .to_ascii_lowercase();
-    if provider == "none" || provider == "disabled" {
+        .to_string();
+    if profile.is_empty() {
         return None;
     }
-    if !provider.is_empty() {
-        return Some(provider);
-    }
-
-    Some(default_embedding_provider().to_string())
+    Some(profile)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -506,77 +477,30 @@ mod tests {
 
     #[test]
     fn symbol_embedding_provider_defaults_voyage_model_and_dimension() {
-        let provider = build_symbol_embedding_provider(
-            &EmbeddingProviderConfig {
-                embedding_provider: Some("voyage".to_string()),
-                embedding_model: None,
-                embedding_api_key: Some("test-key".to_string()),
-                embedding_cache_dir: None,
-            },
-            None,
-        )
-        .expect("provider should build")
-        .expect("provider should be enabled");
-
-        assert_eq!(provider.provider_name(), "voyage");
-        assert_eq!(
-            provider.model_name(),
-            crate::adapters::model_providers::embeddings::default_embedding_model("voyage")
-                .expect("voyage default model")
-        );
-        assert_eq!(provider.output_dimension(), Some(1024));
-    }
-
-    #[test]
-    fn symbol_embedding_provider_resolves_local_defaults_without_api_key() {
-        let provider = resolve_embedding_provider(&EmbeddingProviderConfig {
-            embedding_provider: Some("local".to_string()),
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
+        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
+            daemon_config_path: PathBuf::from("/config.toml"),
+            embedding_profile: Some("voyage-prod".to_string()),
+            runtime_command: "bitloops-embeddings".to_string(),
+            runtime_args: Vec::new(),
+            startup_timeout_secs: 10,
+            request_timeout_secs: 60,
+            warnings: Vec::new(),
         });
 
-        assert_eq!(provider.as_deref(), Some("local"));
-        assert_eq!(
-            crate::adapters::model_providers::embeddings::default_embedding_provider(),
-            "local"
-        );
-        assert_eq!(
-            crate::adapters::model_providers::embeddings::default_embedding_model("local")
-                .expect("local default model")
-                .to_string(),
-            "jinaai/jina-embeddings-v2-base-code"
-        );
-    }
-
-    #[test]
-    fn symbol_embedding_provider_defaults_to_local_when_provider_is_omitted() {
-        assert_eq!(
-            resolve_embedding_provider(&EmbeddingProviderConfig {
-                embedding_provider: None,
-                embedding_model: None,
-                embedding_api_key: None,
-                embedding_cache_dir: None,
-            })
-            .as_deref(),
-            Some(crate::adapters::model_providers::embeddings::default_embedding_provider())
-        );
-        assert_eq!(
-            crate::adapters::model_providers::embeddings::default_embedding_model(
-                crate::adapters::model_providers::embeddings::default_embedding_provider()
-            ),
-            Some("jinaai/jina-embeddings-v2-base-code")
-        );
+        assert_eq!(profile.as_deref(), Some("voyage-prod"));
     }
 
     #[test]
     fn symbol_embedding_provider_returns_none_when_disabled() {
         let provider = build_symbol_embedding_provider(
             &EmbeddingProviderConfig {
-                embedding_provider: Some("disabled".to_string()),
-                embedding_model: None,
-                embedding_api_key: None,
-                embedding_cache_dir: None,
+                daemon_config_path: PathBuf::from("/config.toml"),
+                embedding_profile: None,
+                runtime_command: "bitloops-embeddings".to_string(),
+                runtime_args: Vec::new(),
+                startup_timeout_secs: 10,
+                request_timeout_secs: 60,
+                warnings: Vec::new(),
             },
             None,
         )
@@ -586,23 +510,18 @@ mod tests {
     }
 
     #[test]
-    fn symbol_embedding_provider_requires_api_key_for_openai() {
-        let err = build_symbol_embedding_provider(
-            &EmbeddingProviderConfig {
-                embedding_provider: Some("openai".to_string()),
-                embedding_model: Some("text-embedding-3-large".to_string()),
-                embedding_api_key: None,
-                embedding_cache_dir: None,
-            },
-            None,
-        )
-        .err()
-        .expect("openai provider without api key should fail");
+    fn symbol_embedding_provider_keeps_profile_name_case() {
+        let profile = resolve_embedding_profile(&EmbeddingProviderConfig {
+            daemon_config_path: PathBuf::from("/config.toml"),
+            embedding_profile: Some("Local-Code".to_string()),
+            runtime_command: "bitloops-embeddings".to_string(),
+            runtime_args: Vec::new(),
+            startup_timeout_secs: 10,
+            request_timeout_secs: 60,
+            warnings: Vec::new(),
+        });
 
-        assert!(
-            err.to_string()
-                .contains("BITLOOPS_DEVQL_EMBEDDING_API_KEY is required")
-        );
+        assert_eq!(profile.as_deref(), Some("Local-Code"));
     }
 
     #[test]

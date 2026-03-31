@@ -26,9 +26,6 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
     let duckdb_path = settings["stores"]["events"]["duckdb_path"]
         .as_str()
         .expect("events duckdb path");
-    let embedding_provider = settings["stores"]["embedding_provider"]
-        .as_str()
-        .expect("embedding provider");
     let semantic_provider = settings["semantic"]["provider"]
         .as_str()
         .expect("semantic provider");
@@ -37,8 +34,6 @@ fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {
         repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         format!(
             r#"[stores]
-embedding_provider = {embedding_provider:?}
-
 [stores.relational]
 sqlite_path = {sqlite_path:?}
 
@@ -76,8 +71,7 @@ fn seed_devql_cli_repo() -> TempDir {
                 },
                 "events": {
                     "duckdb_path": ".bitloops/stores/events.duckdb"
-                },
-                "embedding_provider": "disabled"
+                }
             },
             "semantic": {
                 "provider": "disabled"
@@ -408,22 +402,132 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
 }
 
 #[test]
-fn devql_run_ingest_requires_running_daemon() {
+fn devql_run_ingest_bootstraps_daemon_when_needed() {
     let repo = seed_devql_cli_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+    let query_count = Rc::new(RefCell::new(0usize));
+    let ingested = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
 
-    let err = test_runtime()
-        .block_on(run(DevqlArgs {
-            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                init: true,
-                max_checkpoints: 500,
-            })),
-        }))
-        .expect_err("devql ingest should require a running daemon");
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_count = Rc::clone(&bootstrap_count);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_count.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                {
+                    let query_count = Rc::clone(&query_count);
+                    let ingested = Rc::clone(&ingested);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *query_count.borrow_mut() += 1;
+                        *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "initRequested": true,
+                                "checkpointsProcessed": 0,
+                                "eventsInserted": 0,
+                                "artefactsUpserted": 0,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                init: true,
+                                max_checkpoints: 500,
+                            })),
+                        }))
+                        .expect("devql ingest should succeed");
+                },
+            );
+        },
+    );
 
+    assert_eq!(*bootstrap_count.borrow(), 1);
+    assert_eq!(*query_count.borrow(), 1);
+    let (query, variables) = ingested
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("ingest"));
+    assert_eq!(
+        variables,
+        json!({
+            "input": {
+                "init": true,
+                "maxCheckpoints": 500
+            }
+        })
+    );
+}
+
+#[test]
+fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
+    let repo = seed_devql_cli_repo();
+    fs::write(
+        repo.path().join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"[stores]
+[stores.relational]
+sqlite_path = ".bitloops/stores/devql.sqlite"
+
+[stores.events]
+duckdb_path = ".bitloops/stores/events.duckdb"
+
+[semantic]
+provider = "disabled"
+
+[semantic_clones]
+summary_mode = "off"
+embedding_mode = "off"
+"#,
+    )
+    .expect("write deterministic-only config");
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let graphql_calls = Rc::new(RefCell::new(0usize));
+
+    with_graphql_executor_hook(
+        {
+            let graphql_calls = Rc::clone(&graphql_calls);
+            move |_repo_root: &std::path::Path,
+                  _query: &str,
+                  _variables: &serde_json::Value| {
+                *graphql_calls.borrow_mut() += 1;
+                panic!("graphql should not be used when enrichment is disabled");
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                        init: true,
+                        max_checkpoints: 25,
+                    })),
+                }))
+                .expect("local deterministic ingest should succeed");
+        },
+    );
+
+    assert_eq!(*graphql_calls.borrow(), 0);
     assert!(
-        err.to_string().contains("Bitloops daemon is not running"),
-        "expected daemon-required error, got: {err:#}"
+        sqlite_path_for_repo(repo.path()).exists(),
+        "local ingest should initialize the relational database",
     );
 }
 

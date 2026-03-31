@@ -18,12 +18,15 @@ mod stage_embeddings;
 mod stage_semantic_features;
 
 pub(crate) use stage_embeddings::{
+    clear_repo_symbol_embedding_rows,
     ensure_semantic_embeddings_schema, init_postgres_semantic_embeddings_schema,
     init_sqlite_semantic_embeddings_schema, upsert_symbol_embedding_rows,
 };
 pub(crate) use stage_semantic_features::{
     init_postgres_semantic_features_schema, init_sqlite_semantic_features_schema,
+    load_semantic_summary_snapshot,
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
+    persist_semantic_summary_row,
     upsert_semantic_feature_rows,
 };
 

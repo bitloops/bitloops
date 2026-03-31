@@ -49,7 +49,6 @@ tar = "0.4"
 zstd = "0.13"
 duckdb = { version = "1", default-features = false }
 object_store = { version = "0.13.2", features = ["aws", "gcp"] }
-fastembed = { version = "5.12.1", default-features = false, features = ["hf-hub-rustls-tls", "image-models", "ort-load-dynamic"] }
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
 rustls = "0.23"
@@ -59,6 +58,7 @@ x509-parser = "0.18.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
+bitloops-embeddings-protocol = { path = "../bitloops-embeddings-protocol" }
 
 [dev-dependencies]
 cucumber = "0.22.1"

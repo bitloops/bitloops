@@ -1,13 +1,19 @@
 use anyhow::Result;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-#[cfg(test)]
 use std::path::Path;
 
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::{
     IngestionCounters, InitSchemaSummary, format_ingestion_summary, format_init_schema_summary,
 };
+use crate::{api::DashboardServerConfig, daemon};
+
+#[cfg(test)]
+thread_local! {
+    static INGEST_DAEMON_BOOTSTRAP_HOOK: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>> =
+        std::cell::RefCell::new(None);
+}
 
 const INIT_SCHEMA_MUTATION: &str = r#"
     mutation InitSchema {
@@ -90,6 +96,7 @@ pub(super) async fn run_ingest_via_graphql(
     init: bool,
     max_checkpoints: usize,
 ) -> Result<()> {
+    ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
     let response: IngestMutationData = execute_devql_graphql(
         scope,
         INGEST_MUTATION,
@@ -103,6 +110,65 @@ pub(super) async fn run_ingest_via_graphql(
     .await?;
     println!("{}", format_ingestion_summary(&response.ingest));
     Ok(())
+}
+
+async fn ensure_daemon_available_for_ingest(_repo_root: &Path) -> Result<()> {
+    #[cfg(test)]
+    if let Some(result) = maybe_bootstrap_daemon_via_hook(_repo_root) {
+        return result;
+    }
+
+    if daemon::daemon_url()?.is_some() {
+        return Ok(());
+    }
+
+    let report = daemon::status().await?;
+    let daemon_config = daemon::resolve_daemon_config(None)?;
+    let config = DashboardServerConfig {
+        host: None,
+        port: crate::api::DEFAULT_DASHBOARD_PORT,
+        no_open: true,
+        force_http: false,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+    };
+
+    if report.service.is_some() {
+        let _ = daemon::start_service(&daemon_config, config).await?;
+    } else {
+        let _ = daemon::start_detached(&daemon_config, config).await?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn with_ingest_daemon_bootstrap_hook<T>(
+    hook: impl Fn(&Path) -> Result<()> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
+        |cell: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
+            assert!(cell.borrow().is_none(), "ingest daemon hook already installed");
+            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+        },
+    );
+    let result = f();
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
+        |cell: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
+            *cell.borrow_mut() = None;
+        },
+    );
+    result
+}
+
+#[cfg(test)]
+fn maybe_bootstrap_daemon_via_hook(repo_root: &Path) -> Option<Result<()>> {
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
+        |hook: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
+            hook.borrow().as_ref().map(|hook| hook(repo_root))
+        },
+    )
 }
 
 #[cfg(test)]

@@ -247,6 +247,54 @@ pub(crate) async fn upsert_semantic_feature_rows(
     Ok(stats)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SemanticSummarySnapshot {
+    pub semantic_features_input_hash: String,
+    pub summary: String,
+}
+
+pub(crate) async fn load_semantic_summary_snapshot(
+    relational: &RelationalStorage,
+    artefact_id: &str,
+) -> Result<Option<SemanticSummarySnapshot>> {
+    let rows = relational
+        .query_rows(&build_semantic_get_summary_sql(artefact_id))
+        .await?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+
+    let Some(input_hash) = row
+        .get("semantic_features_input_hash")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let Some(summary) = row.get("summary").and_then(Value::as_str).map(str::to_string) else {
+        return Ok(None);
+    };
+
+    Ok(Some(SemanticSummarySnapshot {
+        semantic_features_input_hash: input_hash,
+        summary,
+    }))
+}
+
+pub(crate) async fn persist_semantic_summary_row(
+    relational: &RelationalStorage,
+    semantics: &semantic::SymbolSemanticsRow,
+    semantic_features_input_hash: &str,
+) -> Result<()> {
+    relational
+        .exec(&build_semantic_persist_summary_sql(
+            semantics,
+            semantic_features_input_hash,
+            relational.dialect(),
+        )?)
+        .await
+}
+
 async fn load_semantic_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -340,6 +388,15 @@ fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     )
 }
 
+fn build_semantic_get_summary_sql(artefact_id: &str) -> String {
+    format!(
+        "SELECT semantic_features_input_hash, summary \
+FROM symbol_semantics \
+WHERE artefact_id = '{artefact_id}'",
+        artefact_id = esc_pg(artefact_id),
+    )
+}
+
 fn parse_semantic_index_state_rows(rows: &[Value]) -> semantic::SemanticFeatureIndexState {
     let Some(row) = rows.first() else {
         return semantic::SemanticFeatureIndexState::default();
@@ -371,9 +428,6 @@ fn build_semantic_persist_rows_sql(
     let semantics = &rows.semantics;
     let features = &rows.features;
 
-    let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
-    let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
-    let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
     let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
@@ -383,22 +437,15 @@ fn build_semantic_persist_rows_sql(
     let generated_at_sql = semantic_generated_at_now_sql(dialect);
 
     Ok(format!(
-        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
-ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}; \
+        "{persist_summary_sql}; \
 INSERT INTO symbol_features (artefact_id, repo_id, blob_sha, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
 VALUES ('{features_artefact_id}', '{features_repo_id}', '{features_blob_sha}', '{features_input_hash}', '{normalized_name}', {normalized_signature}, {modifiers}, {identifier_tokens}, {body_tokens}, {parent_kind}, {context_tokens}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
-        artefact_id = esc_pg(&semantics.artefact_id),
-        repo_id = esc_pg(&semantics.repo_id),
-        blob_sha = esc_pg(&semantics.blob_sha),
-        input_hash = esc_pg(&rows.semantic_features_input_hash),
-        docstring_summary = docstring_summary_expr,
-        llm_summary = llm_summary_expr,
-        template_summary = esc_pg(&semantics.template_summary),
-        summary = esc_pg(&semantics.summary),
-        confidence = semantics.confidence,
-        source_model = source_model_expr,
+        persist_summary_sql = build_semantic_persist_summary_sql(
+            semantics,
+            &rows.semantic_features_input_hash,
+            dialect,
+        )?,
         features_artefact_id = esc_pg(&features.artefact_id),
         features_repo_id = esc_pg(&features.repo_id),
         features_blob_sha = esc_pg(&features.blob_sha),
@@ -410,6 +457,34 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         body_tokens = body_tokens_expr,
         parent_kind = parent_kind_expr,
         context_tokens = context_tokens_expr,
+        generated_at = generated_at_sql,
+    ))
+}
+
+fn build_semantic_persist_summary_sql(
+    semantics: &semantic::SymbolSemanticsRow,
+    semantic_features_input_hash: &str,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
+    let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+
+    Ok(format!(
+        "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
+        artefact_id = esc_pg(&semantics.artefact_id),
+        repo_id = esc_pg(&semantics.repo_id),
+        blob_sha = esc_pg(&semantics.blob_sha),
+        input_hash = esc_pg(semantic_features_input_hash),
+        docstring_summary = docstring_summary_expr,
+        llm_summary = llm_summary_expr,
+        template_summary = esc_pg(&semantics.template_summary),
+        summary = esc_pg(&semantics.summary),
+        confidence = semantics.confidence,
+        source_model = source_model_expr,
         generated_at = generated_at_sql,
     ))
 }

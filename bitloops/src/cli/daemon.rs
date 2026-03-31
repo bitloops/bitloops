@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
 use crate::daemon::{self, DaemonMode};
-pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
+pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon enrichments`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DaemonArgs {
@@ -21,6 +21,8 @@ pub enum DaemonCommand {
     Status(DaemonStatusArgs),
     /// Restart the global Bitloops daemon.
     Restart(DaemonRestartArgs),
+    /// Inspect or control the enrichment coordinator.
+    Enrichments(EnrichmentArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -84,6 +86,40 @@ pub struct DaemonRestartArgs {
     pub config: Option<std::path::PathBuf>,
 }
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct EnrichmentArgs {
+    #[command(subcommand)]
+    pub command: Option<EnrichmentCommand>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum EnrichmentCommand {
+    /// Show enrichment queue status.
+    Status(EnrichmentStatusArgs),
+    /// Pause background enrichment work.
+    Pause(EnrichmentPauseArgs),
+    /// Resume background enrichment work.
+    Resume(EnrichmentResumeArgs),
+    /// Requeue failed enrichment work.
+    RetryFailed(EnrichmentRetryFailedArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EnrichmentStatusArgs {}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EnrichmentResumeArgs {}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EnrichmentRetryFailedArgs {}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct EnrichmentPauseArgs {
+    /// Optional reason for pausing the queue.
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(MISSING_SUBCOMMAND_MESSAGE);
@@ -94,6 +130,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
+        DaemonCommand::Enrichments(args) => run_enrichments(args).await,
     }
 }
 
@@ -186,6 +223,37 @@ pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
     Ok(())
 }
 
+pub async fn run_enrichments(args: EnrichmentArgs) -> Result<()> {
+    let Some(command) = args.command else {
+        bail!("missing subcommand. Use one of: `bitloops daemon enrichments status`, `bitloops daemon enrichments pause`, `bitloops daemon enrichments resume`, `bitloops daemon enrichments retry-failed`");
+    };
+
+    match command {
+        EnrichmentCommand::Status(_) => {
+            let status = daemon::enrichment_status()?;
+            for line in enrichment_status_lines(&status) {
+                println!("{line}");
+            }
+            Ok(())
+        }
+        EnrichmentCommand::Pause(args) => {
+            let result = daemon::pause_enrichments(args.reason)?;
+            println!("{}", result.message);
+            Ok(())
+        }
+        EnrichmentCommand::Resume(_) => {
+            let result = daemon::resume_enrichments()?;
+            println!("{}", result.message);
+            Ok(())
+        }
+        EnrichmentCommand::RetryFailed(_) => {
+            let result = daemon::retry_failed_enrichments()?;
+            println!("{}", result.message);
+            Ok(())
+        }
+    }
+}
+
 pub async fn launch_dashboard() -> Result<()> {
     print_legacy_repo_data_warnings();
     if let Some(url) = daemon::daemon_url()? {
@@ -261,6 +329,9 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(health) = report.health.as_ref() {
             append_health_lines(&mut lines, health);
         }
+        if let Some(enrichment) = report.enrichment.as_ref() {
+            append_enrichment_lines(&mut lines, enrichment);
+        }
         return lines;
     }
 
@@ -283,11 +354,17 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(url) = service.last_url.as_ref() {
             lines.push(format!("Last URL: {url}"));
         }
+        if let Some(enrichment) = report.enrichment.as_ref() {
+            append_enrichment_lines(&mut lines, enrichment);
+        }
         return lines;
     }
 
     lines.push("Bitloops daemon: stopped".to_string());
     lines.push("Mode: not running".to_string());
+    if let Some(enrichment) = report.enrichment.as_ref() {
+        append_enrichment_lines(&mut lines, enrichment);
+    }
     lines
 }
 
@@ -346,6 +423,69 @@ fn append_health_lines(lines: &mut Vec<String>, health: &daemon::DaemonHealthSum
     }
 }
 
+fn enrichment_status_lines(status: &daemon::EnrichmentQueueStatus) -> Vec<String> {
+    let mut lines = vec!["Enrichment queue: available".to_string()];
+    append_enrichment_lines(&mut lines, status);
+    lines
+}
+
+fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQueueStatus) {
+    lines.push(format!("Enrichment mode: {}", status.state.mode));
+    lines.push(format!("Enrichment pending jobs: {}", status.state.pending_jobs));
+    lines.push(format!(
+        "Enrichment pending semantic jobs: {}",
+        status.state.pending_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment pending embedding jobs: {}",
+        status.state.pending_embedding_jobs
+    ));
+    lines.push(format!(
+        "Enrichment pending clone rebuild jobs: {}",
+        status.state.pending_clone_rebuild_jobs
+    ));
+    lines.push(format!("Enrichment running jobs: {}", status.state.running_jobs));
+    lines.push(format!(
+        "Enrichment running semantic jobs: {}",
+        status.state.running_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment running embedding jobs: {}",
+        status.state.running_embedding_jobs
+    ));
+    lines.push(format!(
+        "Enrichment running clone rebuild jobs: {}",
+        status.state.running_clone_rebuild_jobs
+    ));
+    lines.push(format!("Enrichment failed jobs: {}", status.state.failed_jobs));
+    lines.push(format!(
+        "Enrichment failed semantic jobs: {}",
+        status.state.failed_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment failed embedding jobs: {}",
+        status.state.failed_embedding_jobs
+    ));
+    lines.push(format!(
+        "Enrichment failed clone rebuild jobs: {}",
+        status.state.failed_clone_rebuild_jobs
+    ));
+    lines.push(format!(
+        "Enrichment retried failed jobs: {}",
+        status.state.retried_failed_jobs
+    ));
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("Enrichment last action: {action}"));
+    }
+    if let Some(reason) = status.state.paused_reason.as_ref() {
+        lines.push(format!("Enrichment pause reason: {reason}"));
+    }
+    lines.push(format!(
+        "Enrichment persisted: {}",
+        if status.persisted { "yes" } else { "no" }
+    ));
+}
+
 fn print_legacy_repo_data_warnings() {
     for line in legacy_repo_data_warnings() {
         eprintln!("{line}");
@@ -387,7 +527,10 @@ fn legacy_repo_data_warnings() -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
-    use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
+    use crate::daemon::{
+        DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
+        EnrichmentQueueStatus, ServiceManagerKind,
+    };
     use clap::Parser;
 
     #[test]
@@ -428,6 +571,31 @@ mod tests {
     }
 
     #[test]
+    fn daemon_enrichments_cli_parses_controls() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "daemon",
+            "enrichments",
+            "pause",
+            "--reason",
+            "maintenance",
+        ])
+        .expect("daemon enrichments should parse");
+
+        let Some(Commands::Daemon(daemon)) = parsed.command else {
+            panic!("expected daemon command");
+        };
+        let Some(DaemonCommand::Enrichments(enrichments)) = daemon.command else {
+            panic!("expected daemon enrichments command");
+        };
+        let Some(EnrichmentCommand::Pause(pause)) = enrichments.command else {
+            panic!("expected pause command");
+        };
+
+        assert_eq!(pause.reason.as_deref(), Some("maintenance"));
+    }
+
+    #[test]
     fn status_lines_show_global_supervisor_install_and_state() {
         let report = DaemonStatusReport {
             runtime: None,
@@ -451,6 +619,29 @@ mod tests {
             }),
             service_running: false,
             health: None,
+            enrichment: Some(EnrichmentQueueStatus {
+                state: EnrichmentQueueState {
+                    version: 1,
+                    mode: EnrichmentQueueMode::Paused,
+                    pending_jobs: 2,
+                    pending_semantic_jobs: 1,
+                    pending_embedding_jobs: 1,
+                    pending_clone_rebuild_jobs: 0,
+                    running_jobs: 1,
+                    running_semantic_jobs: 1,
+                    running_embedding_jobs: 0,
+                    running_clone_rebuild_jobs: 0,
+                    failed_jobs: 3,
+                    failed_semantic_jobs: 1,
+                    failed_embedding_jobs: 1,
+                    failed_clone_rebuild_jobs: 1,
+                    retried_failed_jobs: 4,
+                    last_action: Some("paused".to_string()),
+                    last_updated_unix: 0,
+                    paused_reason: Some("maintenance".to_string()),
+                },
+                persisted: true,
+            }),
         };
 
         assert_eq!(
@@ -462,6 +653,23 @@ mod tests {
                 "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
                 "Supervisor state: stopped".to_string(),
                 "Last URL: https://127.0.0.1:5173".to_string(),
+                "Enrichment mode: paused".to_string(),
+                "Enrichment pending jobs: 2".to_string(),
+                "Enrichment pending semantic jobs: 1".to_string(),
+                "Enrichment pending embedding jobs: 1".to_string(),
+                "Enrichment pending clone rebuild jobs: 0".to_string(),
+                "Enrichment running jobs: 1".to_string(),
+                "Enrichment running semantic jobs: 1".to_string(),
+                "Enrichment running embedding jobs: 0".to_string(),
+                "Enrichment running clone rebuild jobs: 0".to_string(),
+                "Enrichment failed jobs: 3".to_string(),
+                "Enrichment failed semantic jobs: 1".to_string(),
+                "Enrichment failed embedding jobs: 1".to_string(),
+                "Enrichment failed clone rebuild jobs: 1".to_string(),
+                "Enrichment retried failed jobs: 4".to_string(),
+                "Enrichment last action: paused".to_string(),
+                "Enrichment pause reason: maintenance".to_string(),
+                "Enrichment persisted: yes".to_string(),
             ]
         );
     }

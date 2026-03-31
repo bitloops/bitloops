@@ -1,13 +1,16 @@
-mod embeddings_http;
-mod embeddings_local;
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::time::Duration;
 
-use std::path::Path;
+use anyhow::{Context, Result, anyhow, bail};
 
-use anyhow::Result;
-
-const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
-const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "jinaai/jina-embeddings-v2-base-code";
-const DEFAULT_VOYAGE_EMBEDDING_MODEL: &str = "voyage-code-3";
+use bitloops_embeddings_protocol::{
+    DescribeRequest, DescribeResponse, EmbedBatchRequest, EmbedBatchResponse, EmbeddingInput,
+    ErrorResponse, ProviderDescriptor, Request, Response, ShutdownRequest,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
@@ -24,6 +27,15 @@ impl EmbeddingInputType {
     }
 }
 
+impl From<EmbeddingInputType> for bitloops_embeddings_protocol::EmbeddingInputType {
+    fn from(value: EmbeddingInputType) -> Self {
+        match value {
+            EmbeddingInputType::Document => Self::Document,
+            EmbeddingInputType::Query => Self::Query,
+        }
+    }
+}
+
 pub trait EmbeddingProvider: Send + Sync {
     fn provider_name(&self) -> &str;
     fn model_name(&self) -> &str;
@@ -32,34 +44,228 @@ pub trait EmbeddingProvider: Send + Sync {
     fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>>;
 }
 
+#[derive(Debug, Clone)]
+pub struct EmbeddingRuntimeClientConfig {
+    pub command: String,
+    pub args: Vec<String>,
+    pub startup_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub config_path: PathBuf,
+    pub profile_name: String,
+    pub repo_root: Option<PathBuf>,
+}
+
 pub fn build_embedding_provider(
-    provider: &str,
-    model: String,
-    api_key: Option<String>,
-    repo_root: Option<&Path>,
-    cache_dir: Option<&Path>,
+    config: &EmbeddingRuntimeClientConfig,
 ) -> Result<Box<dyn EmbeddingProvider>> {
-    if embeddings_local::supports_provider(provider) {
-        embeddings_local::build(provider, model, repo_root, cache_dir)
-    } else {
-        embeddings_http::build(provider, model, api_key)
+    let session = RuntimeSession::spawn(config)?;
+    let describe = session.describe(Duration::from_secs(config.startup_timeout_secs))?;
+    Ok(Box::new(RuntimeEmbeddingProvider {
+        request_timeout: Duration::from_secs(config.request_timeout_secs),
+        session,
+        runtime: describe.runtime,
+    }))
+}
+
+#[derive(Debug)]
+struct RuntimeEmbeddingProvider {
+    request_timeout: Duration,
+    session: RuntimeSession,
+    runtime: bitloops_embeddings_protocol::RuntimeDescriptor,
+}
+
+impl EmbeddingProvider for RuntimeEmbeddingProvider {
+    fn provider_name(&self) -> &str {
+        &self.runtime.provider.provider_name
+    }
+
+    fn model_name(&self) -> &str {
+        &self.runtime.provider.model_name
+    }
+
+    fn output_dimension(&self) -> Option<usize> {
+        self.runtime.provider.output_dimension
+    }
+
+    fn cache_key(&self) -> String {
+        cache_key_for_runtime(&self.runtime.provider, &self.runtime.profile_name)
+    }
+
+    fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+        let input = input.trim();
+        if input.is_empty() {
+            bail!("embedding input cannot be empty");
+        }
+
+        let request_id = next_request_id();
+        let response = self.session.request(
+            Request::EmbedBatch(EmbedBatchRequest {
+                request_id,
+                inputs: vec![EmbeddingInput {
+                    id: None,
+                    text: input.to_string(),
+                    input_type: input_type.into(),
+                }],
+            }),
+            self.request_timeout,
+        )?;
+        let Response::EmbedBatch(EmbedBatchResponse { vectors, .. }) = response else {
+            bail!("embedding runtime returned an unexpected response type");
+        };
+        let vector = vectors
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("embedding runtime returned no vectors"))?;
+        if vector.values.is_empty() {
+            bail!("embedding runtime returned an empty vector");
+        }
+        Ok(vector.values)
     }
 }
 
-pub fn default_embedding_provider() -> &'static str {
-    DEFAULT_EMBEDDING_PROVIDER
+#[derive(Debug)]
+struct RuntimeSession {
+    sender: mpsc::Sender<WorkerCommand>,
 }
 
-pub fn default_embedding_model(provider: &str) -> Option<&'static str> {
-    match provider {
-        "local" | "jina" | "jina_local" => Some(DEFAULT_LOCAL_EMBEDDING_MODEL),
-        "voyage" => Some(DEFAULT_VOYAGE_EMBEDDING_MODEL),
-        _ => None,
+impl RuntimeSession {
+    fn spawn(config: &EmbeddingRuntimeClientConfig) -> Result<Self> {
+        let mut command = Command::new(&config.command);
+        command.args(&config.args);
+        command.arg("--config").arg(&config.config_path);
+        command.arg("--profile").arg(&config.profile_name);
+        if let Some(repo_root) = config.repo_root.as_ref() {
+            command.arg("--repo_root").arg(repo_root);
+        }
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::inherit());
+
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "spawning embeddings runtime `{}` for profile `{}`",
+                config.command, config.profile_name
+            )
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("capturing embeddings runtime stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("capturing embeddings runtime stdout")?;
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || runtime_worker_loop(child, stdin, stdout, receiver));
+
+        Ok(Self { sender })
+    }
+
+    fn describe(&self, timeout: Duration) -> Result<DescribeResponse> {
+        let response = self.request(
+            Request::Describe(DescribeRequest {
+                request_id: next_request_id(),
+            }),
+            timeout,
+        )?;
+        let Response::Describe(describe) = response else {
+            bail!("embedding runtime returned an unexpected response to describe");
+        };
+        Ok(describe)
+    }
+
+    fn request(&self, request: Request, timeout: Duration) -> Result<Response> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.sender
+            .send(WorkerCommand {
+                request,
+                response_tx,
+            })
+            .map_err(|_| anyhow!("embedding runtime worker is not available"))?;
+        response_rx
+            .recv_timeout(timeout)
+            .map_err(|_| anyhow!("embedding runtime request timed out after {:?}", timeout))?
     }
 }
 
-pub fn embedding_provider_requires_api_key(provider: &str) -> bool {
-    matches!(provider, "voyage" | "openai")
+#[derive(Debug)]
+struct WorkerCommand {
+    request: Request,
+    response_tx: mpsc::Sender<Result<Response>>,
+}
+
+fn runtime_worker_loop(
+    mut child: Child,
+    mut stdin: ChildStdin,
+    stdout: ChildStdout,
+    receiver: mpsc::Receiver<WorkerCommand>,
+) {
+    let mut reader = BufReader::new(stdout);
+    while let Ok(command) = receiver.recv() {
+        let response = handle_worker_request(&mut stdin, &mut reader, &command.request);
+        let _ = command.response_tx.send(response);
+    }
+
+    let _ = write_request(
+        &mut stdin,
+        &Request::Shutdown(ShutdownRequest {
+            request_id: next_request_id(),
+        }),
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn handle_worker_request(
+    stdin: &mut ChildStdin,
+    reader: &mut BufReader<ChildStdout>,
+    request: &Request,
+) -> Result<Response> {
+    write_request(stdin, request)?;
+    let response = read_response(reader)?;
+    match &response {
+        Response::Error(ErrorResponse { message, .. }) => bail!("{message}"),
+        _ => Ok(response),
+    }
+}
+
+fn write_request(stdin: &mut ChildStdin, request: &Request) -> Result<()> {
+    let line = serde_json::to_string(request).context("serializing embeddings runtime request")?;
+    writeln!(stdin, "{line}").context("writing embeddings runtime request")?;
+    stdin.flush().context("flushing embeddings runtime request")
+}
+
+fn read_response(reader: &mut BufReader<ChildStdout>) -> Result<Response> {
+    let mut line = String::new();
+    let bytes = reader
+        .read_line(&mut line)
+        .context("reading embeddings runtime response")?;
+    if bytes == 0 {
+        bail!("embeddings runtime exited before replying");
+    }
+    serde_json::from_str(line.trim_end()).context("parsing embeddings runtime response")
+}
+
+fn cache_key_for_runtime(provider: &ProviderDescriptor, profile_name: &str) -> String {
+    match provider.output_dimension {
+        Some(output_dimension) => format!(
+            "runtime_profile={profile_name}::provider={}::model={}::dimension={output_dimension}",
+            provider.provider_name, provider.model_name
+        ),
+        None => format!(
+            "runtime_profile={profile_name}::provider={}::model={}",
+            provider.provider_name, provider.model_name
+        ),
+    }
+}
+
+fn next_request_id() -> String {
+    static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "embeddings-{}",
+        NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 #[cfg(test)]
@@ -67,25 +273,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedding_provider_defaults_cover_local_and_hosted_models() {
-        assert_eq!(default_embedding_provider(), "local");
+    fn embedding_input_type_maps_to_protocol_shape() {
         assert_eq!(
-            default_embedding_model("local"),
-            Some("jinaai/jina-embeddings-v2-base-code")
+            bitloops_embeddings_protocol::EmbeddingInputType::from(EmbeddingInputType::Document)
+                .as_str(),
+            "document"
         );
         assert_eq!(
-            default_embedding_model("jina"),
-            Some("jinaai/jina-embeddings-v2-base-code")
+            bitloops_embeddings_protocol::EmbeddingInputType::from(EmbeddingInputType::Query)
+                .as_str(),
+            "query"
         );
-        assert_eq!(default_embedding_model("voyage"), Some("voyage-code-3"));
-        assert_eq!(default_embedding_model("openai"), None);
     }
 
     #[test]
-    fn embedding_provider_api_key_requirements_match_supported_http_providers() {
-        assert!(embedding_provider_requires_api_key("voyage"));
-        assert!(embedding_provider_requires_api_key("openai"));
-        assert!(!embedding_provider_requires_api_key("local"));
-        assert!(!embedding_provider_requires_api_key("jina"));
+    fn cache_key_includes_profile_provider_and_model() {
+        let key = cache_key_for_runtime(
+            &ProviderDescriptor {
+                kind: "openai".to_string(),
+                provider_name: "openai".to_string(),
+                model_name: "text-embedding-3-large".to_string(),
+                output_dimension: Some(3072),
+                cache_dir: None,
+            },
+            "prod",
+        );
+
+        assert!(key.contains("runtime_profile=prod"));
+        assert!(key.contains("provider=openai"));
+        assert!(key.contains("model=text-embedding-3-large"));
+        assert!(key.contains("dimension=3072"));
     }
 }

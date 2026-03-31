@@ -40,6 +40,10 @@ struct DaemonTomlFile {
     #[serde(default)]
     semantic: Option<Value>,
     #[serde(default)]
+    semantic_clones: Option<Value>,
+    #[serde(default)]
+    embeddings: Option<Value>,
+    #[serde(default)]
     dashboard: Option<Value>,
 }
 
@@ -109,6 +113,8 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
             stores: file.stores,
             knowledge: file.knowledge,
             semantic: file.semantic,
+            semantic_clones: file.semantic_clones,
+            embeddings: file.embeddings,
             dashboard: file.dashboard,
             watch: None,
         },
