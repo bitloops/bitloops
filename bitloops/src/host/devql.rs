@@ -45,6 +45,8 @@ mod commands_projection;
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
 mod commands_refresh;
+#[path = "devql/sync/mod.rs"]
+pub(crate) mod sync;
 mod connection_status;
 pub(crate) mod identity;
 mod types;
@@ -733,3 +735,7 @@ mod cucumber_bdd;
 #[cfg(test)]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
+
+#[cfg(test)]
+#[path = "devql/tests/sync_tests.rs"]
+mod sync_tests;

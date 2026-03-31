@@ -89,6 +89,7 @@ ON artefact_edges (
 "#
 }
 
+#[allow(dead_code)]
 pub(crate) fn current_state_hardening_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS current_file_state (

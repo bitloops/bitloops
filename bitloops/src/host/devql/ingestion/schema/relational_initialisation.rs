@@ -6,6 +6,21 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite
         .initialise_devql_schema()
         .context("creating SQLite relational DevQL tables")?;
+    sqlite_exec_path_allow_create(sqlite_path, crate::host::devql::sync::schema::sync_schema_sql())
+        .await
+        .context("creating SQLite DevQL sync tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
+    )
+    .await
+    .context("rebuilding SQLite sync current_file_state table")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
+    )
+    .await
+    .context("rebuilding SQLite current-state sync tables")?;
     sqlite_exec_path_allow_create(sqlite_path, edge_model_cleanup_sqlite_sql())
         .await
         .context("normalising SQLite DevQL edge model values")?;
@@ -40,15 +55,28 @@ pub(crate) async fn init_postgres_schema(
         .await
         .context("updating Postgres artefact_edges constraints/indexes")?;
 
-    let current_state_hardening_sql = current_state_hardening_sql();
-    postgres_exec(pg_client, current_state_hardening_sql)
-        .await
-        .context("updating Postgres current-state DevQL tables")?;
-
     let edge_model_cleanup_sql = edge_model_cleanup_postgres_sql();
     postgres_exec(pg_client, edge_model_cleanup_sql)
         .await
         .context("normalising Postgres DevQL edge model values")?;
+
+    postgres_exec(pg_client, crate::host::devql::sync::schema::sync_schema_sql())
+        .await
+        .context("creating Postgres DevQL sync tables")?;
+
+    postgres_exec(
+        pg_client,
+        crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
+    )
+    .await
+    .context("rebuilding Postgres sync current_file_state table")?;
+
+    postgres_exec(
+        pg_client,
+        crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
+    )
+    .await
+    .context("rebuilding Postgres current-state sync tables")?;
 
     crate::capability_packs::semantic_clones::init_postgres_semantic_features_schema(pg_client)
         .await
