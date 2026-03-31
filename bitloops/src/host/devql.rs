@@ -12,8 +12,16 @@ use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::extension_descriptor as semantic_clones_pack;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
+<<<<<<< Updated upstream
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+<<<<<<< Updated upstream
     clear_repo_symbol_embedding_rows,
+=======
+=======
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+    clear_repo_symbol_embedding_rows,
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
     upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
 };

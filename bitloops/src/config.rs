@@ -25,19 +25,42 @@ pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,
     resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo, resolve_provider_config,
     resolve_provider_config_for_repo, resolve_sqlite_db_path, resolve_sqlite_db_path_for_repo,
+<<<<<<< Updated upstream
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
     resolve_semantic_clones_config_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo,
+=======
+<<<<<<< Updated upstream
+    resolve_store_backend_config, resolve_store_backend_config_for_repo,
+>>>>>>> Stashed changes
     resolve_store_embedding_config, resolve_store_embedding_config_for_repo,
     resolve_store_semantic_config, resolve_store_semantic_config_for_repo,
     resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
+<<<<<<< Updated upstream
+=======
+    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, DashboardLocalDashboardConfig,
+    EventsBackendConfig, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
+    StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig,
+=======
+    resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
+    resolve_semantic_clones_config_for_repo, resolve_store_backend_config,
+    resolve_store_backend_config_for_repo, resolve_store_semantic_config,
+    resolve_store_semantic_config_for_repo, resolve_watch_runtime_config_for_repo,
+};
+pub use types::{
+>>>>>>> Stashed changes
     AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig,
     DashboardLocalDashboardConfig, EmbeddingCapabilityConfig, EmbeddingProfileConfig,
     EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig, GithubProviderConfig,
     ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig,
+<<<<<<< Updated upstream
     SemanticSummaryMode, StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig,
+=======
+    SemanticSummaryMode, StoreBackendConfig, StoreFileConfig, StoreSemanticConfig,
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     WatchFileConfig, WatchRuntimeConfig,
 };
 
@@ -49,8 +72,7 @@ pub(crate) use constants::{
 #[cfg(test)]
 pub(crate) use resolve::{
     resolve_provider_config_for_tests, resolve_store_backend_config_for_tests,
-    resolve_store_embedding_config_for_tests, resolve_store_semantic_config_for_tests,
-    resolve_watch_runtime_config_for_tests,
+    resolve_store_semantic_config_for_tests, resolve_watch_runtime_config_for_tests,
 };
 
 #[cfg(test)]

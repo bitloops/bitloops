@@ -237,10 +237,6 @@ mod tests {
             semantic_model: None,
             semantic_api_key: None,
             semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 

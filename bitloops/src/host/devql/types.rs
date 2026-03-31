@@ -1,7 +1,5 @@
 use super::*;
-use crate::config::{
-    resolve_store_embedding_config_for_repo, resolve_store_semantic_config_for_repo,
-};
+use crate::config::resolve_store_semantic_config_for_repo;
 
 #[derive(Debug, Clone)]
 pub struct RepoIdentity {
@@ -26,7 +24,11 @@ pub struct DevqlConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
+<<<<<<< Updated upstream
     #[allow(dead_code)]
+=======
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
     pub(crate) embedding_provider: Option<String>,
     #[allow(dead_code)]
     pub(crate) embedding_model: Option<String>,
@@ -34,6 +36,8 @@ pub struct DevqlConfig {
     pub(crate) embedding_api_key: Option<String>,
     #[allow(dead_code)]
     pub(crate) embedding_cache_dir: Option<PathBuf>,
+=======
+>>>>>>> Stashed changes
 }
 
 impl DevqlConfig {
@@ -49,7 +53,6 @@ impl DevqlConfig {
         let backend_cfg = resolve_store_backend_config_for_repo(&config_root)
             .context("resolving backend config for DevQL runtime")?;
         let semantic_cfg = resolve_store_semantic_config_for_repo(&config_root);
-        let embedding_cfg = resolve_store_embedding_config_for_repo(&config_root);
         Ok(Self {
             config_root,
             repo_root,
@@ -69,10 +72,6 @@ impl DevqlConfig {
             semantic_model: semantic_cfg.semantic_model,
             semantic_api_key: semantic_cfg.semantic_api_key,
             semantic_base_url: semantic_cfg.semantic_base_url,
-            embedding_provider: embedding_cfg.embedding_provider,
-            embedding_model: embedding_cfg.embedding_model,
-            embedding_api_key: embedding_cfg.embedding_api_key,
-            embedding_cache_dir: embedding_cfg.embedding_cache_dir,
         })
     }
 
@@ -201,10 +200,6 @@ mod tests {
             semantic_model: None,
             semantic_api_key: None,
             semantic_base_url: None,
-            embedding_provider: None,
-            embedding_model: None,
-            embedding_api_key: None,
-            embedding_cache_dir: None,
         }
     }
 

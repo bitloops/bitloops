@@ -347,6 +347,18 @@ pub(crate) async fn execute_ingest_with_observer(
     counters.temporary_rows_promoted =
         promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
+    let clone_ingest = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+            json!({}),
+            Some(&relational),
+=======
+>>>>>>> Stashed changes
     if let Some(warning) = embedding_warning.as_deref() {
         log::warn!("semantic_clones embeddings degraded; skipping embedding and clone stages: {warning}");
     }
@@ -356,9 +368,39 @@ pub(crate) async fn execute_ingest_with_observer(
         let clone_ingest = capability_host
             .invoke_ingester_with_relational(
                 SEMANTIC_CLONES_CAPABILITY_ID,
+<<<<<<< Updated upstream
                 SEMANTIC_CLONES_REBUILD_INGESTER_ID,
                 json!({}),
                 Some(&relational),
+=======
+                SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+                json!({}),
+                Some(&relational),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "running capability ingester `{SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+                )
+            })?;
+        counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize;
+        counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
+            .as_u64()
+            .unwrap_or_default() as usize;
+    } else if !embedding_outputs_enabled || (enrichment.is_none() && embedding_provider.is_none()) {
+        clear_repo_symbol_embedding_rows(&relational, &cfg.repo.repo_id).await?;
+        crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
+            &relational,
+            &cfg.repo.repo_id,
+>>>>>>> Stashed changes
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "running capability ingester `{SEMANTIC_CLONES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
+>>>>>>> Stashed changes
             )
             .await
             .with_context(|| {

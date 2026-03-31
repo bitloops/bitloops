@@ -3,7 +3,7 @@
 //! Pure clone scoring lives in [`semantic_clones_pack::build_symbol_clone_edges`]. This module
 //! loads candidates from DevQL relational storage, applies pack DDL when needed, and persists
 //! edges. **DevQL ingestion** should trigger rebuild only via the registered ingester
-//! ([`super::SEMANTIC_CLONES_REBUILD_INGESTER_ID`]) or [`rebuild_symbol_clone_edges`](fn@rebuild_symbol_clone_edges) (also re-exported at `crate::host::devql` under `cfg(test)` for integration tests),
+//! ([`super::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID`]) or [`rebuild_symbol_clone_edges`](fn@rebuild_symbol_clone_edges) (also re-exported at `crate::host::devql` under `cfg(test)` for integration tests),
 //! not by duplicating this pipeline.
 
 use std::collections::{HashMap, HashSet};

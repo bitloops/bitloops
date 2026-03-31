@@ -2,11 +2,24 @@ use serde_json::json;
 use std::path::Path;
 
 use super::unified_config::{
+<<<<<<< Updated upstream
     UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
     resolve_embedding_capability_from_unified, resolve_embedding_from_unified,
     resolve_embeddings_from_unified, resolve_provider_from_unified,
     resolve_semantic_clones_from_unified, resolve_semantic_from_unified,
+=======
+<<<<<<< Updated upstream
+    UnifiedSettings, merge_layers, resolve_dashboard_from_unified, resolve_embedding_from_unified,
+    resolve_provider_from_unified, resolve_semantic_from_unified,
+>>>>>>> Stashed changes
     resolve_store_backend_from_unified, resolve_watch_from_unified,
+=======
+    UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
+    resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
+    resolve_provider_from_unified, resolve_semantic_clones_from_unified,
+    resolve_semantic_from_unified, resolve_store_backend_from_unified,
+    resolve_watch_from_unified,
+>>>>>>> Stashed changes
 };
 use super::{
     DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL,
@@ -140,17 +153,30 @@ fn semantic_from_unified_env_wins_over_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
+<<<<<<< Updated upstream
 fn embedding_from_unified_ignores_legacy_values() {
+=======
+<<<<<<< Updated upstream
+fn embedding_from_unified_reads_values() {
+=======
+fn embedding_capability_from_unified_requires_explicit_profile_selection() {
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     let settings = UnifiedSettings {
-        stores: Some(json!({
-            "embedding_provider": "openai",
-            "embedding_model": "text-embedding-ada-002",
-            "embedding_api_key": "sk-embed"
+        embeddings: Some(json!({
+            "profiles": {
+                "local": {
+                    "kind": "local_fastembed",
+                    "model": "jinaai/jina-embeddings-v2-base-code"
+                }
+            }
         })),
         ..Default::default()
     };
-    let cfg = resolve_embedding_from_unified(&settings, Path::new("/config"), no_env);
+    let capability =
+        resolve_embedding_capability_from_unified(&settings, Path::new("/config"), no_env);
 
+<<<<<<< Updated upstream
     assert_eq!(cfg.embedding_provider, None);
     assert_eq!(cfg.embedding_model, None);
     assert_eq!(cfg.embedding_api_key, None);
@@ -164,6 +190,36 @@ fn embedding_from_unified_defaults_to_disabled() {
     assert_eq!(cfg.embedding_provider, None);
     assert_eq!(cfg.embedding_model, None);
     assert_eq!(cfg.embedding_api_key, None);
+=======
+<<<<<<< Updated upstream
+    assert_eq!(cfg.embedding_provider.as_deref(), Some("openai"));
+    assert_eq!(
+        cfg.embedding_model.as_deref(),
+        Some("text-embedding-ada-002")
+    );
+    assert_eq!(cfg.embedding_api_key.as_deref(), Some("sk-embed"));
+}
+
+#[test]
+fn embedding_from_unified_defaults_provider_to_local() {
+=======
+    assert_eq!(capability.semantic_clones.embedding_profile, None);
+    assert!(capability.embeddings.profiles.contains_key("local"));
+    assert!(capability.embeddings.warnings.is_empty());
+}
+
+#[test]
+fn embeddings_from_unified_defaults_to_disabled() {
+>>>>>>> Stashed changes
+    let settings = UnifiedSettings::default();
+    let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
+
+<<<<<<< Updated upstream
+=======
+    assert_eq!(embeddings.runtime.command, "bitloops-embeddings");
+    assert!(embeddings.profiles.is_empty());
+    assert!(embeddings.warnings.is_empty());
+>>>>>>> Stashed changes
 }
 
 #[test]
@@ -192,10 +248,19 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
 
     let semantic_clones = resolve_semantic_clones_from_unified(&settings, no_env);
     assert_eq!(semantic_clones.summary_mode, SemanticSummaryMode::Auto);
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     assert_eq!(
         semantic_clones.embedding_mode,
         SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     assert_eq!(semantic_clones.embedding_profile.as_deref(), Some("local"));
 
     let embeddings = resolve_embeddings_from_unified(&settings, Path::new("/config"), no_env);
@@ -213,12 +278,21 @@ fn semantic_clones_and_embeddings_from_unified_read_profile_sections() {
 }
 
 #[test]
+<<<<<<< Updated upstream
 fn embedding_capability_from_unified_does_not_synthesize_legacy_profile() {
     let settings = UnifiedSettings {
         stores: Some(json!({
             "embedding_provider": "openai",
             "embedding_model": "text-embedding-3-large",
             "embedding_api_key": "legacy-key"
+=======
+fn embedding_capability_from_unified_does_not_activate_from_unrelated_store_settings() {
+    let settings = UnifiedSettings {
+        stores: Some(json!({
+            "relational": {
+                "sqlite_path": "data/devql.sqlite"
+            }
+>>>>>>> Stashed changes
         })),
         ..Default::default()
     };
@@ -247,6 +321,10 @@ fn semantic_clones_from_unified_reads_mode_fields() {
         SemanticCloneEmbeddingMode::RefreshOnUpgrade
     );
     assert_eq!(semantic_clones.embedding_profile, None);
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 }
 
 // ---------------------------------------------------------------------------

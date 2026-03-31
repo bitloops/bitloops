@@ -31,4 +31,6 @@ pub(crate) use stage_semantic_features::{
 };
 
 pub use pack::SemanticClonesPack;
-pub use types::{SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_REBUILD_INGESTER_ID};
+pub use types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+};

@@ -349,39 +349,46 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
 
-    with_graphql_executor_hook(
-        {
-            let captured = Rc::clone(&captured);
-            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
-                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
-                Ok(json!({
-                    "ingest": {
-                        "success": true,
-                        "initRequested": false,
-                        "checkpointsProcessed": 2,
-                        "eventsInserted": 3,
-                        "artefactsUpserted": 5,
-                        "checkpointsWithoutCommit": 0,
-                        "temporaryRowsPromoted": 0,
-                        "semanticFeatureRowsUpserted": 0,
-                        "semanticFeatureRowsSkipped": 0,
-                        "symbolEmbeddingRowsUpserted": 0,
-                        "symbolEmbeddingRowsSkipped": 0,
-                        "symbolCloneEdgesUpserted": 0,
-                        "symbolCloneSourcesScored": 0
-                    }
-                }))
-            }
-        },
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
         || {
-            test_runtime()
-                .block_on(run(DevqlArgs {
-                    command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                        init: false,
-                        max_checkpoints: 42,
-                    })),
-                }))
-                .expect("devql ingest should succeed");
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "ingest": {
+                                "success": true,
+                                "initRequested": false,
+                                "checkpointsProcessed": 2,
+                                "eventsInserted": 3,
+                                "artefactsUpserted": 5,
+                                "checkpointsWithoutCommit": 0,
+                                "temporaryRowsPromoted": 0,
+                                "semanticFeatureRowsUpserted": 0,
+                                "semanticFeatureRowsSkipped": 0,
+                                "symbolEmbeddingRowsUpserted": 0,
+                                "symbolEmbeddingRowsSkipped": 0,
+                                "symbolCloneEdgesUpserted": 0,
+                                "symbolCloneSourcesScored": 0
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                                init: false,
+                                max_checkpoints: 42,
+                            })),
+                        }))
+                        .expect("devql ingest should succeed");
+                },
+            );
         },
     );
 

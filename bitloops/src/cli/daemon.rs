@@ -423,6 +423,11 @@ fn append_health_lines(lines: &mut Vec<String>, health: &daemon::DaemonHealthSum
     }
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
 fn enrichment_status_lines(status: &daemon::EnrichmentQueueStatus) -> Vec<String> {
     let mut lines = vec!["Enrichment queue: available".to_string()];
     append_enrichment_lines(&mut lines, status);
@@ -441,8 +446,13 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
         status.state.pending_embedding_jobs
     ));
     lines.push(format!(
+<<<<<<< Updated upstream
         "Enrichment pending clone rebuild jobs: {}",
         status.state.pending_clone_rebuild_jobs
+=======
+        "Enrichment pending clone-edge rebuild jobs: {}",
+        status.state.pending_clone_edges_rebuild_jobs
+>>>>>>> Stashed changes
     ));
     lines.push(format!("Enrichment running jobs: {}", status.state.running_jobs));
     lines.push(format!(
@@ -454,8 +464,13 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
         status.state.running_embedding_jobs
     ));
     lines.push(format!(
+<<<<<<< Updated upstream
         "Enrichment running clone rebuild jobs: {}",
         status.state.running_clone_rebuild_jobs
+=======
+        "Enrichment running clone-edge rebuild jobs: {}",
+        status.state.running_clone_edges_rebuild_jobs
+>>>>>>> Stashed changes
     ));
     lines.push(format!("Enrichment failed jobs: {}", status.state.failed_jobs));
     lines.push(format!(
@@ -467,8 +482,13 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
         status.state.failed_embedding_jobs
     ));
     lines.push(format!(
+<<<<<<< Updated upstream
         "Enrichment failed clone rebuild jobs: {}",
         status.state.failed_clone_rebuild_jobs
+=======
+        "Enrichment failed clone-edge rebuild jobs: {}",
+        status.state.failed_clone_edges_rebuild_jobs
+>>>>>>> Stashed changes
     ));
     lines.push(format!(
         "Enrichment retried failed jobs: {}",
@@ -486,6 +506,10 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     ));
 }
 
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 fn print_legacy_repo_data_warnings() {
     for line in legacy_repo_data_warnings() {
         eprintln!("{line}");
@@ -619,6 +643,11 @@ mod tests {
             }),
             service_running: false,
             health: None,
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
             enrichment: Some(EnrichmentQueueStatus {
                 state: EnrichmentQueueState {
                     version: 1,
@@ -626,6 +655,7 @@ mod tests {
                     pending_jobs: 2,
                     pending_semantic_jobs: 1,
                     pending_embedding_jobs: 1,
+<<<<<<< Updated upstream
                     pending_clone_rebuild_jobs: 0,
                     running_jobs: 1,
                     running_semantic_jobs: 1,
@@ -635,6 +665,17 @@ mod tests {
                     failed_semantic_jobs: 1,
                     failed_embedding_jobs: 1,
                     failed_clone_rebuild_jobs: 1,
+=======
+                    pending_clone_edges_rebuild_jobs: 0,
+                    running_jobs: 1,
+                    running_semantic_jobs: 1,
+                    running_embedding_jobs: 0,
+                    running_clone_edges_rebuild_jobs: 0,
+                    failed_jobs: 3,
+                    failed_semantic_jobs: 1,
+                    failed_embedding_jobs: 1,
+                    failed_clone_edges_rebuild_jobs: 1,
+>>>>>>> Stashed changes
                     retried_failed_jobs: 4,
                     last_action: Some("paused".to_string()),
                     last_updated_unix: 0,
@@ -642,6 +683,10 @@ mod tests {
                 },
                 persisted: true,
             }),
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
         };
 
         assert_eq!(
@@ -653,10 +698,16 @@ mod tests {
                 "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
                 "Supervisor state: stopped".to_string(),
                 "Last URL: https://127.0.0.1:5173".to_string(),
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
                 "Enrichment mode: paused".to_string(),
                 "Enrichment pending jobs: 2".to_string(),
                 "Enrichment pending semantic jobs: 1".to_string(),
                 "Enrichment pending embedding jobs: 1".to_string(),
+<<<<<<< Updated upstream
                 "Enrichment pending clone rebuild jobs: 0".to_string(),
                 "Enrichment running jobs: 1".to_string(),
                 "Enrichment running semantic jobs: 1".to_string(),
@@ -666,10 +717,25 @@ mod tests {
                 "Enrichment failed semantic jobs: 1".to_string(),
                 "Enrichment failed embedding jobs: 1".to_string(),
                 "Enrichment failed clone rebuild jobs: 1".to_string(),
+=======
+                "Enrichment pending clone-edge rebuild jobs: 0".to_string(),
+                "Enrichment running jobs: 1".to_string(),
+                "Enrichment running semantic jobs: 1".to_string(),
+                "Enrichment running embedding jobs: 0".to_string(),
+                "Enrichment running clone-edge rebuild jobs: 0".to_string(),
+                "Enrichment failed jobs: 3".to_string(),
+                "Enrichment failed semantic jobs: 1".to_string(),
+                "Enrichment failed embedding jobs: 1".to_string(),
+                "Enrichment failed clone-edge rebuild jobs: 1".to_string(),
+>>>>>>> Stashed changes
                 "Enrichment retried failed jobs: 4".to_string(),
                 "Enrichment last action: paused".to_string(),
                 "Enrichment pause reason: maintenance".to_string(),
                 "Enrichment persisted: yes".to_string(),
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
             ]
         );
     }

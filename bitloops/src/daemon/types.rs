@@ -221,6 +221,11 @@ pub struct DaemonHealthSummary {
     pub blob_connected: Option<bool>,
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrichmentQueueMode {
@@ -244,6 +249,7 @@ pub struct EnrichmentQueueState {
     pub pending_jobs: u64,
     pub pending_semantic_jobs: u64,
     pub pending_embedding_jobs: u64,
+<<<<<<< Updated upstream
     pub pending_clone_rebuild_jobs: u64,
     pub running_jobs: u64,
     pub running_semantic_jobs: u64,
@@ -253,6 +259,17 @@ pub struct EnrichmentQueueState {
     pub failed_semantic_jobs: u64,
     pub failed_embedding_jobs: u64,
     pub failed_clone_rebuild_jobs: u64,
+=======
+    pub pending_clone_edges_rebuild_jobs: u64,
+    pub running_jobs: u64,
+    pub running_semantic_jobs: u64,
+    pub running_embedding_jobs: u64,
+    pub running_clone_edges_rebuild_jobs: u64,
+    pub failed_jobs: u64,
+    pub failed_semantic_jobs: u64,
+    pub failed_embedding_jobs: u64,
+    pub failed_clone_edges_rebuild_jobs: u64,
+>>>>>>> Stashed changes
     pub retried_failed_jobs: u64,
     pub last_action: Option<String>,
     pub last_updated_unix: u64,
@@ -267,6 +284,7 @@ impl Default for EnrichmentQueueState {
             pending_jobs: 0,
             pending_semantic_jobs: 0,
             pending_embedding_jobs: 0,
+<<<<<<< Updated upstream
             pending_clone_rebuild_jobs: 0,
             running_jobs: 0,
             running_semantic_jobs: 0,
@@ -276,6 +294,17 @@ impl Default for EnrichmentQueueState {
             failed_semantic_jobs: 0,
             failed_embedding_jobs: 0,
             failed_clone_rebuild_jobs: 0,
+=======
+            pending_clone_edges_rebuild_jobs: 0,
+            running_jobs: 0,
+            running_semantic_jobs: 0,
+            running_embedding_jobs: 0,
+            running_clone_edges_rebuild_jobs: 0,
+            failed_jobs: 0,
+            failed_semantic_jobs: 0,
+            failed_embedding_jobs: 0,
+            failed_clone_edges_rebuild_jobs: 0,
+>>>>>>> Stashed changes
             retried_failed_jobs: 0,
             last_action: Some("initialized".to_string()),
             last_updated_unix: 0,
@@ -290,6 +319,10 @@ pub struct EnrichmentQueueStatus {
     pub persisted: bool,
 }
 
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 #[derive(Debug, Clone)]
 pub struct DaemonStatusReport {
     pub runtime: Option<DaemonRuntimeState>,

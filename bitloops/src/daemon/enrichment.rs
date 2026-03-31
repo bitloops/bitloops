@@ -53,7 +53,11 @@ pub enum EnrichmentJobKind {
         batch_key: String,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
+<<<<<<< Updated upstream
     CloneRebuild {
+=======
+    CloneEdgesRebuild {
+>>>>>>> Stashed changes
         embedding_mode: SemanticCloneEmbeddingMode,
     },
 }
@@ -110,7 +114,11 @@ enum FollowUpJob {
         input_hashes: BTreeMap<String, String>,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
+<<<<<<< Updated upstream
     CloneRebuild {
+=======
+    CloneEdgesRebuild {
+>>>>>>> Stashed changes
         config_root: PathBuf,
         repo_root: PathBuf,
         repo_id: String,
@@ -288,7 +296,11 @@ impl EnrichmentCoordinator {
         Ok(())
     }
 
+<<<<<<< Updated upstream
     pub async fn enqueue_clone_rebuild(
+=======
+    pub async fn enqueue_clone_edges_rebuild(
+>>>>>>> Stashed changes
         &self,
         config_root: PathBuf,
         repo_root: PathBuf,
@@ -305,13 +317,21 @@ impl EnrichmentCoordinator {
                     (&job.status, &job.job),
                     (
                         EnrichmentJobStatus::Pending | EnrichmentJobStatus::Running,
+<<<<<<< Updated upstream
                         EnrichmentJobKind::CloneRebuild { .. }
+=======
+                        EnrichmentJobKind::CloneEdgesRebuild { .. }
+>>>>>>> Stashed changes
                     )
                 )
         });
         if !has_existing {
             state.jobs.push(EnrichmentJob {
+<<<<<<< Updated upstream
                 id: format!("clone-rebuild-{}", Uuid::new_v4()),
+=======
+                id: format!("clone-edges-rebuild-{}", Uuid::new_v4()),
+>>>>>>> Stashed changes
                 repo_id,
                 repo_root,
                 config_root,
@@ -321,9 +341,15 @@ impl EnrichmentCoordinator {
                 error: None,
                 created_at_unix: unix_timestamp_now(),
                 updated_at_unix: unix_timestamp_now(),
+<<<<<<< Updated upstream
                 job: EnrichmentJobKind::CloneRebuild { embedding_mode },
             });
             state.last_action = Some("enqueue_clone_rebuild".to_string());
+=======
+                job: EnrichmentJobKind::CloneEdgesRebuild { embedding_mode },
+            });
+            state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
+>>>>>>> Stashed changes
             self.save_state(&mut state)?;
             self.notify.notify_waiters();
         }
@@ -438,14 +464,22 @@ impl EnrichmentCoordinator {
                 )
                 .await
             }
+<<<<<<< Updated upstream
             FollowUpJob::CloneRebuild {
+=======
+            FollowUpJob::CloneEdgesRebuild {
+>>>>>>> Stashed changes
                 config_root,
                 repo_root,
                 repo_id,
                 branch,
                 embedding_mode,
             } => {
+<<<<<<< Updated upstream
                 self.enqueue_clone_rebuild(
+=======
+                self.enqueue_clone_edges_rebuild(
+>>>>>>> Stashed changes
                     config_root,
                     repo_root,
                     repo_id,
@@ -577,7 +611,12 @@ fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usize> {
 fn job_is_paused(state: &EnrichmentQueueState, job: &EnrichmentJobKind) -> bool {
     match job {
         EnrichmentJobKind::SemanticSummaries { .. } => state.paused_semantic,
+<<<<<<< Updated upstream
         EnrichmentJobKind::SymbolEmbeddings { .. } | EnrichmentJobKind::CloneRebuild { .. } => {
+=======
+        EnrichmentJobKind::SymbolEmbeddings { .. }
+        | EnrichmentJobKind::CloneEdgesRebuild { .. } => {
+>>>>>>> Stashed changes
             state.paused_embeddings
         }
     }
@@ -587,7 +626,11 @@ fn job_kind_priority(job: &EnrichmentJobKind) -> usize {
     match job {
         EnrichmentJobKind::SemanticSummaries { .. } => 0,
         EnrichmentJobKind::SymbolEmbeddings { .. } => 1,
+<<<<<<< Updated upstream
         EnrichmentJobKind::CloneRebuild { .. } => 2,
+=======
+        EnrichmentJobKind::CloneEdgesRebuild { .. } => 2,
+>>>>>>> Stashed changes
     }
 }
 
@@ -622,8 +665,13 @@ async fn execute_job(job: &EnrichmentJob) -> JobExecutionOutcome {
             embedding_mode,
             ..
         } => execute_embedding_job(&relational, job, inputs, input_hashes, *embedding_mode).await,
+<<<<<<< Updated upstream
         EnrichmentJobKind::CloneRebuild { embedding_mode } => {
             execute_clone_rebuild_job(&cfg, &relational, job, *embedding_mode).await
+=======
+        EnrichmentJobKind::CloneEdgesRebuild { embedding_mode } => {
+            execute_clone_edges_rebuild_job(&cfg, &relational, job, *embedding_mode).await
+>>>>>>> Stashed changes
         }
     }
 }
@@ -824,7 +872,11 @@ async fn execute_embedding_job(
     }
 
     let mut outcome = JobExecutionOutcome::ok();
+<<<<<<< Updated upstream
     outcome.follow_ups.push(FollowUpJob::CloneRebuild {
+=======
+    outcome.follow_ups.push(FollowUpJob::CloneEdgesRebuild {
+>>>>>>> Stashed changes
         config_root: job.config_root.clone(),
         repo_root: job.repo_root.clone(),
         repo_id: job.repo_id.clone(),
@@ -834,7 +886,11 @@ async fn execute_embedding_job(
     outcome
 }
 
+<<<<<<< Updated upstream
 async fn execute_clone_rebuild_job(
+=======
+async fn execute_clone_edges_rebuild_job(
+>>>>>>> Stashed changes
     _cfg: &DevqlConfig,
     relational: &RelationalStorage,
     job: &EnrichmentJob,
@@ -934,10 +990,17 @@ fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueue
         EnrichmentJobStatus::Pending,
         |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
     );
+<<<<<<< Updated upstream
     let pending_clone_rebuild_jobs = count_jobs(
         state,
         EnrichmentJobStatus::Pending,
         |job| matches!(job, EnrichmentJobKind::CloneRebuild { .. }),
+=======
+    let pending_clone_edges_rebuild_jobs = count_jobs(
+        state,
+        EnrichmentJobStatus::Pending,
+        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
+>>>>>>> Stashed changes
     );
     let running_semantic_jobs = count_jobs(
         state,
@@ -949,10 +1012,17 @@ fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueue
         EnrichmentJobStatus::Running,
         |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
     );
+<<<<<<< Updated upstream
     let running_clone_rebuild_jobs = count_jobs(
         state,
         EnrichmentJobStatus::Running,
         |job| matches!(job, EnrichmentJobKind::CloneRebuild { .. }),
+=======
+    let running_clone_edges_rebuild_jobs = count_jobs(
+        state,
+        EnrichmentJobStatus::Running,
+        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
+>>>>>>> Stashed changes
     );
     let failed_semantic_jobs = count_jobs(
         state,
@@ -964,10 +1034,17 @@ fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueue
         EnrichmentJobStatus::Failed,
         |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
     );
+<<<<<<< Updated upstream
     let failed_clone_rebuild_jobs = count_jobs(
         state,
         EnrichmentJobStatus::Failed,
         |job| matches!(job, EnrichmentJobKind::CloneRebuild { .. }),
+=======
+    let failed_clone_edges_rebuild_jobs = count_jobs(
+        state,
+        EnrichmentJobStatus::Failed,
+        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
+>>>>>>> Stashed changes
     );
 
     super::types::EnrichmentQueueState {
@@ -977,6 +1054,7 @@ fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueue
         } else {
             EnrichmentQueueMode::Running
         },
+<<<<<<< Updated upstream
         pending_jobs: pending_semantic_jobs + pending_embedding_jobs + pending_clone_rebuild_jobs,
         pending_semantic_jobs,
         pending_embedding_jobs,
@@ -989,6 +1067,26 @@ fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueue
         failed_semantic_jobs,
         failed_embedding_jobs,
         failed_clone_rebuild_jobs,
+=======
+        pending_jobs: pending_semantic_jobs
+            + pending_embedding_jobs
+            + pending_clone_edges_rebuild_jobs,
+        pending_semantic_jobs,
+        pending_embedding_jobs,
+        pending_clone_edges_rebuild_jobs,
+        running_jobs: running_semantic_jobs
+            + running_embedding_jobs
+            + running_clone_edges_rebuild_jobs,
+        running_semantic_jobs,
+        running_embedding_jobs,
+        running_clone_edges_rebuild_jobs,
+        failed_jobs: failed_semantic_jobs
+            + failed_embedding_jobs
+            + failed_clone_edges_rebuild_jobs,
+        failed_semantic_jobs,
+        failed_embedding_jobs,
+        failed_clone_edges_rebuild_jobs,
+>>>>>>> Stashed changes
         retried_failed_jobs: state.retried_failed_jobs,
         last_action: state.last_action.clone(),
         last_updated_unix: state.updated_at_unix,
