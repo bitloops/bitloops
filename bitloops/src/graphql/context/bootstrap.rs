@@ -186,14 +186,28 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn repository_for_name(&self, name: &str) -> Result<Repository> {
         let selection = self.resolve_repository_selection(name).await?;
-        let repository = Repository::new(
-            selection.name(),
-            selection.provider(),
-            selection.organization(),
-        )
-        .with_scope(crate::graphql::ResolverScope::default().with_repository(selection));
+        let repository = self.repository_from_selection(selection);
 
         Ok(repository)
+    }
+
+    pub(crate) async fn list_known_repositories(&self) -> Result<Vec<SelectedRepository>> {
+        let mut repositories = self.load_known_repositories().await?;
+        if repositories
+            .iter()
+            .all(|repository| repository.repo_id() != self.default_repository.repo_id())
+        {
+            repositories.push(self.default_repository.clone());
+        }
+
+        repositories.sort_by(|left, right| {
+            left.name()
+                .cmp(right.name())
+                .then_with(|| left.provider().cmp(right.provider()))
+                .then_with(|| left.organization().cmp(right.organization()))
+        });
+
+        Ok(repositories)
     }
 
     pub(crate) async fn resolve_repository_selection(
@@ -205,7 +219,7 @@ impl DevqlGraphqlContext {
             return Ok(self.default_repository.clone());
         }
 
-        let repositories = self.load_known_repositories().await?;
+        let repositories = self.list_known_repositories().await?;
         if repositories.is_empty() {
             if requested_name == self.default_repository.name()
                 || requested_name == self.default_repository.identity()
@@ -280,6 +294,15 @@ impl DevqlGraphqlContext {
             ));
         }
         Ok(repositories)
+    }
+
+    fn repository_from_selection(&self, selection: SelectedRepository) -> Repository {
+        Repository::new(
+            selection.name(),
+            selection.provider(),
+            selection.organization(),
+        )
+        .with_scope(crate::graphql::ResolverScope::default().with_repository(selection))
     }
 
     fn relational_backend_name(&self) -> &'static str {

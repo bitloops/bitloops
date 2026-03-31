@@ -1,7 +1,8 @@
 use super::handlers::{
     handle_api_agents, handle_api_branches, handle_api_check_bundle_version, handle_api_checkpoint,
     handle_api_commits, handle_api_db_health, handle_api_fetch_bundle, handle_api_kpis,
-    handle_api_not_found, handle_api_openapi, handle_api_root, handle_api_users,
+    handle_api_not_found, handle_api_openapi, handle_api_repositories, handle_api_root,
+    handle_api_users,
 };
 use super::{
     DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
@@ -207,6 +208,7 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
         .route("/kpis", get(handle_api_kpis))
         .route("/commits", get(handle_api_commits))
         .route("/branches", get(handle_api_branches))
+        .route("/repositories", get(handle_api_repositories))
         .route("/users", get(handle_api_users))
         .route("/agents", get(handle_api_agents))
         .route("/db/health", get(handle_api_db_health))
