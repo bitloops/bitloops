@@ -2001,6 +2001,171 @@ async fn sync_detects_file_edit() {
 }
 
 #[tokio::test]
+async fn dirty_then_commit_unchanged_is_cache_hit() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+    let edited_content = "pub fn greet(name: &str) -> String {\n    format!(\"hello {name}\")\n}\n";
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial full sync");
+
+    fs::write(repo.path().join(path), edited_content).expect("edit tracked source file");
+
+    let dirty_sync = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after dirty edit");
+
+    assert_eq!(dirty_sync.cache_hits, 0);
+    assert_eq!(dirty_sync.cache_misses, 1);
+
+    crate::host::checkpoints::strategy::manual_commit::run_git(repo.path(), &["add", path])
+        .expect("stage edited source file");
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["commit", "-m", "commit edited source"],
+    )
+    .expect("commit edited source file");
+
+    let committed_sync = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after committing unchanged content");
+
+    assert_eq!(committed_sync.cache_hits, 1);
+    assert_eq!(committed_sync.cache_misses, 0);
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_state: (String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current_file_state after commit");
+
+    assert_eq!(
+        current_state.0,
+        crate::host::devql::sync::content_identity::compute_blob_oid(
+            edited_content.as_bytes()
+        )
+    );
+    assert_eq!(current_state.1, "head");
+
+    let retention_class: String = db
+        .query_row(
+            "SELECT retention_class \
+             FROM content_cache \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            [
+                current_state.0.as_str(),
+                "rust",
+                committed_sync.parser_version.as_str(),
+                committed_sync.extractor_version.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("read content_cache retention class");
+    assert_eq!(retention_class, "git_backed");
+}
+
+#[tokio::test]
+async fn branch_switch_reuses_cache() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+    let feature_content = "pub fn greet(name: &str) -> String {\n    format!(\"feature {name}\")\n}\n";
+
+    let initial_sync = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial full sync on main");
+
+    assert_eq!(initial_sync.cache_hits, 0);
+    assert_eq!(initial_sync.cache_misses, initial_sync.paths_added);
+    assert!(initial_sync.cache_misses > 0);
+
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["checkout", "-b", "feature/cache-reuse"],
+    )
+    .expect("create feature branch");
+    fs::write(repo.path().join(path), feature_content).expect("edit tracked source file");
+    crate::host::checkpoints::strategy::manual_commit::run_git(repo.path(), &["add", path])
+        .expect("stage feature change");
+    crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["commit", "-m", "feature branch change"],
+    )
+    .expect("commit feature branch change");
+
+    let feature_sync = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync on feature branch");
+
+    assert_eq!(feature_sync.cache_hits, 0);
+    assert_eq!(feature_sync.cache_misses, 1);
+
+    crate::host::checkpoints::strategy::manual_commit::run_git(repo.path(), &["checkout", "main"])
+        .expect("checkout main branch");
+
+    let main_sync = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after returning to main");
+
+    assert_eq!(main_sync.cache_hits, 1);
+    assert_eq!(main_sync.cache_misses, 0);
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_state: (String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current_file_state after branch switch");
+
+    assert_eq!(
+        current_state.0,
+        crate::host::devql::sync::content_identity::compute_blob_oid(
+            "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n".as_bytes()
+        )
+    );
+    assert_eq!(current_state.1, "head");
+}
+
+#[tokio::test]
 async fn sync_removes_deleted_file() {
     let repo = seed_full_sync_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());

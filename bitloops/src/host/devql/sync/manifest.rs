@@ -76,6 +76,7 @@ pub(crate) fn classify_paths(
                 (Some(_), Some(_)) if repair => PathAction::Changed,
                 (Some(desired), Some(stored))
                     if desired.effective_content_id == stored.effective_content_id
+                        && desired.effective_source == stored.effective_source
                         && stored.parser_version == parser_version
                         && stored.extractor_version == extractor_version =>
                 {
@@ -253,6 +254,24 @@ mod tests {
         let classified = classify_paths(&desired, &stored, "1.0", "1.0", false);
 
         assert_classified_action(&classified, PathAction::Unchanged);
+    }
+
+    #[test]
+    fn classify_changed_when_effective_source_changes() {
+        let desired = make_manifest(vec![("src/a.rs", "abc123")]);
+        let stored = make_stored_with_source(vec![
+            (
+                "src/a.rs",
+                "abc123",
+                "worktree",
+                "1.0",
+                "1.0",
+            ),
+        ]);
+
+        let classified = classify_paths(&desired, &stored, "1.0", "1.0", false);
+
+        assert_classified_action(&classified, PathAction::Changed);
     }
 
     #[test]
@@ -506,20 +525,42 @@ mod tests {
     }
 
     fn make_stored(entries: Vec<(&str, &str, &str, &str)>) -> StoredManifest {
+        make_stored_with_source(
+            entries
+                .into_iter()
+                .map(|(path, content_id, parser_version, extractor_version)| {
+                    (path, content_id, "head", parser_version, extractor_version)
+                })
+                .collect(),
+        )
+    }
+
+    fn make_stored_with_source(
+        entries: Vec<(&str, &str, &str, &str, &str)>,
+    ) -> StoredManifest {
         entries
             .into_iter()
-            .map(|(path, content_id, parser_version, extractor_version)| {
-                (
-                    path.to_string(),
-                    StoredFileState {
-                        path: path.to_string(),
-                        language: "rust".to_string(),
-                        effective_content_id: content_id.to_string(),
-                        parser_version: parser_version.to_string(),
-                        extractor_version: extractor_version.to_string(),
-                    },
-                )
-            })
+            .map(
+                |(path, content_id, effective_source, parser_version, extractor_version)| {
+                    let effective_source = match effective_source {
+                        "head" => EffectiveSource::Head,
+                        "index" => EffectiveSource::Index,
+                        "worktree" => EffectiveSource::Worktree,
+                        _ => EffectiveSource::Head,
+                    };
+                    (
+                        path.to_string(),
+                        StoredFileState {
+                            path: path.to_string(),
+                            language: "rust".to_string(),
+                            effective_content_id: content_id.to_string(),
+                            effective_source,
+                            parser_version: parser_version.to_string(),
+                            extractor_version: extractor_version.to_string(),
+                        },
+                    )
+                },
+            )
             .collect()
     }
 

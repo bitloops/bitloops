@@ -166,6 +166,26 @@ pub(crate) async fn store_cached_content(
     relational.exec_batch_transactional(&statements).await
 }
 
+pub(crate) async fn promote_cached_content_to_git_backed(
+    relational: &RelationalStorage,
+    content_id: &str,
+    language: &str,
+    parser_version: &str,
+    extractor_version: &str,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE content_cache \
+SET retention_class = 'git_backed' \
+WHERE content_id = '{}' AND language = '{}' AND parser_version = '{}' AND extractor_version = '{}' \
+AND retention_class = 'worktree_only'",
+        esc_pg(content_id),
+        esc_pg(language),
+        esc_pg(parser_version),
+        esc_pg(extractor_version),
+    );
+    relational.exec(&sql).await
+}
+
 fn cached_header_from_row(row: &Map<String, Value>) -> Option<CachedHeaderRow> {
     let content_id = row
         .get("content_id")

@@ -44,6 +44,7 @@ pub(crate) struct StoredFileState {
     pub(crate) path: String,
     pub(crate) language: String,
     pub(crate) effective_content_id: String,
+    pub(crate) effective_source: EffectiveSource,
     pub(crate) parser_version: String,
     pub(crate) extractor_version: String,
 }

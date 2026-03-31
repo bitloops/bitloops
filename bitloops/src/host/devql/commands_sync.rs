@@ -171,6 +171,22 @@ async fn execute_sync_inner(
         {
             Some(cached) => {
                 counters.cache_hits += 1;
+                if determine_retention_class(&desired) == "git_backed" {
+                    sync::content_cache::promote_cached_content_to_git_backed(
+                        relational,
+                        &desired.effective_content_id,
+                        &desired.language,
+                        parser_version,
+                        extractor_version,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "promoting cached extraction retention for `{}`",
+                            desired.path
+                        )
+                    })?;
+                }
                 cached
             }
             None => {
@@ -285,7 +301,7 @@ async fn load_stored_manifest(
 ) -> Result<sync::types::StoredManifest> {
     let rows = relational
         .query_rows(&format!(
-            "SELECT path, language, effective_content_id, parser_version, extractor_version \
+            "SELECT path, language, effective_content_id, effective_source, parser_version, extractor_version \
              FROM current_file_state \
              WHERE repo_id = '{}' \
              ORDER BY path",
@@ -310,6 +326,12 @@ fn stored_manifest_row(
         .get("effective_content_id")
         .and_then(Value::as_str)?
         .to_string();
+    let effective_source = match row.get("effective_source").and_then(Value::as_str)? {
+        "head" => sync::types::EffectiveSource::Head,
+        "index" => sync::types::EffectiveSource::Index,
+        "worktree" => sync::types::EffectiveSource::Worktree,
+        _ => return None,
+    };
 
     Some(sync::types::StoredFileState {
         path,
@@ -319,6 +341,7 @@ fn stored_manifest_row(
             .unwrap_or_default()
             .to_string(),
         effective_content_id,
+        effective_source,
         parser_version: row
             .get("parser_version")
             .and_then(Value::as_str)
