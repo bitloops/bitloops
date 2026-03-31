@@ -1,3 +1,4 @@
+use std::env;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
@@ -129,7 +130,8 @@ pub fn run_doctor(force: bool) -> Result<()> {
         existing_shadow_branches: list_shadow_branches(&repo_root),
     };
     let now = SystemTime::now();
-    let strategy_name = settings::load_settings(&repo_root)
+    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.clone());
+    let strategy_name = settings::load_settings(&policy_start)
         .map(|s| s.strategy)
         .unwrap_or_else(|_| settings::DEFAULT_STRATEGY.to_string());
     let can_condense = strategy_name == "manual-commit";

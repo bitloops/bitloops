@@ -5,7 +5,7 @@ title: Uninstalling Bitloops
 
 # Uninstalling Bitloops
 
-`bitloops disable` removes Bitloops hooks from the current repository.
+`bitloops disable` turns capture off in the nearest discovered project policy while leaving hooks installed.
 
 `bitloops uninstall` removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.
 
@@ -67,6 +67,8 @@ bitloops uninstall --config --data --caching --service --shell
 By default, `--agent-hooks` and `--git-hooks` operate on all known repositories. Bitloops builds that list from the daemon repo registry and also includes the current repository when it can resolve one.
 
 `--only-current-project` is valid only with `--agent-hooks` and/or `--git-hooks`.
+
+If you only want to pause capture without removing hooks, use `bitloops disable`.
 
 ## What `--full` Means
 

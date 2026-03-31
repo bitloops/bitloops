@@ -1,4 +1,4 @@
-use crate::artefact_query_planner::ArtefactQuerySpec;
+use crate::artefact_query_planner::{ArtefactPaginationDirection, ArtefactQuerySpec};
 use crate::graphql::ResolvedTemporalScope;
 use crate::graphql::types::{DepsDirection, DepsFilterInput};
 use crate::host::devql::artefact_sql::{
@@ -173,18 +173,38 @@ pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> St
         .pagination
         .as_ref()
         .expect("artefact window queries require pagination in the shared spec");
-    let pagination_clause = pagination
-        .after
-        .as_deref()
-        .map_or_else(String::new, |cursor| {
-            format!(
-                " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
-                    (SELECT path, kind_rank, start_line, end_line, artefact_id \
-                       FROM filtered \
-                      WHERE artefact_id = '{cursor}')",
-                cursor = esc_pg(cursor),
-            )
-        });
+    let (pagination_clause, order) = match pagination.direction {
+        ArtefactPaginationDirection::Forward => (
+            pagination
+                .after
+                .as_deref()
+                .map_or_else(String::new, |cursor| {
+                    format!(
+                        " WHERE (path, kind_rank, start_line, end_line, artefact_id) > \
+                            (SELECT path, kind_rank, start_line, end_line, artefact_id \
+                               FROM filtered \
+                              WHERE artefact_id = '{cursor}')",
+                        cursor = esc_pg(cursor),
+                    )
+                }),
+            filtered_artefact_order_sql().to_string(),
+        ),
+        ArtefactPaginationDirection::Backward => (
+            pagination
+                .before
+                .as_deref()
+                .map_or_else(String::new, |cursor| {
+                    format!(
+                        " WHERE (path, kind_rank, start_line, end_line, artefact_id) < \
+                            (SELECT path, kind_rank, start_line, end_line, artefact_id \
+                               FROM filtered \
+                              WHERE artefact_id = '{cursor}')",
+                        cursor = esc_pg(cursor),
+                    )
+                }),
+            filtered_artefact_reverse_order_sql().to_string(),
+        ),
+    };
 
     format!(
         "{filtered_cte} \
@@ -193,9 +213,13 @@ pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> St
        ORDER BY {order} \
           LIMIT {limit}",
         columns = filtered_artefact_columns_sql(),
-        order = filtered_artefact_order_sql(),
+        order = order,
         limit = pagination.limit,
     )
+}
+
+fn filtered_artefact_reverse_order_sql() -> &'static str {
+    "path DESC, kind_rank DESC, start_line DESC, end_line DESC, artefact_id DESC"
 }
 
 pub(super) fn build_artefacts_by_ids_sql(
@@ -653,7 +677,7 @@ mod tests {
                 agent: Some("codex".to_string()),
                 since: Some("2026-03-20T00:00:00Z".to_string()),
             }),
-            pagination: Some(ArtefactPagination::new(Some("cursor-1"), 11)),
+            pagination: Some(ArtefactPagination::forward(Some("cursor-1"), 11)),
         }
     }
 
@@ -691,5 +715,22 @@ mod tests {
         assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
         assert!(sql.contains("LIMIT 11"));
         assert!(!sql.contains("blob_sha IN"));
+    }
+
+    #[test]
+    fn backward_window_sql_flips_tuple_comparison_and_order() {
+        let mut spec = activity_spec();
+        spec.pagination = Some(ArtefactPagination::backward(Some("cursor-2"), 7));
+
+        let sql = build_current_artefacts_window_sql(&spec);
+
+        assert!(sql.contains("WITH filtered AS"));
+        assert!(sql.contains("FROM filtered"));
+        assert!(sql.contains("WHERE (path, kind_rank, start_line, end_line, artefact_id) <"));
+        assert!(sql.contains("WHERE artefact_id = 'cursor-2'"));
+        assert!(sql.contains(
+            "ORDER BY path DESC, kind_rank DESC, start_line DESC, end_line DESC, artefact_id DESC"
+        ));
+        assert!(sql.contains("LIMIT 7"));
     }
 }

@@ -8,11 +8,11 @@ use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_u
 use super::types::{
     Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, Branch,
     CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, ClonesFilterInput,
-    CommitConnection, CommitEdge, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, JsonScalar,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection,
-    TelemetryEventEdge, TemporalScope, TestHarnessCoverageResult, TestHarnessTestsResult,
-    connection::PageInfo, paginate_items,
+    CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TelemetryEventConnection, TelemetryEventEdge,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Default)]
@@ -71,8 +71,10 @@ impl SlimQueryRoot {
         author: Option<String>,
         since: Option<DateTimeScalar>,
         until: Option<DateTimeScalar>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<CommitConnection> {
         if let (Some(since), Some(until)) = (since.as_ref(), until.as_ref())
             && DateTimeScalar::parse_rfc3339(since.as_str()).expect("validated datetime")
@@ -116,7 +118,14 @@ impl SlimQueryRoot {
                 )));
             }
         };
-        let page = paginate_items(&commits, first, after.as_deref(), |commit| commit.cursor())?;
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let page = paginate_items(&commits, &pagination, |commit| commit.cursor())?;
         Ok(CommitConnection::new(
             page.items.into_iter().map(CommitEdge::new).collect(),
             page.page_info,
@@ -141,14 +150,24 @@ impl SlimQueryRoot {
             .map_err(|err| backend_error(format!("failed to query repository branches: {err:#}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn checkpoints(
         &self,
         ctx: &Context<'_>,
         agent: Option<String>,
         since: Option<DateTimeScalar>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<CheckpointConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let scope = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .slim_root_scope();
@@ -157,9 +176,7 @@ impl SlimQueryRoot {
             .list_checkpoints(&scope, agent.as_deref(), since.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query checkpoints: {err:#}")))?;
-        let page = paginate_items(&checkpoints, first, after.as_deref(), |checkpoint| {
-            checkpoint.cursor()
-        })?;
+        let page = paginate_items(&checkpoints, &pagination, |checkpoint| checkpoint.cursor())?;
         Ok(CheckpointConnection::new(
             page.items.into_iter().map(CheckpointEdge::new).collect(),
             page.page_info,
@@ -167,15 +184,25 @@ impl SlimQueryRoot {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn telemetry(
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "eventType")] event_type: Option<String>,
         agent: Option<String>,
         since: Option<DateTimeScalar>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<TelemetryEventConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let scope = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .slim_root_scope();
@@ -189,7 +216,7 @@ impl SlimQueryRoot {
             )
             .await
             .map_err(|err| backend_error(format!("failed to query telemetry: {err:#}")))?;
-        let page = paginate_items(&telemetry, first, after.as_deref(), |event| event.cursor())?;
+        let page = paginate_items(&telemetry, &pagination, |event| event.cursor())?;
         Ok(TelemetryEventConnection::new(
             page.items
                 .into_iter()
@@ -257,24 +284,26 @@ impl SlimQueryRoot {
         &self,
         ctx: &Context<'_>,
         filter: Option<ArtefactFilterInput>,
-        #[graphql(default = 100)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<ArtefactConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
         }
-        if first <= 0 {
-            return Err(bad_user_input_error("`first` must be greater than zero"));
-        }
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let scope = context.slim_root_scope();
-        let total_count = context
-            .count_artefacts(None, filter.as_ref(), &scope)
-            .await
-            .map_err(|err| backend_error(format!("failed to query artefacts: {err:#}")))?;
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
 
-        if let Some(cursor) = after.as_deref() {
+        if let Some(cursor) = pagination.after().or_else(|| pagination.before()) {
             let cursor_exists = context
                 .artefact_cursor_exists(None, filter.as_ref(), &scope, cursor)
                 .await
@@ -286,29 +315,14 @@ impl SlimQueryRoot {
             }
         }
 
-        let mut artefacts = context
-            .list_artefacts_window(
-                None,
-                filter.as_ref(),
-                &scope,
-                after.as_deref(),
-                first as usize + 1,
-            )
+        let (artefacts, page_info, total_count) = context
+            .query_artefact_connection(None, filter.as_ref(), &scope, &pagination)
             .await
             .map_err(|err| backend_error(format!("failed to query artefacts: {err:#}")))?;
-        let has_next_page = artefacts.len() > first as usize;
-        artefacts.truncate(first as usize);
-        let start_cursor = artefacts.first().map(|artefact| artefact.cursor());
-        let end_cursor = artefacts.last().map(|artefact| artefact.cursor());
 
         Ok(ArtefactConnection::new(
             artefacts.into_iter().map(ArtefactEdge::new).collect(),
-            PageInfo {
-                has_next_page,
-                has_previous_page: after.is_some(),
-                start_cursor,
-                end_cursor,
-            },
+            page_info,
             total_count,
         ))
     }
@@ -317,16 +331,25 @@ impl SlimQueryRoot {
         &self,
         ctx: &Context<'_>,
         filter: Option<DepsFilterInput>,
-        #[graphql(default = 100)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let scope = context.slim_root_scope();
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let deps = context
             .list_project_dependency_edges(&scope, filter.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query dependency edges: {err:#}")))?;
-        let page = paginate_items(&deps, first, after.as_deref(), |edge| edge.cursor())?;
+        let page = paginate_items(&deps, &pagination, |edge| edge.cursor())?;
         Ok(DependencyEdgeConnection::new(
             page.items
                 .into_iter()
@@ -341,9 +364,18 @@ impl SlimQueryRoot {
         &self,
         ctx: &Context<'_>,
         provider: Option<KnowledgeProvider>,
-        #[graphql(default = 25)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<KnowledgeItemConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            25,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let scope = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .slim_root_scope();
@@ -352,7 +384,7 @@ impl SlimQueryRoot {
             .list_knowledge_items(provider, &scope)
             .await
             .map_err(|err| backend_error(format!("failed to query knowledge: {err:#}")))?;
-        let page = paginate_items(&items, first, after.as_deref(), |item| item.cursor())?;
+        let page = paginate_items(&items, &pagination, |item| item.cursor())?;
         Ok(KnowledgeItemConnection::new(
             page.items.into_iter().map(KnowledgeItemEdge::new).collect(),
             page.page_info,
@@ -364,8 +396,10 @@ impl SlimQueryRoot {
         &self,
         ctx: &Context<'_>,
         filter: Option<ClonesFilterInput>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<CloneConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
@@ -381,12 +415,19 @@ impl SlimQueryRoot {
                 "`clones` does not support historical or temporary `asOf(...)` scopes yet",
             ));
         }
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
 
         let clones = context
             .list_project_clones(&scope, filter.as_ref())
             .await
             .map_err(|err| backend_error(format!("failed to query semantic clones: {err:#}")))?;
-        let page = paginate_items(&clones, first, after.as_deref(), |clone| clone.cursor())?;
+        let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
@@ -463,32 +504,27 @@ impl SlimQueryRoot {
         )
     }
 
-    async fn extension(
-        &self,
-        ctx: &Context<'_>,
-        stage: String,
-        args: Option<JsonScalar>,
-        #[graphql(default = 100)] first: i32,
-    ) -> Result<Vec<JsonScalar>> {
+    #[graphql(name = "testsSummary")]
+    async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let scope = context.slim_root_scope();
         let artefacts = context
             .list_artefacts(None, None, &scope)
             .await
             .map_err(|err| backend_error(format!("failed to query artefacts: {err:#}")))?;
-        let rows = StageResolverAdapter::new(context.clone(), stage.as_str())
+        let rows = StageResolverAdapter::new(context.clone(), "test_harness_tests_summary")
             .resolve(
                 &scope,
                 artefacts
                     .iter()
                     .map(project_stage_row_from_artefact)
                     .collect(),
-                args.map(|value| value.0),
-                stage_limit(first)?,
+                None,
+                1,
             )
             .await
-            .map_err(|err| map_stage_adapter_error(&format!("stage `{stage}`"), err))?;
-        Ok(rows.into_iter().map(async_graphql::types::Json).collect())
+            .map_err(|err| map_stage_adapter_error("tests summary", err))?;
+        decode_stage_single("test_harness_tests_summary", rows)
     }
 }
 
@@ -550,11 +586,25 @@ fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Resu
         .collect()
 }
 
+fn decode_stage_single<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<T> {
+    let Some(row) = rows.into_iter().next() else {
+        return Err(backend_error(format!(
+            "failed to decode `{stage}` stage payload: empty result"
+        )));
+    };
+    serde_json::from_value(row).map_err(|err| {
+        backend_error(format!(
+            "failed to decode `{stage}` stage payload into typed GraphQL result: {err}"
+        ))
+    })
+}
+
 fn map_stage_adapter_error(scope: &str, err: anyhow::Error) -> async_graphql::Error {
     let message = format!("{err:#}");
     if message.contains("unsupported DevQL stage")
         || message.contains("ambiguous DevQL stage")
         || message.contains("extension args must")
+        || message.contains("requires a resolved commit")
     {
         return bad_user_input_error(message);
     }

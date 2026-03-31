@@ -19,9 +19,9 @@ pub const ROOT_SHORT_ABOUT: &str = "Bitloops CLI";
 pub const ROOT_LONG_ABOUT: &str = r#"The command-line interface for Bitloops
 
 Getting Started:
-  To get started with Bitloops CLI, run 'bitloops init' to set up the
-  global daemon config, then run 'bitloops enable' inside a repository
-  to install hooks. For more information, visit:
+  To get started with Bitloops CLI, run 'bitloops start' to launch the
+  daemon, then run 'bitloops init' inside a repository or subproject.
+  For more information, visit:
   https://docs.bitloops.io/introduction
 
 Environment Variables:
@@ -39,7 +39,7 @@ pub struct CleanArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DisableArgs {
-    /// Deprecated: repo policy files are not changed by this command.
+    /// Deprecated: the nearest discovered project policy is edited automatically.
     #[arg(long, default_value_t = false)]
     pub project: bool,
 }
@@ -152,9 +152,8 @@ pub fn run_clean_command(args: &CleanArgs) -> Result<()> {
 
 pub fn run_disable_command(args: &DisableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
-    let repo_root = enable::find_repo_root(&cwd)?;
     let mut out = io::stdout();
-    enable::run_disable(&repo_root, &mut out, args.project)
+    enable::run_disable(&cwd, &mut out, args.project)
 }
 
 pub async fn run_uninstall_command(args: uninstall::UninstallArgs) -> Result<()> {

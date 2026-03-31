@@ -90,6 +90,19 @@ fn sqlite_path_for_repo(repo_root: &Path) -> PathBuf {
         .expect("resolve sqlite path")
 }
 
+fn with_isolated_daemon_state<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo_root),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+    f()
+}
+
 #[test]
 fn devql_cli_parses_ingest_defaults() {
     let parsed =
@@ -329,18 +342,18 @@ fn devql_run_init_executes_graphql_mutation() {
 #[test]
 fn devql_run_init_requires_running_daemon() {
     let repo = seed_devql_cli_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
+    with_isolated_daemon_state(repo.path(), || {
+        let err = test_runtime()
+            .block_on(run(DevqlArgs {
+                command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
+            }))
+            .expect_err("devql init should require a running daemon");
 
-    let err = test_runtime()
-        .block_on(run(DevqlArgs {
-            command: Some(DevqlCommand::Init(DevqlInitArgs::default())),
-        }))
-        .expect_err("devql init should require a running daemon");
-
-    assert!(
-        err.to_string().contains("Bitloops daemon is not running"),
-        "expected daemon-required error, got: {err:#}"
-    );
+        assert!(
+            err.to_string().contains("Bitloops daemon is not running"),
+            "expected daemon-required error, got: {err:#}"
+        );
+    });
 }
 
 #[test]
@@ -489,7 +502,8 @@ fn devql_run_ingest_bootstraps_daemon_when_needed() {
 fn devql_run_ingest_stays_local_when_enrichment_is_disabled() {
     let repo = seed_devql_cli_repo();
     fs::write(
-        repo.path().join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        repo.path()
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
         r#"[stores]
 [stores.relational]
 sqlite_path = ".bitloops/stores/devql.sqlite"
@@ -512,9 +526,7 @@ embedding_mode = "off"
     with_graphql_executor_hook(
         {
             let graphql_calls = Rc::clone(&graphql_calls);
-            move |_repo_root: &std::path::Path,
-                  _query: &str,
-                  _variables: &serde_json::Value| {
+            move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
                 *graphql_calls.borrow_mut() += 1;
                 panic!("graphql should not be used when enrichment is disabled");
             }
@@ -536,6 +548,21 @@ embedding_mode = "off"
         sqlite_path_for_repo(repo.path()).exists(),
         "local ingest should initialize the relational database",
     );
+    with_isolated_daemon_state(repo.path(), || {
+        let err = test_runtime()
+            .block_on(run(DevqlArgs {
+                command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                    init: true,
+                    max_checkpoints: 500,
+                })),
+            }))
+            .expect_err("devql ingest should require a running daemon");
+
+        assert!(
+            err.to_string().contains("Bitloops daemon is not running"),
+            "expected daemon-required error, got: {err:#}"
+        );
+    });
 }
 
 #[test]

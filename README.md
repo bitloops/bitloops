@@ -117,19 +117,28 @@ brew install bitloops/tap/bitloops
 
 ## Getting Started
 
-1. Initialise the global daemon config:
+1. Start the daemon and create the global daemon config:
+
+   ```bash
+   bitloops start --create-default-config
+   ```
+
+   On a fresh machine, interactive `bitloops start` can also prompt to create the default daemon config. During that first bootstrap, Bitloops asks for telemetry consent unless you pass `--telemetry`, `--telemetry=false`, or `--no-telemetry`.
+
+2. From inside the git repository or subproject you want to capture, bootstrap Bitloops:
 
    ```bash
    bitloops init
    ```
 
-2. From inside the git repository you want to capture, enable Bitloops hooks:
+3. Toggle capture later if needed:
 
    ```bash
    bitloops enable
+   bitloops disable
    ```
 
-3. Work as usual and commit normally. Bitloops will capture the relevant
+4. Work as usual and commit normally. Bitloops will capture the relevant
    developer-agent context around those changes.
 
 ## Dashboard
@@ -143,7 +152,7 @@ bitloops dashboard
 To control the daemon directly:
 
 ```bash
-bitloops daemon start
+bitloops start
 bitloops daemon stop
 bitloops status
 bitloops checkpoints status
@@ -224,7 +233,10 @@ default events backend: `duckdb`). Legacy `postgres_dsn` / `clickhouse_*` and
 
 Telemetry data help us understand which features users are using the most and
 help us guide our development. The telemetry data are not connected to specific
-users and are analyzed and considered in aggregate.
+users and are analysed and considered in aggregate. Bitloops asks for consent
+when the default daemon config is first created, and later interactive `init`
+or `enable` runs only ask again if consent becomes unresolved for an existing
+daemon config.
 
 ## Community & Support
 

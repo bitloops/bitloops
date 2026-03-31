@@ -185,6 +185,15 @@ impl DevqlGraphqlContext {
         ))
     }
 
+    pub(crate) fn require_global_write_scope(&self) -> Result<()> {
+        if self.schema_mode == DevqlSchemaMode::Global {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "global DevQL mutations require the global daemon endpoint; use `/devql/global`"
+        ))
+    }
+
     pub(crate) fn repository_selection_for_scope(
         &self,
         scope: &super::ResolverScope,

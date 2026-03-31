@@ -7,7 +7,7 @@ use crate::utils::paths;
 
 use super::constants::*;
 use super::daemon_config::load_daemon_settings;
-use super::repo_policy::discover_repo_policy;
+use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
@@ -71,7 +71,7 @@ pub fn resolve_dashboard_config_for_repo(repo_root: &Path) -> DashboardFileConfi
 }
 
 pub fn resolve_watch_runtime_config_for_repo(repo_root: &Path) -> WatchRuntimeConfig {
-    let settings = discover_repo_policy(repo_root)
+    let settings = discover_repo_policy_optional(repo_root)
         .map(|snapshot| UnifiedSettings {
             watch: Some(snapshot.watch),
             ..UnifiedSettings::default()

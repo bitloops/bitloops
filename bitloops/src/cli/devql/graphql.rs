@@ -172,7 +172,7 @@ fn maybe_bootstrap_daemon_via_hook(repo_root: &Path) -> Option<Result<()>> {
 }
 
 #[cfg(test)]
-pub(super) fn with_graphql_executor_hook<T>(
+pub(crate) fn with_graphql_executor_hook<T>(
     hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
     f: impl FnOnce() -> T,
 ) -> T {

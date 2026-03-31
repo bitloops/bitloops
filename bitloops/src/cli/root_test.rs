@@ -75,8 +75,8 @@ fn TestRootCommand_LongHelpIncludesGettingStartedAndAccessibility() {
         "long help should include getting-started guidance"
     );
     assert!(
-        help.contains("bitloops enable"),
-        "long help should include the enable command in getting-started guidance"
+        help.contains("bitloops init"),
+        "long help should include the init command in getting-started guidance"
     );
     assert!(
         help.contains("Environment Variables:"),

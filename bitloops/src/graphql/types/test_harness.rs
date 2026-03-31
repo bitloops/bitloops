@@ -71,3 +71,22 @@ pub struct TestHarnessCoverageResult {
     pub coverage: TestHarnessCoverage,
     pub summary: TestHarnessCoverageSummary,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+pub struct TestHarnessCommitCounts {
+    pub test_artefacts: i32,
+    pub test_artefact_edges: i32,
+    pub test_classifications: i32,
+    pub coverage_captures: i32,
+    pub coverage_hits: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct TestHarnessCommitSummary {
+    pub capability: String,
+    pub stage: String,
+    pub status: String,
+    pub commit_sha: String,
+    pub counts: TestHarnessCommitCounts,
+    pub coverage_present: bool,
+}

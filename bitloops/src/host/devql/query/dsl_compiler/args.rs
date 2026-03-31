@@ -1,9 +1,7 @@
 use anyhow::Result;
 
 use super::document_builder::{GraphqlArgument, GraphqlField, GraphqlSelection};
-use super::field_mapping::{
-    compile_datetime_literal, compile_stage_json_literal, enum_literal, quote_graphql_string,
-};
+use super::field_mapping::{compile_datetime_literal, enum_literal, quote_graphql_string};
 use super::{ParsedDevqlQuery, RegisteredStageCall};
 
 pub(super) fn compile_artefact_args(
@@ -129,21 +127,6 @@ pub(super) fn compile_coverage_args(
     Ok(args)
 }
 
-pub(super) fn compile_extension_args(
-    stage: &RegisteredStageCall,
-    first: Option<usize>,
-) -> Vec<GraphqlArgument> {
-    let mut args = vec![GraphqlArgument::new(
-        "stage",
-        quote_graphql_string(&stage.stage_name),
-    )];
-    if let Some(json_args) = compile_extension_stage_args(stage) {
-        args.push(GraphqlArgument::new("args", json_args));
-    }
-    args.extend(first_arg(first));
-    args
-}
-
 pub(super) fn compile_artefact_filter_input(parsed: &ParsedDevqlQuery) -> Result<Option<String>> {
     let mut fields = Vec::new();
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
@@ -194,17 +177,6 @@ pub(super) fn compile_clones_filter_input(parsed: &ParsedDevqlQuery) -> Option<S
     }
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))
-}
-
-pub(super) fn compile_extension_stage_args(stage: &RegisteredStageCall) -> Option<String> {
-    (!stage.args.is_empty()).then(|| {
-        let pairs = stage
-            .args
-            .iter()
-            .map(|(key, value)| format!("{key}: {}", compile_stage_json_literal(value)))
-            .collect::<Vec<_>>();
-        format!("{{ {} }}", pairs.join(", "))
-    })
 }
 
 pub(super) fn connection_field(

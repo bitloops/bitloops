@@ -6,7 +6,7 @@ use cucumber::{World as _, given, then, when, writer::Stats as _};
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use test_harness_support::{
-    ListedArtefact, Workspace, discovered_languages, load_symbol_fqn,
+    ListedArtefact, Workspace, bootstrap_codex_workspace, discovered_languages, load_symbol_fqn,
     load_test_scenario_signatures, run_bitloops_or_panic, scenario_link_exists,
     seed_production_artefacts, write_line_only_lcov_fixture, write_malformed_lcov_fixture,
     write_rust_additional_declarations_fixture, write_rust_coverage_fixture,
@@ -82,10 +82,7 @@ fn initialize_repository_with_production(
     workspace: Workspace,
     commit_sha: String,
 ) {
-    run_bitloops_or_panic(
-        workspace.repo_dir(),
-        &["init", "--agent", "codex", "--telemetry", "false"],
-    );
+    bootstrap_codex_workspace(&workspace);
     run_bitloops_or_panic(workspace.repo_dir(), &["devql", "init"]);
     seed_production_artefacts(&workspace, &commit_sha);
 

@@ -3,6 +3,7 @@ use crate::config::settings;
 use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;
+use std::env;
 use std::io::Write;
 use std::process::Command;
 use std::time::SystemTime;
@@ -47,13 +48,14 @@ pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
     }
 
     let repo_root = crate::utils::paths::repo_root()?;
-    let effective = settings::load_settings(&repo_root)?;
+    let policy_start = env::current_dir().unwrap_or_else(|_| repo_root.clone());
+    let effective = settings::load_settings(&policy_start)?;
     let effective_cli = CliSettings {
         strategy: effective.strategy.clone(),
         enabled: effective.enabled,
     };
-    let policy_root = settings::current_policy_root(&repo_root)?;
-    let fingerprint = settings::current_config_fingerprint(&repo_root)?;
+    let policy_root = settings::current_policy_root(&policy_start)?;
+    let fingerprint = settings::current_config_fingerprint(&policy_start)?;
 
     if detailed {
         writeln!(w, "{}", format_settings_status_short(&effective_cli))?;
@@ -378,12 +380,12 @@ mod tests {
 
         let output = String::from_utf8(stdout.into_inner()).expect("utf8");
         assert!(
-            output.contains("Enabled (manual-commit)"),
-            "expected local-only override to be ignored without shared policy root, got: {output}"
+            output.contains("Enabled (auto-commit)"),
+            "expected standalone local policy to be active, got: {output}"
         );
         assert!(
-            output.contains("Policy Root: built-in defaults"),
-            "expected built-in default policy root, got: {output}"
+            output.contains(&format!("Policy Root: {}", canonical_display(repo.path()))),
+            "expected local policy root, got: {output}"
         );
         assert!(
             output.contains("Config Fingerprint:"),

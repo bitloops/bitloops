@@ -13,54 +13,30 @@ pub mod unified_config;
 
 pub use constants::BITLOOPS_CONFIG_RELATIVE_PATH;
 pub use daemon_config::{
-    DaemonCliSettings, LoadedDaemonSettings, default_daemon_config_path,
+    DaemonCliSettings, DaemonTelemetryConsentState, LoadedDaemonSettings,
+    bootstrap_default_daemon_environment, default_daemon_config_exists, default_daemon_config_path,
     ensure_daemon_config_exists, load_daemon_settings, persist_daemon_cli_settings,
-    persist_dashboard_tls_hint,
+    persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
 pub use repo_policy::{
     ImportedKnowledgeConfig, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
-    RepoPolicySnapshot, discover_repo_policy,
+    RepoPolicySnapshot, discover_repo_policy, discover_repo_policy_optional,
 };
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo, resolve_dashboard_config,
     resolve_dashboard_config_for_repo, resolve_duckdb_db_path_for_repo, resolve_provider_config,
     resolve_provider_config_for_repo, resolve_sqlite_db_path, resolve_sqlite_db_path_for_repo,
-<<<<<<< Updated upstream
-    resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
-    resolve_semantic_clones_config_for_repo, resolve_store_backend_config,
-    resolve_store_backend_config_for_repo,
-=======
-<<<<<<< Updated upstream
-    resolve_store_backend_config, resolve_store_backend_config_for_repo,
->>>>>>> Stashed changes
-    resolve_store_embedding_config, resolve_store_embedding_config_for_repo,
-    resolve_store_semantic_config, resolve_store_semantic_config_for_repo,
-    resolve_watch_runtime_config_for_repo,
-};
-pub use types::{
-<<<<<<< Updated upstream
-=======
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, DashboardLocalDashboardConfig,
-    EventsBackendConfig, GithubProviderConfig, ProviderConfig, RelationalBackendConfig,
-    StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig,
-=======
     resolve_embedding_capability_config_for_repo, resolve_embeddings_config_for_repo,
     resolve_semantic_clones_config_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo, resolve_store_semantic_config,
     resolve_store_semantic_config_for_repo, resolve_watch_runtime_config_for_repo,
 };
 pub use types::{
->>>>>>> Stashed changes
     AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig,
     DashboardLocalDashboardConfig, EmbeddingCapabilityConfig, EmbeddingProfileConfig,
     EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig, GithubProviderConfig,
     ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig,
-<<<<<<< Updated upstream
-    SemanticSummaryMode, StoreBackendConfig, StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig,
-=======
     SemanticSummaryMode, StoreBackendConfig, StoreFileConfig, StoreSemanticConfig,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     WatchFileConfig, WatchRuntimeConfig,
 };
 

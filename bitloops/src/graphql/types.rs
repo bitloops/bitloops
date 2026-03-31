@@ -23,7 +23,7 @@ pub use clone::{ClonesFilterInput, SemanticClone};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
-    CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge,
+    CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge, ConnectionPagination,
     DependencyConnectionEdge, DependencyEdgeConnection, KnowledgeItemConnection, KnowledgeItemEdge,
     KnowledgeRelationConnection, KnowledgeRelationEdge, KnowledgeVersionConnection,
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,
@@ -41,4 +41,6 @@ pub use repository::{Branch, Repository};
 pub use scalars::{DateTimeScalar, JsonScalar};
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
-pub use test_harness::{TestHarnessCoverageResult, TestHarnessTestsResult};
+pub use test_harness::{
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+};

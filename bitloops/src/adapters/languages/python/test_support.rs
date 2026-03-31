@@ -1,34 +1,21 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tree_sitter::{Node, Parser};
 use tree_sitter_python::LANGUAGE as LANGUAGE_PYTHON;
 
-use crate::capability_packs::test_harness::mapping::file_discovery::{
-    normalize_join, normalize_rel_path, read_source_file,
+use crate::host::language_adapter::{
+    DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, LanguageTestSupport,
+    ReferenceCandidate, ScenarioDiscoverySource,
 };
-use crate::capability_packs::test_harness::mapping::model::{
-    DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
-    ScenarioDiscoverySource,
-};
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
-pub(crate) struct PythonLanguageProvider {
-    parser: Parser,
-}
+#[derive(Default)]
+pub(crate) struct PythonLanguageTestSupport;
 
-impl PythonLanguageProvider {
-    pub(crate) fn new() -> Result<Self> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&LANGUAGE_PYTHON.into())
-            .context("failed to load Python parser")?;
-        Ok(Self { parser })
-    }
-}
-
-impl LanguageProvider for PythonLanguageProvider {
+impl LanguageTestSupport for PythonLanguageTestSupport {
     fn language_id(&self) -> &'static str {
         "python"
     }
@@ -37,7 +24,37 @@ impl LanguageProvider for PythonLanguageProvider {
         2
     }
 
-    fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
+        PythonTestMappingHelper::supports_path(absolute_path, relative_path)
+    }
+
+    fn discover_tests(
+        &self,
+        absolute_path: &std::path::Path,
+        relative_path: &str,
+    ) -> Result<DiscoveredTestFile> {
+        PythonTestMappingHelper::new()?.discover_tests(absolute_path, relative_path)
+    }
+}
+
+pub(crate) fn python_test_support() -> Arc<dyn LanguageTestSupport> {
+    Arc::new(PythonLanguageTestSupport)
+}
+
+pub(crate) struct PythonTestMappingHelper {
+    parser: Parser,
+}
+
+impl PythonTestMappingHelper {
+    pub(crate) fn new() -> Result<Self> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&LANGUAGE_PYTHON.into())
+            .context("failed to load Python parser")?;
+        Ok(Self { parser })
+    }
+
+    pub(crate) fn supports_path(_absolute_path: &Path, relative_path: &str) -> bool {
         let file_name = Path::new(relative_path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -49,7 +66,7 @@ impl LanguageProvider for PythonLanguageProvider {
                 || relative_path.contains("/tests/"))
     }
 
-    fn discover_tests(
+    pub(crate) fn discover_tests(
         &mut self,
         absolute_path: &Path,
         relative_path: &str,
@@ -69,7 +86,7 @@ impl LanguageProvider for PythonLanguageProvider {
 
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
-            language: self.language_id().to_string(),
+            language: "python".to_string(),
             reference_candidates,
             suites: collect_python_suites(root, bytes, relative_path),
         })
@@ -321,4 +338,30 @@ fn is_python_test_function(node: Node<'_>, source: &[u8]) -> bool {
     node.child_by_field_name("name")
         .and_then(|name| name.utf8_text(source).ok())
         .is_some_and(|name| name.starts_with("test_"))
+}
+
+fn read_source_file(path: &Path) -> Result<String> {
+    fs::read_to_string(path).with_context(|| format!("failed reading test file {}", path.display()))
+}
+
+fn normalize_join(base: &Path, relative: &Path) -> PathBuf {
+    let joined = base.join(relative);
+    let mut normalized = PathBuf::new();
+
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+
+    normalized
+}
+
+fn normalize_rel_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

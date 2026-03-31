@@ -14,7 +14,7 @@ use crate::host::devql::{
 };
 
 mod args;
-mod graphql;
+pub(crate) mod graphql;
 mod knowledge;
 
 #[cfg(test)]

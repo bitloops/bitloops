@@ -1,34 +1,21 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tree_sitter::{Node, Parser};
 use tree_sitter_typescript::LANGUAGE_TYPESCRIPT;
 
-use crate::capability_packs::test_harness::mapping::file_discovery::{
-    normalize_join, normalize_rel_path, read_source_file,
+use crate::host::language_adapter::{
+    DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, LanguageTestSupport,
+    ReferenceCandidate, ScenarioDiscoverySource,
 };
-use crate::capability_packs::test_harness::mapping::model::{
-    DiscoveredTestFile, DiscoveredTestScenario, DiscoveredTestSuite, ReferenceCandidate,
-    ScenarioDiscoverySource,
-};
-use crate::capability_packs::test_harness::mapping::registry::LanguageProvider;
 
-pub(crate) struct TypeScriptLanguageProvider {
-    parser: Parser,
-}
+#[derive(Default)]
+pub(crate) struct TsJsLanguageTestSupport;
 
-impl TypeScriptLanguageProvider {
-    pub(crate) fn new() -> Result<Self> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&LANGUAGE_TYPESCRIPT.into())
-            .context("failed to load TypeScript parser")?;
-        Ok(Self { parser })
-    }
-}
-
-impl LanguageProvider for TypeScriptLanguageProvider {
+impl LanguageTestSupport for TsJsLanguageTestSupport {
     fn language_id(&self) -> &'static str {
         "typescript"
     }
@@ -37,13 +24,43 @@ impl LanguageProvider for TypeScriptLanguageProvider {
         1
     }
 
-    fn supports_path(&self, _absolute_path: &Path, relative_path: &str) -> bool {
+    fn supports_path(&self, absolute_path: &std::path::Path, relative_path: &str) -> bool {
+        TypeScriptTestMappingHelper::supports_path(absolute_path, relative_path)
+    }
+
+    fn discover_tests(
+        &self,
+        absolute_path: &std::path::Path,
+        relative_path: &str,
+    ) -> Result<DiscoveredTestFile> {
+        TypeScriptTestMappingHelper::new()?.discover_tests(absolute_path, relative_path)
+    }
+}
+
+pub(crate) fn ts_js_test_support() -> Arc<dyn LanguageTestSupport> {
+    Arc::new(TsJsLanguageTestSupport)
+}
+
+pub(crate) struct TypeScriptTestMappingHelper {
+    parser: Parser,
+}
+
+impl TypeScriptTestMappingHelper {
+    pub(crate) fn new() -> Result<Self> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&LANGUAGE_TYPESCRIPT.into())
+            .context("failed to load TypeScript parser")?;
+        Ok(Self { parser })
+    }
+
+    pub(crate) fn supports_path(_absolute_path: &Path, relative_path: &str) -> bool {
         relative_path.ends_with(".test.ts")
             || relative_path.ends_with(".spec.ts")
             || relative_path.contains("/__tests__/")
     }
 
-    fn discover_tests(
+    pub(crate) fn discover_tests(
         &mut self,
         absolute_path: &Path,
         relative_path: &str,
@@ -63,7 +80,7 @@ impl LanguageProvider for TypeScriptLanguageProvider {
 
         Ok(DiscoveredTestFile {
             relative_path: relative_path.to_string(),
-            language: self.language_id().to_string(),
+            language: "typescript".to_string(),
             reference_candidates,
             suites: collect_typescript_suites(root, bytes),
         })
@@ -285,4 +302,30 @@ fn extract_second_callback_body(call_expression: Node<'_>) -> Option<Node<'_>> {
     let args = call_expression.child_by_field_name("arguments")?;
     let callback = args.named_child(1)?;
     callback.child_by_field_name("body")
+}
+
+fn read_source_file(path: &Path) -> Result<String> {
+    fs::read_to_string(path).with_context(|| format!("failed reading test file {}", path.display()))
+}
+
+fn normalize_join(base: &Path, relative: &Path) -> PathBuf {
+    let joined = base.join(relative);
+    let mut normalized = PathBuf::new();
+
+    for component in joined.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+
+    normalized
+}
+
+fn normalize_rel_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

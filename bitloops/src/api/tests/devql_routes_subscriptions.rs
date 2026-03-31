@@ -2,7 +2,7 @@ use super::*;
 
 fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
-    let fingerprint = crate::config::discover_repo_policy(repo_root)
+    let fingerprint = crate::config::discover_repo_policy_optional(repo_root)
         .expect("discover repo policy")
         .fingerprint;
     vec![
@@ -642,7 +642,6 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
               uncoveredLineCount
             }
           }
-          extension(stage: "coverage", first: 5)
         }
         "#,
     )
@@ -689,10 +688,6 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
     assert_eq!(
         payload["data"]["coverage"][0]["summary"]["uncoveredLineCount"],
         1
-    );
-    assert_eq!(
-        payload["data"]["extension"][0]["coverage"]["coverage_source"],
-        "lcov"
     );
 }
 
@@ -826,7 +821,9 @@ async fn devql_post_route_surfaces_slim_stage_validation_errors() {
               artefactId
             }
           }
-          badExtension: extension(stage: "unknown_stage", first: 5)
+          badTestsSummary: testsSummary {
+            commitSha
+          }
         }
         "#,
     )
@@ -855,8 +852,8 @@ async fn devql_post_route_surfaces_slim_stage_validation_errors() {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("unsupported DevQL stage")),
-        "expected unsupported stage error, got {messages:?}"
+            .any(|message| message.contains("requires a resolved commit")),
+        "expected testsSummary commit error, got {messages:?}"
     );
 }
 

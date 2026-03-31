@@ -639,3 +639,7 @@ fn get_reachable_temporary_checkpoints_shell(
 
     points
 }
+
+#[cfg(test)]
+#[path = "branch_tests.rs"]
+mod tests;

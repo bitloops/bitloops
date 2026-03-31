@@ -424,6 +424,143 @@ async fn devql_commit_connection_surfaces_structured_cursor_errors() {
 }
 
 #[tokio::test]
+async fn devql_commit_connection_supports_reverse_pagination() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let tail_page = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(last: 1) {
+                  totalCount
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                  }
+                  edges {
+                    node {
+                      commitMessage
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        tail_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        tail_page.errors
+    );
+
+    let tail_json = tail_page.data.into_json().expect("graphql data to json");
+    assert_eq!(tail_json["repo"]["commits"]["totalCount"], 2);
+    assert_eq!(
+        tail_json["repo"]["commits"]["pageInfo"]["hasNextPage"],
+        false
+    );
+    assert_eq!(
+        tail_json["repo"]["commits"]["pageInfo"]["hasPreviousPage"],
+        true
+    );
+    assert_eq!(
+        tail_json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Initial commit"
+    );
+
+    let before_cursor = tail_json["repo"]["commits"]["pageInfo"]["startCursor"]
+        .as_str()
+        .expect("tail start cursor")
+        .to_string();
+
+    let before_page = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                commits(last: 1, before: "{before_cursor}") {{
+                  pageInfo {{
+                    hasNextPage
+                    hasPreviousPage
+                  }}
+                  edges {{
+                    node {{
+                      commitMessage
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#
+        )))
+        .await;
+
+    assert!(
+        before_page.errors.is_empty(),
+        "graphql errors: {:?}",
+        before_page.errors
+    );
+
+    let before_json = before_page.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        before_json["repo"]["commits"]["pageInfo"]["hasNextPage"],
+        true
+    );
+    assert_eq!(
+        before_json["repo"]["commits"]["pageInfo"]["hasPreviousPage"],
+        false
+    );
+    assert_eq!(
+        before_json["repo"]["commits"]["edges"][0]["node"]["commitMessage"],
+        "Checkpoint commit"
+    );
+}
+
+#[tokio::test]
+async fn devql_commit_connection_rejects_mixed_forward_and_reverse_arguments() {
+    let repo = seed_dashboard_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                commits(first: 1, last: 1) {
+                  edges {
+                    cursor
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+}
+
+#[tokio::test]
 async fn devql_repository_queries_handle_repos_without_checkpoint_storage() {
     let repo = TempDir::new().expect("temp dir");
     init_test_repo(repo.path(), "main", "Alice", "alice@example.com");

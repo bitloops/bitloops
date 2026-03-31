@@ -9,9 +9,9 @@ use crate::graphql::{
 
 use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, ClonesFilterInput, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, JsonScalar, TestHarnessCoverageResult,
-    TestHarnessTestsResult, paginate_items,
+    CloneEdge, ClonesFilterInput, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -151,9 +151,18 @@ impl Artefact {
     async fn children(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<ArtefactConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let artefacts = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_child_artefacts(self.id.as_ref(), &self.scope)
@@ -164,9 +173,7 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&artefacts, first, after.as_deref(), |artefact| {
-            artefact.cursor()
-        })?;
+        let page = paginate_items(&artefacts, &pagination, |artefact| artefact.cursor())?;
         Ok(ArtefactConnection::new(
             page.items.into_iter().map(ArtefactEdge::new).collect(),
             page.page_info,
@@ -178,9 +185,18 @@ impl Artefact {
         &self,
         ctx: &Context<'_>,
         filter: Option<DepsFilterInput>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let deps = ctx
             .data_unchecked::<DataLoaders>()
             .load_outgoing_edges(self.id.as_ref(), filter, &self.scope)
@@ -191,7 +207,7 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&deps, first, after.as_deref(), |edge| edge.cursor())?;
+        let page = paginate_items(&deps, &pagination, |edge| edge.cursor())?;
         Ok(DependencyEdgeConnection::new(
             page.items
                 .into_iter()
@@ -206,9 +222,18 @@ impl Artefact {
         &self,
         ctx: &Context<'_>,
         filter: Option<DepsFilterInput>,
-        #[graphql(default = 50)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let deps = ctx
             .data_unchecked::<DataLoaders>()
             .load_incoming_edges(self.id.as_ref(), filter, &self.scope)
@@ -219,7 +244,7 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&deps, first, after.as_deref(), |edge| edge.cursor())?;
+        let page = paginate_items(&deps, &pagination, |edge| edge.cursor())?;
         Ok(DependencyEdgeConnection::new(
             page.items
                 .into_iter()
@@ -234,8 +259,10 @@ impl Artefact {
         &self,
         ctx: &Context<'_>,
         filter: Option<ClonesFilterInput>,
-        #[graphql(default = 20)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<CloneConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
@@ -249,6 +276,13 @@ impl Artefact {
                 "`clones` does not support historical or temporary `asOf(...)` scopes yet",
             ));
         }
+        let pagination = ConnectionPagination::from_graphql(
+            20,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
 
         let clones = ctx
             .data_unchecked::<DevqlGraphqlContext>()
@@ -260,7 +294,7 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&clones, first, after.as_deref(), |clone| clone.cursor())?;
+        let page = paginate_items(&clones, &pagination, |clone| clone.cursor())?;
         Ok(CloneConnection::new(
             page.items.into_iter().map(CloneEdge::new).collect(),
             page.page_info,
@@ -271,9 +305,18 @@ impl Artefact {
     async fn chat_history(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = 10)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<ChatEntryConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            10,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let history = ctx
             .data_unchecked::<DataLoaders>()
             .load_chat_history(self.path.as_str(), self.symbol_fqn.as_deref(), &self.scope)
@@ -284,7 +327,7 @@ impl Artefact {
                     self.id.as_ref()
                 ))
             })?;
-        let page = paginate_items(&history, first, after.as_deref(), |entry| entry.cursor())?;
+        let page = paginate_items(&history, &pagination, |entry| entry.cursor())?;
         Ok(ChatEntryConnection::new(
             page.items.into_iter().map(ChatEntryEdge::new).collect(),
             page.page_info,
@@ -334,28 +377,6 @@ impl Artefact {
             .await
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
-    }
-
-    async fn extension(
-        &self,
-        ctx: &Context<'_>,
-        stage: String,
-        args: Option<JsonScalar>,
-        #[graphql(default = 100)] first: i32,
-    ) -> Result<Vec<JsonScalar>> {
-        let rows = StageResolverAdapter::new(
-            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
-            stage.as_str(),
-        )
-        .resolve(
-            &self.scope,
-            vec![artefact_stage_row(self)],
-            args.map(|value| value.0),
-            stage_limit(first)?,
-        )
-        .await
-        .map_err(|err| map_stage_adapter_error(self.id.as_ref(), &stage, err))?;
-        Ok(rows.into_iter().map(async_graphql::types::Json).collect())
     }
 }
 
@@ -426,6 +447,7 @@ fn map_stage_adapter_error(
     if message.contains("unsupported DevQL stage")
         || message.contains("ambiguous DevQL stage")
         || message.contains("extension args must")
+        || message.contains("requires a resolved commit")
     {
         return bad_user_input_error(message);
     }

@@ -52,7 +52,7 @@ async fn handle_supervisor_start_repo(
     let _guard = state.operation_lock.lock().await;
     let daemon_config =
         resolve_daemon_config(Some(request.config_path.as_path())).map_err(supervisor_api_error)?;
-    ensure_service_managed_repo_runtime(&daemon_config, request.config)
+    ensure_service_managed_repo_runtime(&daemon_config, request.config, request.telemetry)
         .await
         .map(Json)
         .map_err(supervisor_api_error)

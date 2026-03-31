@@ -16,6 +16,7 @@ pub mod reset;
 pub mod resume;
 pub mod rewind;
 pub mod root;
+pub(crate) mod telemetry_consent;
 pub mod testlens;
 pub mod uninstall;
 pub mod versioncheck;
@@ -51,13 +52,13 @@ pub struct Cli {
 pub enum Commands {
     /// Manage the Bitloops daemon lifecycle.
     Daemon(daemon::DaemonArgs),
-    /// Start the Bitloops daemon for the current repository.
+    /// Start the global Bitloops daemon.
     Start(daemon::DaemonStartArgs),
-    /// Stop the Bitloops daemon for the current repository.
+    /// Stop the global Bitloops daemon.
     Stop(daemon::DaemonStopArgs),
-    /// Show Bitloops daemon status for the current repository.
+    /// Show global Bitloops daemon status.
     Status(daemon::DaemonStatusArgs),
-    /// Restart the Bitloops daemon for the current repository.
+    /// Restart the global Bitloops daemon.
     Restart(daemon::DaemonRestartArgs),
     /// Repository/session checkpoint status and related views.
     Checkpoints(checkpoints::CheckpointsArgs),
@@ -69,11 +70,11 @@ pub enum Commands {
     Clean(root::CleanArgs),
     /// Reset shadow/session state for current HEAD.
     Reset(root::ResetArgs),
-    /// Initialize the global Bitloops daemon config.
+    /// Initialise Bitloops for the current project.
     Init(init::InitArgs),
-    /// Enable Bitloops in the current project.
+    /// Enable capture in the current Bitloops project.
     Enable(enable::EnableArgs),
-    /// Disable Bitloops in the current project.
+    /// Disable capture in the current Bitloops project.
     Disable(root::DisableArgs),
     /// Uninstall Bitloops artefacts from your system or known repositories.
     Uninstall(uninstall::UninstallArgs),
@@ -164,7 +165,11 @@ pub async fn run(cli: Cli) -> Result<()> {
 
     if root::should_attempt_watcher_autostart(&command)
         && let Ok(repo_root) = crate::utils::paths::repo_root()
-        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root)
+        && let Ok(policy_start) = std::env::current_dir()
+        && let Ok(policy) = crate::config::discover_repo_policy_optional(&policy_start)
+        && let Some(config_root) = policy.root.as_deref()
+        && crate::config::settings::is_enabled_for_hooks(&policy_start)
+        && let Err(err) = crate::host::devql::watch::ensure_watcher_running(&repo_root, config_root)
     {
         log::debug!("skipping DevQL watcher auto-start: {err:#}");
     }
