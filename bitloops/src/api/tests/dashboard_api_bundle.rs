@@ -191,8 +191,12 @@ async fn api_validates_missing_required_branch() {
 }
 
 #[tokio::test]
-async fn api_repositories_lists_default_repository() {
+async fn api_repositories_returns_empty_list_when_catalog_is_empty() {
     let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute("DELETE FROM repositories", [])
+        .expect("clear repository catalog");
     let app = build_dashboard_router(test_state(
         repo.path().to_path_buf(),
         ServeMode::HelloWorld,
@@ -202,13 +206,7 @@ async fn api_repositories_lists_default_repository() {
     let (status, payload) = request_json(app, "/api/repositories").await;
     assert_eq!(status, StatusCode::OK);
     let repositories = payload.as_array().expect("repositories array");
-    assert_eq!(repositories.len(), 1);
-    assert_eq!(repositories[0]["name"].as_str(), Some(SEEDED_REPO_NAME));
-    assert_eq!(repositories[0]["provider"].as_str(), Some("local"));
-    assert_eq!(repositories[0]["organization"].as_str(), Some("local"));
-    assert_eq!(repositories[0]["defaultBranch"].as_str(), Some("main"));
-    assert!(repositories[0]["repoId"].as_str().is_some());
-    assert!(repositories[0]["identity"].as_str().is_some());
+    assert!(repositories.is_empty());
 }
 
 #[tokio::test]

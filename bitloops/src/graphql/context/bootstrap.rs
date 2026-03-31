@@ -193,13 +193,6 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn list_known_repositories(&self) -> Result<Vec<SelectedRepository>> {
         let mut repositories = self.load_known_repositories().await?;
-        if repositories
-            .iter()
-            .all(|repository| repository.repo_id() != self.default_repository.repo_id())
-        {
-            repositories.push(self.default_repository.clone());
-        }
-
         repositories.sort_by(|left, right| {
             left.name()
                 .cmp(right.name())
