@@ -8,15 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Dashboard repository-list REST endpoint**: added `GET /api/repositories` on the legacy dashboard API so clients can list all repositories currently stored in the DevQL repository catalog. The endpoint is exposed through the existing `/api` router, included in the dashboard OpenAPI document, and covered by regression tests for both empty-catalog and multi-repository cases.
+
 ### Changed
 
 ### Fixed
-
-## [0.0.13] - 2026-03-31
-
-### Added
-
-- **Dashboard repository-list REST endpoint**: added `GET /api/repositories` on the legacy dashboard API so clients can list all repositories currently stored in the DevQL repository catalog. The endpoint is exposed through the existing `/api` router, included in the dashboard OpenAPI document, and covered by regression tests for both empty-catalog and multi-repository cases.
 
 ## [0.0.12] - 2026-03-30
 
