@@ -216,18 +216,12 @@ base_url = "https://api.openai.com/v1"
 
 ### Compatibility
 
-Existing embedding settings can remain as deprecated compatibility shims during migration:
+Legacy embedding settings were removed from the implementation:
 
-- `stores.embedding_provider`
-- `stores.embedding_model`
-- `stores.embedding_api_key`
-- `stores.embedding_cache_dir`
-- `BITLOOPS_DEVQL_EMBEDDING_*`
-
-But the new product direction should be:
-
+- no `stores.embedding_*`
+- no `BITLOOPS_DEVQL_EMBEDDING_*`
 - no implicit fallback to local
-- explicit profile selection
+- explicit profile selection only
 
 ---
 

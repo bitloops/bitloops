@@ -158,7 +158,7 @@ In practice this means:
 The current code reflects that direction:
 
 - `test_harness` consumes `languages()` and `test_harness_store()` from the host context
-- `semantic_clones` uses `clone_rebuild_relational()` rather than `devql_relational_scoped(...)`
+- `semantic_clones` uses `clone_edges_rebuild_relational()` rather than `devql_relational_scoped(...)`
 - GraphQL resolvers call typed stage adapters rather than the removed public `extension(stage)` field
 
 ## Key runtime flows

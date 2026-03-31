@@ -24,20 +24,6 @@ pub struct DevqlConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
-<<<<<<< Updated upstream
-    #[allow(dead_code)]
-=======
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-    pub(crate) embedding_provider: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_model: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_api_key: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_cache_dir: Option<PathBuf>,
-=======
->>>>>>> Stashed changes
 }
 
 impl DevqlConfig {

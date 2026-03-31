@@ -54,102 +54,6 @@ pub struct StoreSemanticConfig {
     pub semantic_base_url: Option<String>,
 }
 
-<<<<<<< Updated upstream
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StoreEmbeddingConfig {
-    pub embedding_provider: Option<String>,
-    pub embedding_model: Option<String>,
-    pub embedding_api_key: Option<String>,
-    pub embedding_cache_dir: Option<PathBuf>,
-=======
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticSummaryMode {
-    #[default]
-    Auto,
-    Off,
-}
-
-impl fmt::Display for SemanticSummaryMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Auto => write!(f, "auto"),
-            Self::Off => write!(f, "off"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticCloneEmbeddingMode {
-    Off,
-    Deterministic,
-    #[default]
-    SemanticAwareOnce,
-    RefreshOnUpgrade,
-}
-
-impl fmt::Display for SemanticCloneEmbeddingMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Off => write!(f, "off"),
-            Self::Deterministic => write!(f, "deterministic"),
-            Self::SemanticAwareOnce => write!(f, "semantic_aware_once"),
-            Self::RefreshOnUpgrade => write!(f, "refresh_on_upgrade"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SemanticClonesConfig {
-    pub summary_mode: SemanticSummaryMode,
-    pub embedding_mode: SemanticCloneEmbeddingMode,
-    pub embedding_profile: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EmbeddingsRuntimeConfig {
-    pub command: String,
-    pub args: Vec<String>,
-    pub startup_timeout_secs: u64,
-    pub request_timeout_secs: u64,
-}
-
-impl Default for EmbeddingsRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            command: "bitloops-embeddings".to_string(),
-            args: Vec::new(),
-            startup_timeout_secs: 10,
-            request_timeout_secs: 60,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingProfileConfig {
-    pub name: String,
-    pub kind: String,
-    pub model: Option<String>,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub cache_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingsConfig {
-    pub runtime: EmbeddingsRuntimeConfig,
-    pub profiles: BTreeMap<String, EmbeddingProfileConfig>,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmbeddingCapabilityConfig {
-    pub semantic_clones: SemanticClonesConfig,
-    pub embeddings: EmbeddingsConfig,
->>>>>>> Stashed changes
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticSummaryMode {
@@ -334,20 +238,6 @@ pub struct StoreFileConfig {
     pub(crate) semantic_model: Option<String>,
     pub(crate) semantic_api_key: Option<String>,
     pub(crate) semantic_base_url: Option<String>,
-<<<<<<< Updated upstream
-    #[allow(dead_code)]
-=======
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-    pub(crate) embedding_provider: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_model: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_api_key: Option<String>,
-    #[allow(dead_code)]
-    pub(crate) embedding_cache_dir: Option<String>,
-=======
->>>>>>> Stashed changes
     pub(crate) blob_local_path: Option<String>,
     pub(crate) blob_s3_bucket: Option<String>,
     pub(crate) blob_s3_region: Option<String>,

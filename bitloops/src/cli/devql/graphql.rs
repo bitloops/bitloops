@@ -134,9 +134,9 @@ async fn ensure_daemon_available_for_ingest(_repo_root: &Path) -> Result<()> {
     };
 
     if report.service.is_some() {
-        let _ = daemon::start_service(&daemon_config, config).await?;
+        let _ = daemon::start_service(&daemon_config, config, None).await?;
     } else {
-        let _ = daemon::start_detached(&daemon_config, config).await?;
+        let _ = daemon::start_detached(&daemon_config, config, None).await?;
     }
 
     Ok(())

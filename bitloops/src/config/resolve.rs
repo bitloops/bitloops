@@ -14,26 +14,11 @@ use super::store_config_utils::{
     resolve_configured_path, resolve_required_provider_string,
 };
 use super::types::{
-<<<<<<< Updated upstream
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EmbeddingCapabilityConfig,
-    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
-    SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreEmbeddingConfig,
-    StoreFileConfig, StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
-=======
-<<<<<<< Updated upstream
-    AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EventsBackendConfig,
-    GithubProviderConfig, ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
-    StoreEmbeddingConfig, StoreFileConfig, StoreSemanticConfig, WatchFileConfig,
-    WatchRuntimeConfig,
-=======
     AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EmbeddingCapabilityConfig,
     EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
     GithubProviderConfig, ProviderConfig, RelationalBackendConfig, SemanticCloneEmbeddingMode,
     SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
     StoreSemanticConfig, WatchFileConfig, WatchRuntimeConfig,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 };
 use super::unified_config::{
     UnifiedSettings, resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
@@ -111,22 +96,6 @@ pub fn resolve_provider_config_for_repo(repo_root: &Path) -> Result<ProviderConf
     let settings = daemon_settings_for_repo(repo_root)?.1;
     resolve_provider_from_unified(&settings, |key| env::var(key).ok())
 }
-
-<<<<<<< Updated upstream
-pub fn resolve_store_embedding_config() -> StoreEmbeddingConfig {
-    let repo_root = current_repo_root_or_cwd();
-    resolve_store_embedding_config_for_repo(&repo_root)
-}
-
-pub fn resolve_store_embedding_config_for_repo(repo_root: &Path) -> StoreEmbeddingConfig {
-<<<<<<< Updated upstream
-    let _ = repo_root;
-    StoreEmbeddingConfig::default()
-}
-
-=======
-=======
->>>>>>> Stashed changes
 pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClonesConfig {
     let settings = daemon_settings_for_repo(repo_root)
         .map(|(_, settings)| settings)
@@ -135,10 +104,6 @@ pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClon
 }
 
 pub fn resolve_embeddings_config_for_repo(repo_root: &Path) -> EmbeddingsConfig {
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     let (config_root, settings) = daemon_settings_for_repo(repo_root).unwrap_or_default();
     resolve_embeddings_from_unified(&settings, &config_root, |key| env::var(key).ok())
 }
@@ -502,22 +467,6 @@ where
             .unwrap_or(defaults.watch_poll_fallback_ms),
     }
 }
-
-<<<<<<< Updated upstream
-pub(crate) fn resolve_store_embedding_config_with<F>(
-    file_cfg: StoreFileConfig,
-    config_root: &Path,
-    env_lookup: F,
-) -> StoreEmbeddingConfig
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let _ = (file_cfg, config_root, env_lookup);
-    StoreEmbeddingConfig::default()
-}
-
-=======
->>>>>>> Stashed changes
 #[cfg(test)]
 pub(crate) fn resolve_store_backend_config_for_tests(
     file_cfg: StoreFileConfig,
@@ -670,15 +619,3 @@ pub(crate) fn resolve_watch_runtime_config_for_tests(
         })
     })
 }
-<<<<<<< Updated upstream
-
-#[cfg(test)]
-pub(crate) fn resolve_store_embedding_config_for_tests(
-    file_cfg: StoreFileConfig,
-    env: &[(&str, &str)],
-) -> StoreEmbeddingConfig {
-    let _ = (file_cfg, env);
-    StoreEmbeddingConfig::default()
-}
-=======
->>>>>>> Stashed changes
