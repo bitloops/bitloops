@@ -174,13 +174,10 @@ fn collect_go_scenarios(root: Node<'_>, source: &[u8]) -> Vec<DiscoveredTestScen
         let Ok(name) = name_node.utf8_text(source) else {
             continue;
         };
-        let discovery_source = if name.starts_with("Benchmark") {
-            Some(ScenarioDiscoverySource::Source)
-        } else if name.starts_with("Fuzz") {
-            Some(ScenarioDiscoverySource::Source)
-        } else if name.starts_with("Example") {
-            Some(ScenarioDiscoverySource::Source)
-        } else if name.starts_with("Test") {
+        let discovery_source = if ["Benchmark", "Fuzz", "Example", "Test"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
             Some(ScenarioDiscoverySource::Source)
         } else {
             None
@@ -390,7 +387,7 @@ fn go_package_directory_map(repo_root: &Path) -> std::collections::HashMap<Strin
             continue;
         }
         let current_root = entry.path().parent().unwrap_or(module_root.as_path());
-        if let Some(relative) = current_root.strip_prefix(&module_root).ok() {
+        if let Ok(relative) = current_root.strip_prefix(&module_root) {
             let package_name = if relative.as_os_str().is_empty() {
                 module_path.clone()
             } else {
