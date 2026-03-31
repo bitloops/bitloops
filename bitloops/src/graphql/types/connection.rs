@@ -326,30 +326,122 @@ pub struct PaginatedItems<T> {
     pub total_count: usize,
 }
 
-pub fn paginate_items<T: Clone>(
-    items: &[T],
-    first: i32,
-    after: Option<&str>,
-    cursor_of: impl Fn(&T) -> String,
-) -> Result<PaginatedItems<T>> {
-    if first <= 0 {
-        return Err(bad_user_input_error("`first` must be greater than zero"));
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionPagination {
+    Forward {
+        limit: usize,
+        after: Option<String>,
+    },
+    Backward {
+        limit: usize,
+        before: Option<String>,
+    },
+}
+
+impl ConnectionPagination {
+    pub fn from_graphql(
+        default_limit: usize,
+        first: Option<i32>,
+        after: Option<&str>,
+        last: Option<i32>,
+        before: Option<&str>,
+    ) -> Result<Self> {
+        if (first.is_some() || after.is_some()) && (last.is_some() || before.is_some()) {
+            return Err(bad_user_input_error(
+                "use either forward pagination (`first`/`after`) or backward pagination (`last`/`before`), not both",
+            ));
+        }
+
+        if let Some(last) = last {
+            if last <= 0 {
+                return Err(bad_user_input_error("`last` must be greater than zero"));
+            }
+            return Ok(Self::Backward {
+                limit: last as usize,
+                before: before.map(str::to_string),
+            });
+        }
+
+        if before.is_some() {
+            return Err(bad_user_input_error("`before` requires `last`"));
+        }
+
+        let first = first.unwrap_or(default_limit as i32);
+        if first <= 0 {
+            return Err(bad_user_input_error("`first` must be greater than zero"));
+        }
+
+        Ok(Self::Forward {
+            limit: first as usize,
+            after: after.map(str::to_string),
+        })
     }
 
-    let total_count = items.len();
-    let start_index = match after {
-        Some(cursor) => {
-            let Some(position) = items.iter().position(|item| cursor_of(item) == cursor) else {
-                return Err(bad_cursor_error(format!(
-                    "cursor `{cursor}` does not match any result in this connection"
-                )));
-            };
-            position.saturating_add(1)
+    pub fn limit(&self) -> usize {
+        match self {
+            Self::Forward { limit, .. } | Self::Backward { limit, .. } => *limit,
         }
-        None => 0,
-    };
+    }
 
-    let end_index = start_index.saturating_add(first as usize).min(total_count);
+    pub fn fetch_limit(&self) -> usize {
+        self.limit().saturating_add(1)
+    }
+
+    pub fn after(&self) -> Option<&str> {
+        match self {
+            Self::Forward { after, .. } => after.as_deref(),
+            Self::Backward { .. } => None,
+        }
+    }
+
+    pub fn before(&self) -> Option<&str> {
+        match self {
+            Self::Backward { before, .. } => before.as_deref(),
+            Self::Forward { .. } => None,
+        }
+    }
+}
+
+pub fn paginate_items<T: Clone>(
+    items: &[T],
+    pagination: &ConnectionPagination,
+    cursor_of: impl Fn(&T) -> String,
+) -> Result<PaginatedItems<T>> {
+    let total_count = items.len();
+    let (start_index, end_index) = match pagination {
+        ConnectionPagination::Forward { limit, after } => {
+            let start_index = match after.as_deref() {
+                Some(cursor) => {
+                    let Some(position) = items.iter().position(|item| cursor_of(item) == cursor)
+                    else {
+                        return Err(bad_cursor_error(format!(
+                            "cursor `{cursor}` does not match any result in this connection"
+                        )));
+                    };
+                    position.saturating_add(1)
+                }
+                None => 0,
+            };
+            let end_index = start_index.saturating_add(*limit).min(total_count);
+            (start_index, end_index)
+        }
+        ConnectionPagination::Backward { limit, before } => {
+            let end_index = match before.as_deref() {
+                Some(cursor) => {
+                    let Some(position) = items.iter().position(|item| cursor_of(item) == cursor)
+                    else {
+                        return Err(bad_cursor_error(format!(
+                            "cursor `{cursor}` does not match any result in this connection"
+                        )));
+                    };
+                    position
+                }
+                None => total_count,
+            };
+            let start_index = end_index.saturating_sub(*limit);
+            (start_index, end_index)
+        }
+    };
     let page_items = items[start_index..end_index].to_vec();
     let start_cursor = page_items.first().map(&cursor_of);
     let end_cursor = page_items.last().map(&cursor_of);
@@ -364,4 +456,101 @@ pub fn paginate_items<T: Clone>(
         },
         total_count,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pagination(
+        default_limit: usize,
+        first: Option<i32>,
+        after: Option<&str>,
+        last: Option<i32>,
+        before: Option<&str>,
+    ) -> ConnectionPagination {
+        ConnectionPagination::from_graphql(default_limit, first, after, last, before)
+            .expect("pagination args should be valid")
+    }
+
+    #[test]
+    fn paginate_items_defaults_to_forward_window() {
+        let items = vec!["a", "b", "c"];
+        let page = paginate_items(&items, &pagination(2, None, None, None, None), |item| {
+            item.to_string()
+        })
+        .expect("forward page");
+
+        assert_eq!(page.items, vec!["a", "b"]);
+        assert_eq!(
+            page.page_info,
+            PageInfo {
+                has_next_page: true,
+                has_previous_page: false,
+                start_cursor: Some("a".to_string()),
+                end_cursor: Some("b".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn paginate_items_supports_backward_windows() {
+        let items = vec!["a", "b", "c", "d"];
+        let page = paginate_items(
+            &items,
+            &pagination(10, None, None, Some(2), Some("d")),
+            |item| item.to_string(),
+        )
+        .expect("backward page");
+
+        assert_eq!(page.items, vec!["b", "c"]);
+        assert_eq!(
+            page.page_info,
+            PageInfo {
+                has_next_page: true,
+                has_previous_page: true,
+                start_cursor: Some("b".to_string()),
+                end_cursor: Some("c".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn paginate_items_supports_backward_window_from_tail() {
+        let items = vec!["a", "b", "c"];
+        let page = paginate_items(&items, &pagination(10, None, None, Some(2), None), |item| {
+            item.to_string()
+        })
+        .expect("backward tail page");
+
+        assert_eq!(page.items, vec!["b", "c"]);
+        assert_eq!(
+            page.page_info,
+            PageInfo {
+                has_next_page: false,
+                has_previous_page: true,
+                start_cursor: Some("b".to_string()),
+                end_cursor: Some("c".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn pagination_rejects_mixed_directions() {
+        let err = ConnectionPagination::from_graphql(10, Some(2), None, Some(2), None)
+            .expect_err("mixed pagination must fail");
+
+        assert!(
+            err.message
+                .contains("use either forward pagination (`first`/`after`) or backward pagination (`last`/`before`)")
+        );
+    }
+
+    #[test]
+    fn pagination_rejects_before_without_last() {
+        let err = ConnectionPagination::from_graphql(10, None, None, None, Some("cursor"))
+            .expect_err("before without last must fail");
+
+        assert!(err.message.contains("`before` requires `last`"));
+    }
 }

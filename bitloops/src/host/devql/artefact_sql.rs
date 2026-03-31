@@ -252,7 +252,7 @@ mod tests {
                 agent: Some("codex".to_string()),
                 since: Some("2026-03-20T00:00:00Z".to_string()),
             }),
-            pagination: Some(ArtefactPagination::new(None, 25)),
+            pagination: Some(ArtefactPagination::forward(None, 25)),
         }
     }
 

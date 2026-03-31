@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::constants::*;
 use super::daemon_config::load_daemon_settings;
-use super::repo_policy::discover_repo_policy;
+use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, read_any_bool, read_any_string, read_any_string_opt, read_any_u64,
     read_any_u64_opt,
@@ -135,7 +135,7 @@ impl DashboardFileConfig {
 
 impl WatchFileConfig {
     pub fn load_for_repo(repo_root: &Path) -> Self {
-        discover_repo_policy(repo_root)
+        discover_repo_policy_optional(repo_root)
             .ok()
             .map(|policy| {
                 let mut map = serde_json::Map::new();

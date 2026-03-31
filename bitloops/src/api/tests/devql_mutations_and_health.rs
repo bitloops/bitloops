@@ -41,6 +41,92 @@ async fn devql_schema_builds_and_executes_in_process() {
 }
 
 #[tokio::test]
+async fn global_mutation_updates_cli_telemetry_consent() {
+    let temp = TempDir::new().expect("temp dir");
+    let config_path = temp
+        .path()
+        .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    fs::write(
+        &config_path,
+        r#"[runtime]
+local_dev = false
+cli_version = "0.0.1"
+
+[telemetry]
+enabled = false
+"#,
+    )
+    .expect("write daemon config");
+
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        temp.path().to_path_buf(),
+        super::super::db::DashboardDbPools::default(),
+    ));
+    let runtime_path = crate::daemon::runtime_state_path(temp.path());
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path: config_path.clone(),
+        config_root: temp.path().to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: temp.path().join("bundle"),
+        relational_db_path: temp.path().join("relational.db"),
+        events_db_path: temp.path().join("events.duckdb"),
+        blob_store_path: temp.path().join("blob"),
+        repo_registry_path: temp.path().join("repo-registry.json"),
+        binary_fingerprint: "test".to_string(),
+        updated_at_unix: 0,
+    };
+    fs::create_dir_all(
+        runtime_path
+            .parent()
+            .expect("runtime state should have a parent directory"),
+    )
+    .expect("create runtime state parent");
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialise runtime state");
+    bytes.push(b'\n');
+    fs::write(&runtime_path, bytes).expect("write runtime state");
+
+    let response = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            mutation {{
+              updateCliTelemetryConsent(cliVersion: "{version}") {{
+                telemetry
+                needsPrompt
+              }}
+            }}
+            "#,
+            version = crate::cli::telemetry_consent::CURRENT_CLI_VERSION,
+        )))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        json["updateCliTelemetryConsent"]["telemetry"],
+        serde_json::Value::Null
+    );
+    assert_eq!(json["updateCliTelemetryConsent"]["needsPrompt"], true);
+
+    let rendered = fs::read_to_string(&config_path).expect("read daemon config");
+    assert!(rendered.contains(&format!(
+        "cli_version = \"{}\"",
+        crate::cli::telemetry_consent::CURRENT_CLI_VERSION
+    )));
+    assert!(!rendered.contains("enabled = false"));
+}
+
+#[tokio::test]
 async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);

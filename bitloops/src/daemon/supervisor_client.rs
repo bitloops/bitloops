@@ -60,6 +60,7 @@ async fn supervisor_http_ready(runtime: &SupervisorRuntimeState) -> bool {
 pub(super) async fn supervisor_start_repo(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
     let runtime = ensure_supervisor_available().await?;
     let response = reqwest::Client::new()
@@ -70,6 +71,7 @@ pub(super) async fn supervisor_start_repo(
         .json(&SupervisorStartRequest {
             config_path: daemon_config.config_path.clone(),
             config,
+            telemetry,
         })
         .send()
         .await
@@ -107,6 +109,7 @@ pub(super) async fn supervisor_restart_repo(
         .json(&SupervisorStartRequest {
             config_path: daemon_config.config_path.clone(),
             config,
+            telemetry: None,
         })
         .send()
         .await

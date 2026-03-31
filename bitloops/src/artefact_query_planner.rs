@@ -146,15 +146,34 @@ pub(crate) struct ArtefactActivityFilter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArtefactPaginationDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArtefactPagination {
+    pub direction: ArtefactPaginationDirection,
     pub after: Option<String>,
+    pub before: Option<String>,
     pub limit: usize,
 }
 
 impl ArtefactPagination {
-    pub(crate) fn new(after: Option<&str>, limit: usize) -> Self {
+    pub(crate) fn forward(after: Option<&str>, limit: usize) -> Self {
         Self {
+            direction: ArtefactPaginationDirection::Forward,
             after: normalise_optional_text(after),
+            before: None,
+            limit: limit.max(1),
+        }
+    }
+
+    pub(crate) fn backward(before: Option<&str>, limit: usize) -> Self {
+        Self {
+            direction: ArtefactPaginationDirection::Backward,
+            after: None,
+            before: normalise_optional_text(before),
             limit: limit.max(1),
         }
     }
@@ -252,7 +271,7 @@ pub(crate) fn plan_devql_artefact_query(
             parsed.artefacts.agent.as_deref(),
             parsed.artefacts.since.as_deref(),
         ),
-        pagination: Some(ArtefactPagination::new(None, parsed.limit)),
+        pagination: Some(ArtefactPagination::forward(None, parsed.limit)),
     })
 }
 
@@ -411,7 +430,7 @@ mod tests {
                 ..Default::default()
             }),
             &ResolverScope::default(),
-            Some(ArtefactPagination::new(None, 25)),
+            Some(ArtefactPagination::forward(None, 25)),
         );
 
         assert_eq!(graphql_spec, devql_spec);
@@ -445,7 +464,7 @@ mod tests {
                 "commit-123".to_string(),
                 TemporalAccessMode::HistoricalCommit,
             )),
-            Some(ArtefactPagination::new(None, 10)),
+            Some(ArtefactPagination::forward(None, 10)),
         );
 
         assert_eq!(graphql_spec, devql_spec);
@@ -475,7 +494,7 @@ mod tests {
                     "ignored".to_string(),
                     TemporalAccessMode::SaveRevision("temp:42".to_string()),
                 )),
-            Some(ArtefactPagination::new(None, 5)),
+            Some(ArtefactPagination::forward(None, 5)),
         );
 
         assert_eq!(graphql_spec, devql_spec);

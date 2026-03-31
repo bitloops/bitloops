@@ -9,8 +9,10 @@ Bitloops has moved to a daemon-first architecture. This release intentionally br
 
 ## What Changed
 
-- `bitloops init` now prepares the global daemon config.
-- `bitloops enable` and `bitloops disable` now manage hooks only.
+- `bitloops start` now owns default daemon-config bootstrap.
+- First-run telemetry consent now belongs to `bitloops start` when that default daemon config is created.
+- `bitloops init` now bootstraps a project or subproject again.
+- `bitloops enable` and `bitloops disable` now toggle capture only.
 - `bitloops uninstall` is now the command for machine-wide cleanup.
 - `bitloops status` now reports daemon status.
 - Repo/session status moved to `bitloops checkpoints status`.
@@ -53,9 +55,11 @@ Default path categories now follow platform app directories:
 1. Move daemon settings, store paths, provider credentials, and dashboard defaults into the global daemon config.
 2. Move repo capture policy into `.bitloops.toml`.
 3. Move local repo overrides into `.bitloops.local.toml`.
-4. Re-run `bitloops init` to create the daemon config if needed.
-5. Re-run `bitloops enable` in each repo to install hooks under the new model.
-6. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
+4. Run `bitloops start` interactively on each machine, or `bitloops start --create-default-config --telemetry` in non-interactive setups, to create the default daemon config and default local store files.
+5. Answer the telemetry prompt during that first `start`, or pass an explicit telemetry flag.
+6. Run `bitloops init` in each repo or subproject to create `.bitloops.local.toml`, install hooks, and run the baseline sync. Use `bitloops init --install-default-daemon` if you want init to bootstrap the default daemon service first.
+7. Use `bitloops enable` and `bitloops disable` to toggle capture in project policy.
+8. Use `bitloops uninstall --full` if you need to clear the new platform-directory installation completely.
 
 ## Examples
 

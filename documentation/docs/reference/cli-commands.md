@@ -22,39 +22,60 @@ bitloops help
 
 ### `bitloops init`
 
-Bootstraps the global daemon config.
+Bootstraps the current project or subproject.
 
 ```bash
 bitloops init
-bitloops init --telemetry false
+bitloops init --install-default-daemon
 ```
 
 Notes:
 
-- `init` no longer installs hooks.
-- Deprecated flags such as `--agent` and `--force` are accepted only to keep old invocations from failing loudly.
+- Run `bitloops start` first when the daemon is already configured.
+- Use `bitloops init --install-default-daemon` on a fresh machine when you want `init` to bootstrap the default daemon service before continuing.
+- `init` treats the current working directory as the Bitloops project root.
+- `init` creates or updates `.bitloops.local.toml`.
+- `.bitloops.local.toml` is added to `.git/info/exclude`.
+- `init` installs git hooks plus the selected agent hooks.
+- `init` replaces `[agents].supported` with the current selection on rerun.
+- `init` triggers daemon-backed schema initialisation and the baseline sync into `artefacts_current`.
+- Use `--agent <name>` to pin the supported agent set or `--skip-baseline` when you want hooks and config without the initial baseline ingestion.
+- `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
+- First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
+- `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
+- In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag.
 
 ### `bitloops enable`
 
-Installs git hooks and supported agent hooks for the current repository.
+Enables capture in the nearest discovered project policy.
 
 ```bash
 bitloops enable
-bitloops enable --agent claude-code
 ```
 
 Notes:
 
-- `enable` no longer writes repo settings files.
-- `.bitloops.local.toml` is added to `.git/info/exclude` so local overrides stay untracked by default.
+- `enable` edits the nearest discovered `.bitloops.local.toml` or `.bitloops.toml` in place.
+- `enable` only toggles `[capture].enabled = true`.
+- Installed hooks stay in place and resume capturing without reinstallation.
+- If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
+- `enable` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
+- `enable` only prompts for telemetry when the daemon config already existed and consent is unresolved.
+- In non-interactive mode, unresolved telemetry consent requires an explicit telemetry flag and Bitloops fails before editing project policy.
 
 ### `bitloops disable`
 
-Removes Bitloops hooks from the current repository.
+Disables capture in the nearest discovered project policy.
 
 ```bash
 bitloops disable
 ```
+
+Notes:
+
+- `disable` only toggles `[capture].enabled = false`.
+- Hooks and watchers remain installed and become no-ops while capture is disabled.
+- Use `bitloops uninstall --agent-hooks --git-hooks` if you want to remove hooks themselves.
 
 ### `bitloops uninstall`
 
@@ -87,7 +108,7 @@ Notes:
 
 - No flags opens an interactive multi-select picker when running in a TTY.
 - In non-interactive environments, you must pass explicit flags.
-- `disable` remains the repo-scoped hook-off command. Use `uninstall` for machine-wide cleanup.
+- `disable` is a capture toggle. Use `uninstall` for hook removal or machine-wide cleanup.
 - See [Uninstalling Bitloops](./uninstall.md) for target-by-target behaviour and caveats.
 
 ## Daemon Lifecycle
@@ -100,6 +121,7 @@ Starts the Bitloops daemon.
 
 ```bash
 bitloops start
+bitloops start --create-default-config
 bitloops daemon start
 bitloops daemon start -d
 bitloops daemon start --until-stopped
@@ -117,6 +139,17 @@ Key flags:
 | `--recheck-local-dashboard-net` | Re-run local dashboard TLS and network checks |
 | `--bundle-dir` | Override the dashboard bundle directory for this run |
 | `--config` | Use an explicit daemon config file |
+| `--create-default-config` | Create the default global daemon config plus local default store files before starting |
+| `--telemetry`, `--telemetry=false`, `--no-telemetry` | Set telemetry consent explicitly for this CLI version |
+
+Notes:
+
+- In interactive mode, plain `start` prompts to create the default daemon config when it is missing. Answering `yes` behaves the same as `--create-default-config`; answering `no` returns the usual missing-config error.
+- On a fresh machine, `bitloops start --create-default-config` remains the explicit non-interactive bootstrap path for the default daemon config plus the default SQLite, DuckDB, and blob-store paths.
+- When you pass `--config` and the file does not exist, `start` fails.
+- `--create-default-config` only works with the default daemon config location. It cannot be combined with `--config`.
+- When `start` creates the default daemon config and no explicit telemetry flag is present, interactive mode prompts for telemetry consent before the daemon continues.
+- In non-interactive mode, creating the default daemon config requires an explicit telemetry flag.
 
 ### `bitloops stop`
 

@@ -37,11 +37,11 @@ type Artefact {
 	blobSha: String!
 	createdAt: DateTime!
 	parent: Artefact
-	children(first: Int! = 50, after: String): ArtefactConnection!
-	outgoingDeps(filter: DepsFilterInput, first: Int! = 50, after: String): DependencyEdgeConnection!
-	incomingDeps(filter: DepsFilterInput, first: Int! = 50, after: String): DependencyEdgeConnection!
-	clones(filter: ClonesFilterInput, first: Int! = 20, after: String): CloneConnection!
-	chatHistory(first: Int! = 10, after: String): ChatEntryConnection!
+	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
+	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
 }
@@ -210,7 +210,7 @@ type Commit {
 	committedAt: DateTime!
 	branch: String
 	filesChanged: [String!]!
-	checkpoints(first: Int! = 10, after: String): CheckpointConnection!
+	checkpoints(first: Int, after: String, last: Int, before: String): CheckpointConnection!
 }
 
 type CommitConnection {
@@ -276,8 +276,8 @@ type FileContext {
 	path: String!
 	language: String
 	blobSha: String
-	artefacts(filter: ArtefactFilterInput, first: Int! = 100, after: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int! = 100, after: String): DependencyEdgeConnection!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 }
 
 type HealthBackendStatus {
@@ -356,8 +356,8 @@ type KnowledgeItem {
 	externalUrl: String!
 	title: String
 	latestVersion: KnowledgeVersion!
-	versions(first: Int! = 10, after: String): KnowledgeVersionConnection!
-	relations(first: Int! = 25, after: String): KnowledgeRelationConnection!
+	versions(first: Int, after: String, last: Int, before: String): KnowledgeVersionConnection!
+	relations(first: Int, after: String, last: Int, before: String): KnowledgeRelationConnection!
 }
 
 type KnowledgeItemConnection {
@@ -461,8 +461,10 @@ type MigrationRecord {
 }
 
 type MutationRoot {
+	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
+	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
@@ -481,11 +483,11 @@ type Project {
 	asOf(input: AsOfInput!): TemporalScope!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
-	artefacts(filter: ArtefactFilterInput, first: Int! = 100, after: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int! = 100, after: String): DependencyEdgeConnection!
-	checkpoints(agent: String, since: DateTime, first: Int! = 50, after: String): CheckpointConnection!
-	knowledge(provider: KnowledgeProvider, first: Int! = 25, after: String): KnowledgeItemConnection!
-	clones(filter: ClonesFilterInput, first: Int! = 50, after: String): CloneConnection!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
+	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -511,18 +513,18 @@ type SlimQueryRoot {
 	health: HealthStatus!
 	asOf(input: AsOfInput!): TemporalScope!
 	defaultBranch: String!
-	commits(branch: String, author: String, since: DateTime, until: DateTime, first: Int! = 50, after: String): CommitConnection!
+	commits(branch: String, author: String, since: DateTime, until: DateTime, first: Int, after: String, last: Int, before: String): CommitConnection!
 	branches(since: DateTime, until: DateTime): [Branch!]!
-	checkpoints(agent: String, since: DateTime, first: Int! = 50, after: String): CheckpointConnection!
-	telemetry(eventType: String, agent: String, since: DateTime, first: Int! = 50, after: String): TelemetryEventConnection!
+	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
+	telemetry(eventType: String, agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): TelemetryEventConnection!
 	users: [String!]!
 	agents: [String!]!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
-	artefacts(filter: ArtefactFilterInput, first: Int! = 100, after: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int! = 100, after: String): DependencyEdgeConnection!
-	knowledge(provider: KnowledgeProvider, first: Int! = 25, after: String): KnowledgeItemConnection!
-	clones(filter: ClonesFilterInput, first: Int! = 50, after: String): CloneConnection!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
+	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
@@ -560,7 +562,7 @@ type TemporalScope {
 	project(path: String!): Project!
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
-	artefacts(filter: ArtefactFilterInput, first: Int! = 100, after: String): ArtefactConnection!
+	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 }
 
 type TestHarnessArtefactRef {
@@ -641,6 +643,11 @@ type TestHarnessTestsSummary {
 	crossCutting: Boolean!
 	dataSources: [String!]!
 	diagnosticCount: Int!
+}
+
+type UpdateCliTelemetryConsentResult {
+	telemetry: Boolean
+	needsPrompt: Boolean!
 }
 
 """

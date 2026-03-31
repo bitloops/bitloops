@@ -2,7 +2,7 @@ use super::*;
 
 fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
     let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
-    let fingerprint = crate::config::discover_repo_policy(repo_root)
+    let fingerprint = crate::config::discover_repo_policy_optional(repo_root)
         .expect("discover repo policy")
         .fingerprint;
     vec![
