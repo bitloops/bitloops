@@ -40,6 +40,36 @@ fn sync_test_cfg() -> crate::host::devql::DevqlConfig {
     }
 }
 
+fn sync_test_cfg_for_repo(repo_root: &Path) -> crate::host::devql::DevqlConfig {
+    crate::host::devql::DevqlConfig {
+        config_root: repo_root.to_path_buf(),
+        repo_root: repo_root.to_path_buf(),
+        repo: crate::host::devql::RepoIdentity {
+            provider: "github".to_string(),
+            organization: "bitloops".to_string(),
+            name: "sync-task-10".to_string(),
+            identity: "github/bitloops/sync-task-10".to_string(),
+            repo_id: crate::host::devql::deterministic_uuid(&format!(
+                "repo://{}",
+                repo_root.display()
+            )),
+        },
+        pg_dsn: None,
+        clickhouse_url: "http://localhost:8123".to_string(),
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: "default".to_string(),
+        semantic_provider: None,
+        semantic_model: None,
+        semantic_api_key: None,
+        semantic_base_url: None,
+        embedding_provider: None,
+        embedding_model: None,
+        embedding_api_key: None,
+        embedding_cache_dir: None,
+    }
+}
+
 fn desired_file_state(
     path: &str,
     language: &str,
@@ -509,6 +539,46 @@ fn seed_workspace_repo() -> tempfile::TempDir {
         "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
     )
     .expect("write rust source");
+    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
+fn seed_full_sync_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    fs::create_dir_all(dir.path().join("web")).expect("create web dir");
+    fs::create_dir_all(dir.path().join("scripts")).expect("create scripts dir");
+
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
+    )
+    .expect("write rust source");
+    fs::write(
+        dir.path().join("web/app.ts"),
+        "import { helper } from \"./util\";\n\nexport function run(): number {\n  return helper();\n}\n",
+    )
+    .expect("write TypeScript source");
+    fs::write(
+        dir.path().join("web/util.js"),
+        "export function helper() {\n  return 7;\n}\n",
+    )
+    .expect("write JavaScript source");
+    fs::write(
+        dir.path().join("scripts/main.py"),
+        "def helper() -> int:\n    return 1\n\n\ndef run() -> int:\n    return helper()\n",
+    )
+    .expect("write Python source");
     fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
 
     crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
@@ -1545,4 +1615,231 @@ function localHelper(): number {
     assert_eq!(artefact_count, 0);
     assert_eq!(edge_count, 0);
     assert_eq!(current_file_state_count, 0);
+}
+
+#[tokio::test]
+async fn full_sync_indexes_all_supported_files() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let summary = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync");
+
+    assert!(summary.success, "full sync should report success");
+    assert_eq!(summary.paths_added, 4);
+    assert_eq!(summary.paths_changed, 0);
+    assert_eq!(summary.paths_removed, 0);
+    assert_eq!(summary.paths_unchanged, 0);
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let mut stmt = db
+        .prepare(
+            "SELECT path, language, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 \
+             ORDER BY path",
+        )
+        .expect("prepare current_file_state query");
+    let rows = stmt
+        .query_map([cfg.repo.repo_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("query current_file_state rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect current_file_state rows");
+
+    assert_eq!(
+        rows,
+        vec![
+            ("scripts/main.py".to_string(), "python".to_string(), "head".to_string()),
+            ("src/lib.rs".to_string(), "rust".to_string(), "head".to_string()),
+            ("web/app.ts".to_string(), "typescript".to_string(), "head".to_string()),
+            ("web/util.js".to_string(), "javascript".to_string(), "head".to_string()),
+        ]
+    );
+
+    let cache_count: i64 = db
+        .query_row("SELECT COUNT(*) FROM content_cache", [], |row| row.get(0))
+        .expect("count content_cache rows");
+    let artefact_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count artefacts_current rows");
+    let edge_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count artefact_edges_current rows");
+    let sync_state: (String, String, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT last_sync_status, last_sync_reason, active_branch, head_commit_sha \
+             FROM repo_sync_state WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read repo_sync_state row");
+
+    assert_eq!(cache_count, 4, "supported files should be cached once each");
+    assert!(
+        artefact_count >= 8,
+        "full sync should materialize file and symbol artefacts"
+    );
+    assert!(
+        edge_count >= 2,
+        "full sync should materialize dependency edges for supported files"
+    );
+    assert_eq!(sync_state.0, "completed");
+    assert_eq!(sync_state.1, "full");
+    assert_eq!(sync_state.2.as_deref(), Some("main"));
+    assert!(
+        sync_state.3.is_some(),
+        "completed sync should persist the resolved HEAD commit"
+    );
+}
+
+#[tokio::test]
+async fn auto_sync_uses_full_reason_and_git_backed_retention_for_clean_head_files() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let summary = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Auto,
+    )
+    .await
+    .expect("execute auto sync");
+
+    assert_eq!(summary.mode, "full");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let sync_reason: String = db
+        .query_row(
+            "SELECT last_sync_reason FROM repo_sync_state WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read repo_sync_state reason");
+    let retention_classes = {
+        let mut stmt = db
+            .prepare(
+                "SELECT DISTINCT retention_class \
+                 FROM content_cache \
+                 ORDER BY retention_class",
+            )
+            .expect("prepare retention class query");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query retention classes")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect retention classes")
+    };
+
+    assert_eq!(sync_reason, "full");
+    assert_eq!(retention_classes, vec!["git_backed".to_string()]);
+}
+
+#[tokio::test]
+async fn auto_sync_marks_dirty_worktree_content_as_worktree_only_retention() {
+    let repo = seed_full_sync_repo();
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hello {name}\")\n}\n",
+    )
+    .expect("rewrite rust source in worktree");
+
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let summary = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Auto,
+    )
+    .await
+    .expect("execute auto sync with dirty worktree");
+
+    assert_eq!(summary.mode, "full");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let effective_source: String = db
+        .query_row(
+            "SELECT effective_source FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/lib.rs"],
+            |row| row.get(0),
+        )
+        .expect("read current_file_state effective source");
+    let retention_class: String = db
+        .query_row(
+            "SELECT retention_class \
+             FROM content_cache c \
+             JOIN current_file_state s \
+               ON s.effective_content_id = c.content_id \
+              AND s.language = c.language \
+             WHERE s.repo_id = ?1 AND s.path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/lib.rs"],
+            |row| row.get(0),
+        )
+        .expect("read content_cache retention class");
+
+    assert_eq!(effective_source, "worktree");
+    assert_eq!(retention_class, "worktree_only");
+}
+
+#[tokio::test]
+async fn execute_sync_preserves_original_error_when_failed_status_write_fails() {
+    let temp = tempdir().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let mut cfg = sync_test_cfg_for_repo(temp.path());
+    cfg.repo_root = temp.path().join("missing-repo");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    db.execute_batch(
+        r#"
+CREATE TRIGGER fail_sync_failed_status
+BEFORE UPDATE OF last_sync_status ON repo_sync_state
+WHEN NEW.last_sync_status = 'failed'
+BEGIN
+    SELECT RAISE(FAIL, 'forced write_sync_failed failure');
+END;
+"#,
+    )
+    .expect("create failing repo_sync_state trigger");
+
+    let err = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect_err("sync should fail when repo_root is not a git workspace");
+    let message = format!("{err:#}");
+
+    assert!(
+        message.contains("inspecting workspace for DevQL sync"),
+        "returned error should preserve the original inner sync failure: {message}"
+    );
+    assert!(
+        !message.contains("forced write_sync_failed failure"),
+        "write_sync_failed failure must not mask the original sync failure: {message}"
+    );
 }

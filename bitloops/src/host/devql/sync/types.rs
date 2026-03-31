@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum SyncMode {
+pub enum SyncMode {
     Auto,
     Full,
     Paths(Vec<String>),
