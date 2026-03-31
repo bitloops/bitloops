@@ -1662,10 +1662,26 @@ async fn full_sync_indexes_all_supported_files() {
     assert_eq!(
         rows,
         vec![
-            ("scripts/main.py".to_string(), "python".to_string(), "head".to_string()),
-            ("src/lib.rs".to_string(), "rust".to_string(), "head".to_string()),
-            ("web/app.ts".to_string(), "typescript".to_string(), "head".to_string()),
-            ("web/util.js".to_string(), "javascript".to_string(), "head".to_string()),
+            (
+                "scripts/main.py".to_string(),
+                "python".to_string(),
+                "head".to_string()
+            ),
+            (
+                "src/lib.rs".to_string(),
+                "rust".to_string(),
+                "head".to_string()
+            ),
+            (
+                "web/app.ts".to_string(),
+                "typescript".to_string(),
+                "head".to_string()
+            ),
+            (
+                "web/util.js".to_string(),
+                "javascript".to_string(),
+                "head".to_string()
+            ),
         ]
     );
 
@@ -1842,4 +1858,201 @@ END;
         !message.contains("forced write_sync_failed failure"),
         "write_sync_failed failure must not mask the original sync failure: {message}"
     );
+}
+
+#[tokio::test]
+async fn sync_twice_with_no_changes_is_noop() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let first = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial full sync");
+    assert_eq!(first.paths_added, 4);
+    assert_eq!(first.paths_changed, 0);
+    assert_eq!(first.paths_removed, 0);
+    assert_eq!(first.paths_unchanged, 0);
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let artefacts_before: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count artefacts before second sync");
+
+    let second = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute second full sync");
+
+    let artefacts_after: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count artefacts after second sync");
+
+    assert_eq!(second.paths_unchanged, 4);
+    assert_eq!(second.paths_added, 0);
+    assert_eq!(second.paths_changed, 0);
+    assert_eq!(second.paths_removed, 0);
+    assert_eq!(second.cache_hits, 0);
+    assert_eq!(second.cache_misses, 0);
+    assert_eq!(artefacts_before, artefacts_after);
+}
+
+#[tokio::test]
+async fn sync_detects_file_edit() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let original_content = "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n";
+    let edited_content = "pub fn greet(name: &str) -> String {\n    format!(\"hello {name}\")\n}\n";
+    let original_blob =
+        crate::host::devql::sync::content_identity::compute_blob_oid(original_content.as_bytes());
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial full sync");
+
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        edited_content,
+    )
+    .expect("edit tracked source file");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after edit");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let current_state: (String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "src/lib.rs"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current_file_state for edited path");
+    let artefact_content_ids = {
+        let mut stmt = db
+            .prepare(
+                "SELECT content_id FROM artefacts_current \
+                 WHERE repo_id = ?1 AND path = ?2 \
+                 ORDER BY symbol_id",
+            )
+            .expect("prepare artefacts_current content query");
+        stmt.query_map([cfg.repo.repo_id.as_str(), "src/lib.rs"], |row| {
+            row.get::<_, String>(0)
+        })
+        .expect("query artefacts_current content ids")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect artefacts_current content ids")
+    };
+    let old_content_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2 AND content_id = ?3",
+            [cfg.repo.repo_id.as_str(), "src/lib.rs", original_blob.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count artefacts with previous content id");
+
+    let edited_blob = crate::host::devql::sync::content_identity::compute_blob_oid(
+        &fs::read(repo.path().join("src/lib.rs")).expect("read edited worktree file"),
+    );
+
+    assert_eq!(result.paths_changed, 1);
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(current_state.0, edited_blob);
+    assert_eq!(current_state.1, "worktree");
+    assert!(!artefact_content_ids.is_empty());
+    assert!(
+        artefact_content_ids.iter().all(|content_id| content_id == &edited_blob),
+        "all materialized rows for src/lib.rs should reflect the edited content"
+    );
+    assert_eq!(
+        old_content_count, 0,
+        "no artefacts_current rows should remain for the previous content id"
+    );
+}
+
+#[tokio::test]
+async fn sync_removes_deleted_file() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute initial full sync");
+
+    fs::remove_file(repo.path().join("web/app.ts")).expect("delete tracked source file");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute sync after delete");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let artefact_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "web/app.ts"],
+            |row| row.get(0),
+        )
+        .expect("count artefacts for deleted path");
+    let current_state_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "web/app.ts"],
+            |row| row.get(0),
+        )
+        .expect("count current_file_state for deleted path");
+    let edge_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefact_edges_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), "web/app.ts"],
+            |row| row.get(0),
+        )
+        .expect("count artefact_edges_current for deleted path");
+
+    assert_eq!(result.paths_removed, 1);
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_changed, 0);
+    assert_eq!(result.paths_unchanged, 3);
+    assert_eq!(artefact_count, 0);
+    assert_eq!(edge_count, 0);
+    assert_eq!(current_state_count, 0);
 }
