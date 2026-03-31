@@ -2166,6 +2166,227 @@ async fn branch_switch_reuses_cache() {
 }
 
 #[tokio::test]
+async fn path_scoped_sync_only_updates_specified_paths() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let scoped_path = "src/lib.rs";
+    let unscoped_path = "web/app.ts";
+    let scoped_content = "pub fn greet(name: &str) -> String {\n    format!(\"scoped {name}\")\n}\n";
+    let unscoped_content = "import { helper } from \"./util\";\n\nexport function run(): number {\n  return helper() + 1;\n}\n";
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let load_artefacts = |db: &Connection, path: &str| {
+        let mut stmt = db
+            .prepare(
+                "SELECT content_id, symbol_fqn, symbol_id, artefact_id \
+                 FROM artefacts_current \
+                 WHERE repo_id = ?1 AND path = ?2 \
+                 ORDER BY symbol_fqn",
+            )
+            .expect("prepare artefacts_current query");
+        stmt.query_map([cfg.repo.repo_id.as_str(), path], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .expect("query artefacts_current rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect artefacts_current rows")
+    };
+    let load_current_state = |db: &Connection, path: &str| {
+        db.query_row(
+            "SELECT language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            },
+        )
+        .expect("load current_file_state row")
+    };
+
+    let baseline_scoped_artefacts = load_artefacts(&db, scoped_path);
+    let baseline_unscoped_artefacts = load_artefacts(&db, unscoped_path);
+    let baseline_scoped_state = load_current_state(&db, scoped_path);
+    let baseline_unscoped_state = load_current_state(&db, unscoped_path);
+
+    fs::write(repo.path().join(scoped_path), scoped_content).expect("edit scoped file");
+    fs::write(repo.path().join(unscoped_path), unscoped_content).expect("edit unscoped file");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Paths(vec![scoped_path.to_string()]),
+    )
+    .await
+    .expect("execute path-scoped sync");
+
+    let scoped_blob =
+        crate::host::devql::sync::content_identity::compute_blob_oid(scoped_content.as_bytes());
+    let scoped_state = load_current_state(&db, scoped_path);
+    let unscoped_state = load_current_state(&db, unscoped_path);
+    let scoped_artefacts = load_artefacts(&db, scoped_path);
+    let unscoped_artefacts = load_artefacts(&db, unscoped_path);
+
+    assert_eq!(result.paths_changed, 1);
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(result.paths_unchanged, 0);
+    assert_eq!(result.cache_hits, 0);
+    assert_eq!(result.cache_misses, 1);
+    assert_eq!(scoped_state.4, scoped_blob);
+    assert_eq!(scoped_state.5, "worktree");
+    assert_eq!(unscoped_state, baseline_unscoped_state);
+    assert_eq!(unscoped_artefacts, baseline_unscoped_artefacts);
+    assert_eq!(baseline_scoped_artefacts.len(), scoped_artefacts.len());
+    assert_ne!(scoped_artefacts, baseline_scoped_artefacts);
+    assert_eq!(
+        unscoped_state.4,
+        baseline_unscoped_state.4,
+        "unscoped path should keep the previously materialized content id"
+    );
+    assert_eq!(
+        baseline_scoped_state.4,
+        crate::host::devql::sync::content_identity::compute_blob_oid(
+            "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n".as_bytes()
+        ),
+        "baseline scoped state should still reflect the original materialization"
+    );
+    assert_eq!(
+        scoped_artefacts
+            .iter()
+            .all(|row| row.0 == scoped_blob),
+        true,
+        "scoped artefacts should reflect the edited content"
+    );
+}
+
+#[tokio::test]
+async fn repair_mode_reprocesses_all_paths_using_cache_when_available() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let baseline_state: (String, String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source, parser_version \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read baseline current_file_state row");
+    let baseline_versions: (String, String) = db
+        .query_row(
+            "SELECT parser_version, extractor_version \
+             FROM repo_sync_state \
+             WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read baseline sync versions");
+    let expected_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count baseline supported paths");
+    let baseline_retention_class: String = db
+        .query_row(
+            "SELECT retention_class \
+             FROM content_cache \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            [
+                baseline_state.0.as_str(),
+                "rust",
+                baseline_versions.0.as_str(),
+                baseline_versions.1.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("read baseline retention class");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Repair,
+    )
+    .await
+    .expect("execute repair sync");
+
+    let repaired_state: (String, String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source, parser_version \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("read repaired current_file_state row");
+    let retention_class: String = db
+        .query_row(
+            "SELECT retention_class \
+             FROM content_cache \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            [
+                repaired_state.0.as_str(),
+                "rust",
+                result.parser_version.as_str(),
+                result.extractor_version.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("read repaired retention class");
+
+    assert_eq!(result.paths_changed as i64, expected_count);
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_removed, 0);
+    assert_eq!(result.paths_unchanged, 0);
+    assert_eq!(result.cache_hits as i64, expected_count);
+    assert_eq!(result.cache_misses, 0);
+    assert_eq!(repaired_state, baseline_state);
+    assert_eq!(retention_class, baseline_retention_class);
+}
+
+#[tokio::test]
 async fn sync_removes_deleted_file() {
     let repo = seed_full_sync_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());
