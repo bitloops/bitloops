@@ -137,7 +137,7 @@ fn collect_go_import_edge(node: Node<'_>, traversal: &mut GoTraversalCtx<'_>) {
         return;
     };
     let line_no = node.start_position().row as i32 + 1;
-    let key = format!("{}|{}|{}", traversal.path, import_path, line_no);
+    let key = format!("{}|{}", traversal.path, import_path);
     if !traversal.seen_imports.insert(key) {
         return;
     }
@@ -413,7 +413,7 @@ fn push_go_embedding_edge(
             let Some(import_path) = traversal.imported_package_refs.get(&package_name) else {
                 return;
             };
-            let key = format!("{from_symbol_fqn}|{import_path}|{type_name}|{line_no}");
+            let key = format!("{from_symbol_fqn}|import|{import_path}|{type_name}");
             if !traversal.seen_extends.insert(key) {
                 return;
             }
@@ -431,6 +431,10 @@ fn push_go_embedding_edge(
             let Some(type_name) = type_name_from_node(type_node, traversal.content) else {
                 return;
             };
+            let dedupe_key = format!("{from_symbol_fqn}|local|{type_name}");
+            if !traversal.seen_extends.insert(dedupe_key) {
+                return;
+            }
             push_extends_edge(
                 &mut EdgeCollector {
                     out: traversal.out,
@@ -586,58 +590,4 @@ fn package_member_symbol_ref(
         return format!("{path}::{operand_name}::{field_name}");
     }
     format!("{path}::member::{field_name}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::extract_go_dependency_edges;
-    use crate::adapters::languages::go::extraction::extract_go_artefacts;
-    use crate::host::devql::EdgeKind;
-
-    #[test]
-    fn extract_go_dependency_edges_collects_imports_calls_references_and_embeddings() {
-        let content = r#"package service
-
-import (
-    "context"
-    "net/http"
-)
-
-type Base interface {
-    Run(context.Context) error
-}
-
-type Handler struct {
-    Base
-}
-
-func helper() {}
-
-func Run() {
-    helper()
-    http.ListenAndServe(":8080", nil)
-}
-"#;
-
-        let artefacts = extract_go_artefacts(content, "service/run.go").unwrap();
-        let edges = extract_go_dependency_edges(content, "service/run.go", &artefacts).unwrap();
-
-        assert!(edges.iter().any(|edge| edge.edge_kind == EdgeKind::Imports));
-        assert!(edges.iter().any(|edge| {
-            edge.edge_kind == EdgeKind::Calls
-                && edge.to_target_symbol_fqn.as_deref() == Some("service/run.go::helper")
-        }));
-        assert!(edges.iter().any(|edge| {
-            edge.edge_kind == EdgeKind::Calls
-                && edge.to_symbol_ref.as_deref() == Some("net/http::ListenAndServe")
-        }));
-        assert!(edges.iter().any(|edge| {
-            edge.edge_kind == EdgeKind::References
-                && edge.to_symbol_ref.as_deref() == Some("context::Context")
-        }));
-        assert!(edges.iter().any(|edge| {
-            edge.edge_kind == EdgeKind::Extends
-                && edge.to_target_symbol_fqn.as_deref() == Some("service/run.go::Base")
-        }));
-    }
 }

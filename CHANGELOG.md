@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
-- **Go language support**: added `tree-sitter-go` and a built-in `go-language-pack` so `.go` files now resolve through the extension host and participate in the existing language-adapter runtime without changing DevQL core dispatch. Go support now includes canonical mappings, artefact extraction for functions, methods, structs, interfaces, type aliases, imports, and module-scope vars/consts, dependency edges for imports/calls/type references/embedding relationships, built-in registry and mapping coverage, and a Go test-harness provider for `_test.go` discovery, subtest detection, and `go test -json` enumeration parsing.
+- **Go language support**: added `tree-sitter-go` and a built-in `go-language-pack` so `.go` files now resolve through the extension host and participate in the existing language-adapter runtime without changing DevQL core dispatch. Go support now includes canonical mappings, artefact extraction for functions, methods, structs, interfaces, type aliases, imports, and module-scope vars/consts, dependency edges for imports/calls/type references/embedding relationships, built-in registry and mapping coverage, host-side Go adapter regression tests for edge precision, duplicate-edge prevention, and cross-kind overlap checks, duplicate-edge fixes for repeated imports and repeated local/imported embeddings, and a Go test-harness provider for `_test.go` discovery, subtest detection, and `go test -json` enumeration parsing.
 - **kinds.rs**: added `kinds.rs` file on `language_adapter` folder which contains an enum with the language_kinds and is used across the language related files instead of magic strings.
 
 ### Changed
