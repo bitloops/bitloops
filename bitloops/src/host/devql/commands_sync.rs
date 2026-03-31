@@ -172,7 +172,7 @@ async fn execute_sync_inner(
             Some(cached) => {
                 counters.cache_hits += 1;
                 if determine_retention_class(&desired) == "git_backed" {
-                    sync::content_cache::promote_cached_content_to_git_backed(
+                    sync::content_cache::promote_to_git_backed(
                         relational,
                         &desired.effective_content_id,
                         &desired.language,

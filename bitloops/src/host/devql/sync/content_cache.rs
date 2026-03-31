@@ -186,6 +186,23 @@ AND retention_class = 'worktree_only'",
     relational.exec(&sql).await
 }
 
+pub(crate) async fn promote_to_git_backed(
+    relational: &RelationalStorage,
+    content_id: &str,
+    language: &str,
+    parser_version: &str,
+    extractor_version: &str,
+) -> Result<()> {
+    promote_cached_content_to_git_backed(
+        relational,
+        content_id,
+        language,
+        parser_version,
+        extractor_version,
+    )
+    .await
+}
+
 fn cached_header_from_row(row: &Map<String, Value>) -> Option<CachedHeaderRow> {
     let content_id = row
         .get("content_id")
@@ -418,4 +435,82 @@ fn nullable_i32_sql(value: Option<i32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use tempfile::tempdir;
+
+    async fn create_test_relational() -> RelationalStorage {
+        let temp = tempdir().expect("temp dir");
+        let sqlite_path = temp.path().join("devql.sqlite");
+        crate::host::devql::init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise sqlite relational schema");
+        let sqlite_path = temp.keep().join("devql.sqlite");
+        RelationalStorage::local_only(sqlite_path)
+    }
+
+    async fn retention_class_for(
+        relational: &RelationalStorage,
+        content_id: &str,
+    ) -> Option<String> {
+        let sql = format!(
+            "SELECT retention_class FROM content_cache \
+WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' AND extractor_version = 'extractor-v1'",
+            esc_pg(content_id),
+        );
+        relational
+            .query_rows(&sql)
+            .await
+            .expect("query content_cache")
+            .first()
+            .and_then(Value::as_object)
+            .and_then(|row| row.get("retention_class"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    #[tokio::test]
+    async fn worktree_only_promoted_to_git_backed_when_seen_as_head_blob() {
+        let relational = create_test_relational().await;
+        let extraction = CachedExtraction {
+            content_id: "abc123".to_string(),
+            language: "rust".to_string(),
+            parser_version: "parser-v1".to_string(),
+            extractor_version: "extractor-v1".to_string(),
+            parse_status: "parsed".to_string(),
+            artefacts: vec![],
+            edges: vec![],
+        };
+
+        store_cached_content(&relational, &extraction, "worktree_only")
+            .await
+            .expect("store worktree-only cache entry");
+        assert_eq!(
+            retention_class_for(&relational, &extraction.content_id)
+                .await
+                .as_deref(),
+            Some("worktree_only")
+        );
+
+        promote_to_git_backed(
+            &relational,
+            &extraction.content_id,
+            &extraction.language,
+            &extraction.parser_version,
+            &extraction.extractor_version,
+        )
+        .await
+        .expect("promote cache entry");
+
+        assert_eq!(
+            retention_class_for(&relational, &extraction.content_id)
+                .await
+                .as_deref(),
+            Some("git_backed")
+        );
+    }
 }
