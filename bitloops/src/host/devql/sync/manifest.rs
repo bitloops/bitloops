@@ -21,8 +21,11 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let dirty_paths: HashSet<&str> = workspace.dirty_files.iter().map(String::as_str).collect();
-    let untracked_paths: HashSet<&str> =
-        workspace.untracked_files.iter().map(String::as_str).collect();
+    let untracked_paths: HashSet<&str> = workspace
+        .untracked_files
+        .iter()
+        .map(String::as_str)
+        .collect();
     let mut manifest = DesiredManifest::new();
 
     for path in collect_candidate_paths(workspace) {
@@ -209,13 +212,12 @@ fn read_worktree_content_id(
         return Ok((None, false));
     }
 
-    if !needs_disk_read
-        && let Some(index_content_id) = index_content_id
-    {
+    if !needs_disk_read && let Some(index_content_id) = index_content_id {
         return Ok((Some(index_content_id.to_string()), true));
     }
 
-    let content = fs::read(&full_path).with_context(|| format!("reading `{path}` from worktree"))?;
+    let content =
+        fs::read(&full_path).with_context(|| format!("reading `{path}` from worktree"))?;
     Ok((Some(compute_blob_oid(&content)), true))
 }
 
@@ -330,9 +332,12 @@ mod tests {
         fs::write(repo.path().join(path), worktree_content).expect("write worktree file");
 
         let mut workspace = workspace_state_with_head(path, &head_content_id);
-        workspace
-            .staged_changes
-            .insert(path.to_string(), crate::host::devql::sync::workspace_state::StagedChange::Modified(index_content_id.clone()));
+        workspace.staged_changes.insert(
+            path.to_string(),
+            crate::host::devql::sync::workspace_state::StagedChange::Modified(
+                index_content_id.clone(),
+            ),
+        );
 
         let state = build_desired_file_state(
             path,
@@ -451,7 +456,9 @@ mod tests {
         let mut workspace = workspace_state_with_head(path, &head_content_id);
         workspace.staged_changes.insert(
             path.to_string(),
-            crate::host::devql::sync::workspace_state::StagedChange::Modified(index_content_id.clone()),
+            crate::host::devql::sync::workspace_state::StagedChange::Modified(
+                index_content_id.clone(),
+            ),
         );
 
         let state = build_desired_file_state(
