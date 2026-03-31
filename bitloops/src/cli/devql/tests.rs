@@ -113,6 +113,131 @@ fn devql_cli_parses_ingest_defaults() {
 }
 
 #[test]
+fn devql_cli_parses_sync_modes() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "sync",
+        "--paths",
+        "src/lib.rs,src/main.rs",
+    ])
+    .expect("devql sync with paths should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+
+    assert!(!sync.full);
+    assert_eq!(
+        sync.paths,
+        Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()])
+    );
+    assert!(!sync.repair);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
+        .expect("devql sync repair should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(!sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(sync.repair);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
+        .expect("devql sync full should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(!sync.repair);
+}
+
+#[test]
+fn devql_cli_rejects_conflicting_sync_modes() {
+    let cases = vec![
+        vec!["bitloops", "devql", "sync", "--full", "--paths", "src/lib.rs"],
+        vec!["bitloops", "devql", "sync", "--full", "--repair"],
+        vec!["bitloops", "devql", "sync", "--paths", "src/lib.rs", "--repair"],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
+    ];
+
+    for argv in cases {
+        assert!(
+            Cli::try_parse_from(argv.iter().copied()).is_err(),
+            "expected conflicting sync modes to be rejected for argv: {argv:?}"
+        );
+    }
+}
+
+#[test]
+fn format_sync_completion_summary_includes_diagnostics_when_present() {
+    let summary = SyncSummary {
+        success: true,
+        mode: "repair".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        head_tree_sha: Some("def456".to_string()),
+        paths_unchanged: 4,
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        cache_hits: 5,
+        cache_misses: 2,
+        parse_errors: 1,
+    };
+
+    assert_eq!(
+        format_sync_completion_summary(&summary),
+        "sync complete: 1 added, 2 changed, 3 removed, 4 unchanged, 5 cache hits (mode=repair, 2 cache misses, 1 parse errors)"
+    );
+}
+
+#[test]
+fn format_sync_completion_summary_keeps_basic_happy_path_line() {
+    let summary = SyncSummary {
+        success: true,
+        mode: "full".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: None,
+        head_commit_sha: None,
+        head_tree_sha: None,
+        paths_unchanged: 4,
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        cache_hits: 5,
+        cache_misses: 0,
+        parse_errors: 0,
+    };
+
+    assert_eq!(
+        format_sync_completion_summary(&summary),
+        "sync complete: 1 added, 2 changed, 3 removed, 4 unchanged, 5 cache hits"
+    );
+}
+
+#[test]
 fn devql_cli_parses_checkpoint_file_snapshot_projection_command() {
     let parsed = Cli::try_parse_from([
         "bitloops",

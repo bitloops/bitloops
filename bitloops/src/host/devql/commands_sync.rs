@@ -26,14 +26,19 @@ pub struct SyncSummary {
 }
 
 pub async fn run_sync(cfg: &DevqlConfig, mode: sync::types::SyncMode) -> Result<()> {
-    let backends =
-        resolve_store_backend_config_for_repo(&cfg.config_root).context("resolving DevQL backend config for `devql sync`")?;
+    run_sync_with_summary(cfg, mode).await.map(|_| ())
+}
+
+pub async fn run_sync_with_summary(
+    cfg: &DevqlConfig,
+    mode: sync::types::SyncMode,
+) -> Result<SyncSummary> {
+    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+        .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
     init_relational_schema(cfg, &relational).await?;
 
-    let summary = execute_sync(cfg, &relational, mode).await?;
-    println!("{}", format_sync_summary(&summary));
-    Ok(())
+    execute_sync(cfg, &relational, mode).await
 }
 
 pub(crate) async fn execute_sync(
@@ -42,8 +47,8 @@ pub(crate) async fn execute_sync(
     mode: sync::types::SyncMode,
 ) -> Result<SyncSummary> {
     let (parser_version, extractor_version) = resolve_pack_versions()?;
-    let _lock = sync::lock::SyncLock::acquire(&cfg.config_root)
-        .context("acquiring DevQL sync lock")?;
+    let _lock =
+        sync::lock::SyncLock::acquire(&cfg.config_root).context("acquiring DevQL sync lock")?;
 
     sync::lock::write_sync_started(
         relational,
@@ -55,15 +60,7 @@ pub(crate) async fn execute_sync(
     )
     .await?;
 
-    match execute_sync_inner(
-        cfg,
-        relational,
-        &mode,
-        &parser_version,
-        &extractor_version,
-    )
-    .await
-    {
+    match execute_sync_inner(cfg, relational, &mode, &parser_version, &extractor_version).await {
         Ok(summary) => {
             sync::lock::write_sync_completed(
                 relational,
@@ -78,7 +75,8 @@ pub(crate) async fn execute_sync(
             Ok(summary)
         }
         Err(err) => {
-            if let Err(write_err) = sync::lock::write_sync_failed(relational, &cfg.repo.repo_id).await
+            if let Err(write_err) =
+                sync::lock::write_sync_failed(relational, &cfg.repo.repo_id).await
             {
                 log::warn!(
                     "failed to mark DevQL sync as failed for repo `{}`: {write_err:#}",
@@ -177,9 +175,8 @@ async fn execute_sync_inner(
             }
             None => {
                 counters.cache_misses += 1;
-                let content = read_effective_content(cfg, &desired).with_context(|| {
-                    format!("reading effective content for `{}`", desired.path)
-                })?;
+                let content = read_effective_content(cfg, &desired)
+                    .with_context(|| format!("reading effective content for `{}`", desired.path))?;
                 let Some(extraction) = sync::extraction::extract_to_cache_format(
                     cfg,
                     &desired.path,
@@ -241,20 +238,6 @@ async fn execute_sync_inner(
     })
 }
 
-fn format_sync_summary(summary: &SyncSummary) -> String {
-    format!(
-        "DevQL sync complete: mode={}, paths_added={}, paths_changed={}, paths_removed={}, paths_unchanged={}, cache_hits={}, cache_misses={}, parse_errors={}",
-        summary.mode,
-        summary.paths_added,
-        summary.paths_changed,
-        summary.paths_removed,
-        summary.paths_unchanged,
-        summary.cache_hits,
-        summary.cache_misses,
-        summary.parse_errors,
-    )
-}
-
 fn sync_reason(mode: &sync::types::SyncMode) -> &'static str {
     match mode {
         sync::types::SyncMode::Auto => "full",
@@ -267,7 +250,8 @@ fn sync_reason(mode: &sync::types::SyncMode) -> &'static str {
 fn requested_paths(mode: &sync::types::SyncMode) -> Option<HashSet<String>> {
     match mode {
         sync::types::SyncMode::Paths(paths) => Some(
-            paths.iter()
+            paths
+                .iter()
                 .map(String::as_str)
                 .map(str::trim)
                 .filter(|path| !path.is_empty())
@@ -318,7 +302,9 @@ async fn load_stored_manifest(
     Ok(manifest)
 }
 
-fn stored_manifest_row(row: &serde_json::Map<String, Value>) -> Option<sync::types::StoredFileState> {
+fn stored_manifest_row(
+    row: &serde_json::Map<String, Value>,
+) -> Option<sync::types::StoredFileState> {
     let path = row.get("path").and_then(Value::as_str)?.to_string();
     let effective_content_id = row
         .get("effective_content_id")
@@ -378,10 +364,14 @@ fn read_effective_content(
     }
 }
 
-fn read_blob_content(repo_root: &std::path::Path, blob_sha: &str, path: &str, source: &str) -> Result<String> {
-    super::git_blob_content(repo_root, blob_sha).ok_or_else(|| {
-        anyhow!("missing {source} blob `{blob_sha}` for sync path `{path}`")
-    })
+fn read_blob_content(
+    repo_root: &std::path::Path,
+    blob_sha: &str,
+    path: &str,
+    source: &str,
+) -> Result<String> {
+    super::git_blob_content(repo_root, blob_sha)
+        .ok_or_else(|| anyhow!("missing {source} blob `{blob_sha}` for sync path `{path}`"))
 }
 
 fn determine_retention_class(desired: &sync::types::DesiredFileState) -> &'static str {
@@ -401,7 +391,9 @@ mod tests {
         assert_eq!(sync_reason(&sync::types::SyncMode::Auto), "full");
         assert_eq!(sync_reason(&sync::types::SyncMode::Full), "full");
         assert_eq!(
-            sync_reason(&sync::types::SyncMode::Paths(vec!["src/lib.rs".to_string()])),
+            sync_reason(&sync::types::SyncMode::Paths(vec![
+                "src/lib.rs".to_string()
+            ])),
             "paths"
         );
         assert_eq!(sync_reason(&sync::types::SyncMode::Repair), "repair");

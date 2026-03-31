@@ -71,9 +71,10 @@ pub use self::commands_refresh::{
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
-pub use self::commands_sync::{SyncSummary, run_sync};
+pub use self::commands_sync::{SyncSummary, run_sync, run_sync_with_summary};
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
+pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
