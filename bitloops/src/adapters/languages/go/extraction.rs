@@ -5,7 +5,7 @@ use tree_sitter::Node;
 
 use super::canonical::{GO_CANONICAL_MAPPINGS, GO_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, is_supported_language_kind, resolve_canonical_kind,
 };
 
 struct GoArtefactDescriptor {
@@ -110,7 +110,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: "function_declaration".to_string(),
+                        language_kind: LanguageKind::FunctionDeclaration.as_str().to_string(),
                         name: name.clone(),
                         symbol_fqn: format!("{path}::{name}"),
                         parent_symbol_fqn: None,
@@ -132,7 +132,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: "method_declaration".to_string(),
+                        language_kind: LanguageKind::MethodDeclaration.as_str().to_string(),
                         name: name.clone(),
                         symbol_fqn: format!("{parent_symbol_fqn}::{name}"),
                         parent_symbol_fqn: Some(parent_symbol_fqn),
@@ -148,8 +148,8 @@ fn collect_go_nodes_recursive(
                 let type_node = node.child_by_field_name("type");
                 let language_kind = type_node
                     .map(|inner| match inner.kind() {
-                        "struct_type" => "struct_type",
-                        "interface_type" => "interface_type",
+                        "struct_type" => LanguageKind::StructType.as_str(),
+                        "interface_type" => LanguageKind::InterfaceType.as_str(),
                         _ => node.kind(),
                     })
                     .unwrap_or(node.kind())
@@ -185,7 +185,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: "import_spec".to_string(),
+                        language_kind: LanguageKind::ImportSpec.as_str().to_string(),
                         name: import_name.clone(),
                         symbol_fqn: format!("{path}::import::{import_name}@{line_no}"),
                         parent_symbol_fqn: None,
