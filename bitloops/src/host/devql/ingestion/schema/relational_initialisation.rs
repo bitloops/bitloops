@@ -6,9 +6,12 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     sqlite
         .initialise_devql_schema()
         .context("creating SQLite relational DevQL tables")?;
-    sqlite_exec_path_allow_create(sqlite_path, crate::host::devql::sync::schema::sync_schema_sql())
-        .await
-        .context("creating SQLite DevQL sync tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::host::devql::sync::schema::sync_schema_sql(),
+    )
+    .await
+    .context("creating SQLite DevQL sync tables")?;
     sqlite_exec_path_allow_create(
         sqlite_path,
         crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
@@ -60,9 +63,12 @@ pub(crate) async fn init_postgres_schema(
         .await
         .context("normalising Postgres DevQL edge model values")?;
 
-    postgres_exec(pg_client, crate::host::devql::sync::schema::sync_schema_sql())
-        .await
-        .context("creating Postgres DevQL sync tables")?;
+    postgres_exec(
+        pg_client,
+        crate::host::devql::sync::schema::sync_schema_sql(),
+    )
+    .await
+    .context("creating Postgres DevQL sync tables")?;
 
     postgres_exec(
         pg_client,

@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::fs;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -37,7 +38,9 @@ CREATE TABLE current_file_state (
     ] {
         let count: i64 = db
             .query_row(
-                &format!("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"),
+                &format!(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -52,7 +55,10 @@ CREATE TABLE current_file_state (
             |row| row.get(0),
         )
         .expect("read sqlite_master for sync_state");
-    assert_eq!(legacy_sync_state_count, 1, "legacy sync_state table should still exist");
+    assert_eq!(
+        legacy_sync_state_count, 1,
+        "legacy sync_state table should still exist"
+    );
 
     for column in &[
         "head_content_id",
@@ -76,7 +82,10 @@ CREATE TABLE current_file_state (
                 |row| row.get(0),
             )
             .expect("read pragma_table_info");
-        assert_eq!(column_count, 1, "column {column} should exist on current_file_state");
+        assert_eq!(
+            column_count, 1,
+            "column {column} should exist on current_file_state"
+        );
     }
 }
 
@@ -110,4 +119,201 @@ fn sync_artefacts_current_migration_sql_recreates_current_state_tables() {
     assert!(!sql.contains("artefact_edges_current_branch_from_idx"));
     assert!(!sql.contains("artefact_edges_current_branch_to_idx"));
     assert!(!sql.contains("JSONB"));
+}
+
+fn seed_workspace_repo() -> tempfile::TempDir {
+    let dir = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        dir.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+
+    fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n",
+    )
+    .expect("write rust source");
+    fs::write(dir.path().join("README.md"), "# ignored\n").expect("write readme");
+
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(dir.path(), &["commit", "-m", "initial"]);
+    dir
+}
+
+#[test]
+fn workspace_state_inspect_workspace_reads_head_tree() {
+    let repo = seed_workspace_repo();
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect clean workspace");
+
+    let head_sha = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["rev-parse", "HEAD"],
+    )
+    .expect("resolve HEAD");
+    let head_blob = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["rev-parse", "HEAD:src/lib.rs"],
+    )
+    .expect("resolve HEAD blob");
+    let head_tree_sha = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["rev-parse", "HEAD^{tree}"],
+    )
+    .expect("resolve HEAD tree");
+    let active_branch = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["branch", "--show-current"],
+    )
+    .expect("resolve active branch");
+
+    assert_eq!(state.head_commit_sha.as_deref(), Some(head_sha.as_str()));
+    assert_eq!(state.head_tree_sha.as_deref(), Some(head_tree_sha.as_str()));
+    assert_eq!(state.active_branch.as_deref(), Some(active_branch.as_str()));
+    assert_eq!(state.head_tree.len(), 2);
+    assert_eq!(state.head_tree.get("src/lib.rs"), Some(&head_blob));
+    assert!(state.head_tree.contains_key("README.md"));
+    assert!(state.staged_changes.is_empty());
+    assert!(state.dirty_files.is_empty());
+    assert!(state.untracked_files.is_empty());
+}
+
+#[test]
+fn workspace_state_reports_dirty_files() {
+    let repo = seed_workspace_repo();
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hello {name}\")\n}\n",
+    )
+    .expect("rewrite rust source");
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect dirty workspace");
+
+    assert!(state.staged_changes.is_empty());
+    assert_eq!(state.dirty_files, vec!["src/lib.rs".to_string()]);
+    assert!(state.untracked_files.is_empty());
+    assert!(state.head_tree.contains_key("src/lib.rs"));
+}
+
+#[test]
+fn workspace_state_staged_changes_report_index_diffs() {
+    let repo = seed_workspace_repo();
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn greet(name: &str) -> String {\n    format!(\"hey {name}\")\n}\n",
+    )
+    .expect("rewrite rust source");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/lib.rs"]);
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect staged workspace");
+
+    let index_blob = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["rev-parse", ":src/lib.rs"],
+    )
+    .expect("resolve index blob");
+    let staged = state
+        .staged_changes
+        .get("src/lib.rs")
+        .expect("expected staged rust file");
+    assert_eq!(
+        staged,
+        &crate::host::devql::sync::workspace_state::StagedChange::Modified(index_blob)
+    );
+    assert_eq!(state.staged_changes.len(), 1);
+    assert!(state.dirty_files.is_empty());
+    assert!(state.untracked_files.is_empty());
+}
+
+#[test]
+fn workspace_state_reports_staged_deletes() {
+    let repo = seed_workspace_repo();
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["rm", "src/lib.rs"]);
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect staged delete workspace");
+
+    let staged = state
+        .staged_changes
+        .get("src/lib.rs")
+        .expect("expected staged delete");
+    assert_eq!(
+        staged,
+        &crate::host::devql::sync::workspace_state::StagedChange::Deleted
+    );
+    assert_eq!(state.staged_changes.len(), 1);
+    assert!(state.dirty_files.is_empty());
+    assert!(state.untracked_files.is_empty());
+}
+
+#[test]
+fn workspace_state_reports_untracked_files() {
+    let repo = seed_workspace_repo();
+    fs::write(
+        repo.path().join("src/new_file.rs"),
+        "pub fn created() -> i32 {\n    7\n}\n",
+    )
+    .expect("write untracked rust source");
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect workspace with untracked file");
+
+    assert!(state.staged_changes.is_empty());
+    assert!(state.dirty_files.is_empty());
+    assert_eq!(state.untracked_files, vec!["src/new_file.rs".to_string()]);
+    assert!(!state.head_tree.contains_key("src/new_file.rs"));
+}
+
+#[test]
+fn workspace_state_unborn_head_reports_raw_workspace_state() {
+    let repo = tempdir().expect("temp dir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn draft() -> bool {\n    true\n}\n",
+    )
+    .expect("write rust source");
+    crate::test_support::git_fixtures::git_ok(repo.path(), &["add", "src/lib.rs"]);
+
+    let state = crate::host::devql::sync::workspace_state::inspect_workspace(repo.path())
+        .expect("inspect unborn HEAD");
+
+    let active_branch = crate::host::checkpoints::strategy::manual_commit::run_git(
+        repo.path(),
+        &["branch", "--show-current"],
+    )
+    .expect("resolve active branch");
+
+    assert_eq!(state.head_commit_sha, None);
+    assert_eq!(state.head_tree_sha, None);
+    assert_eq!(state.active_branch.as_deref(), Some(active_branch.as_str()));
+    assert!(state.head_tree.is_empty());
+    assert_eq!(state.staged_changes.len(), 1);
+    assert_eq!(
+        state
+            .staged_changes
+            .get("src/lib.rs")
+            .expect("expected staged rust file"),
+        &crate::host::devql::sync::workspace_state::StagedChange::Added(
+            crate::host::checkpoints::strategy::manual_commit::run_git(
+                repo.path(),
+                &["rev-parse", ":src/lib.rs"],
+            )
+            .expect("resolve staged blob"),
+        )
+    );
+    assert!(state.dirty_files.is_empty());
+    assert!(state.untracked_files.is_empty());
 }

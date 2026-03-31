@@ -45,10 +45,10 @@ mod commands_projection;
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
 mod commands_refresh;
-#[path = "devql/sync/mod.rs"]
-pub(crate) mod sync;
 mod connection_status;
 pub(crate) mod identity;
+#[path = "devql/sync/mod.rs"]
+pub(crate) mod sync;
 mod types;
 
 pub(crate) use self::commands_ingest::execute_ingest_with_observer;
