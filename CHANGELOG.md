@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
+- **Dashboard checkpoint-detail REST endpoint now resolves repositories explicitly**: changed `GET /api/checkpoints/{checkpoint_id}` to `GET /api/checkpoints/{repo_id}/{checkpoint_id}` so the legacy dashboard API loads checkpoint details from the selected repository instead of implicitly reading from the default repo root. Updated the dashboard API regression tests and OpenAPI path coverage to match the repo-aware route.
+
 ### Fixed
 
 ## [0.0.12] - 2026-03-30
