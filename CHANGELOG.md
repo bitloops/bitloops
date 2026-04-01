@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Daemon liveness detection on macOS**: the CLI now treats Unix `kill(pid, 0)` permission errors (`EPERM`) as evidence that the daemon process still exists instead of assuming the process is gone. This fixes cases where a live Bitloops daemon was misreported as stopped, which could break daemon status and lifecycle flows.
+
 ## [0.0.12] - 2026-03-30
 
 ### Added
