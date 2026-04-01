@@ -117,14 +117,14 @@ pub struct DaemonRestartArgs {
 pub struct DaemonLogsArgs {
     /// Print the last N lines from the daemon log.
     #[arg(long, value_name = "N", value_parser = parse_log_lines)]
-    pub lines: Option<usize>,
+    pub tail: Option<usize>,
 
     /// Keep streaming appended daemon log lines.
     #[arg(long, default_value_t = false, conflicts_with = "path")]
     pub follow: bool,
 
     /// Print the daemon log file path and exit.
-    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "lines"])]
+    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "tail"])]
     pub path: bool,
 }
 
@@ -154,6 +154,17 @@ async fn run_start_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    log::info!(
+        "cli daemon start: detached={} until_stopped={} config={:?} host={:?} port={} http={} recheck_local_dashboard_net={} bundle_dir={:?}",
+        args.detached,
+        args.until_stopped,
+        args.config,
+        args.host,
+        args.port,
+        args.http,
+        args.recheck_local_dashboard_net,
+        args.bundle_dir
+    );
     print_legacy_repo_data_warnings();
     let preflight = resolve_start_preflight(&args, out, input)?;
 
@@ -264,6 +275,7 @@ fn collect_startup_telemetry_choice(
 }
 
 pub async fn run_stop(args: DaemonStopArgs) -> Result<()> {
+    log::info!("cli daemon stop: config={:?}", args.config);
     if let Some(config_path) = args.config.as_deref() {
         let _ = daemon::resolve_daemon_config(Some(config_path))?;
     }
@@ -300,7 +312,7 @@ fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
     }
 
     ensure_log_file_exists(&log_path)?;
-    print_log_tail(&log_path, args.lines.unwrap_or(DEFAULT_LOG_TAIL_LINES), out)?;
+    print_log_tail(&log_path, args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES), out)?;
     if args.follow {
         follow_log_file(&log_path, out, &|| false, LOG_FOLLOW_POLL_INTERVAL)?;
     }
@@ -308,6 +320,7 @@ fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
 }
 
 pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
+    log::info!("cli daemon restart: config={:?}", args.config);
     let requested_config: Option<daemon::ResolvedDaemonConfig> = args
         .config
         .as_deref()
@@ -471,9 +484,9 @@ fn ensure_log_file_exists(path: &Path) -> Result<()> {
 fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
     let parsed = value
         .parse::<usize>()
-        .map_err(|_| format!("invalid value `{value}` for --lines"))?;
+        .map_err(|_| format!("invalid value `{value}` for --tail"))?;
     if parsed == 0 {
-        return Err("--lines must be greater than 0".to_string());
+        return Err("--tail must be greater than 0".to_string());
     }
     Ok(parsed)
 }
@@ -781,9 +794,9 @@ mod tests {
     }
 
     #[test]
-    fn daemon_logs_cli_parses_lines_follow_and_path_flags() {
+    fn daemon_logs_cli_parses_tail_follow_and_path_flags() {
         let parsed =
-            Cli::try_parse_from(["bitloops", "daemon", "logs", "--lines", "25", "--follow"])
+            Cli::try_parse_from(["bitloops", "daemon", "logs", "--tail", "25", "--follow"])
                 .expect("daemon logs should parse");
 
         let Some(Commands::Daemon(daemon)) = parsed.command else {
@@ -793,7 +806,7 @@ mod tests {
             panic!("expected daemon logs command");
         };
 
-        assert_eq!(args.lines, Some(25));
+        assert_eq!(args.tail, Some(25));
         assert!(args.follow);
         assert!(!args.path);
     }
@@ -805,10 +818,18 @@ mod tests {
             .expect("daemon logs should reject --path with --follow");
         assert!(err.to_string().contains("--path"));
 
-        let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--lines", "5"])
+        let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--tail", "5"])
             .err()
-            .expect("daemon logs should reject --path with --lines");
+            .expect("daemon logs should reject --path with --tail");
         assert!(err.to_string().contains("--path"));
+    }
+
+    #[test]
+    fn daemon_logs_cli_rejects_lines_flag() {
+        let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--lines", "5"])
+            .err()
+            .expect("daemon logs should reject removed --lines flag");
+        assert!(err.to_string().contains("--lines"));
     }
 
     #[tokio::test]
@@ -1219,7 +1240,7 @@ mod tests {
 
         run_logs_with_io(
             DaemonLogsArgs {
-                lines: Some(3),
+                tail: Some(3),
                 follow: false,
                 path: false,
             },
@@ -1248,7 +1269,7 @@ mod tests {
 
         run_logs_with_io(
             DaemonLogsArgs {
-                lines: None,
+                tail: None,
                 follow: false,
                 path: true,
             },

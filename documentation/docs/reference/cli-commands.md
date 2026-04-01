@@ -199,7 +199,7 @@ Prints the daemon log file as raw JSON lines.
 
 ```bash
 bitloops daemon logs
-bitloops daemon logs --lines 50
+bitloops daemon logs --tail 50
 bitloops daemon logs --follow
 bitloops daemon logs --path
 ```

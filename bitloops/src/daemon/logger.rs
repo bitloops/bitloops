@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use env_logger::Target;
 use log::{LevelFilter, Record};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -13,7 +14,7 @@ use crate::config::load_daemon_settings;
 pub const DAEMON_LOG_FILE_NAME: &str = "daemon.log";
 pub const LOG_LEVEL_ENV_VAR: &str = "BITLOOPS_LOG_LEVEL";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProcessLogContext {
     process: &'static str,
     mode: &'static str,
@@ -47,6 +48,15 @@ impl ProcessLogContext {
             mode,
             config_path,
             service_name,
+        }
+    }
+
+    pub fn daemon_cli(mode: &'static str, config_path: Option<PathBuf>) -> Self {
+        Self {
+            process: "daemon_cli",
+            mode,
+            config_path,
+            service_name: None,
         }
     }
 

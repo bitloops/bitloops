@@ -34,24 +34,43 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
             args.service_name.clone(),
         )),
         cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
-        cli::Commands::Start(args) if !args.detached && !args.until_stopped => Some(
-            daemon::ProcessLogContext::daemon("foreground", args.config.clone(), None),
-        ),
-        cli::Commands::Restart(args) => Some(daemon::ProcessLogContext::daemon(
-            "foreground",
+        cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            if args.until_stopped {
+                "start_service"
+            } else if args.detached {
+                "start_detached"
+            } else {
+                "start_foreground"
+            },
             args.config.clone(),
-            None,
+        )),
+        cli::Commands::Stop(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            "stop",
+            args.config.clone(),
+        )),
+        cli::Commands::Restart(args) => Some(daemon::ProcessLogContext::daemon_cli(
+            "restart",
+            args.config.clone(),
         )),
         cli::Commands::Daemon(args) => match args.command.as_ref()? {
-            cli::daemon::DaemonCommand::Start(start) if !start.detached && !start.until_stopped => {
-                Some(daemon::ProcessLogContext::daemon(
-                    "foreground",
+            cli::daemon::DaemonCommand::Start(start) => {
+                Some(daemon::ProcessLogContext::daemon_cli(
+                    if start.until_stopped {
+                        "start_service"
+                    } else if start.detached {
+                        "start_detached"
+                    } else {
+                        "start_foreground"
+                    },
                     start.config.clone(),
-                    None,
                 ))
             }
+            cli::daemon::DaemonCommand::Stop(stop) => Some(daemon::ProcessLogContext::daemon_cli(
+                "stop",
+                stop.config.clone(),
+            )),
             cli::daemon::DaemonCommand::Restart(restart) => Some(
-                daemon::ProcessLogContext::daemon("foreground", restart.config.clone(), None),
+                daemon::ProcessLogContext::daemon_cli("restart", restart.config.clone()),
             ),
             _ => None,
         },
@@ -93,7 +112,10 @@ mod tests {
         DashboardLocalDashboardConfig, ProviderConfig, resolve_dashboard_config,
         resolve_provider_config, resolve_store_backend_config,
     };
+    use super::daemon_log_context;
+    use crate::cli::{Cli, Commands};
     use crate::test_support::process_state::enter_process_state;
+    use clap::Parser;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -194,5 +216,30 @@ tls = true
         let cfg = resolve_provider_config().expect("provider config");
 
         assert_eq!(cfg, ProviderConfig::default());
+    }
+
+    #[test]
+    fn daemon_log_context_uses_daemon_cli_for_stop_command() {
+        let parsed = Cli::parse_from(["bitloops", "daemon", "stop"]);
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected daemon log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "daemon_cli");
+        assert_eq!(command["mode"], "stop");
+    }
+
+    #[test]
+    fn daemon_log_context_uses_daemon_cli_for_detached_start_command() {
+        let parsed = Cli::parse_from(["bitloops", "daemon", "start", "-d"]);
+        let Some(Commands::Daemon(_)) = parsed.command.as_ref() else {
+            panic!("expected daemon command");
+        };
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected daemon log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "daemon_cli");
+        assert_eq!(command["mode"], "start_detached");
     }
 }
