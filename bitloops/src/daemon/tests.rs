@@ -1,5 +1,9 @@
 use super::*;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
+use crate::config::{
+    bootstrap_default_daemon_environment, load_daemon_settings, persist_dashboard_tls_hint,
+    update_daemon_telemetry_consent,
+};
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
 
@@ -20,6 +24,14 @@ local_path = ".bitloops/blob-store"
 "#,
     )
     .expect("write test config");
+    config_path
+}
+
+fn write_daemon_config(config_root: &Path, content: &str) -> PathBuf {
+    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let parent = config_path.parent().expect("config parent");
+    fs::create_dir_all(parent).expect("create config parent");
+    fs::write(&config_path, content).expect("write daemon config");
     config_path
 }
 
@@ -56,6 +68,15 @@ fn systemd_unit_includes_hidden_supervisor_command() {
 fn read_runtime_state_drops_stale_file() {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo_root),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
     let runtime_path = runtime_state_path(repo_root);
     write_runtime_state(
         &runtime_path,
@@ -153,4 +174,196 @@ fn resolve_daemon_config_uses_default_global_config_path() {
         resolved.relational_db_path,
         canonical_root.join(".bitloops/stores/daemon.sqlite")
     );
+}
+
+#[test]
+fn bootstrap_default_daemon_environment_creates_config_and_local_store_files() {
+    let config_root = TempDir::new().expect("temp dir");
+    let data_root = TempDir::new().expect("temp dir");
+    let cache_root = TempDir::new().expect("temp dir");
+    let state_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let data_root_str = data_root.path().to_string_lossy().to_string();
+    let cache_root_str = cache_root.path().to_string_lossy().to_string();
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_str.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            ),
+        ],
+    );
+
+    let config_path = bootstrap_default_daemon_environment().expect("bootstrap default daemon");
+    let rendered = fs::read_to_string(&config_path).expect("read daemon config");
+    let resolved = resolve_daemon_config(Some(config_path.as_path())).expect("resolve config");
+
+    assert!(rendered.contains("[stores.relational]"));
+    assert!(rendered.contains("[stores.events]"));
+    assert!(rendered.contains("[stores.blob]"));
+    assert!(resolved.relational_db_path.is_file());
+    assert!(resolved.events_db_path.is_file());
+    assert!(resolved.blob_store_path.is_dir());
+}
+
+#[test]
+fn update_daemon_telemetry_consent_persists_cli_version() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+"#,
+    );
+
+    let state = update_daemon_telemetry_consent(Some(config_path.as_path()), "1.2.3", Some(true))
+        .expect("update telemetry consent");
+    let loaded = load_daemon_settings(Some(config_path.as_path())).expect("load daemon settings");
+
+    assert_eq!(state.telemetry, Some(true));
+    assert_eq!(state.cli_version, "1.2.3");
+    assert_eq!(loaded.cli.cli_version, "1.2.3");
+    assert_eq!(loaded.cli.telemetry, Some(true));
+}
+
+#[test]
+fn update_daemon_telemetry_consent_clears_legacy_opt_out_without_version() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+
+[telemetry]
+enabled = false
+"#,
+    );
+
+    let state = update_daemon_telemetry_consent(Some(config_path.as_path()), "1.2.3", None)
+        .expect("update telemetry consent");
+    let loaded = load_daemon_settings(Some(config_path.as_path())).expect("load daemon settings");
+
+    assert_eq!(state.telemetry, None);
+    assert!(state.needs_prompt);
+    assert_eq!(loaded.cli.cli_version, "1.2.3");
+    assert_eq!(loaded.cli.telemetry, None);
+}
+
+#[test]
+fn update_daemon_telemetry_consent_clears_opt_out_on_newer_version() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+cli_version = "1.2.2"
+
+[telemetry]
+enabled = false
+"#,
+    );
+
+    let state = update_daemon_telemetry_consent(Some(config_path.as_path()), "1.2.3", None)
+        .expect("update telemetry consent");
+    let loaded = load_daemon_settings(Some(config_path.as_path())).expect("load daemon settings");
+
+    assert_eq!(state.telemetry, None);
+    assert!(state.needs_prompt);
+    assert_eq!(loaded.cli.telemetry, None);
+    assert_eq!(loaded.cli.cli_version, "1.2.3");
+}
+
+#[test]
+fn update_daemon_telemetry_consent_preserves_opt_in_on_newer_version() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+cli_version = "1.2.2"
+
+[telemetry]
+enabled = true
+"#,
+    );
+
+    let state = update_daemon_telemetry_consent(Some(config_path.as_path()), "1.2.3", None)
+        .expect("update telemetry consent");
+    let loaded = load_daemon_settings(Some(config_path.as_path())).expect("load daemon settings");
+
+    assert_eq!(state.telemetry, Some(true));
+    assert!(!state.needs_prompt);
+    assert_eq!(loaded.cli.telemetry, Some(true));
+    assert_eq!(loaded.cli.cli_version, "1.2.3");
+}
+
+#[test]
+fn persist_dashboard_tls_hint_creates_missing_dashboard_tables() {
+    let config_root = TempDir::new().expect("temp dir");
+    let config_root_str = config_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root_str.as_str()),
+        )],
+    );
+    let config_path = write_daemon_config(
+        &config_root.path().join("bitloops"),
+        r#"[runtime]
+local_dev = false
+"#,
+    );
+
+    persist_dashboard_tls_hint(true).expect("persist dashboard tls hint");
+    let contents = fs::read_to_string(&config_path).expect("read daemon config");
+
+    assert!(contents.contains("[dashboard.local_dashboard]"));
+    assert!(contents.contains("tls = true"));
 }

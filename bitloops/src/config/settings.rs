@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, Value as TomlValue};
 
 use super::{
-    REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy, load_daemon_settings,
+    REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy,
+    discover_repo_policy_optional, load_daemon_settings,
 };
 
 pub const SETTINGS_DIR: &str = ".bitloops";
@@ -76,7 +77,14 @@ pub fn settings_local_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
-    let policy = discover_repo_policy(repo_root)?;
+    load_settings_from_policy(discover_repo_policy_optional(repo_root)?)
+}
+
+pub fn load_required_settings(repo_root: &Path) -> Result<BitloopsSettings> {
+    load_settings_from_policy(discover_repo_policy(repo_root)?)
+}
+
+fn load_settings_from_policy(policy: super::RepoPolicySnapshot) -> Result<BitloopsSettings> {
     let daemon = load_daemon_settings(None)?;
 
     let mut settings = BitloopsSettings {
@@ -109,15 +117,24 @@ pub fn load_settings(repo_root: &Path) -> Result<BitloopsSettings> {
 }
 
 pub fn current_config_fingerprint(repo_root: &Path) -> Result<String> {
-    Ok(discover_repo_policy(repo_root)?.fingerprint)
+    Ok(discover_repo_policy_optional(repo_root)?.fingerprint)
 }
 
 pub fn current_policy_root(repo_root: &Path) -> Result<Option<PathBuf>> {
-    Ok(discover_repo_policy(repo_root)?.root)
+    Ok(discover_repo_policy_optional(repo_root)?.root)
 }
 
 pub fn is_enabled(repo_root: &Path) -> Result<bool> {
     load_settings(repo_root).map(|settings| settings.enabled)
+}
+
+pub fn is_enabled_for_hooks(start: &Path) -> bool {
+    discover_repo_policy_optional(start)
+        .and_then(|policy| {
+            let has_root = policy.root.is_some();
+            load_settings_from_policy(policy).map(|settings| has_root && settings.enabled)
+        })
+        .unwrap_or(false)
 }
 
 pub fn save_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
@@ -155,26 +172,42 @@ impl BitloopsSettings {
     }
 }
 
+pub fn write_project_bootstrap_settings(
+    path: &Path,
+    strategy: &str,
+    supported_agents: &[String],
+) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_capture_table(doc);
+        doc["capture"]["enabled"] = Item::Value(TomlValue::from(true));
+        doc["capture"]["strategy"] = Item::Value(TomlValue::from(strategy));
+        ensure_agents_table(doc);
+        doc["agents"]["supported"] = string_array_item(supported_agents);
+        Ok(())
+    })
+}
+
+pub fn set_capture_enabled(path: &Path, enabled: bool) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_capture_table(doc);
+        doc["capture"]["enabled"] = Item::Value(TomlValue::from(enabled));
+        Ok(())
+    })
+}
+
 fn save_repo_policy_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("creating repo policy parent directory {}", parent.display())
-        })?;
-    }
-
-    let mut doc = DocumentMut::new();
-    doc["capture"] = Item::Table(Table::new());
-    doc["capture"]["enabled"] = Item::Value(TomlValue::from(settings.enabled));
-    doc["capture"]["strategy"] = Item::Value(TomlValue::from(settings.strategy.as_str()));
-    for (key, value) in &settings.strategy_options {
-        if value.is_null() {
-            continue;
+    write_repo_policy_file(path, |doc| {
+        ensure_capture_table(doc);
+        doc["capture"]["enabled"] = Item::Value(TomlValue::from(settings.enabled));
+        doc["capture"]["strategy"] = Item::Value(TomlValue::from(settings.strategy.as_str()));
+        for (key, value) in &settings.strategy_options {
+            if value.is_null() {
+                continue;
+            }
+            doc["capture"][key] = json_value_to_toml_item(value)?;
         }
-        doc["capture"][key] = json_value_to_toml_item(value)?;
-    }
-
-    fs::write(path, doc.to_string())
-        .with_context(|| format!("writing repo policy {}", path.display()))
+        Ok(())
+    })
 }
 
 fn json_value_to_toml_item(value: &Value) -> Result<Item> {
@@ -212,4 +245,55 @@ fn json_value_to_toml_item(value: &Value) -> Result<Item> {
             Ok(Item::Table(table))
         }
     }
+}
+
+fn write_repo_policy_file(
+    path: &Path,
+    update: impl FnOnce(&mut DocumentMut) -> Result<()>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("creating repo policy parent directory {}", parent.display())
+        })?;
+    }
+
+    let existing = match fs::read_to_string(path) {
+        Ok(existing) => existing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading repo policy {}", path.display()));
+        }
+    };
+    let mut doc = if existing.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        existing
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing repo policy {}", path.display()))?
+    };
+
+    update(&mut doc)?;
+
+    fs::write(path, doc.to_string())
+        .with_context(|| format!("writing repo policy {}", path.display()))
+}
+
+fn ensure_capture_table(doc: &mut DocumentMut) {
+    if doc.get("capture").is_none_or(|item| !item.is_table()) {
+        doc["capture"] = Item::Table(Table::new());
+    }
+}
+
+fn ensure_agents_table(doc: &mut DocumentMut) {
+    if doc.get("agents").is_none_or(|item| !item.is_table()) {
+        doc["agents"] = Item::Table(Table::new());
+    }
+}
+
+fn string_array_item(values: &[String]) -> Item {
+    let mut array = Array::new();
+    for value in values {
+        array.push(value.as_str());
+    }
+    Item::Value(TomlValue::Array(array))
 }

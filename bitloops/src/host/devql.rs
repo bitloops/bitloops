@@ -575,16 +575,28 @@ pub async fn run_init(cfg: &DevqlConfig) -> Result<()> {
     Ok(())
 }
 
-pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
+pub async fn execute_project_bootstrap(
+    cfg: &DevqlConfig,
+    skip_baseline: bool,
+) -> Result<InitSchemaSummary> {
     let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
+
+    if skip_baseline {
+        return Ok(summary);
+    }
+
+    run_baseline_ingestion(cfg, &relational).await?;
+    Ok(summary)
+}
+
+pub async fn run_init_for_bitloops(cfg: &DevqlConfig, skip_baseline: bool) -> Result<()> {
+    let summary = execute_project_bootstrap(cfg, skip_baseline).await?;
     println!("{}", format_init_schema_summary(&summary));
 
     if skip_baseline {
         println!("Baseline ingestion skipped (`--skip-baseline`).");
-        return Ok(());
     }
-
-    run_baseline_ingestion(cfg, &relational).await
+    Ok(())
 }
 
 mod core_contracts;

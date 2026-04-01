@@ -106,7 +106,7 @@ pub(super) async fn run_ingest_via_graphql(
 }
 
 #[cfg(test)]
-pub(super) fn with_graphql_executor_hook<T>(
+pub(crate) fn with_graphql_executor_hook<T>(
     hook: impl Fn(&Path, &str, &serde_json::Value) -> Result<serde_json::Value> + 'static,
     f: impl FnOnce() -> T,
 ) -> T {

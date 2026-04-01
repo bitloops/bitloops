@@ -1,12 +1,10 @@
 use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 
-use crate::graphql::{
-    DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
-};
+use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error};
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, connection::PageInfo, paginate_items,
+    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ConnectionPagination,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -32,28 +30,25 @@ impl FileContext {
         &self,
         ctx: &Context<'_>,
         filter: Option<ArtefactFilterInput>,
-        #[graphql(default = 100)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<ArtefactConnection> {
         if let Some(filter) = filter.as_ref() {
             filter.validate()?;
         }
-        if first <= 0 {
-            return Err(bad_user_input_error("`first` must be greater than zero"));
-        }
 
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
-        let total_count = context
-            .count_artefacts(Some(self.path.as_str()), filter.as_ref(), &self.scope)
-            .await
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to query artefacts for file {}: {err:#}",
-                    self.path
-                ))
-            })?;
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
 
-        if let Some(cursor) = after.as_deref() {
+        if let Some(cursor) = pagination.after().or_else(|| pagination.before()) {
             let cursor_exists = context
                 .artefact_cursor_exists(
                     Some(self.path.as_str()),
@@ -75,13 +70,12 @@ impl FileContext {
             }
         }
 
-        let mut artefacts = context
-            .list_artefacts_window(
+        let (artefacts, page_info, total_count) = context
+            .query_artefact_connection(
                 Some(self.path.as_str()),
                 filter.as_ref(),
                 &self.scope,
-                after.as_deref(),
-                first as usize + 1,
+                &pagination,
             )
             .await
             .map_err(|err| {
@@ -90,19 +84,10 @@ impl FileContext {
                     self.path
                 ))
             })?;
-        let has_next_page = artefacts.len() > first as usize;
-        artefacts.truncate(first as usize);
-        let start_cursor = artefacts.first().map(|artefact| artefact.cursor());
-        let end_cursor = artefacts.last().map(|artefact| artefact.cursor());
 
         Ok(ArtefactConnection::new(
             artefacts.into_iter().map(ArtefactEdge::new).collect(),
-            PageInfo {
-                has_next_page,
-                has_previous_page: after.is_some(),
-                start_cursor,
-                end_cursor,
-            },
+            page_info,
             total_count,
         ))
     }
@@ -111,9 +96,18 @@ impl FileContext {
         &self,
         ctx: &Context<'_>,
         filter: Option<DepsFilterInput>,
-        #[graphql(default = 100)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<DependencyEdgeConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let deps = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_file_dependency_edges(self.path.as_str(), filter.as_ref(), &self.scope)
@@ -124,7 +118,7 @@ impl FileContext {
                     self.path
                 ))
             })?;
-        let page = paginate_items(&deps, first, after.as_deref(), |edge| edge.cursor())?;
+        let page = paginate_items(&deps, &pagination, |edge| edge.cursor())?;
         Ok(DependencyEdgeConnection::new(
             page.items
                 .into_iter()

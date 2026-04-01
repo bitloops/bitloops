@@ -98,22 +98,32 @@ pub async fn start_foreground(
     config: DashboardServerConfig,
     open_browser: bool,
     ready_subject: &str,
+    telemetry: Option<bool>,
 ) -> Result<()> {
-    lifecycle::start_foreground(daemon_config, config, open_browser, ready_subject).await
+    lifecycle::start_foreground(
+        daemon_config,
+        config,
+        open_browser,
+        ready_subject,
+        telemetry,
+    )
+    .await
 }
 
 pub async fn start_detached(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
-    lifecycle::start_detached(daemon_config, config).await
+    lifecycle::start_detached(daemon_config, config, telemetry).await
 }
 
 pub async fn start_service(
     daemon_config: &ResolvedDaemonConfig,
     config: DashboardServerConfig,
+    telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
-    lifecycle::start_service(daemon_config, config).await
+    lifecycle::start_service(daemon_config, config, telemetry).await
 }
 
 pub async fn restart(config_override: Option<&ResolvedDaemonConfig>) -> Result<DaemonRuntimeState> {

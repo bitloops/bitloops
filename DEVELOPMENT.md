@@ -131,7 +131,7 @@ Edit `Cargo.toml`:
 
 ```toml
 [package]
-version = "0.0.11"   # ← change this
+version = "0.0.1"   # ← change this
 ```
 
 ### 2. Run the release script
@@ -206,7 +206,7 @@ The `install.sh` script at the repo root detects the platform, downloads the mat
 class Bitloops < Formula
   desc "Bitloops CLI"
   homepage "https://github.com/bitloops/bitloops-cli"
-  version "0.0.11"
+  version "0.0.12"
   license "MIT"
 
   on_macos do

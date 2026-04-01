@@ -13,7 +13,7 @@ require_cmd() {
   fi
 }
 
-detect_target() {
+detect_platform() {
   local os arch
   os="$(uname -s)"
   arch="$(uname -m)"
@@ -40,6 +40,47 @@ detect_target() {
   esac
 }
 
+detect_archive_ext() {
+  local os
+  os="$(uname -s)"
+
+  case "$os" in
+    Darwin)
+      printf "%s" "zip"
+      ;;
+    Linux)
+      printf "%s" "tar.gz"
+      ;;
+    *)
+      echo "Error: unsupported OS for archive selection: ${os}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+extract_archive() {
+  local archive="$1"
+  local destination="$2"
+  local os
+
+  os="$(uname -s)"
+
+  case "$os" in
+    Darwin)
+      require_cmd ditto
+      ditto -x -k "$archive" "$destination"
+      ;;
+    Linux)
+      require_cmd tar
+      tar -xzf "$archive" -C "$destination"
+      ;;
+    *)
+      echo "Error: unsupported OS for extraction: ${os}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 sha256_file() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -53,12 +94,12 @@ sha256_file() {
 }
 
 require_cmd curl
-require_cmd tar
 require_cmd awk
 require_cmd uname
 
-TARGET="$(detect_target)"
-ASSET_NAME="bitloops-${TARGET}.tar.gz"
+TARGET="$(detect_platform)"
+ARCHIVE_EXT="$(detect_archive_ext)"
+ASSET_NAME="bitloops-${TARGET}.${ARCHIVE_EXT}"
 CHECKSUMS_FILE="checksums-sha256.txt"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 
@@ -92,8 +133,13 @@ if [[ "${EXPECTED_HASH}" != "${ACTUAL_HASH}" ]]; then
   exit 1
 fi
 
-tar -xzf "${TMP_DIR}/${ASSET_NAME}" -C "${TMP_DIR}"
-if [[ ! -f "${TMP_DIR}/bitloops" ]]; then
+extract_archive "${TMP_DIR}/${ASSET_NAME}" "${TMP_DIR}"
+
+if [[ -f "${TMP_DIR}/bitloops" ]]; then
+  EXTRACTED_BINARY="${TMP_DIR}/bitloops"
+elif [[ -f "${TMP_DIR}/package/bitloops" ]]; then
+  EXTRACTED_BINARY="${TMP_DIR}/package/bitloops"
+else
   echo "Error: extracted archive did not contain 'bitloops' binary" >&2
   exit 1
 fi
@@ -109,7 +155,7 @@ if [[ ! -w "${INSTALL_DIR}" ]]; then
   INSTALL_DIR="${FALLBACK_DIR}"
 fi
 
-install -m 0755 "${TMP_DIR}/bitloops" "${INSTALL_DIR}/bitloops"
+install -m 0755 "${EXTRACTED_BINARY}" "${INSTALL_DIR}/bitloops"
 
 echo "Installed bitloops ${TAG} to ${INSTALL_DIR}/bitloops"
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then

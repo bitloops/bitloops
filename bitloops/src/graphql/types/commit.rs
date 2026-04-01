@@ -2,7 +2,9 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error};
 
-use super::{CheckpointConnection, CheckpointEdge, DateTimeScalar, paginate_items};
+use super::{
+    CheckpointConnection, CheckpointEdge, ConnectionPagination, DateTimeScalar, paginate_items,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 #[graphql(complex)]
@@ -46,9 +48,18 @@ impl Commit {
     async fn checkpoints(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = 10)] first: i32,
+        first: Option<i32>,
         after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
     ) -> Result<CheckpointConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            10,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
         let checkpoints = ctx
             .data_unchecked::<DevqlGraphqlContext>()
             .list_commit_checkpoints(&self.scope, &self.sha)
@@ -59,9 +70,7 @@ impl Commit {
                     self.sha
                 ))
             })?;
-        let page = paginate_items(&checkpoints, first, after.as_deref(), |checkpoint| {
-            checkpoint.cursor()
-        })?;
+        let page = paginate_items(&checkpoints, &pagination, |checkpoint| checkpoint.cursor())?;
         Ok(CheckpointConnection::new(
             page.items.into_iter().map(CheckpointEdge::new).collect(),
             page.page_info,
