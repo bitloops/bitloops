@@ -39,16 +39,25 @@ pub(super) fn process_is_running(pid: u32) -> Result<bool> {
 
     #[cfg(not(windows))]
     {
-        Ok(Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false))
+        if pid > i32::MAX as u32 {
+            return Ok(false);
+        }
+
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        Ok(unix_kill_zero_indicates_running(
+            result,
+            std::io::Error::last_os_error().raw_os_error(),
+        ))
     }
+}
+
+#[cfg(not(windows))]
+fn unix_kill_zero_indicates_running(result: i32, raw_os_error: Option<i32>) -> bool {
+    if result == 0 {
+        return true;
+    }
+
+    matches!(raw_os_error, Some(libc::EPERM))
 }
 
 pub(super) fn terminate_process(pid: u32) -> Result<()> {
@@ -189,6 +198,8 @@ fn should_accept_invalid_daemon_certs(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::should_accept_invalid_daemon_certs;
+    #[cfg(not(windows))]
+    use super::unix_kill_zero_indicates_running;
 
     #[test]
     fn daemon_http_client_only_relaxes_loopback_https_urls() {
@@ -200,5 +211,14 @@ mod tests {
             "https://dev.internal:5667"
         ));
         assert!(!should_accept_invalid_daemon_certs("not-a-url"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_pid_probe_treats_permission_denied_as_running() {
+        assert!(unix_kill_zero_indicates_running(-1, Some(libc::EPERM)));
+        assert!(!unix_kill_zero_indicates_running(-1, Some(libc::ESRCH)));
+        assert!(!unix_kill_zero_indicates_running(-1, Some(libc::EINVAL)));
+        assert!(unix_kill_zero_indicates_running(0, None));
     }
 }
