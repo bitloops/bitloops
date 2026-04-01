@@ -10,7 +10,6 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
 use tokio::{sync::mpsc, task};
 
 use crate::api::DashboardServerConfig;
@@ -24,126 +23,22 @@ mod display;
 #[cfg(test)]
 #[path = "daemon/tests.rs"]
 mod tests;
-pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon logs`";
+
 const DEFAULT_LOG_TAIL_LINES: usize = 200;
 const LOG_FOLLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
 pub use args::{
-    DaemonArgs, DaemonCommand, DaemonRestartArgs, DaemonStartArgs, DaemonStatusArgs,
-    DaemonStopArgs, EnrichmentArgs, EnrichmentCommand, EnrichmentPauseArgs, EnrichmentResumeArgs,
-    EnrichmentRetryFailedArgs, EnrichmentStatusArgs, MISSING_SUBCOMMAND_MESSAGE,
+    DaemonArgs, DaemonCommand, DaemonLogsArgs, DaemonRestartArgs, DaemonStartArgs,
+    DaemonStatusArgs, DaemonStopArgs, EnrichmentArgs, EnrichmentCommand, EnrichmentPauseArgs,
+    EnrichmentResumeArgs, EnrichmentRetryFailedArgs, EnrichmentStatusArgs,
+    MISSING_SUBCOMMAND_MESSAGE,
 };
 
 use display::{
     enrichment_status_lines, legacy_repo_data_warnings, print_legacy_repo_data_warnings,
     status_lines,
 };
-#[derive(Subcommand, Debug, Clone)]
-pub enum DaemonCommand {
-    /// Start the global Bitloops daemon.
-    Start(DaemonStartArgs),
-    /// Stop the global Bitloops daemon.
-    Stop(DaemonStopArgs),
-    /// Show global Bitloops daemon status.
-    Status(DaemonStatusArgs),
-    /// Restart the global Bitloops daemon.
-    Restart(DaemonRestartArgs),
-    /// Show daemon log output.
-    Logs(DaemonLogsArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct DaemonStartArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-
-    /// Create the default global daemon config and local default stores if missing.
-    #[arg(long, default_value_t = false, conflicts_with = "config")]
-    pub create_default_config: bool,
-
-    /// Start detached instead of holding the current terminal open.
-    #[arg(
-        short = 'd',
-        long,
-        default_value_t = false,
-        conflicts_with = "until_stopped"
-    )]
-    pub detached: bool,
-
-    /// Install or refresh an always-on user-scoped service, then start it.
-    #[arg(long, default_value_t = false, conflicts_with = "detached")]
-    pub until_stopped: bool,
-
-    /// Hostname to bind the daemon server to.
-    #[arg(long)]
-    pub host: Option<String>,
-
-    /// Port to bind the daemon server to.
-    #[arg(long, default_value_t = crate::api::DEFAULT_DASHBOARD_PORT)]
-    pub port: u16,
-
-    /// Force fast local HTTP mode. Requires `--host 127.0.0.1`.
-    #[arg(long, default_value_t = false)]
-    pub http: bool,
-
-    /// Force a full local dashboard network recheck and refresh discovery hints.
-    #[arg(long = "recheck-local-dashboard-net", default_value_t = false)]
-    pub recheck_local_dashboard_net: bool,
-
-    /// Path to the dashboard bundle directory (contains index.html).
-    #[arg(long = "bundle-dir", alias = "bundle", value_name = "PATH")]
-    pub bundle_dir: Option<std::path::PathBuf>,
-
-    /// Enable anonymous telemetry for this CLI version.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
-    pub telemetry: Option<bool>,
-
-    /// Disable anonymous telemetry for this CLI version.
-    #[arg(
-        long = "no-telemetry",
-        conflicts_with = "telemetry",
-        default_value_t = false
-    )]
-    pub no_telemetry: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStopArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonStatusArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonRestartArgs {
-    /// Path to the Bitloops daemon config file.
-    #[arg(long, value_name = "PATH")]
-    pub config: Option<std::path::PathBuf>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct DaemonLogsArgs {
-    /// Print the last N lines from the daemon log.
-    #[arg(long, value_name = "N", value_parser = parse_log_lines)]
-    pub tail: Option<usize>,
-
-    /// Keep streaming appended daemon log lines.
-    #[arg(long, default_value_t = false, conflicts_with = "path")]
-    pub follow: bool,
-
-    /// Print the daemon log file path and exit.
-    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "tail"])]
-    pub path: bool,
-}
 
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -506,53 +401,6 @@ fn missing_default_daemon_bootstrap_message() -> &'static str {
     "Bitloops daemon has not been bootstrapped yet. Run `bitloops start --create-default-config` or `bitloops init --install-default-daemon`."
 }
 
-fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
-    let mut lines = Vec::new();
-    let log_path = daemon::daemon_log_file_path();
-
-    if let Some(runtime) = report.runtime.as_ref() {
-        lines.push("Bitloops daemon: running".to_string());
-        lines.push(format!("Mode: {}", runtime.mode));
-        lines.push(format!("URL: {}", runtime.url));
-        lines.push(format!("Config: {}", runtime.config_path.display()));
-        lines.push(format!("Log file: {}", log_path.display()));
-        lines.push(format!("PID: {}", runtime.pid));
-        append_supervisor_lines(&mut lines, report);
-        if let Some(health) = report.health.as_ref() {
-            append_health_lines(&mut lines, health);
-        }
-        return lines;
-    }
-
-    if let Some(service) = report.service.as_ref() {
-        lines.push("Bitloops daemon: stopped".to_string());
-        lines.push("Mode: always-on service".to_string());
-        lines.push(format!("Config: {}", service.config_path.display()));
-        lines.push(format!("Log file: {}", log_path.display()));
-        lines.push(format!(
-            "Supervisor service: {} ({}, installed)",
-            service.service_name, service.manager
-        ));
-        lines.push(format!(
-            "Supervisor state: {}",
-            if report.service_running {
-                "running"
-            } else {
-                "stopped"
-            }
-        ));
-        if let Some(url) = service.last_url.as_ref() {
-            lines.push(format!("Last URL: {url}"));
-        }
-        return lines;
-    }
-
-    lines.push("Bitloops daemon: stopped".to_string());
-    lines.push("Mode: not running".to_string());
-    lines.push(format!("Log file: {}", log_path.display()));
-    lines
-}
-
 fn ensure_log_file_exists(path: &Path) -> Result<()> {
     if path.is_file() {
         return Ok(());
@@ -561,16 +409,6 @@ fn ensure_log_file_exists(path: &Path) -> Result<()> {
         "Bitloops daemon log file does not exist yet at {}. Start the daemon and try again.",
         path.display()
     );
-}
-
-fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|_| format!("invalid value `{value}` for --tail"))?;
-    if parsed == 0 {
-        return Err("--tail must be greater than 0".to_string());
-    }
-    Ok(parsed)
 }
 
 async fn read_tail_lines(path: std::path::PathBuf, lines: usize) -> Result<Vec<String>> {
@@ -755,98 +593,3 @@ where
         thread::sleep(poll_interval);
     }
 }
-
-fn append_supervisor_lines(lines: &mut Vec<String>, report: &daemon::DaemonStatusReport) {
-    if let Some(service) = report.service.as_ref() {
-        lines.push(format!(
-            "Supervisor service: {} ({}, installed)",
-            service.service_name, service.manager
-        ));
-        lines.push(format!(
-            "Supervisor state: {}",
-            if report.service_running {
-                "running"
-            } else {
-                "stopped"
-            }
-        ));
-    }
-}
-
-fn append_health_lines(lines: &mut Vec<String>, health: &daemon::DaemonHealthSummary) {
-    if let (Some(backend), Some(connected)) =
-        (&health.relational_backend, health.relational_connected)
-    {
-        lines.push(format!(
-            "Relational: {} ({})",
-            backend,
-            if connected {
-                "connected"
-            } else {
-                "disconnected"
-            }
-        ));
-    }
-    if let (Some(backend), Some(connected)) = (&health.events_backend, health.events_connected) {
-        lines.push(format!(
-            "Events: {} ({})",
-            backend,
-            if connected {
-                "connected"
-            } else {
-                "disconnected"
-            }
-        ));
-    }
-    if let (Some(backend), Some(connected)) = (&health.blob_backend, health.blob_connected) {
-        lines.push(format!(
-            "Blob: {} ({})",
-            backend,
-            if connected {
-                "available"
-            } else {
-                "unavailable"
-            }
-        ));
-    }
-}
-
-fn print_legacy_repo_data_warnings() {
-    for line in legacy_repo_data_warnings() {
-        eprintln!("{line}");
-    }
-}
-
-fn legacy_repo_data_warnings() -> Vec<String> {
-    let Some(repo_root) = crate::utils::paths::repo_root().ok() else {
-        return Vec::new();
-    };
-
-    let legacy_paths = [
-        repo_root.join(".bitloops").join("stores"),
-        repo_root.join(".bitloops").join("embeddings"),
-        repo_root.join(".bitloops").join("tmp"),
-        repo_root.join(".bitloops").join("metadata"),
-    ];
-    let found: Vec<_> = legacy_paths
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect();
-    if found.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::with_capacity(found.len() + 1);
-    lines.push(
-        "Warning: legacy repo-local Bitloops data was found and is ignored unless you configure those paths explicitly in the daemon config.".to_string(),
-    );
-    lines.extend(
-        found
-            .into_iter()
-            .map(|path| format!("Legacy path: {}", path.display())),
-    );
-    lines
-}
-
-#[cfg(test)]
-mod tests;

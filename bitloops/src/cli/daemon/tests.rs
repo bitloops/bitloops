@@ -9,7 +9,6 @@ use clap::Parser;
 use std::io::Cursor;
 use tempfile::TempDir;
 
-use crate::test_support::process_state::enter_process_state;
 use std::fs::{self, OpenOptions};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -447,7 +446,6 @@ fn daemon_enrichments_cli_parses_controls() {
 
 #[test]
 fn status_lines_show_global_supervisor_install_and_state() {
-fn status_lines_show_global_supervisor_install_and_state() {
     let state_root = TempDir::new().expect("temp dir");
     let state_root_str = state_root.path().to_string_lossy().to_string();
     let _guard = enter_process_state(
@@ -504,7 +502,6 @@ fn status_lines_show_global_supervisor_install_and_state() {
             persisted: true,
         }),
     };
-    };
     let log_path = daemon::daemon_log_file_path();
 
     assert_eq!(
@@ -513,6 +510,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
             "Bitloops daemon: stopped".to_string(),
             "Mode: always-on service".to_string(),
             "Config: /tmp/bitloops/config.toml".to_string(),
+            format!("Log file: {}", log_path.display()),
             "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
             "Supervisor state: stopped".to_string(),
             "Last URL: https://127.0.0.1:5173".to_string(),
@@ -533,13 +531,6 @@ fn status_lines_show_global_supervisor_install_and_state() {
             "Enrichment last action: paused".to_string(),
             "Enrichment pause reason: maintenance".to_string(),
             "Enrichment persisted: yes".to_string(),
-        ]
-    );
-}
-            format!("Log file: {}", log_path.display()),
-            "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
-            "Supervisor state: stopped".to_string(),
-            "Last URL: https://127.0.0.1:5173".to_string(),
         ]
     );
 }
@@ -578,6 +569,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         service: None,
         service_running: false,
         health: None,
+        enrichment: None,
     };
 
     let lines = status_lines(&report);
@@ -604,6 +596,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         service: None,
         service_running: false,
         health: None,
+        enrichment: None,
     };
 
     assert_eq!(

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon enrichments`";
+pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon enrichments`, `bitloops daemon logs`";
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DaemonArgs {
@@ -22,6 +22,8 @@ pub enum DaemonCommand {
     Restart(DaemonRestartArgs),
     /// Inspect or control the enrichment coordinator.
     Enrichments(EnrichmentArgs),
+    /// Show daemon log output.
+    Logs(DaemonLogsArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -102,6 +104,21 @@ pub struct DaemonRestartArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub struct DaemonLogsArgs {
+    /// Print the last N lines from the daemon log.
+    #[arg(long, value_name = "N", value_parser = parse_log_lines)]
+    pub tail: Option<usize>,
+
+    /// Keep streaming appended daemon log lines.
+    #[arg(long, default_value_t = false, conflicts_with = "path")]
+    pub follow: bool,
+
+    /// Print the daemon log file path and exit.
+    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "tail"])]
+    pub path: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub struct EnrichmentArgs {
     #[command(subcommand)]
     pub command: Option<EnrichmentCommand>,
@@ -133,4 +150,14 @@ pub struct EnrichmentPauseArgs {
     /// Optional reason for pausing the queue.
     #[arg(long)]
     pub reason: Option<String>,
+}
+
+fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid value `{value}` for --tail"))?;
+    if parsed == 0 {
+        return Err("--tail must be greater than 0".to_string());
+    }
+    Ok(parsed)
 }

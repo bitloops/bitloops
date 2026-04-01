@@ -2,12 +2,14 @@ use crate::daemon;
 
 pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     let mut lines = Vec::new();
+    let log_path = daemon::daemon_log_file_path();
 
     if let Some(runtime) = report.runtime.as_ref() {
         lines.push("Bitloops daemon: running".to_string());
         lines.push(format!("Mode: {}", runtime.mode));
         lines.push(format!("URL: {}", runtime.url));
         lines.push(format!("Config: {}", runtime.config_path.display()));
+        lines.push(format!("Log file: {}", log_path.display()));
         lines.push(format!("PID: {}", runtime.pid));
         append_supervisor_lines(&mut lines, report);
         if let Some(health) = report.health.as_ref() {
@@ -23,6 +25,7 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         lines.push("Bitloops daemon: stopped".to_string());
         lines.push("Mode: always-on service".to_string());
         lines.push(format!("Config: {}", service.config_path.display()));
+        lines.push(format!("Log file: {}", log_path.display()));
         lines.push(format!(
             "Supervisor service: {} ({}, installed)",
             service.service_name, service.manager
@@ -46,6 +49,7 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
 
     lines.push("Bitloops daemon: stopped".to_string());
     lines.push("Mode: not running".to_string());
+    lines.push(format!("Log file: {}", log_path.display()));
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
     }
