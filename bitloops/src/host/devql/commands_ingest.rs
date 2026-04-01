@@ -20,12 +20,15 @@ pub(crate) async fn execute_ingest_with_observer(
     max_checkpoints: usize,
     observer: Option<&dyn IngestionObserver>,
 ) -> Result<IngestionCounters> {
+    let log_ctx =
+        crate::telemetry::logging::with_component(crate::telemetry::logging::background(), "devql");
     let mut counters = IngestionCounters {
         init_requested: init,
         ..IngestionCounters::default()
     };
     let mut checkpoints_total = 0usize;
     let mut checkpoints_processed = 0usize;
+    let mut current_stage = "starting ingest".to_string();
     emit_progress(
         observer,
         IngestionProgressPhase::Initializing,
@@ -37,253 +40,457 @@ pub(crate) async fn execute_ingest_with_observer(
     );
 
     let result: Result<()> = async {
-    let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
-    let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
-        .context("resolving DevQL backend config for `devql ingest`")?;
-    let relational = RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
-    let knowledge_context =
-        capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
-            .context("resolving knowledge capability ingester owner")?;
-    let summary_provider =
-        semantic_clones_pack::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
-    let embedding_provider = semantic_clones_pack::build_symbol_embedding_provider(
-        &embedding_provider_config(cfg),
-        Some(&cfg.repo_root),
-    )?;
-    if init {
-        if backends.events.has_clickhouse() {
-            init_clickhouse_schema(cfg).await?;
-        } else {
-            init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest start",
+            &[
+                crate::telemetry::logging::string_attr("operation", "devql_ingest"),
+                crate::telemetry::logging::string_attr("repo_id", &cfg.repo.repo_id),
+                crate::telemetry::logging::string_attr(
+                    "repo_root",
+                    &cfg.repo_root.display().to_string(),
+                ),
+                crate::telemetry::logging::bool_attr("init", init),
+                crate::telemetry::logging::int_attr(
+                    "max_checkpoints",
+                    i64::try_from(max_checkpoints).unwrap_or(i64::MAX),
+                ),
+            ],
+        );
+
+        current_stage = "loading Core extension host".to_string();
+        let _ = core_extension_host().context("loading Core extension host for `devql ingest`")?;
+
+        current_stage = "resolving store backend config".to_string();
+        let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
+            .context("resolving DevQL backend config for `devql ingest`")?;
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest config resolved",
+            &[
+                crate::telemetry::logging::string_attr(
+                    "relational_backend",
+                    if backends.relational.has_postgres() {
+                        "postgres"
+                    } else {
+                        "sqlite"
+                    },
+                ),
+                crate::telemetry::logging::string_attr(
+                    "events_backend",
+                    if backends.events.has_clickhouse() {
+                        "clickhouse"
+                    } else {
+                        "duckdb"
+                    },
+                ),
+                crate::telemetry::logging::string_attr(
+                    "relational_target",
+                    backends
+                        .relational
+                        .sqlite_path
+                        .as_deref()
+                        .unwrap_or("<postgres>"),
+                ),
+                crate::telemetry::logging::string_attr(
+                    "events_target",
+                    backends
+                        .events
+                        .duckdb_path
+                        .as_deref()
+                        .unwrap_or("<clickhouse>"),
+                ),
+            ],
+        );
+
+        current_stage = "connecting relational storage".to_string();
+        let relational =
+            RelationalStorage::connect(cfg, &backends.relational, "devql ingest").await?;
+
+        current_stage = "resolving knowledge capability ingester owner".to_string();
+        let knowledge_context =
+            capability_ingest_context_for_ingester(cfg, None, KNOWLEDGE_CAPABILITY_INGESTER_ID)
+                .context("resolving knowledge capability ingester owner")?;
+
+        current_stage = "building semantic summary provider".to_string();
+        let summary_provider =
+            semantic_clones_pack::build_semantic_summary_provider(&semantic_provider_config(cfg))?;
+
+        current_stage = "building symbol embedding provider".to_string();
+        let embedding_provider = semantic_clones_pack::build_symbol_embedding_provider(
+            &embedding_provider_config(cfg),
+            Some(&cfg.repo_root),
+        )?;
+
+        if init {
+            current_stage = "initialising event schema".to_string();
+            if backends.events.has_clickhouse() {
+                init_clickhouse_schema(cfg).await?;
+            } else {
+                init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
+            }
+
+            current_stage = "initialising relational schema".to_string();
+            init_relational_schema(cfg, &relational).await?;
+            crate::telemetry::logging::info(
+                &log_ctx,
+                "devql ingest schema init complete",
+                &[crate::telemetry::logging::string_attr(
+                    "operation",
+                    "devql_ingest",
+                )],
+            );
         }
-        init_relational_schema(cfg, &relational).await?;
-    }
 
-    ensure_repository_row(cfg, &relational).await?;
+        current_stage = "ensuring repository row".to_string();
+        ensure_repository_row(cfg, &relational).await?;
 
-    let mut checkpoints = list_committed(&cfg.repo_root)?;
-    checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    if max_checkpoints > 0 && checkpoints.len() > max_checkpoints {
-        checkpoints.truncate(max_checkpoints);
-    }
-    checkpoints_total = checkpoints.len();
-    emit_progress(
-        observer,
-        IngestionProgressPhase::Initializing,
-        checkpoints_total,
-        checkpoints_processed,
-        None,
-        None,
-        &counters,
-    );
-
-    let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
-    let mut existing_event_ids = fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
-
-    for cp in checkpoints {
-        let checkpoint = cp.clone();
-        let commit_info = commit_map.get(&cp.checkpoint_id);
-        let commit_sha = commit_info
-            .map(|info| info.commit_sha.clone())
-            .unwrap_or_default();
-        let commit_sha_option = (!commit_sha.is_empty()).then_some(commit_sha.clone());
+        current_stage = "listing committed checkpoints".to_string();
+        let mut checkpoints = list_committed(&cfg.repo_root)?;
+        checkpoints.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        if max_checkpoints > 0 && checkpoints.len() > max_checkpoints {
+            checkpoints.truncate(max_checkpoints);
+        }
+        checkpoints_total = checkpoints.len();
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest checkpoints discovered",
+            &[
+                crate::telemetry::logging::int_attr(
+                    "checkpoints_total",
+                    i64::try_from(checkpoints_total).unwrap_or(i64::MAX),
+                ),
+                crate::telemetry::logging::int_attr(
+                    "checkpoints_after_limit",
+                    i64::try_from(checkpoints.len()).unwrap_or(i64::MAX),
+                ),
+            ],
+        );
         emit_progress(
             observer,
-            IngestionProgressPhase::Extracting,
+            IngestionProgressPhase::Initializing,
             checkpoints_total,
             checkpoints_processed,
-            Some(cp.checkpoint_id.clone()),
-            commit_sha_option.clone(),
+            None,
+            None,
             &counters,
         );
-        let event_id = deterministic_uuid(&format!(
-            "{}|{}|{}|checkpoint_committed",
-            cfg.repo.repo_id, cp.checkpoint_id, cp.session_id
-        ));
 
-        if !existing_event_ids.contains(&event_id) {
-            insert_checkpoint_event(cfg, &backends.events, &cp, &event_id, commit_info).await?;
-            existing_event_ids.insert(event_id);
-            counters.events_inserted += 1;
-        }
+        current_stage = "collecting checkpoint commit map".to_string();
+        let commit_map = collect_checkpoint_commit_map(&cfg.repo_root)?;
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest checkpoint commit map loaded",
+            &[crate::telemetry::logging::int_attr(
+                "commit_map_entries",
+                i64::try_from(commit_map.len()).unwrap_or(i64::MAX),
+            )],
+        );
 
-        if commit_sha.is_empty() {
-            counters.checkpoints_without_commit += 1;
+        current_stage = "fetching existing checkpoint event ids".to_string();
+        let mut existing_event_ids =
+            fetch_existing_checkpoint_event_ids(cfg, &backends.events).await?;
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest existing checkpoint event ids fetched",
+            &[crate::telemetry::logging::int_attr(
+                "existing_event_ids",
+                i64::try_from(existing_event_ids.len()).unwrap_or(i64::MAX),
+            )],
+        );
+
+        for cp in checkpoints {
+            let checkpoint = cp.clone();
+            let commit_info = commit_map.get(&cp.checkpoint_id);
+            let commit_sha = commit_info
+                .map(|info| info.commit_sha.clone())
+                .unwrap_or_default();
+            let commit_sha_option = (!commit_sha.is_empty()).then_some(commit_sha.clone());
+            crate::telemetry::logging::info(
+                &log_ctx,
+                "devql ingest checkpoint start",
+                &[
+                    crate::telemetry::logging::string_attr("checkpoint_id", &cp.checkpoint_id),
+                    crate::telemetry::logging::string_attr("session_id", &cp.session_id),
+                    crate::telemetry::logging::int_attr(
+                        "files_touched",
+                        i64::try_from(cp.files_touched.len()).unwrap_or(i64::MAX),
+                    ),
+                    crate::telemetry::logging::string_attr(
+                        "commit_sha",
+                        if commit_sha.is_empty() {
+                            "<none>"
+                        } else {
+                            &commit_sha
+                        },
+                    ),
+                ],
+            );
+            emit_progress(
+                observer,
+                IngestionProgressPhase::Extracting,
+                checkpoints_total,
+                checkpoints_processed,
+                Some(cp.checkpoint_id.clone()),
+                commit_sha_option.clone(),
+                &counters,
+            );
+            let event_id = deterministic_uuid(&format!(
+                "{}|{}|{}|checkpoint_committed",
+                cfg.repo.repo_id, cp.checkpoint_id, cp.session_id
+            ));
+
+            current_stage = format!("writing checkpoint event for {}", cp.checkpoint_id);
+            if !existing_event_ids.contains(&event_id) {
+                insert_checkpoint_event(cfg, &backends.events, &cp, &event_id, commit_info)
+                    .await?;
+                existing_event_ids.insert(event_id);
+                counters.events_inserted += 1;
+            }
+
+            if commit_sha.is_empty() {
+                counters.checkpoints_without_commit += 1;
+                checkpoints_processed += 1;
+                emit_checkpoint_ingested(observer, checkpoint, None);
+                emit_progress(
+                    observer,
+                    IngestionProgressPhase::Persisting,
+                    checkpoints_total,
+                    checkpoints_processed,
+                    Some(cp.checkpoint_id.clone()),
+                    None,
+                    &counters,
+                );
+                crate::telemetry::logging::info(
+                    &log_ctx,
+                    "devql ingest checkpoint complete without commit",
+                    &[crate::telemetry::logging::string_attr(
+                        "checkpoint_id",
+                        &cp.checkpoint_id,
+                    )],
+                );
+                continue;
+            }
+
+            current_stage = format!("upserting commit row for {}", cp.checkpoint_id);
+            upsert_commit_row(
+                cfg,
+                &relational,
+                &cp,
+                commit_info.expect("commit_info exists when sha exists"),
+            )
+            .await?;
+
+            current_stage = format!("materialising file artefacts for {}", cp.checkpoint_id);
+            for path in &cp.files_touched {
+                let normalized_path = normalize_repo_path(path);
+                if normalized_path.is_empty() {
+                    continue;
+                }
+
+                let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
+                    .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
+                let Some(blob_sha) = blob_sha else {
+                    delete_current_state_for_path(cfg, &relational, &normalized_path).await?;
+                    continue;
+                };
+                let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
+
+                upsert_file_state_row(
+                    &cfg.repo.repo_id,
+                    &relational,
+                    &commit_sha,
+                    &normalized_path,
+                    &blob_sha,
+                )
+                .await?;
+                let file_artefact = upsert_file_artefact_row(
+                    &cfg.repo.repo_id,
+                    &cfg.repo_root,
+                    &relational,
+                    &normalized_path,
+                    &blob_sha,
+                )
+                .await?;
+                upsert_language_artefacts(
+                    cfg,
+                    &relational,
+                    &FileRevision {
+                        commit_sha: &commit_sha,
+                        revision: TemporalRevisionRef {
+                            kind: TemporalRevisionKind::Commit,
+                            id: &commit_sha,
+                            temp_checkpoint_id: None,
+                        },
+                        commit_unix: commit_info
+                            .expect("commit_info exists when sha exists")
+                            .commit_unix,
+                        path: &normalized_path,
+                        blob_sha: &blob_sha,
+                    },
+                    &file_artefact,
+                )
+                .await?;
+                counters.artefacts_upserted += 1;
+
+                current_stage =
+                    format!("running semantic feature stages for checkpoint {}", cp.checkpoint_id);
+                let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
+                    &relational,
+                    &cfg.repo.repo_id,
+                    &blob_sha,
+                    &normalized_path,
+                )
+                .await?;
+                let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
+                    &relational,
+                    &cfg.repo.repo_id,
+                    &blob_sha,
+                    &normalized_path,
+                )
+                .await?;
+                let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
+                    &pre_stage_artefacts,
+                    &pre_stage_dependencies,
+                    &content,
+                );
+                let semantic_feature_stats = upsert_semantic_feature_rows(
+                    &relational,
+                    &semantic_feature_inputs,
+                    Arc::clone(&summary_provider),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "running capability ingester `{}` owned by `{}`",
+                        knowledge_context.ingester_id, knowledge_context.capability_pack_id
+                    )
+                })?;
+                if let Some(embedding_provider) = embedding_provider.as_ref() {
+                    let embedding_stats = upsert_symbol_embedding_rows(
+                        &relational,
+                        &semantic_feature_inputs,
+                        Arc::clone(embedding_provider),
+                    )
+                    .await?;
+                    counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
+                    counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
+                }
+                counters.artefacts_upserted += 1;
+                counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
+                counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
+            }
+
+            current_stage = format!("projecting checkpoint snapshots for {}", cp.checkpoint_id);
+            let _projected_rows = upsert_checkpoint_file_snapshot_rows(
+                cfg,
+                &relational,
+                &cp,
+                &commit_sha,
+                commit_info,
+            )
+            .await?;
+
+            counters.checkpoints_processed += 1;
             checkpoints_processed += 1;
-            emit_checkpoint_ingested(observer, checkpoint, None);
+            emit_checkpoint_ingested(observer, checkpoint, commit_sha_option.clone());
             emit_progress(
                 observer,
                 IngestionProgressPhase::Persisting,
                 checkpoints_total,
                 checkpoints_processed,
                 Some(cp.checkpoint_id.clone()),
-                None,
+                commit_sha_option,
                 &counters,
             );
-            continue;
+            crate::telemetry::logging::info(
+                &log_ctx,
+                "devql ingest checkpoint complete",
+                &[
+                    crate::telemetry::logging::string_attr("checkpoint_id", &cp.checkpoint_id),
+                    crate::telemetry::logging::int_attr(
+                        "checkpoints_processed",
+                        i64::try_from(checkpoints_processed).unwrap_or(i64::MAX),
+                    ),
+                    crate::telemetry::logging::int_attr(
+                        "checkpoints_total",
+                        i64::try_from(checkpoints_total).unwrap_or(i64::MAX),
+                    ),
+                    crate::telemetry::logging::int_attr(
+                        "artefacts_upserted",
+                        i64::try_from(counters.artefacts_upserted).unwrap_or(i64::MAX),
+                    ),
+                    crate::telemetry::logging::int_attr(
+                        "events_inserted",
+                        i64::try_from(counters.events_inserted).unwrap_or(i64::MAX),
+                    ),
+                ],
+            );
         }
 
-        upsert_commit_row(
-            cfg,
-            &relational,
-            &cp,
-            commit_info.expect("commit_info exists when sha exists"),
-        )
-        .await?;
+        current_stage = "promoting temporary current rows for head commit".to_string();
+        counters.temporary_rows_promoted =
+            promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
 
-        for path in &cp.files_touched {
-            let normalized_path = normalize_repo_path(path);
-            if normalized_path.is_empty() {
-                continue;
-            }
+        current_stage = "building capability host".to_string();
+        let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
 
-            let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
-                .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
-            let Some(blob_sha) = blob_sha else {
-                delete_current_state_for_path(cfg, &relational, &normalized_path).await?;
-                continue;
-            };
-            let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
-
-            upsert_file_state_row(
-                &cfg.repo.repo_id,
-                &relational,
-                &commit_sha,
-                &normalized_path,
-                &blob_sha,
-            )
-            .await?;
-            let file_artefact = upsert_file_artefact_row(
-                &cfg.repo.repo_id,
-                &cfg.repo_root,
-                &relational,
-                &normalized_path,
-                &blob_sha,
-            )
-            .await?;
-            upsert_language_artefacts(
-                cfg,
-                &relational,
-                &FileRevision {
-                    commit_sha: &commit_sha,
-                    revision: TemporalRevisionRef {
-                        kind: TemporalRevisionKind::Commit,
-                        id: &commit_sha,
-                        temp_checkpoint_id: None,
-                    },
-                    commit_unix: commit_info
-                        .expect("commit_info exists when sha exists")
-                        .commit_unix,
-                    path: &normalized_path,
-                    blob_sha: &blob_sha,
-                },
-                &file_artefact,
-            )
-            .await?;
-            counters.artefacts_upserted += 1;
-
-            let pre_stage_artefacts = load_pre_stage_artefacts_for_blob(
-                &relational,
-                &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
-            )
-            .await?;
-            let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
-                &relational,
-                &cfg.repo.repo_id,
-                &blob_sha,
-                &normalized_path,
-            )
-            .await?;
-            let semantic_feature_inputs = semantic_clones_pack::build_semantic_feature_inputs(
-                &pre_stage_artefacts,
-                &pre_stage_dependencies,
-                &content,
-            );
-            let semantic_feature_stats = upsert_semantic_feature_rows(
-                &relational,
-                &semantic_feature_inputs,
-                Arc::clone(&summary_provider),
+        current_stage = "running semantic clone rebuild ingester".to_string();
+        let clone_ingest = capability_host
+            .invoke_ingester_with_relational(
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_REBUILD_INGESTER_ID,
+                json!({}),
+                Some(&relational),
             )
             .await
             .with_context(|| {
                 format!(
-                    "running capability ingester `{}` owned by `{}`",
-                    knowledge_context.ingester_id, knowledge_context.capability_pack_id
+                    "running capability ingester `{SEMANTIC_CLONES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
                 )
             })?;
-            if let Some(embedding_provider) = embedding_provider.as_ref() {
-                let embedding_stats = upsert_symbol_embedding_rows(
-                    &relational,
-                    &semantic_feature_inputs,
-                    Arc::clone(embedding_provider),
-                )
-                .await?;
-                counters.symbol_embedding_rows_upserted += embedding_stats.upserted;
-                counters.symbol_embedding_rows_skipped += embedding_stats.skipped;
-            }
-            counters.artefacts_upserted += 1;
-            counters.semantic_feature_rows_upserted += semantic_feature_stats.upserted;
-            counters.semantic_feature_rows_skipped += semantic_feature_stats.skipped;
-        }
-
-        let _projected_rows = upsert_checkpoint_file_snapshot_rows(
-            cfg,
-            &relational,
-            &cp,
-            &commit_sha,
-            commit_info,
-        )
-        .await?;
-
-        counters.checkpoints_processed += 1;
-        checkpoints_processed += 1;
-        emit_checkpoint_ingested(observer, checkpoint, commit_sha_option.clone());
+        counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
+            .as_u64()
+            .unwrap_or_default() as usize;
+        counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
+            .as_u64()
+            .unwrap_or_default() as usize;
+        counters.success = true;
         emit_progress(
             observer,
-            IngestionProgressPhase::Persisting,
+            IngestionProgressPhase::Complete,
             checkpoints_total,
             checkpoints_processed,
-            Some(cp.checkpoint_id.clone()),
-            commit_sha_option,
+            None,
+            None,
             &counters,
         );
-    }
-
-    counters.temporary_rows_promoted =
-        promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
-
-    let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
-    let clone_ingest = capability_host
-        .invoke_ingester_with_relational(
-            SEMANTIC_CLONES_CAPABILITY_ID,
-            SEMANTIC_CLONES_REBUILD_INGESTER_ID,
-            json!({}),
-            Some(&relational),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "running capability ingester `{SEMANTIC_CLONES_REBUILD_INGESTER_ID}` for `{SEMANTIC_CLONES_CAPABILITY_ID}`"
-            )
-        })?;
-    counters.symbol_clone_edges_upserted += clone_ingest.payload["symbol_clone_edges_upserted"]
-        .as_u64()
-        .unwrap_or_default() as usize;
-    counters.symbol_clone_sources_scored += clone_ingest.payload["symbol_clone_sources_scored"]
-        .as_u64()
-        .unwrap_or_default() as usize;
-    counters.success = true;
-    emit_progress(
-        observer,
-        IngestionProgressPhase::Complete,
-        checkpoints_total,
-        checkpoints_processed,
-        None,
-        None,
-        &counters,
-    );
+        crate::telemetry::logging::info(
+            &log_ctx,
+            "devql ingest complete",
+            &[
+                crate::telemetry::logging::int_attr(
+                    "checkpoints_processed",
+                    i64::try_from(counters.checkpoints_processed).unwrap_or(i64::MAX),
+                ),
+                crate::telemetry::logging::int_attr(
+                    "events_inserted",
+                    i64::try_from(counters.events_inserted).unwrap_or(i64::MAX),
+                ),
+                crate::telemetry::logging::int_attr(
+                    "artefacts_upserted",
+                    i64::try_from(counters.artefacts_upserted).unwrap_or(i64::MAX),
+                ),
+                crate::telemetry::logging::int_attr(
+                    "temporary_rows_promoted",
+                    i64::try_from(counters.temporary_rows_promoted).unwrap_or(i64::MAX),
+                ),
+                crate::telemetry::logging::int_attr(
+                    "symbol_clone_edges_upserted",
+                    i64::try_from(counters.symbol_clone_edges_upserted).unwrap_or(i64::MAX),
+                ),
+            ],
+        );
         Ok(())
     }
     .await;
@@ -291,6 +498,14 @@ pub(crate) async fn execute_ingest_with_observer(
     match result {
         Ok(()) => Ok(counters),
         Err(err) => {
+            crate::telemetry::logging::error(
+                &log_ctx,
+                "devql ingest failed",
+                &[
+                    crate::telemetry::logging::string_attr("stage", &current_stage),
+                    crate::telemetry::logging::string_attr("error", &format!("{err:#}")),
+                ],
+            );
             emit_progress(
                 observer,
                 IngestionProgressPhase::Failed,

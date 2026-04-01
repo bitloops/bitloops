@@ -25,7 +25,7 @@ pub(super) async fn start_foreground(
     ready_subject: &str,
     telemetry: Option<bool>,
 ) -> Result<()> {
-    ensure_can_start(daemon_config.config_root.as_path(), false)?;
+    ensure_can_start(daemon_config.config_root.as_path(), false).await?;
     run_server(
         daemon_config,
         config,
@@ -46,7 +46,7 @@ pub(super) async fn start_detached(
     config: DashboardServerConfig,
     telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
-    ensure_can_start(daemon_config.config_root.as_path(), false)?;
+    ensure_can_start(daemon_config.config_root.as_path(), false).await?;
     let args = InternalDaemonProcessArgs::from_server_config(
         daemon_config,
         DaemonMode::Detached,

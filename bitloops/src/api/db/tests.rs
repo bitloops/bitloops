@@ -164,3 +164,29 @@ async fn dashboard_db_pools_query_duckdb_with_shared_pool() -> Result<()> {
     assert_eq!(rows, vec![json!({ "value": 3 }), json!({ "value": 4 })]);
     Ok(())
 }
+
+#[tokio::test]
+async fn dashboard_db_pools_health_check_uses_duckdb_path_without_shared_pool() -> Result<()> {
+    let dir = tempdir()?;
+    let duckdb_path = dir.path().join("events.duckdb");
+    let conn = duckdb::Connection::open(&duckdb_path).context("creating duckdb file for test")?;
+    conn.execute_batch("SELECT 1;")
+        .context("seeding duckdb for direct health-check test")?;
+    drop(conn);
+
+    let pools = DashboardDbPools {
+        has_postgres: false,
+        has_clickhouse: false,
+        postgres: None,
+        sqlite: None,
+        clickhouse: None,
+        duckdb: None,
+        duckdb_path: Some(duckdb_path),
+    };
+
+    let health = pools.health_check().await;
+
+    assert_eq!(health.events.kind, super::health::BackendHealthKind::Ok);
+    assert_eq!(health.events.detail, "SELECT 1 => 1");
+    Ok(())
+}

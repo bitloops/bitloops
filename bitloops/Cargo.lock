@@ -704,6 +704,7 @@ dependencies = [
  "hex",
  "hyper",
  "hyper-util",
+ "libc",
  "log",
  "notify",
  "object_store",

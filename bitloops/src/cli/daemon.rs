@@ -297,7 +297,7 @@ pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
 
 pub async fn launch_dashboard() -> Result<()> {
     print_legacy_repo_data_warnings();
-    if let Some(url) = daemon::daemon_url()? {
+    if let Some(url) = daemon::daemon_url().await? {
         crate::api::open_in_default_browser(&url)?;
         println!("Opened Bitloops dashboard at {url}");
         return Ok(());

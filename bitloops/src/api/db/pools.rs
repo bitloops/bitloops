@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::time::timeout;
 
@@ -20,6 +20,7 @@ pub(crate) struct DashboardDbPools {
     pub(super) sqlite: Option<SqlitePool>,
     pub(super) clickhouse: Option<ClickHousePool>,
     pub(super) duckdb: Option<DuckDbPool>,
+    pub(super) duckdb_path: Option<PathBuf>,
 }
 
 impl fmt::Debug for DashboardDbPools {
@@ -31,6 +32,7 @@ impl fmt::Debug for DashboardDbPools {
             .field("sqlite_enabled", &self.sqlite.is_some())
             .field("clickhouse_enabled", &self.clickhouse.is_some())
             .field("duckdb_enabled", &self.duckdb.is_some())
+            .field("duckdb_configured", &self.duckdb_path.is_some())
             .finish()
     }
 }
@@ -41,6 +43,7 @@ impl DashboardDbPools {
         let sqlite_pool = self.sqlite.clone();
         let clickhouse_pool = self.clickhouse.as_ref();
         let duckdb_pool = self.duckdb.as_ref();
+        let duckdb_path = self.duckdb_path.clone();
 
         let relational_fut = async move {
             match (postgres_pool, sqlite_pool) {
@@ -74,7 +77,20 @@ impl DashboardDbPools {
                     Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
                     Err(_) => BackendHealth::fail("health check timed out".to_string()),
                 },
-                None => BackendHealth::skip("not configured"),
+                None => match duckdb_path {
+                    Some(path) => {
+                        let check = async move {
+                            let pool = DuckDbPool::connect(path).await?;
+                            pool.ping().await
+                        };
+                        match timeout(HEALTH_CHECK_TIMEOUT, check).await {
+                            Ok(Ok(value)) => BackendHealth::ok(format!("SELECT 1 => {value}")),
+                            Ok(Err(err)) => BackendHealth::fail(format!("{err:#}")),
+                            Err(_) => BackendHealth::fail("health check timed out".to_string()),
+                        }
+                    }
+                    None => BackendHealth::skip("not configured"),
+                },
             }
         };
 
@@ -202,6 +218,7 @@ impl DashboardDbPools {
             postgres: None,
             sqlite,
             clickhouse: None,
+            duckdb_path: duckdb.as_ref().map(|pool| pool.path().to_path_buf()),
             duckdb,
         }
     }

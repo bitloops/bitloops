@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const DAEMON_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const DAEMON_READY_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub(super) fn current_binary_fingerprint() -> Result<String> {
     let current_exe = env::current_exe().context("resolving Bitloops executable path")?;
     let bytes = fs::read(&current_exe)
@@ -39,16 +42,25 @@ pub(super) fn process_is_running(pid: u32) -> Result<bool> {
 
     #[cfg(not(windows))]
     {
-        Ok(Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false))
+        if pid > i32::MAX as u32 {
+            return Ok(false);
+        }
+
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        Ok(unix_kill_zero_indicates_running(
+            result,
+            std::io::Error::last_os_error().raw_os_error(),
+        ))
     }
+}
+
+#[cfg(not(windows))]
+fn unix_kill_zero_indicates_running(result: i32, raw_os_error: Option<i32>) -> bool {
+    if result == 0 {
+        return true;
+    }
+
+    matches!(raw_os_error, Some(libc::EPERM))
 }
 
 pub(super) fn terminate_process(pid: u32) -> Result<()> {
@@ -99,7 +111,7 @@ pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -
 }
 
 pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
-    let client = match daemon_http_client(&state.url) {
+    let client = match daemon_ready_http_client(&state.url) {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -114,6 +126,19 @@ pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
 
 pub(super) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
+    if should_accept_invalid_daemon_certs(url) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder = builder.connect_timeout(DAEMON_HTTP_CONNECT_TIMEOUT);
+    builder
+        .build()
+        .context("building Bitloops daemon HTTP client")
+}
+
+fn daemon_ready_http_client(url: &str) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(DAEMON_HTTP_CONNECT_TIMEOUT)
+        .timeout(DAEMON_READY_CHECK_TIMEOUT);
     if should_accept_invalid_daemon_certs(url) {
         builder = builder.danger_accept_invalid_certs(true);
     }
@@ -189,6 +214,8 @@ fn should_accept_invalid_daemon_certs(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::should_accept_invalid_daemon_certs;
+    #[cfg(not(windows))]
+    use super::unix_kill_zero_indicates_running;
 
     #[test]
     fn daemon_http_client_only_relaxes_loopback_https_urls() {
@@ -200,5 +227,14 @@ mod tests {
             "https://dev.internal:5667"
         ));
         assert!(!should_accept_invalid_daemon_certs("not-a-url"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_pid_probe_treats_permission_denied_as_running() {
+        assert!(unix_kill_zero_indicates_running(-1, Some(libc::EPERM)));
+        assert!(!unix_kill_zero_indicates_running(-1, Some(libc::ESRCH)));
+        assert!(!unix_kill_zero_indicates_running(-1, Some(libc::EINVAL)));
+        assert!(unix_kill_zero_indicates_running(0, None));
     }
 }

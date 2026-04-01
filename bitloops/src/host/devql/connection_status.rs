@@ -157,21 +157,16 @@ async fn check_sqlite_connection(path: &Path) -> Result<()> {
 
 async fn check_duckdb_connection(path: &Path) -> Result<()> {
     let db_path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        if !db_path.is_file() {
-            bail!(
-                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
-                db_path.display()
-            );
-        }
-        let conn = duckdb::Connection::open(&db_path)
-            .with_context(|| format!("opening DuckDB events database at {}", db_path.display()))?;
-        conn.execute_batch("SELECT 1")
-            .context("running DuckDB health query `SELECT 1`")?;
-        Ok(())
-    })
-    .await
-    .context("joining DuckDB health query task")?
+    let rows = crate::host::devql::duckdb_query_rows_path(&db_path, "SELECT 1 AS value").await?;
+    let value = rows
+        .first()
+        .and_then(|row| row.get("value"))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| anyhow!("DuckDB health query returned no rows"))?;
+    if value != 1 {
+        bail!("unexpected DuckDB health query result: {value}");
+    }
+    Ok(())
 }
 
 fn clickhouse_endpoint(url: &str, database: &str) -> String {
