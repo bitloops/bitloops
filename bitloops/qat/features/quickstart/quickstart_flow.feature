@@ -9,13 +9,13 @@ Feature: Quickstart end-to-end flow
     And   I start the daemon in bitloops
     And   I create a Rust project with tests in bitloops
     And   I run InitCommit for bitloops
-    And   I run bitloops init --agent claude in bitloops
+    And   I run bitloops init --agent claude-code in bitloops
     And   I run bitloops enable in bitloops
 
   @quickstart-checkpoint
   Scenario: Checkpoint creation through Claude Code edits
     Given I ensure Claude Code auth in bitloops
-    And   I make a first change using Claude Code to bitloops
+    And   I ask Claude Code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and returns the result, and add a test for it" in bitloops
     And   I committed today in bitloops
     Then  checkpoint mapping exists in bitloops
     And   commit_checkpoints count is at least 1 in bitloops

@@ -227,6 +227,20 @@ pub(super) fn given_first_claude_change(
     })
 }
 
+pub(super) fn given_claude_code_prompt(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let prompt = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I ask Claude Code to make a change",
+            helpers::run_claude_code_prompt_for_repo(world, &repo_name, &prompt),
+        );
+    })
+}
+
 pub(super) fn given_second_claude_change(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

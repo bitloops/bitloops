@@ -53,3 +53,12 @@ async fn qat_onboarding() {
         .await
         .expect("QAT onboarding suite failed");
 }
+
+#[tokio::test]
+#[ignore = "slow E2E: runs QAT quickstart suite; use `cargo test --test qat_acceptance qat_quickstart -- --ignored`"]
+async fn qat_quickstart() {
+    let binary = resolve_binary();
+    runner::run_suite(binary, Suite::Quickstart)
+        .await
+        .expect("QAT quickstart suite failed");
+}

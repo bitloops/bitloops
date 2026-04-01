@@ -854,6 +854,15 @@ pub fn run_first_change_using_claude_code_for_repo(
     run_claude_code_prompt(world, FIRST_CLAUDE_PROMPT)
 }
 
+pub fn run_claude_code_prompt_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    prompt: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_claude_code_prompt(world, prompt)
+}
+
 pub fn run_second_change_using_claude_code_for_repo(
     world: &mut QatWorld,
     repo_name: &str,

@@ -16,6 +16,7 @@ pub enum Suite {
     Devql,
     ClaudeCode,
     Onboarding,
+    Quickstart,
 }
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
@@ -120,6 +121,7 @@ fn suite_feature_path(suite: &Suite) -> PathBuf {
         Suite::Devql => root.join("devql"),
         Suite::ClaudeCode => root.join("claude-code"),
         Suite::Onboarding => root.join("onboarding"),
+        Suite::Quickstart => root.join("quickstart"),
     }
 }
 

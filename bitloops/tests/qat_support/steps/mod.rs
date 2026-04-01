@@ -103,6 +103,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
+            step_fn(given_claude_code_prompt),
+        )
+        .given(
+            None,
             regex(r"^I make a second change using Claude Code to (\S+)$"),
             step_fn(given_second_claude_change),
         )
