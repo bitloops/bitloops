@@ -121,16 +121,8 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
+    assert!(ingest.init);
     assert_eq!(ingest.max_checkpoints, 500);
-}
-
-#[test]
-fn devql_cli_rejects_removed_ingest_init_flag() {
-    let err = match Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"]) {
-        Ok(_) => panic!("ingest --init flag should be rejected"),
-        Err(err) => err,
-    };
-    assert!(err.to_string().contains("--init"));
 }
 
 #[test]
@@ -202,23 +194,9 @@ fn devql_cli_parses_sync_modes() {
 #[test]
 fn devql_cli_rejects_conflicting_sync_modes() {
     let cases = vec![
-        vec![
-            "bitloops",
-            "devql",
-            "sync",
-            "--full",
-            "--paths",
-            "src/lib.rs",
-        ],
+        vec!["bitloops", "devql", "sync", "--full", "--paths", "src/lib.rs"],
         vec!["bitloops", "devql", "sync", "--full", "--repair"],
-        vec![
-            "bitloops",
-            "devql",
-            "sync",
-            "--paths",
-            "src/lib.rs",
-            "--repair",
-        ],
+        vec!["bitloops", "devql", "sync", "--paths", "src/lib.rs", "--repair"],
         vec!["bitloops", "devql", "sync", "--validate", "--repair"],
         vec!["bitloops", "devql", "sync", "--validate", "--full"],
         vec![
@@ -645,6 +623,7 @@ fn devql_run_ingest_executes_graphql_mutation_with_expected_input() {
             test_runtime()
                 .block_on(run(DevqlArgs {
                     command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                        init: false,
                         max_checkpoints: 42,
                     })),
                 }))
@@ -675,6 +654,7 @@ fn devql_run_ingest_requires_running_daemon() {
         let err = test_runtime()
             .block_on(run(DevqlArgs {
                 command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                    init: true,
                     max_checkpoints: 500,
                 })),
             }))

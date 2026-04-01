@@ -1,6 +1,6 @@
 use std::io::{self, BufRead, Write};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
@@ -137,7 +137,6 @@ async fn run_start_with_io(
     }
     let daemon_config = daemon::resolve_daemon_config(args.config.as_deref())?;
     let config = build_server_config(&args);
-    maybe_initialise_devql_schema_for_start().await?;
 
     if args.until_stopped {
         let state =
@@ -175,67 +174,6 @@ async fn run_start_with_io(
         preflight.startup_telemetry,
     )
     .await
-}
-
-async fn maybe_initialise_devql_schema_for_start() -> Result<()> {
-    let Ok(repo_root) = crate::utils::paths::repo_root() else {
-        return Ok(());
-    };
-
-    #[cfg(test)]
-    if let Some(result) = maybe_execute_start_schema_init_hook(repo_root.as_path()) {
-        return result;
-    }
-
-    let repo = crate::host::devql::resolve_repo_identity(&repo_root)
-        .context("resolving repository identity for `bitloops start`")?;
-    let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.clone(), repo)
-        .context("resolving DevQL config for `bitloops start`")?;
-    crate::host::devql::execute_init_schema(&cfg, "bitloops start")
-        .await
-        .context("initialising DevQL schema during `bitloops start`")?;
-    Ok(())
-}
-
-#[cfg(test)]
-thread_local! {
-    static START_SCHEMA_INIT_HOOK: std::cell::RefCell<Option<std::rc::Rc<StartSchemaInitHook>>> =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-type StartSchemaInitHook = dyn Fn(&std::path::Path) -> Result<()> + 'static;
-
-#[cfg(test)]
-fn with_start_schema_init_hook<T>(
-    hook: impl Fn(&std::path::Path) -> Result<()> + 'static,
-    f: impl FnOnce() -> T,
-) -> T {
-    START_SCHEMA_INIT_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<StartSchemaInitHook>>>| {
-            assert!(
-                cell.borrow().is_none(),
-                "start schema init hook already installed"
-            );
-            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
-        },
-    );
-    let result = f();
-    START_SCHEMA_INIT_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<StartSchemaInitHook>>>| {
-            *cell.borrow_mut() = None;
-        },
-    );
-    result
-}
-
-#[cfg(test)]
-fn maybe_execute_start_schema_init_hook(repo_root: &std::path::Path) -> Option<Result<()>> {
-    START_SCHEMA_INIT_HOOK.with(
-        |hook: &std::cell::RefCell<Option<std::rc::Rc<StartSchemaInitHook>>>| {
-            hook.borrow().as_ref().map(|hook| hook(repo_root))
-        },
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -567,36 +505,10 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
-    use crate::test_support::git_fixtures::{git_ok, init_test_repo};
     use crate::test_support::process_state::enter_process_state;
     use clap::Parser;
-    use std::cell::RefCell;
-    use std::fs;
     use std::io::Cursor;
-    use std::path::PathBuf;
-    use std::rc::Rc;
     use tempfile::TempDir;
-
-    fn test_runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-    }
-
-    fn seed_git_repo() -> TempDir {
-        let dir = TempDir::new().expect("temp dir");
-        let repo_root = dir.path();
-        init_test_repo(repo_root, "main", "Alice", "alice@example.com");
-        fs::write(
-            repo_root.join("src.rs"),
-            "pub fn ready() -> bool { true }\n",
-        )
-        .expect("write seed file");
-        git_ok(repo_root, &["add", "."]);
-        git_ok(repo_root, &["commit", "-m", "seed repo"]);
-        dir
-    }
 
     #[test]
     fn daemon_start_cli_parses_lifecycle_and_server_flags() {
@@ -920,65 +832,6 @@ mod tests {
         assert_eq!(decision.startup_telemetry, Some(false));
         assert!(!rendered.contains("Help us improve Bitloops"));
         assert!(!rendered.contains("Enable anonymous telemetry? [Y/n]"));
-    }
-
-    #[test]
-    fn start_schema_init_is_skipped_outside_repo_context() {
-        let workspace = TempDir::new().expect("temp workspace");
-        let _guard = enter_process_state(Some(workspace.path()), &[]);
-        let hook_called = Rc::new(RefCell::new(false));
-
-        with_start_schema_init_hook(
-            {
-                let hook_called = Rc::clone(&hook_called);
-                move |_repo_root| {
-                    *hook_called.borrow_mut() = true;
-                    Ok(())
-                }
-            },
-            || {
-                test_runtime()
-                    .block_on(maybe_initialise_devql_schema_for_start())
-                    .expect("schema init should be skipped outside a git repo");
-            },
-        );
-
-        assert!(
-            !*hook_called.borrow(),
-            "schema init hook should not run without a detected repository"
-        );
-    }
-
-    #[test]
-    fn start_schema_init_runs_for_detected_repo() {
-        let repo = seed_git_repo();
-        let _guard = enter_process_state(Some(repo.path()), &[]);
-        let captured = Rc::new(RefCell::new(None::<PathBuf>));
-
-        with_start_schema_init_hook(
-            {
-                let captured = Rc::clone(&captured);
-                move |repo_root| {
-                    *captured.borrow_mut() = Some(repo_root.to_path_buf());
-                    Ok(())
-                }
-            },
-            || {
-                test_runtime()
-                    .block_on(maybe_initialise_devql_schema_for_start())
-                    .expect("schema init should run when repo context is available");
-            },
-        );
-
-        let expected_repo_root = repo
-            .path()
-            .canonicalize()
-            .unwrap_or_else(|_| repo.path().to_path_buf());
-        assert_eq!(
-            captured.borrow().as_deref(),
-            Some(expected_repo_root.as_path()),
-            "schema init should target the active repository root"
-        );
     }
 
     #[test]

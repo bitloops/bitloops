@@ -8,8 +8,7 @@ pub struct DevqlArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum DevqlCommand {
-    /// Internal: create schema for configured relational/events backends.
-    #[command(hide = true)]
+    /// Create schema for configured relational/events backends.
     Init(DevqlInitArgs),
     /// Ingest checkpoint/events and relational artefacts for configured backends.
     Ingest(DevqlIngestArgs),
@@ -32,6 +31,10 @@ pub struct DevqlInitArgs {}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlIngestArgs {
+    /// Bootstrap tables before ingestion.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub init: bool,
+
     /// Limit checkpoints processed (newest-first).
     #[arg(long, default_value_t = 500)]
     pub max_checkpoints: usize,

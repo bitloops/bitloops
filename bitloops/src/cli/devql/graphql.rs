@@ -87,6 +87,7 @@ pub(super) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
 
 pub(super) async fn run_ingest_via_graphql(
     scope: &SlimCliRepoScope,
+    init: bool,
     max_checkpoints: usize,
 ) -> Result<()> {
     let response: IngestMutationData = execute_devql_graphql(
@@ -94,7 +95,7 @@ pub(super) async fn run_ingest_via_graphql(
         INGEST_MUTATION,
         json!({
             "input": {
-                "init": false,
+                "init": init,
                 "maxCheckpoints": max_checkpoints,
             }
         }),
