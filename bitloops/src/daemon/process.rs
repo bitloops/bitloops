@@ -1,8 +1,5 @@
 use super::*;
 
-pub(super) const DAEMON_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-pub(super) const DAEMON_READY_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
-
 pub(super) fn current_binary_fingerprint() -> Result<String> {
     let current_exe = env::current_exe().context("resolving Bitloops executable path")?;
     let bytes = fs::read(&current_exe)
@@ -111,7 +108,7 @@ pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -
 }
 
 pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
-    let client = match daemon_ready_http_client(&state.url) {
+    let client = match daemon_http_client(&state.url) {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -126,19 +123,6 @@ pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
 
 pub(super) fn daemon_http_client(url: &str) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
-    if should_accept_invalid_daemon_certs(url) {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-    builder = builder.connect_timeout(DAEMON_HTTP_CONNECT_TIMEOUT);
-    builder
-        .build()
-        .context("building Bitloops daemon HTTP client")
-}
-
-fn daemon_ready_http_client(url: &str) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(DAEMON_HTTP_CONNECT_TIMEOUT)
-        .timeout(DAEMON_READY_CHECK_TIMEOUT);
     if should_accept_invalid_daemon_certs(url) {
         builder = builder.danger_accept_invalid_certs(true);
     }

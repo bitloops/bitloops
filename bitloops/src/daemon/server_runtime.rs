@@ -193,17 +193,13 @@ pub(super) fn install_or_update_repo_service_binding(
     Ok(metadata)
 }
 
-pub(super) async fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) -> Result<()> {
+pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) -> Result<()> {
     if let Some(runtime) = read_runtime_state(repo_root)? {
         let current = current_binary_fingerprint().unwrap_or_default();
         if !runtime.binary_fingerprint.is_empty()
             && !current.is_empty()
             && runtime.binary_fingerprint != current
             && !matches!(runtime.mode, DaemonMode::Service)
-        {
-            terminate_process(runtime.pid)?;
-            let _ = fs::remove_file(runtime_state_path(repo_root));
-        } else if !matches!(runtime.mode, DaemonMode::Service) && !daemon_http_ready(&runtime).await
         {
             terminate_process(runtime.pid)?;
             let _ = fs::remove_file(runtime_state_path(repo_root));

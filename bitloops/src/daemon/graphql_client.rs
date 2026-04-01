@@ -159,15 +159,8 @@ pub(super) fn choose_dashboard_launch_mode() -> Result<Option<DaemonMode>> {
     Ok(choice)
 }
 
-pub(super) async fn daemon_url() -> Result<Option<String>> {
-    let Some(state) = read_runtime_state(Path::new("."))? else {
-        return Ok(None);
-    };
-    if daemon_http_ready(&state).await {
-        Ok(Some(state.url))
-    } else {
-        Ok(None)
-    }
+pub(super) fn daemon_url() -> Result<Option<String>> {
+    Ok(read_runtime_state(Path::new("."))?.map(|state| state.url))
 }
 
 #[derive(Debug, Deserialize)]

@@ -219,27 +219,6 @@ pub(super) fn clickhouse_http_client() -> Result<&'static reqwest::Client> {
     }
 }
 
-pub(super) const DUCKDB_OPERATION_TIMEOUT_SECS: u64 = 30;
-
-async fn run_duckdb_blocking<T>(
-    db_path: PathBuf,
-    action: &'static str,
-    op: impl FnOnce() -> Result<T> + Send + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    let task = tokio::task::spawn_blocking(op);
-    match tokio::time::timeout(Duration::from_secs(DUCKDB_OPERATION_TIMEOUT_SECS), task).await {
-        Ok(joined) => joined.context(format!("joining DuckDB {action} task"))?,
-        Err(_) => Err(anyhow!(
-            "DuckDB {action} timed out after {}s at {}. Another Bitloops process may still be holding the database open.",
-            DUCKDB_OPERATION_TIMEOUT_SECS,
-            db_path.display()
-        )),
-    }
-}
-
 pub(super) async fn duckdb_exec_path(path: &Path, sql: &str) -> Result<()> {
     duckdb_exec_path_inner(path, sql, false).await
 }
@@ -255,33 +234,28 @@ pub(super) async fn duckdb_exec_path_inner(
 ) -> Result<()> {
     let db_path = path.to_path_buf();
     let statement = sql.to_string();
-    let timeout_path = db_path.clone();
-    run_duckdb_blocking(
-        timeout_path,
-        "statement execution",
-        move || -> Result<()> {
-            if allow_create {
-                if let Some(parent) = db_path.parent()
-                    && !parent.as_os_str().is_empty()
-                {
-                    std::fs::create_dir_all(parent).with_context(|| {
-                        format!("creating DuckDB directory {}", parent.display())
-                    })?;
-                }
-            } else if !db_path.is_file() {
-                bail!(
-                    "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
-                    db_path.display()
-                );
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        if allow_create {
+            if let Some(parent) = db_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
             }
-            let conn = duckdb::Connection::open(&db_path)
-                .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
-            conn.execute_batch(&statement)
-                .context("executing DuckDB statements")?;
-            Ok(())
-        },
-    )
+        } else if !db_path.is_file() {
+            bail!(
+                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
+        let conn = duckdb::Connection::open(&db_path)
+            .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
+        conn.execute_batch(&statement)
+            .context("executing DuckDB statements")?;
+        Ok(())
+    })
     .await
+    .context("joining DuckDB execute task")?
 }
 
 pub(super) async fn sqlite_exec_path(path: &Path, sql: &str) -> Result<()> {
@@ -381,43 +355,39 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
 pub(crate) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
     let db_path = path.to_path_buf();
     let query = sql.to_string();
-    let timeout_path = db_path.clone();
-    run_duckdb_blocking(
-        timeout_path,
-        "query execution",
-        move || -> Result<Vec<Value>> {
-            if !db_path.is_file() {
-                bail!(
-                    "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
-                    db_path.display()
-                );
-            }
-            let conn = duckdb::Connection::open(&db_path)
-                .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
-            let mut stmt = conn.prepare(&query).context("preparing DuckDB query")?;
-            let mut rows = stmt.query([]).context("executing DuckDB query")?;
-            let column_names = rows
-                .as_ref()
-                .map(|statement| statement.column_names())
-                .unwrap_or_default();
-            let mut out = Vec::new();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+        if !db_path.is_file() {
+            bail!(
+                "DuckDB database file not found at {}. Run `bitloops init` to create and initialise stores.",
+                db_path.display()
+            );
+        }
+        let conn = duckdb::Connection::open(&db_path)
+            .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
+        let mut stmt = conn.prepare(&query).context("preparing DuckDB query")?;
+        let mut rows = stmt.query([]).context("executing DuckDB query")?;
+        let column_names = rows
+            .as_ref()
+            .map(|statement| statement.column_names())
+            .unwrap_or_default();
+        let mut out = Vec::new();
 
-            while let Some(row) = rows.next().context("iterating DuckDB query rows")? {
-                let mut obj = serde_json::Map::new();
-                for (idx, column_name) in column_names.iter().enumerate() {
-                    let value_ref = row.get_ref(idx).with_context(|| {
-                        format!("reading DuckDB value for column index {idx} (`{column_name}`)")
-                    })?;
-                    let owned: duckdb::types::Value = value_ref.to_owned();
-                    obj.insert(column_name.clone(), duckdb_value_to_json(owned));
-                }
-                out.push(Value::Object(obj));
+        while let Some(row) = rows.next().context("iterating DuckDB query rows")? {
+            let mut obj = serde_json::Map::new();
+            for (idx, column_name) in column_names.iter().enumerate() {
+                let value_ref = row.get_ref(idx).with_context(|| {
+                    format!("reading DuckDB value for column index {idx} (`{column_name}`)")
+                })?;
+                let owned: duckdb::types::Value = value_ref.to_owned();
+                obj.insert(column_name.clone(), duckdb_value_to_json(owned));
             }
+            out.push(Value::Object(obj));
+        }
 
-            Ok(out)
-        },
-    )
+        Ok(out)
+    })
     .await
+    .context("joining DuckDB query task")?
 }
 
 pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec<Value>> {
