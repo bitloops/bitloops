@@ -9,7 +9,7 @@ on:
       - synchronize
     paths:
       - "**/*.rs"
-      - "documentation/docs/reference/rust-code-standards.md"
+      - "documentation/contributors/guides/rust-code-standards.md"
       - ".github/workflows/rust-standards-ai.yml"
       - ".github/scripts/rust-standards-ai-review.mjs"
 

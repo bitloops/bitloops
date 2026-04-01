@@ -10,8 +10,10 @@ How to get your code into Bitloops.
 ## Branch and Build
 
 ```bash
-# Create a branch from main
-git checkout -b your-feature main
+# Sync from develop, then create your branch
+git checkout develop
+git pull origin develop
+git checkout -b your-feature
 
 # Make your changes, then verify (from bitloops/)
 cd bitloops
@@ -26,9 +28,9 @@ Keep changes focused. One PR per concern — don't mix a bug fix with a refactor
 ## Submit a PR
 
 1. Push your branch to your fork
-2. Open a PR against `main`
+2. Open a PR against `develop`
 3. Fill in the PR template — describe what you changed and why
-4. CI will run automatically (builds across 6 platforms)
+4. CI will run automatically
 5. A maintainer will review your code
 
 ### PR Tips
@@ -53,12 +55,11 @@ agent adapter pattern in src/adapters/agents/.
 
 Releases are handled by maintainers. The flow is:
 
-1. PRs are merged to `main` with CI passing
-2. Version is bumped in `bitloops/Cargo.toml`
-3. `./scripts/release.sh` creates and pushes a release tag
-4. GitHub Actions builds binaries for all 6 platforms (macOS ARM64/x86, Linux, Windows ARM64/x86)
-5. Binaries are published to GitHub Releases
-6. Homebrew tap is updated
+1. Contributor PRs are reviewed and merged to `develop`
+2. Maintainers prepare releases from the integration branch
+3. Version is bumped in `bitloops/Cargo.toml`
+4. `./scripts/release.sh` creates and pushes a release tag
+5. GitHub Actions builds and publishes release artifacts
 
 You don't need to worry about releases — just get your PR merged and we'll handle the rest.
 

@@ -87,7 +87,7 @@ rg 'symbol_clone_edges' bitloops --glob '*.rs'
 
 - `host/devql/mod.rs` — `devql ingest` ends with **`invoke_ingester_with_relational`** for `semantic_clones.rebuild`; **`#[cfg(test)] pub(crate) use`** re-exports `rebuild_symbol_clone_edges` at `crate::host::devql` for **`devql::tests`**.
 
-**Interpretation:** Semantic clone **stages 1–3** persistence and rebuild orchestration live under **`capability_packs/semantic_clones`** (not `ingestion/`). Ingestion triggers the pack ingester; scoring/features/embeddings remain under **`capability_packs/semantic_clones/{scoring,features,embeddings}`**. Postgres bootstrap ensures semantic + clone tables early; pack migrations cover versioned SQLite host paths (see [core ↔ pack boundaries](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack)).
+**Interpretation:** Semantic clone **stages 1–3** persistence and rebuild orchestration live under **`capability_packs/semantic_clones`** (not `ingestion/`). Ingestion triggers the pack ingester; scoring/features/embeddings remain under **`capability_packs/semantic_clones/{scoring,features,embeddings}`**. Postgres bootstrap ensures semantic + clone tables early; pack migrations cover versioned SQLite host paths (see [core ↔ pack boundaries](../documentation/contributors/architecture/devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack)).
 
 ### 4.2 Test harness / `test_links` (thin in `ingestion/`)
 

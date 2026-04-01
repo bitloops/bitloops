@@ -590,11 +590,11 @@ Implement changes in this order.
 
 - wire new repository functions
 
-`docs/layered-extension-architecture.md`
+`documentation/contributors/architecture/layered-extension-architecture.md`
 
 - update architecture diagram and wording
 
-`docs/layered-extension-architecture-capability-packs.md`
+`documentation/contributors/architecture/capability-packs.md`
 
 - document split-domain storage
 

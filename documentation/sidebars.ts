@@ -49,7 +49,6 @@ const sidebars: SidebarsConfig = {
         'reference/uninstall',
         'reference/configuration',
         'reference/environment-variables',
-        'reference/rust-code-standards',
       ],
     },
     {
