@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Added
 
 - **Dashboard repository-list REST endpoint**: added `GET /api/repositories` on the legacy dashboard API so clients can list all repositories currently stored in the DevQL repository catalog. The endpoint is exposed through the existing `/api` router, included in the dashboard OpenAPI document, and covered by regression tests for both empty-catalog and multi-repository cases.
+- **Daemon structured logging and log inspection CLI**: added a dedicated daemon-owned `daemon.log` under the Bitloops state directory together with `bitloops daemon logs` for raw JSONL inspection via `--tail`, `--follow`, and `--path`. Daemon, supervisor, and daemon lifecycle CLI flows now emit structured start/stop/restart records with process and mode metadata, `bitloops daemon status` reports the log file path, and daemon log level now resolves from `BITLOOPS_LOG_LEVEL` first and daemon config `[logging].level` second.
 
 ### Changed
 
