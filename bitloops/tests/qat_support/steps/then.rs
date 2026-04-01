@@ -17,6 +17,165 @@ pub(super) fn then_bitloops_stores_exist(
     })
 }
 
+pub(super) fn then_version_output(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step("bitloops --version exits 0 and prints a semver version", helpers::assert_version_output(world));
+    })
+}
+
+pub(super) fn then_daemon_config_exists(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step("the global daemon config file exists", helpers::assert_daemon_config_exists(world));
+    })
+}
+
+pub(super) fn then_config_has_relational_store(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "the config contains a relational store path",
+            helpers::assert_config_has_relational_store(world),
+        );
+    })
+}
+
+pub(super) fn then_repo_local_bitloops_dir_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "the repo-local .bitloops directory exists",
+            helpers::assert_file_exists_in_repo(world, &repo_name, ".bitloops"),
+        );
+    })
+}
+
+pub(super) fn then_repo_local_path_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let relative_path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "the repo-local path exists",
+            helpers::assert_file_exists_in_repo(world, &repo_name, &relative_path),
+        );
+    })
+}
+
+pub(super) fn then_agent_hooks_exist(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "git hooks exist for the agent",
+            helpers::assert_agent_hooks_installed(world, &repo_name, &agent_name),
+        );
+    })
+}
+
+pub(super) fn then_status_shows_disabled(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "bitloops status shows disabled",
+            helpers::assert_status_shows_disabled(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_ingest_reports_zero_checkpoints(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "DevQL ingest reports checkpoints_processed=0",
+            helpers::assert_ingest_metric_value(world, "bitloops", "checkpoints_processed", 0),
+        );
+    })
+}
+
+pub(super) fn then_daemon_stop_exits_zero(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "bitloops daemon stop exits 0",
+            helpers::assert_daemon_stop_exits_zero(world),
+        );
+    })
+}
+
+pub(super) fn then_commit_checkpoints_count(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let min_count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("commit_checkpoints count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "commit_checkpoints count is at least",
+            helpers::assert_commit_checkpoints_count(world, &repo_name, min_count),
+        );
+    })
+}
+
+pub(super) fn then_coverage_captures_count(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let min_count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("coverage_captures count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "coverage_captures count is at least",
+            helpers::assert_coverage_captures_count(world, &repo_name, min_count),
+        );
+    })
+}
+
+pub(super) fn then_coverage_hits_count(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let min_count = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("coverage_hits count should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "coverage_hits count is at least",
+            helpers::assert_coverage_hits_count(world, &repo_name, min_count),
+        );
+    })
+}
+
 pub(super) fn then_commit_timeline_is_correct(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

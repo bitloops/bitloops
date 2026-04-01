@@ -95,6 +95,34 @@ pub(super) fn given_init_bitloops(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agent(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I run bitloops init --agent",
+            helpers::run_init_bitloops_with_agent(world, &repo_name, &agent_name, false),
+        );
+    })
+}
+
+pub(super) fn given_init_bitloops_with_agent_force(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I run bitloops init --agent --force",
+            helpers::run_init_bitloops_with_agent(world, &repo_name, &agent_name, true),
+        );
+    })
+}
+
 pub(super) fn given_enable_cli(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -104,6 +132,71 @@ pub(super) fn given_enable_cli(
         run_step(
             "I run EnableCLI",
             helpers::run_enable_cli_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_enable(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run bitloops enable",
+            helpers::run_bitloops_enable_with_flags(world, &repo_name, &[]),
+        );
+    })
+}
+
+pub(super) fn given_enable_project(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run bitloops enable --project",
+            helpers::run_bitloops_enable_with_flags(world, &repo_name, &["--project"]),
+        );
+    })
+}
+
+pub(super) fn given_disable(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run bitloops disable",
+            helpers::run_bitloops_disable(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_simulate_codex_checkpoint(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I simulate a codex checkpoint",
+            helpers::simulate_codex_checkpoint(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_simulate_claude_checkpoint(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I simulate a claude checkpoint",
+            helpers::simulate_codex_checkpoint(world, &repo_name),
         );
     })
 }
@@ -252,6 +345,19 @@ pub(super) fn given_create_ts_test_project(
     })
 }
 
+pub(super) fn given_create_rust_project_with_tests(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a Rust project with tests",
+            helpers::create_rust_project_with_tests(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_testlens_ingest_tests(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -273,6 +379,32 @@ pub(super) fn given_testlens_ingest_coverage(
         let repo_name = ctx.matches[1].1.clone();
         run_step(
             "I run TestLens ingest-coverage",
+            helpers::run_testlens_ingest_coverage(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_testlens_ingest_tests_at_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run TestLens ingest-tests at HEAD",
+            helpers::run_testlens_ingest_tests(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_testlens_ingest_coverage_at_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run TestLens ingest-coverage at HEAD",
             helpers::run_testlens_ingest_coverage(world, &repo_name),
         );
     })

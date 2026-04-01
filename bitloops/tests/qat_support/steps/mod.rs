@@ -48,6 +48,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init --agent (\S+) in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops init --agent (\S+) --force in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent_force),
+        )
+        .given(
+            None,
             regex(r"^I run EnableCLI for (\S+)$"),
             step_fn(given_enable_cli),
         )
@@ -55,6 +65,31 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run EnableCLIs for (\S+)$"),
             step_fn(given_enable_cli),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops enable in (\S+)$"),
+            step_fn(given_enable),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops enable --project in (\S+)$"),
+            step_fn(given_enable_project),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops disable in (\S+)$"),
+            step_fn(given_disable),
+        )
+        .given(
+            None,
+            regex(r"^I simulate a codex checkpoint in (\S+)$"),
+            step_fn(given_simulate_codex_checkpoint),
+        )
+        .given(
+            None,
+            regex(r"^I simulate a claude checkpoint in (\S+)$"),
+            step_fn(given_simulate_claude_checkpoint),
         )
         .given(
             None,
@@ -108,6 +143,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a Rust project with tests in (\S+)$"),
+            step_fn(given_create_rust_project_with_tests),
+        )
+        .given(
+            None,
             regex(r"^I run TestLens ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
@@ -115,6 +155,16 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run TestLens ingest-coverage for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_coverage),
+        )
+        .given(
+            None,
+            regex(r"^I run TestLens ingest-tests at HEAD in (\S+)$"),
+            step_fn(given_testlens_ingest_tests_at_head),
+        )
+        .given(
+            None,
+            regex(r"^I run TestLens ingest-coverage at HEAD in (\S+)$"),
+            step_fn(given_testlens_ingest_coverage_at_head),
         )
         .given(
             None,
@@ -160,6 +210,71 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^bitloops stores exist in (\S+)$"),
             step_fn(then_bitloops_stores_exist),
+        )
+        .then(
+            None,
+            regex(r"^bitloops --version exits 0 and prints a semver version$"),
+            step_fn(then_version_output),
+        )
+        .then(
+            None,
+            regex(r"^the global daemon config file exists$"),
+            step_fn(then_daemon_config_exists),
+        )
+        .then(
+            None,
+            regex(r"^the config contains a relational store path$"),
+            step_fn(then_config_has_relational_store),
+        )
+        .then(
+            None,
+            regex(r"^the repo-local \.bitloops directory exists in (\S+)$"),
+            step_fn(then_repo_local_bitloops_dir_exists),
+        )
+        .then(
+            None,
+            regex(r#"^the repo-local path \"([^\"]+)\" exists in (\S+)$"#),
+            step_fn(then_repo_local_path_exists),
+        )
+        .then(
+            None,
+            regex(r"^the repo-local (.+) exists in (\S+)$"),
+            step_fn(then_repo_local_path_exists),
+        )
+        .then(
+            None,
+            regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
+            step_fn(then_agent_hooks_exist),
+        )
+        .then(
+            None,
+            regex(r"^bitloops status shows disabled in (\S+)$"),
+            step_fn(then_status_shows_disabled),
+        )
+        .then(
+            None,
+            regex(r"^DevQL ingest reports checkpoints_processed=0$"),
+            step_fn(then_ingest_reports_zero_checkpoints),
+        )
+        .then(
+            None,
+            regex(r"^bitloops daemon stop exits 0$"),
+            step_fn(then_daemon_stop_exits_zero),
+        )
+        .then(
+            None,
+            regex(r"^commit_checkpoints count is at least (\d+) in (\S+)$"),
+            step_fn(then_commit_checkpoints_count),
+        )
+        .then(
+            None,
+            regex(r"^coverage_captures count is at least (\d+) in (\S+)$"),
+            step_fn(then_coverage_captures_count),
+        )
+        .then(
+            None,
+            regex(r"^coverage_hits count is at least (\d+) in (\S+)$"),
+            step_fn(then_coverage_hits_count),
         )
         .then(
             None,

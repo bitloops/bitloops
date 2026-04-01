@@ -27,6 +27,7 @@ pub struct QatWorld {
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
+    pub agent_name: Option<String>,
 }
 
 impl QatWorld {
@@ -45,6 +46,7 @@ impl QatWorld {
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
         self.last_knowledge_add_had_commit_association = None;
+        self.agent_name = None;
     }
 
     pub fn prepare(

@@ -48,6 +48,33 @@ pub fn create_ts_project_with_known_deps(repo_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn create_rust_project_with_tests(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let repo_dir = world.repo_dir();
+    fs::create_dir_all(repo_dir.join("src"))
+        .with_context(|| format!("creating {}", repo_dir.join("src").display()))?;
+    fs::create_dir_all(repo_dir.join("coverage"))
+        .with_context(|| format!("creating {}", repo_dir.join("coverage").display()))?;
+
+    fs::write(
+        repo_dir.join("Cargo.toml"),
+        "[package]\nname = \"qat-sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .context("writing Cargo.toml")?;
+    fs::write(repo_dir.join(".gitignore"), "target/\n").context("writing .gitignore")?;
+    fs::write(
+        repo_dir.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\npub fn multiply(a: i32, b: i32) -> i32 {\n    a * b\n}\n\npub fn greet(name: &str) -> String {\n    format!(\"Hello, {}!\", name)\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn test_add() {\n        assert_eq!(add(2, 3), 5);\n    }\n\n    #[test]\n    fn test_multiply() {\n        assert_eq!(multiply(3, 4), 12);\n    }\n\n    #[test]\n    fn test_greet() {\n        assert_eq!(greet(\"World\"), \"Hello, World!\");\n    }\n}\n",
+    )
+    .context("writing src/lib.rs")?;
+    fs::write(
+        repo_dir.join("coverage/lcov.info"),
+        "TN:\nSF:src/lib.rs\nFN:1,add\nFNDA:1,add\nFN:5,multiply\nFNDA:1,multiply\nFN:9,greet\nFNDA:1,greet\nDA:2,1\nDA:6,1\nDA:10,1\nLF:3\nLH:3\nend_of_record\n",
+    )
+    .context("writing coverage/lcov.info")?;
+    Ok(())
+}
+
 pub fn add_new_caller_of_symbol(world: &mut QatWorld, symbol_alias: &str) -> Result<()> {
     let parts: Vec<&str> = symbol_alias.split('.').collect();
     let (service_name, method_name) = match parts.as_slice() {
@@ -228,6 +255,11 @@ pub fn run_testlens_ingest_tests(world: &mut QatWorld, repo_name: &str) -> Resul
 pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let sha = resolve_head_sha(world)?;
+    let tool = if world.repo_dir().join("Cargo.toml").exists() {
+        "cargo-test"
+    } else {
+        "jest"
+    };
     run_bitloops_success(
         world,
         &[
@@ -240,10 +272,58 @@ pub fn run_testlens_ingest_coverage(world: &mut QatWorld, repo_name: &str) -> Re
             "--scope",
             "workspace",
             "--tool",
-            "jest",
+            tool,
         ],
         "bitloops testlens ingest-coverage",
     )
+}
+
+pub fn assert_commit_checkpoints_count(
+    world: &QatWorld,
+    repo_name: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let mappings = read_commit_checkpoint_mappings(world.repo_dir())
+        .context("reading commit-checkpoint mappings")?;
+    ensure!(
+        mappings.len() >= min_count,
+        "expected commit_checkpoints count >= {min_count}, got {}",
+        mappings.len()
+    );
+    Ok(())
+}
+
+pub fn assert_coverage_captures_count(
+    world: &QatWorld,
+    repo_name: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let sqlite_path = resolve_qat_relational_db_path(world)?;
+    let conn = rusqlite::Connection::open(&sqlite_path)
+        .with_context(|| format!("opening {}", sqlite_path.display()))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM coverage_captures", [], |row| {
+        row.get(0)
+    })?;
+    ensure!(
+        (count as usize) >= min_count,
+        "expected coverage_captures count >= {min_count}, got {count}"
+    );
+    Ok(())
+}
+
+pub fn assert_coverage_hits_count(world: &QatWorld, repo_name: &str, min_count: usize) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let sqlite_path = resolve_qat_relational_db_path(world)?;
+    let conn = rusqlite::Connection::open(&sqlite_path)
+        .with_context(|| format!("opening {}", sqlite_path.display()))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM coverage_hits", [], |row| row.get(0))?;
+    ensure!(
+        (count as usize) >= min_count,
+        "expected coverage_hits count >= {min_count}, got {count}"
+    );
+    Ok(())
 }
 
 pub fn run_testlens_ingest_results(
@@ -275,25 +355,46 @@ pub fn run_testlens_query(
 ) -> Result<serde_json::Value> {
     ensure_bitloops_repo_name(repo_name)?;
     let query = match view {
-        "summary" | "tests" => {
-            r#"repo("bitloops")->artefacts(kind:"method")->tests()->limit(200)"#.to_string()
-        }
-        "coverage" => {
-            r#"repo("bitloops")->artefacts(kind:"method")->coverage()->limit(200)"#.to_string()
-        }
+        "summary" | "tests" => r#"repo("bitloops")->artefacts()->tests()->limit(200)"#.to_string(),
+        "coverage" => r#"repo("bitloops")->artefacts()->coverage()->limit(200)"#.to_string(),
         _ => bail!("unsupported testlens view `{view}`"),
     };
     let value = run_devql_query(world, &query)?;
     let rows = value
         .as_array()
         .ok_or_else(|| anyhow!("expected testlens DevQL query to return a JSON array"))?;
-    let row = rows.iter().find(|row| {
+    let symbol_row = rows.iter().find(|row| {
         row.get("symbolFqn")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|candidate| {
                 candidate == artefact || candidate.ends_with(&format!("::{artefact}"))
             })
     });
+    let by_covering_test_name = rows.iter().find(|row| {
+        row.get("tests")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry
+                        .get("coveringTests")
+                        .or_else(|| entry.get("covering_tests"))
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|tests| {
+                            tests.iter().any(|test| {
+                                test.get("testName")
+                                    .or_else(|| test.get("test_name"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|name| name == artefact)
+                            })
+                        })
+                })
+            })
+    });
+    let row = if matches!(view, "summary" | "tests") {
+        by_covering_test_name.or(symbol_row)
+    } else {
+        symbol_row
+    };
 
     let payload = match (view, row) {
         ("summary", Some(row)) => {
@@ -414,6 +515,35 @@ pub fn run_testlens_query(
     world.last_command_stdout =
         Some(serde_json::to_string(&payload).context("serializing normalized testlens payload")?);
     Ok(payload)
+}
+
+fn resolve_qat_relational_db_path(world: &QatWorld) -> Result<std::path::PathBuf> {
+    let home = world.run_dir().join("home");
+    let macos = home
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    if macos.exists() {
+        return Ok(macos);
+    }
+
+    let xdg = home
+        .join("xdg")
+        .join("bitloops")
+        .join("stores")
+        .join("relational")
+        .join("relational.db");
+    if xdg.exists() {
+        return Ok(xdg);
+    }
+
+    let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
+        .context("resolving store config for coverage assertion fallback")?;
+    resolve_sqlite_db_path_for_repo(world.repo_dir(), cfg.relational.sqlite_path.as_deref())
+        .context("resolving sqlite path for coverage assertion fallback")
 }
 
 pub fn assert_testlens_query_returns_results(

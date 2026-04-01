@@ -44,3 +44,12 @@ async fn qat_claude_code() {
         .await
         .expect("QAT Claude Code suite failed");
 }
+
+#[tokio::test]
+#[ignore = "slow E2E: runs QAT onboarding suite; use `cargo test --test qat_acceptance qat_onboarding -- --ignored`"]
+async fn qat_onboarding() {
+    let binary = resolve_binary();
+    runner::run_suite(binary, Suite::Onboarding)
+        .await
+        .expect("QAT onboarding suite failed");
+}
