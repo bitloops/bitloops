@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::language_adapter::{LanguageKind, TsJsKind};
 
 #[test]
 fn extract_js_ts_functions_detects_basic_function() {
@@ -66,7 +67,10 @@ export function greet(name: string) {
 
     let class = artefacts
         .iter()
-        .find(|a| a.language_kind == "class_declaration" && a.name == "Service")
+        .find(|a| {
+            a.language_kind == LanguageKind::ts_js(TsJsKind::ClassDeclaration)
+                && a.name == "Service"
+        })
         .expect("expected class artefact");
     assert_eq!(class.canonical_kind, None);
 
@@ -108,7 +112,9 @@ function boot() {
 
     let constructor = artefacts
         .iter()
-        .find(|a| a.language_kind == "constructor" && a.name == "constructor")
+        .find(|a| {
+            a.language_kind == LanguageKind::ts_js(TsJsKind::Constructor) && a.name == "constructor"
+        })
         .expect("expected constructor artefact");
     assert_eq!(constructor.canonical_kind, None);
     assert_eq!(
@@ -116,26 +122,18 @@ function boot() {
         Some("src/sample.ts::Service")
     );
 
-    assert!(
-        artefacts
-            .iter()
-            .any(|a| a.language_kind == "variable_declarator" && a.name == "cacheKey")
-    );
-    assert!(
-        artefacts
-            .iter()
-            .any(|a| a.language_kind == "variable_declarator" && a.name == "API_URL")
-    );
-    assert!(
-        !artefacts
-            .iter()
-            .any(|a| a.language_kind == "variable_declarator" && a.name == "localOnly")
-    );
-    assert!(
-        !artefacts
-            .iter()
-            .any(|a| a.language_kind == "variable_declarator" && a.name == "nestedOnly")
-    );
+    assert!(artefacts.iter().any(|a| a.language_kind
+        == LanguageKind::ts_js(TsJsKind::VariableDeclarator)
+        && a.name == "cacheKey"));
+    assert!(artefacts.iter().any(|a| a.language_kind
+        == LanguageKind::ts_js(TsJsKind::VariableDeclarator)
+        && a.name == "API_URL"));
+    assert!(!artefacts.iter().any(|a| a.language_kind
+        == LanguageKind::ts_js(TsJsKind::VariableDeclarator)
+        && a.name == "localOnly"));
+    assert!(!artefacts.iter().any(|a| a.language_kind
+        == LanguageKind::ts_js(TsJsKind::VariableDeclarator)
+        && a.name == "nestedOnly"));
 }
 
 #[test]
@@ -169,7 +167,8 @@ export const FLAG = "demo";
     let class = artefacts
         .iter()
         .find(|artefact| {
-            artefact.language_kind == "class_declaration" && artefact.name == "Service"
+            artefact.language_kind == LanguageKind::ts_js(TsJsKind::ClassDeclaration)
+                && artefact.name == "Service"
         })
         .expect("expected class artefact");
     assert!(class.modifiers.is_empty());
@@ -178,7 +177,8 @@ export const FLAG = "demo";
     let field = artefacts
         .iter()
         .find(|artefact| {
-            artefact.language_kind == "public_field_definition" && artefact.name == "value"
+            artefact.language_kind == LanguageKind::ts_js(TsJsKind::PublicFieldDefinition)
+                && artefact.name == "value"
         })
         .expect("expected field artefact");
     assert_eq!(
@@ -193,7 +193,10 @@ export const FLAG = "demo";
 
     let method = artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "method_definition" && artefact.name == "run")
+        .find(|artefact| {
+            artefact.language_kind == LanguageKind::ts_js(TsJsKind::MethodDefinition)
+                && artefact.name == "run"
+        })
         .expect("expected method artefact");
     assert_eq!(
         method.modifiers,
@@ -207,7 +210,10 @@ export const FLAG = "demo";
 
     let variable = artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "variable_declarator" && artefact.name == "FLAG")
+        .find(|artefact| {
+            artefact.language_kind == LanguageKind::ts_js(TsJsKind::VariableDeclarator)
+                && artefact.name == "FLAG"
+        })
         .expect("expected variable artefact");
     assert_eq!(variable.modifiers, vec!["export".to_string()]);
     assert_eq!(variable.docstring.as_deref(), Some("variable summary"));
@@ -228,7 +234,8 @@ export async function greet(name: string) {
     let function = artefacts
         .iter()
         .find(|artefact| {
-            artefact.language_kind == "function_declaration" && artefact.name == "greet"
+            artefact.language_kind == LanguageKind::ts_js(TsJsKind::FunctionDeclaration)
+                && artefact.name == "greet"
         })
         .expect("expected function artefact");
 

@@ -155,6 +155,7 @@ To control the daemon directly:
 bitloops start
 bitloops daemon stop
 bitloops status
+bitloops daemon logs
 bitloops checkpoints status
 ```
 

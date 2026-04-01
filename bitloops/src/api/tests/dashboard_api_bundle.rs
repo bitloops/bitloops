@@ -254,13 +254,15 @@ async fn api_repositories_lists_all_known_repositories() {
 #[tokio::test]
 async fn api_checkpoint_returns_detailed_session_payload() {
     let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
     let app = build_dashboard_router(test_state(
         repo.path().to_path_buf(),
         ServeMode::HelloWorld,
         repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json(app, "/api/checkpoints/aabbccddeeff").await;
+    let checkpoint_path = format!("/api/checkpoints/{repo_id}/aabbccddeeff");
+    let (status, payload) = request_json(app, &checkpoint_path).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["checkpoint_id"], "aabbccddeeff");
     assert_eq!(payload["session_count"].as_u64(), Some(1));
@@ -333,13 +335,15 @@ async fn api_users_returns_name_and_email_from_graphql_wrapper() {
 #[tokio::test]
 async fn api_checkpoint_validates_checkpoint_id() {
     let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
     let app = build_dashboard_router(test_state(
         repo.path().to_path_buf(),
         ServeMode::HelloWorld,
         repo.path().to_path_buf(),
     ));
 
-    let (status, payload) = request_json(app, "/api/checkpoints/not-an-id").await;
+    let checkpoint_path = format!("/api/checkpoints/{repo_id}/not-an-id");
+    let (status, payload) = request_json(app, &checkpoint_path).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(payload["error"]["code"], "bad_request");
     assert_eq!(
@@ -368,7 +372,7 @@ async fn api_openapi_json_lists_dashboard_paths() {
     assert!(payload["paths"].get("/api/db/health").is_some());
     assert!(
         payload["paths"]
-            .get("/api/checkpoints/{checkpoint_id}")
+            .get("/api/checkpoints/{repo_id}/{checkpoint_id}")
             .is_some()
     );
     assert!(payload["paths"].get("/api/check_bundle_version").is_some());

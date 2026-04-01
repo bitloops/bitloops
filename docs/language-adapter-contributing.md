@@ -11,8 +11,8 @@ The runtime contract lives in:
 A new pack must implement:
 
 - `descriptor()` -> returns a `LanguagePackDescriptor`
-- `canonical_mappings()` -> mapping table from parser kinds to canonical projections
-- `supported_language_kinds()` -> complete supported parser-kind set
+- `canonical_mappings()` -> mapping table from typed `LanguageKind` variants to canonical projections
+- `supported_language_kinds()` -> complete supported typed `LanguageKind` set
 - `extract_artefacts(content, path)` -> language symbol extraction
 - `extract_dependency_edges(content, path, artefacts)` -> dependency graph extraction
 
@@ -37,6 +37,8 @@ Rules:
 - Every `CanonicalMapping.language_kind` must appear in `supported_language_kinds()`.
 - `MappingCondition::WhenInsideParent` overrides `Always` when `inside_parent == true`.
 - Some language kinds may intentionally have no canonical projection (language-specific-only artefacts).
+- Adapter internals should use typed `LanguageKind` values rather than raw string literals.
+- Convert `LanguageKind` to strings only at persistence or public API boundaries via `as_str()`.
 
 Projections are defined in:
 
@@ -53,6 +55,7 @@ Key expectations:
 - `LanguageArtefact.symbol_fqn` must be stable and unique per symbol within file scope.
 - `parent_symbol_fqn` should be set for nested symbols (methods, members, etc).
 - `canonical_kind` should be populated by extractor mapping when a canonical projection exists.
+- `language_kind` is a typed `LanguageKind`, not a raw parser string.
 - `DependencyEdge` must include accurate `edge_kind`, source symbol, and either target symbol fqn or unresolved reference.
 - `metadata` should preserve edge-resolution and form details (`import`, `call`, `export`, `ref` forms).
 
@@ -72,12 +75,13 @@ Update registry factory:
 
 Actions:
 
-1. Define `PYTHON_CANONICAL_MAPPINGS` and `PYTHON_SUPPORTED_LANGUAGE_KINDS` in `python/canonical.rs`.
-2. Implement symbol extraction in `python/extraction.rs` returning `Vec<LanguageArtefact>`.
-3. Implement dependency extraction in `python/edges.rs` returning `Vec<DependencyEdge>`.
-4. Implement `PythonLanguageAdapterPack` in `python/pack.rs`.
-5. Expose module root in `python.rs`.
-6. Register pack in `builtin_language_adapter_packs()` in `languages.rs`.
+1. Define `PythonKind` variants in `bitloops/src/host/language_adapter/kinds.rs`.
+2. Define `PYTHON_CANONICAL_MAPPINGS` and `PYTHON_SUPPORTED_LANGUAGE_KINDS` in `python/canonical.rs` using typed `LanguageKind::python(...)` values.
+3. Implement symbol extraction in `python/extraction.rs` returning `Vec<LanguageArtefact>` with typed `language_kind` values.
+4. Implement dependency extraction in `python/edges.rs` returning `Vec<DependencyEdge>`.
+5. Implement `PythonLanguageAdapterPack` in `python/pack.rs`.
+6. Expose module root in `python.rs`.
+7. Register pack in `builtin_language_adapter_packs()` in `languages.rs`.
 
 No DevQL dispatch changes should be required.
 
@@ -89,6 +93,7 @@ Required checks:
 2. Artefact extraction tests for representative constructs and edge cases.
 3. Dependency edge tests for imports/exports/calls/references and dedup/order behavior.
 4. Registry integration test (`LanguageAdapterRegistry`) for pack registration and execution.
+5. String round-trip tests for any new language-specific `LanguageKind` variants.
 
 Recommended targeted commands:
 

@@ -212,7 +212,10 @@ fn build_dashboard_api_router() -> Router<DashboardState> {
         .route("/users", get(handle_api_users))
         .route("/agents", get(handle_api_agents))
         .route("/db/health", get(handle_api_db_health))
-        .route("/checkpoints/{checkpoint_id}", get(handle_api_checkpoint))
+        .route(
+            "/checkpoints/{repo_id}/{checkpoint_id}",
+            get(handle_api_checkpoint),
+        )
         .route(
             "/check_bundle_version",
             get(handle_api_check_bundle_version),

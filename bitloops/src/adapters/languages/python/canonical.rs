@@ -1,49 +1,49 @@
 use crate::host::devql::CanonicalKindProjection;
-use crate::host::language_adapter::{CanonicalMapping, MappingCondition};
+use crate::host::language_adapter::{CanonicalMapping, LanguageKind, MappingCondition, PythonKind};
 
 pub(crate) static PYTHON_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {
-        language_kind: "function_definition",
+        language_kind: LanguageKind::python(PythonKind::FunctionDefinition),
         projection: CanonicalKindProjection::Function,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "function_definition",
+        language_kind: LanguageKind::python(PythonKind::FunctionDefinition),
         projection: CanonicalKindProjection::Method,
         condition: MappingCondition::WhenInsideParent,
     },
     CanonicalMapping {
-        language_kind: "class_definition",
+        language_kind: LanguageKind::python(PythonKind::ClassDefinition),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "import_statement",
+        language_kind: LanguageKind::python(PythonKind::ImportStatement),
         projection: CanonicalKindProjection::Import,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "import_from_statement",
+        language_kind: LanguageKind::python(PythonKind::ImportFromStatement),
         projection: CanonicalKindProjection::Import,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "future_import_statement",
+        language_kind: LanguageKind::python(PythonKind::FutureImportStatement),
         projection: CanonicalKindProjection::Import,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "assignment",
+        language_kind: LanguageKind::python(PythonKind::Assignment),
         projection: CanonicalKindProjection::Variable,
         condition: MappingCondition::Always,
     },
 ];
 
-pub(crate) static PYTHON_SUPPORTED_LANGUAGE_KINDS: &[&str] = &[
-    "function_definition",
-    "class_definition",
-    "import_statement",
-    "import_from_statement",
-    "future_import_statement",
-    "assignment",
+pub(crate) static PYTHON_SUPPORTED_LANGUAGE_KINDS: &[LanguageKind] = &[
+    LanguageKind::python(PythonKind::FunctionDefinition),
+    LanguageKind::python(PythonKind::ClassDefinition),
+    LanguageKind::python(PythonKind::ImportStatement),
+    LanguageKind::python(PythonKind::ImportFromStatement),
+    LanguageKind::python(PythonKind::FutureImportStatement),
+    LanguageKind::python(PythonKind::Assignment),
 ];

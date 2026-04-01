@@ -234,7 +234,7 @@ impl DevqlBddWorld {
     ) {
         assert!(
             self.artefacts.iter().any(|artefact| {
-                artefact.language_kind == language_kind
+                artefact.language_kind.as_str() == language_kind
                     && artefact.canonical_kind.as_deref() == canonical_kind
                     && artefact.name == name
             }),

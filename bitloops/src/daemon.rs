@@ -32,6 +32,8 @@ mod enrichment;
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
+#[path = "daemon/logger.rs"]
+mod logger;
 #[path = "daemon/process.rs"]
 mod process;
 #[path = "daemon/server_runtime.rs"]
@@ -56,6 +58,7 @@ mod tests;
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
+pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::types::{
     DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
     DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
