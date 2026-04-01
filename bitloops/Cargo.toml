@@ -60,6 +60,7 @@ x509-parser = "0.18.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
+libc = "0.2"
 
 [dev-dependencies]
 cucumber = "0.22.1"
