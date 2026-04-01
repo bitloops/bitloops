@@ -191,6 +191,67 @@ async fn api_validates_missing_required_branch() {
 }
 
 #[tokio::test]
+async fn api_repositories_returns_empty_list_when_catalog_is_empty() {
+    let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute("DELETE FROM repositories", [])
+        .expect("clear repository catalog");
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json(app, "/api/repositories").await;
+    assert_eq!(status, StatusCode::OK);
+    let repositories = payload.as_array().expect("repositories array");
+    assert!(repositories.is_empty());
+}
+
+#[tokio::test]
+async fn api_repositories_lists_all_known_repositories() {
+    let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES
+            (?1, 'github', 'acme', 'alpha', 'main'),
+            (?2, 'github', 'acme', 'beta', 'develop')
+         ON CONFLICT(repo_id) DO UPDATE SET
+            provider = excluded.provider,
+            organization = excluded.organization,
+            name = excluded.name,
+            default_branch = excluded.default_branch",
+        rusqlite::params![
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+    )
+    .expect("seed repository catalog rows");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json(app, "/api/repositories").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let repositories = payload.as_array().expect("repositories array");
+    assert_eq!(repositories.len(), 3);
+    assert_eq!(
+        repositories
+            .iter()
+            .map(|repo| repo["name"].as_str().expect("repository name"))
+            .collect::<Vec<_>>(),
+        vec!["alpha", "beta", SEEDED_REPO_NAME]
+    );
+}
+
+#[tokio::test]
 async fn api_checkpoint_returns_detailed_session_payload() {
     let repo = seed_dashboard_repo();
     let app = build_dashboard_router(test_state(
@@ -301,6 +362,7 @@ async fn api_openapi_json_lists_dashboard_paths() {
     assert!(payload["paths"].get("/api/kpis").is_some());
     assert!(payload["paths"].get("/api/commits").is_some());
     assert!(payload["paths"].get("/api/branches").is_some());
+    assert!(payload["paths"].get("/api/repositories").is_some());
     assert!(payload["paths"].get("/api/users").is_some());
     assert!(payload["paths"].get("/api/agents").is_some());
     assert!(payload["paths"].get("/api/db/health").is_some());
