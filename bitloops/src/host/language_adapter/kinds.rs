@@ -1,86 +1,62 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum LanguageKind {
-    Assignment,
-    ClassDeclaration,
-    ClassDefinition,
-    ConstItem,
-    ConstSpec,
-    Constructor,
-    EnumDeclaration,
-    EnumItem,
-    FunctionDeclaration,
-    FunctionDefinition,
-    FunctionItem,
-    FutureImportStatement,
-    ImplItem,
-    ImportFromStatement,
-    ImportSpec,
-    ImportStatement,
-    InterfaceDeclaration,
-    InterfaceType,
-    InternalModule,
-    LetDeclaration,
-    MacroDefinition,
-    MethodDeclaration,
-    MethodDefinition,
-    ModItem,
-    ModuleDeclaration,
-    PropertyDeclaration,
-    PublicFieldDefinition,
-    StaticItem,
-    StructItem,
-    StructType,
-    TraitItem,
-    TypeAlias,
-    TypeAliasDeclaration,
-    TypeItem,
-    TypeSpec,
-    UseDeclaration,
-    VarSpec,
-    VariableDeclarator,
+macro_rules! define_language_kinds {
+    ($name:ident { $($kind:ident => $value:literal,)* }) => {
+        pub(crate) struct $name;
+
+        #[allow(non_upper_case_globals)]
+        impl $name {
+            $(pub(crate) const $kind: &'static str = $value;)*
+        }
+    };
 }
 
-impl LanguageKind {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Assignment => "assignment",
-            Self::ClassDeclaration => "class_declaration",
-            Self::ClassDefinition => "class_definition",
-            Self::ConstItem => "const_item",
-            Self::ConstSpec => "const_spec",
-            Self::Constructor => "constructor",
-            Self::EnumDeclaration => "enum_declaration",
-            Self::EnumItem => "enum_item",
-            Self::FunctionDeclaration => "function_declaration",
-            Self::FunctionDefinition => "function_definition",
-            Self::FunctionItem => "function_item",
-            Self::FutureImportStatement => "future_import_statement",
-            Self::ImplItem => "impl_item",
-            Self::ImportFromStatement => "import_from_statement",
-            Self::ImportSpec => "import_spec",
-            Self::ImportStatement => "import_statement",
-            Self::InterfaceDeclaration => "interface_declaration",
-            Self::InterfaceType => "interface_type",
-            Self::InternalModule => "internal_module",
-            Self::LetDeclaration => "let_declaration",
-            Self::MacroDefinition => "macro_definition",
-            Self::MethodDeclaration => "method_declaration",
-            Self::MethodDefinition => "method_definition",
-            Self::ModItem => "mod_item",
-            Self::ModuleDeclaration => "module_declaration",
-            Self::PropertyDeclaration => "property_declaration",
-            Self::PublicFieldDefinition => "public_field_definition",
-            Self::StaticItem => "static_item",
-            Self::StructItem => "struct_item",
-            Self::StructType => "struct_type",
-            Self::TraitItem => "trait_item",
-            Self::TypeAlias => "type_alias",
-            Self::TypeAliasDeclaration => "type_alias_declaration",
-            Self::TypeItem => "type_item",
-            Self::TypeSpec => "type_spec",
-            Self::UseDeclaration => "use_declaration",
-            Self::VarSpec => "var_spec",
-            Self::VariableDeclarator => "variable_declarator",
-        }
-    }
-}
+define_language_kinds!(GolangKinds {
+    FunctionDeclaration => "function_declaration",
+    MethodDeclaration => "method_declaration",
+    TypeSpec => "type_spec",
+    TypeAlias => "type_alias",
+    StructType => "struct_type",
+    InterfaceType => "interface_type",
+    ImportSpec => "import_spec",
+    VarSpec => "var_spec",
+    ConstSpec => "const_spec",
+});
+
+define_language_kinds!(TsJsKinds {
+    ClassDeclaration => "class_declaration",
+    Constructor => "constructor",
+    EnumDeclaration => "enum_declaration",
+    FunctionDeclaration => "function_declaration",
+    ImportStatement => "import_statement",
+    InterfaceDeclaration => "interface_declaration",
+    InternalModule => "internal_module",
+    MethodDefinition => "method_definition",
+    ModuleDeclaration => "module_declaration",
+    PropertyDeclaration => "property_declaration",
+    PublicFieldDefinition => "public_field_definition",
+    TypeAliasDeclaration => "type_alias_declaration",
+    VariableDeclarator => "variable_declarator",
+});
+
+define_language_kinds!(RustKinds {
+    ConstItem => "const_item",
+    EnumItem => "enum_item",
+    FunctionItem => "function_item",
+    ImplItem => "impl_item",
+    LetDeclaration => "let_declaration",
+    MacroDefinition => "macro_definition",
+    ModItem => "mod_item",
+    StaticItem => "static_item",
+    StructItem => "struct_item",
+    TraitItem => "trait_item",
+    TypeItem => "type_item",
+    UseDeclaration => "use_declaration",
+});
+
+define_language_kinds!(PythonKinds {
+    Assignment => "assignment",
+    ClassDefinition => "class_definition",
+    ImportFromStatement => "import_from_statement",
+    FunctionDefinition => "function_definition",
+    FutureImportStatement => "future_import_statement",
+    ImportStatement => "import_statement",
+});
