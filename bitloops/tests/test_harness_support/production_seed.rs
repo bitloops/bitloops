@@ -577,9 +577,8 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
                 })?;
             }
             Err(err) => {
-                return Err(err).with_context(|| {
-                    format!("failed upserting current_file_state {}", row.path)
-                });
+                return Err(err)
+                    .with_context(|| format!("failed upserting current_file_state {}", row.path));
             }
         }
     }

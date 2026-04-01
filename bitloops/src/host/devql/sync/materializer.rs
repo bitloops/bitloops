@@ -335,9 +335,7 @@ fn derive_materialized_edges(
     Ok(edges)
 }
 
-fn dedupe_materialized_edges_by_edge_id(
-    edges: Vec<MaterializedEdge>,
-) -> Vec<MaterializedEdge> {
+fn dedupe_materialized_edges_by_edge_id(edges: Vec<MaterializedEdge>) -> Vec<MaterializedEdge> {
     let mut deduped = HashMap::<String, MaterializedEdge>::new();
     for edge in edges {
         deduped.insert(edge.edge_id.clone(), edge);
@@ -568,11 +566,11 @@ fn non_empty_text(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::sync::content_cache::CachedEdge;
+    use crate::host::devql::sync::types::EffectiveSource;
     use rusqlite::Connection;
     use serde_json::json;
     use tempfile::tempdir;
-    use crate::host::devql::sync::content_cache::CachedEdge;
-    use crate::host::devql::sync::types::EffectiveSource;
 
     fn test_cfg(repo_root: &std::path::Path) -> crate::host::devql::DevqlConfig {
         crate::host::devql::DevqlConfig {
@@ -621,9 +619,8 @@ mod tests {
         let relational = create_test_relational().await;
         let path = "src/lib.rs";
         let content = "pub fn greet() {}\n";
-        let content_id = crate::host::devql::sync::content_identity::compute_blob_oid(
-            content.as_bytes(),
-        );
+        let content_id =
+            crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
         let desired = DesiredFileState {
             path: path.to_string(),
             language: "rust".to_string(),
@@ -720,9 +717,8 @@ mod tests {
         let relational = create_test_relational().await;
         let path = "src/lib.rs";
         let content = "pub fn greet() {}\n";
-        let content_id = crate::host::devql::sync::content_identity::compute_blob_oid(
-            content.as_bytes(),
-        );
+        let content_id =
+            crate::host::devql::sync::content_identity::compute_blob_oid(content.as_bytes());
         let desired = DesiredFileState {
             path: path.to_string(),
             language: "rust".to_string(),
@@ -741,23 +737,21 @@ mod tests {
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
             parse_status: "parsed".to_string(),
-            artefacts: vec![
-                CachedArtefact {
-                    artifact_key: "file::src/lib.rs".to_string(),
-                    canonical_kind: Some("file".to_string()),
-                    language_kind: "file".to_string(),
-                    name: path.to_string(),
-                    parent_artifact_key: None,
-                    start_line: 1,
-                    end_line: 1,
-                    start_byte: 0,
-                    end_byte: 8,
-                    signature: "fn greet()".to_string(),
-                    modifiers: vec![],
-                    docstring: Some("greet".to_string()),
-                    metadata: json!({"variant": "shared"}),
-                },
-            ],
+            artefacts: vec![CachedArtefact {
+                artifact_key: "file::src/lib.rs".to_string(),
+                canonical_kind: Some("file".to_string()),
+                language_kind: "file".to_string(),
+                name: path.to_string(),
+                parent_artifact_key: None,
+                start_line: 1,
+                end_line: 1,
+                start_byte: 0,
+                end_byte: 8,
+                signature: "fn greet()".to_string(),
+                modifiers: vec![],
+                docstring: Some("greet".to_string()),
+                metadata: json!({"variant": "shared"}),
+            }],
             edges: vec![
                 CachedEdge {
                     edge_key: "edge::call::old".to_string(),

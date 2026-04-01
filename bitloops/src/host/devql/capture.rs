@@ -129,12 +129,9 @@ async fn sync_changed_paths(
         return Ok(());
     }
 
-    crate::host::devql::run_sync_with_summary(
-        cfg,
-        crate::host::devql::SyncMode::Paths(paths),
-    )
-    .await
-    .context("running DevQL sync for watcher capture paths")?;
+    crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
+        .await
+        .context("running DevQL sync for watcher capture paths")?;
 
     Ok(())
 }
@@ -239,17 +236,16 @@ mod tests {
                      ORDER BY symbol_fqn",
                 )
                 .expect("prepare sync-shaped artefacts_current query");
-            stmt.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .expect("query sync-shaped artefacts_current rows")
-            .collect::<Result<Vec<_>, _>>()
-            .expect("collect sync-shaped artefacts_current rows")
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .expect("query sync-shaped artefacts_current rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect sync-shaped artefacts_current rows")
         };
         assert!(
             materialized_rows
                 .iter()
-                .all(|(_, content_id, language)| content_id == &working_blob_sha && language == "rust"),
+                .all(|(_, content_id, language)| content_id == &working_blob_sha
+                    && language == "rust"),
             "watch capture should delegate to sync and materialize rows for the edited blob"
         );
         assert!(
@@ -373,7 +369,10 @@ mod tests {
         assert!(
             materialized_rows
                 .iter()
-                .all(|(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs") && content_id == &working_blob_sha),
+                .all(
+                    |(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs")
+                        && content_id == &working_blob_sha
+                ),
             "capture should rewrite stale sync rows for the edited path"
         );
         assert!(
@@ -447,7 +446,10 @@ mod tests {
         assert!(
             materialized_rows
                 .iter()
-                .all(|(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs") && content_id == &current_blob_sha),
+                .all(
+                    |(symbol_fqn, content_id)| symbol_fqn.starts_with("src/lib.rs")
+                        && content_id == &current_blob_sha
+                ),
             "follow-up temp changes should rematerialize the sync-shaped rows for the edited blob"
         );
         assert!(
@@ -694,7 +696,10 @@ mod tests {
             current_state.0, content_id,
             "current_file_state should use the same effective content id as artefacts_current"
         );
-        assert!(workspace_id > 0, "workspace_revisions must insert a batch id");
+        assert!(
+            workspace_id > 0,
+            "workspace_revisions must insert a batch id"
+        );
     }
 
     #[test]

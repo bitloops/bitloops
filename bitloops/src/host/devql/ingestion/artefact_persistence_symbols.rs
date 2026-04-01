@@ -217,5 +217,4 @@ mod tests {
             "historical builder should upsert on artefact_id"
         );
     }
-
 }

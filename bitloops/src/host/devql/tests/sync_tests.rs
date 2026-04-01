@@ -1773,7 +1773,10 @@ async fn sync_validate_reports_clean_state_then_detects_stale_rows() {
         .await
         .expect("execute sync validation for clean state");
     let clean_report = clean.validation.expect("validation report");
-    assert!(clean_report.valid, "freshly synced state should validate clean");
+    assert!(
+        clean_report.valid,
+        "freshly synced state should validate clean"
+    );
     assert!(
         clean_report.files_with_drift.is_empty(),
         "clean validation should not report per-file drift"
@@ -2022,11 +2025,7 @@ async fn sync_detects_file_edit() {
     .await
     .expect("execute initial full sync");
 
-    fs::write(
-        repo.path().join("src/lib.rs"),
-        edited_content,
-    )
-    .expect("edit tracked source file");
+    fs::write(repo.path().join("src/lib.rs"), edited_content).expect("edit tracked source file");
 
     let result = crate::host::devql::execute_sync(
         &cfg,
@@ -2081,7 +2080,9 @@ async fn sync_detects_file_edit() {
     assert_eq!(current_state.1, "worktree");
     assert!(!artefact_content_ids.is_empty());
     assert!(
-        artefact_content_ids.iter().all(|content_id| content_id == &edited_blob),
+        artefact_content_ids
+            .iter()
+            .all(|content_id| content_id == &edited_blob),
         "all materialized rows for src/lib.rs should reflect the edited content"
     );
     assert_eq!(
@@ -2152,9 +2153,7 @@ async fn dirty_then_commit_unchanged_is_cache_hit() {
 
     assert_eq!(
         current_state.0,
-        crate::host::devql::sync::content_identity::compute_blob_oid(
-            edited_content.as_bytes()
-        )
+        crate::host::devql::sync::content_identity::compute_blob_oid(edited_content.as_bytes())
     );
     assert_eq!(current_state.1, "head");
 
@@ -2182,7 +2181,8 @@ async fn branch_switch_reuses_cache() {
     let sqlite_path = repo.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let path = "src/lib.rs";
-    let feature_content = "pub fn greet(name: &str) -> String {\n    format!(\"feature {name}\")\n}\n";
+    let feature_content =
+        "pub fn greet(name: &str) -> String {\n    format!(\"feature {name}\")\n}\n";
 
     let initial_sync = crate::host::devql::execute_sync(
         &cfg,
@@ -2262,7 +2262,8 @@ async fn staged_content_takes_precedence_over_head() {
     let sqlite_path = repo.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let path = "src/lib.rs";
-    let staged_content = "pub fn greet(name: &str) -> String {\n    format!(\"staged {name}\")\n}\n";
+    let staged_content =
+        "pub fn greet(name: &str) -> String {\n    format!(\"staged {name}\")\n}\n";
 
     crate::host::devql::execute_sync(
         &cfg,
@@ -2435,7 +2436,10 @@ async fn unsupported_file_ignored_supported_file_added() {
         )
         .expect("count unsupported current_file_state rows");
 
-    assert!(result.success, "sync should succeed with ignored unsupported files");
+    assert!(
+        result.success,
+        "sync should succeed with ignored unsupported files"
+    );
     assert_eq!(result.paths_added, 1);
     assert_eq!(result.paths_changed, 0);
     assert_eq!(result.paths_removed, 0);
@@ -2452,7 +2456,8 @@ async fn path_scoped_sync_only_updates_specified_paths() {
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
     let scoped_path = "src/lib.rs";
     let unscoped_path = "web/app.ts";
-    let scoped_content = "pub fn greet(name: &str) -> String {\n    format!(\"scoped {name}\")\n}\n";
+    let scoped_content =
+        "pub fn greet(name: &str) -> String {\n    format!(\"scoped {name}\")\n}\n";
     let unscoped_content = "import { helper } from \"./util\";\n\nexport function run(): number {\n  return helper() + 1;\n}\n";
 
     crate::host::devql::execute_sync(
@@ -2546,8 +2551,7 @@ async fn path_scoped_sync_only_updates_specified_paths() {
     assert_eq!(baseline_scoped_artefacts.len(), scoped_artefacts.len());
     assert_ne!(scoped_artefacts, baseline_scoped_artefacts);
     assert_eq!(
-        unscoped_state.4,
-        baseline_unscoped_state.4,
+        unscoped_state.4, baseline_unscoped_state.4,
         "unscoped path should keep the previously materialized content id"
     );
     assert_eq!(
@@ -2558,9 +2562,7 @@ async fn path_scoped_sync_only_updates_specified_paths() {
         "baseline scoped state should still reflect the original materialization"
     );
     assert_eq!(
-        scoped_artefacts
-            .iter()
-            .all(|row| row.0 == scoped_blob),
+        scoped_artefacts.iter().all(|row| row.0 == scoped_blob),
         true,
         "scoped artefacts should reflect the edited content"
     );

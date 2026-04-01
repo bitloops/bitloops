@@ -67,9 +67,11 @@ fn current_file_state_matches_new_shape(conn: &rusqlite::Connection) -> Result<b
         "exists_in_worktree",
         "last_synced_at",
     ];
-    Ok(sqlite_table_columns(conn, "current_file_state")? == expected_columns
-        && sqlite_table_pk_columns(conn, "current_file_state")?
-            == vec!["repo_id".to_string(), "path".to_string()])
+    Ok(
+        sqlite_table_columns(conn, "current_file_state")? == expected_columns
+            && sqlite_table_pk_columns(conn, "current_file_state")?
+                == vec!["repo_id".to_string(), "path".to_string()],
+    )
 }
 
 fn artefacts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
@@ -94,13 +96,15 @@ fn artefacts_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bo
         "docstring",
         "updated_at",
     ];
-    Ok(sqlite_table_columns(conn, "artefacts_current")? == expected_columns
-        && sqlite_table_pk_columns(conn, "artefacts_current")?
-            == vec![
-                "repo_id".to_string(),
-                "path".to_string(),
-                "symbol_id".to_string(),
-            ])
+    Ok(
+        sqlite_table_columns(conn, "artefacts_current")? == expected_columns
+            && sqlite_table_pk_columns(conn, "artefacts_current")?
+                == vec![
+                    "repo_id".to_string(),
+                    "path".to_string(),
+                    "symbol_id".to_string(),
+                ],
+    )
 }
 
 fn artefact_edges_current_matches_new_shape(conn: &rusqlite::Connection) -> Result<bool> {
@@ -121,9 +125,11 @@ fn artefact_edges_current_matches_new_shape(conn: &rusqlite::Connection) -> Resu
         "metadata",
         "updated_at",
     ];
-    Ok(sqlite_table_columns(conn, "artefact_edges_current")? == expected_columns
-        && sqlite_table_pk_columns(conn, "artefact_edges_current")?
-            == vec!["repo_id".to_string(), "edge_id".to_string()])
+    Ok(
+        sqlite_table_columns(conn, "artefact_edges_current")? == expected_columns
+            && sqlite_table_pk_columns(conn, "artefact_edges_current")?
+                == vec!["repo_id".to_string(), "edge_id".to_string()],
+    )
 }
 
 fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
@@ -143,10 +149,7 @@ fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<
     Ok(columns)
 }
 
-fn sqlite_table_pk_columns(
-    conn: &rusqlite::Connection,
-    table: &str,
-) -> Result<Vec<String>> {
+fn sqlite_table_pk_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .with_context(|| format!("preparing PRAGMA table_info for `{table}`"))?;

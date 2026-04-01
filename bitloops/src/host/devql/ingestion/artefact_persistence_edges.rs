@@ -172,5 +172,4 @@ mod tests {
             "historical edge builder should upsert by edge_id"
         );
     }
-
 }

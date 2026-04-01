@@ -68,7 +68,6 @@ pub(crate) fn post_merge_refreshes_devql_current_state_for_merged_files() {
 
     let current_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     assert_eq!(current_branch, primary_branch);
-
 }
 
 #[test]
@@ -137,5 +136,8 @@ pub(crate) fn post_merge_refresh_removes_devql_current_state_for_deleted_files()
         after_delete, 0,
         "post_merge should remove deleted file rows from sync-owned current state"
     );
-    assert_eq!(file_state_rows, 0, "deleted merge paths should be removed from current_file_state");
+    assert_eq!(
+        file_state_rows, 0,
+        "deleted merge paths should be removed from current_file_state"
+    );
 }

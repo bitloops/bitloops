@@ -251,7 +251,13 @@ pub(super) fn insert_current_file_state_row(
             exists_in_head, exists_in_index, exists_in_worktree,
             last_synced_at
         ) VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?4, 'head', 'test', 'test', 1, 1, 1, ?5)",
-        rusqlite::params![repo_id, path, language, effective_content_id, last_synced_at],
+        rusqlite::params![
+            repo_id,
+            path,
+            language,
+            effective_content_id,
+            last_synced_at
+        ],
     )
     .expect("insert current_file_state row");
 }

@@ -427,8 +427,10 @@ pub(super) fn artefacts_current_matches_sync_shape(conn: &rusqlite::Connection) 
         "path".to_string(),
         "symbol_id".to_string(),
     ];
-    Ok(sqlite_table_columns(conn, "artefacts_current")? == expected_columns
-        && sqlite_table_pk_columns(conn, "artefacts_current")? == expected_pk)
+    Ok(
+        sqlite_table_columns(conn, "artefacts_current")? == expected_columns
+            && sqlite_table_pk_columns(conn, "artefacts_current")? == expected_pk,
+    )
 }
 
 pub(super) fn artefact_edges_current_matches_sync_shape(
@@ -452,8 +454,10 @@ pub(super) fn artefact_edges_current_matches_sync_shape(
         "updated_at",
     ];
     let expected_pk = vec!["repo_id".to_string(), "edge_id".to_string()];
-    Ok(sqlite_table_columns(conn, "artefact_edges_current")? == expected_columns
-        && sqlite_table_pk_columns(conn, "artefact_edges_current")? == expected_pk)
+    Ok(
+        sqlite_table_columns(conn, "artefact_edges_current")? == expected_columns
+            && sqlite_table_pk_columns(conn, "artefact_edges_current")? == expected_pk,
+    )
 }
 
 fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
@@ -548,10 +552,26 @@ CREATE TABLE artefact_edges_current (
         migrate_artefacts_current_branch_scope(&conn)?;
         migrate_artefact_edges_current_branch_scope(&conn)?;
 
-        assert!(!sqlite_table_has_column(&conn, "artefacts_current", "branch")?);
-        assert!(!sqlite_table_has_column(&conn, "artefacts_current", "commit_sha")?);
-        assert!(!sqlite_table_has_column(&conn, "artefact_edges_current", "branch")?);
-        assert!(!sqlite_table_has_column(&conn, "artefact_edges_current", "commit_sha")?);
+        assert!(!sqlite_table_has_column(
+            &conn,
+            "artefacts_current",
+            "branch"
+        )?);
+        assert!(!sqlite_table_has_column(
+            &conn,
+            "artefacts_current",
+            "commit_sha"
+        )?);
+        assert!(!sqlite_table_has_column(
+            &conn,
+            "artefact_edges_current",
+            "branch"
+        )?);
+        assert!(!sqlite_table_has_column(
+            &conn,
+            "artefact_edges_current",
+            "commit_sha"
+        )?);
 
         assert_eq!(
             sqlite_table_pk_columns(&conn, "artefacts_current")?,
@@ -596,10 +616,26 @@ CREATE TABLE artefact_edges_current (
         migrate_artefacts_current_branch_scope(&conn)?;
         migrate_artefact_edges_current_branch_scope(&conn)?;
 
-        assert!(sqlite_table_has_column(&conn, "artefacts_current", "branch")?);
-        assert!(sqlite_table_has_column(&conn, "artefacts_current", "commit_sha")?);
-        assert!(sqlite_table_has_column(&conn, "artefact_edges_current", "branch")?);
-        assert!(sqlite_table_has_column(&conn, "artefact_edges_current", "commit_sha")?);
+        assert!(sqlite_table_has_column(
+            &conn,
+            "artefacts_current",
+            "branch"
+        )?);
+        assert!(sqlite_table_has_column(
+            &conn,
+            "artefacts_current",
+            "commit_sha"
+        )?);
+        assert!(sqlite_table_has_column(
+            &conn,
+            "artefact_edges_current",
+            "branch"
+        )?);
+        assert!(sqlite_table_has_column(
+            &conn,
+            "artefact_edges_current",
+            "commit_sha"
+        )?);
 
         assert_eq!(
             sqlite_table_pk_columns(&conn, "artefacts_current")?,

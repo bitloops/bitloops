@@ -109,7 +109,10 @@ pub(crate) async fn refresh_current_state_for_path(
         parser_version: COMPAT_PARSER_VERSION.to_string(),
         extractor_version: COMPAT_EXTRACTOR_VERSION.to_string(),
         parse_status: "ok".to_string(),
-        artefacts: all_records.iter().map(cached_artefact_from_record).collect(),
+        artefacts: all_records
+            .iter()
+            .map(cached_artefact_from_record)
+            .collect(),
         edges: edge_records
             .iter()
             .map(cached_edge_from_record)

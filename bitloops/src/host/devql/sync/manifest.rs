@@ -259,15 +259,8 @@ mod tests {
     #[test]
     fn classify_changed_when_effective_source_changes() {
         let desired = make_manifest(vec![("src/a.rs", "abc123")]);
-        let stored = make_stored_with_source(vec![
-            (
-                "src/a.rs",
-                "abc123",
-                "worktree",
-                "1.0",
-                "1.0",
-            ),
-        ]);
+        let stored =
+            make_stored_with_source(vec![("src/a.rs", "abc123", "worktree", "1.0", "1.0")]);
 
         let classified = classify_paths(&desired, &stored, "1.0", "1.0", false);
 
@@ -535,9 +528,7 @@ mod tests {
         )
     }
 
-    fn make_stored_with_source(
-        entries: Vec<(&str, &str, &str, &str, &str)>,
-    ) -> StoredManifest {
+    fn make_stored_with_source(entries: Vec<(&str, &str, &str, &str, &str)>) -> StoredManifest {
         entries
             .into_iter()
             .map(

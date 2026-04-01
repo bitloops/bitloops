@@ -380,8 +380,11 @@ pub(crate) async fn execute_sync_validation(
         .duration_since(UNIX_EPOCH)
         .context("computing sync validation run identifier")?
         .as_nanos();
-    let sqlite_path =
-        temp_parent.join(format!("sync_validate_{}_{}.sqlite", std::process::id(), run_id));
+    let sqlite_path = temp_parent.join(format!(
+        "sync_validate_{}_{}.sqlite",
+        std::process::id(),
+        run_id
+    ));
     let _cleanup = TempSqliteCleanup {
         path: sqlite_path.clone(),
     };
@@ -397,7 +400,11 @@ pub(crate) async fn execute_sync_validation(
     let expected_edges = load_edge_rows(&expected_store, &cfg.repo.repo_id).await?;
     let actual_edges = load_edge_rows(relational, &cfg.repo.repo_id).await?;
 
-    let artefact_diff = compare_rows_by_key(&expected_artefacts, &actual_artefacts, &["path", "symbol_id"]);
+    let artefact_diff = compare_rows_by_key(
+        &expected_artefacts,
+        &actual_artefacts,
+        &["path", "symbol_id"],
+    );
     let edge_diff = compare_rows_by_key(&expected_edges, &actual_edges, &["path", "edge_id"]);
     let files_with_drift = merge_file_drift(&artefact_diff, &edge_diff);
 
@@ -556,20 +563,24 @@ fn merge_file_drift(
     let mut files = std::collections::HashMap::<String, SyncValidationFileDrift>::new();
 
     for (path, counts) in &artefact_diff.by_path {
-        let entry = files.entry(path.clone()).or_insert_with(|| SyncValidationFileDrift {
-            path: path.clone(),
-            ..SyncValidationFileDrift::default()
-        });
+        let entry = files
+            .entry(path.clone())
+            .or_insert_with(|| SyncValidationFileDrift {
+                path: path.clone(),
+                ..SyncValidationFileDrift::default()
+            });
         entry.missing_artefacts += counts.missing;
         entry.stale_artefacts += counts.stale;
         entry.mismatched_artefacts += counts.mismatched;
     }
 
     for (path, counts) in &edge_diff.by_path {
-        let entry = files.entry(path.clone()).or_insert_with(|| SyncValidationFileDrift {
-            path: path.clone(),
-            ..SyncValidationFileDrift::default()
-        });
+        let entry = files
+            .entry(path.clone())
+            .or_insert_with(|| SyncValidationFileDrift {
+                path: path.clone(),
+                ..SyncValidationFileDrift::default()
+            });
         entry.missing_edges += counts.missing;
         entry.stale_edges += counts.stale;
         entry.mismatched_edges += counts.mismatched;

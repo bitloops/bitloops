@@ -157,7 +157,10 @@ async fn upsert_sync_state_value(
     relational.exec(&sql).await
 }
 
-async fn count_current_file_rows(cfg: &DevqlConfig, relational: &RelationalStorage) -> Result<usize> {
+async fn count_current_file_rows(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+) -> Result<usize> {
     let sql = format!(
         "SELECT COUNT(*) AS row_count FROM artefacts_current \
 WHERE repo_id = '{}' AND canonical_kind = 'file'",

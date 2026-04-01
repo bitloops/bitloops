@@ -54,7 +54,8 @@ fn insert_sentinel_current_state(sqlite: &rusqlite::Connection, repo_id: &str) {
 }
 
 #[test]
-pub(crate) fn reference_transaction_committed_local_branch_deletion_leaves_sync_current_state_untouched() {
+pub(crate) fn reference_transaction_committed_local_branch_deletion_leaves_sync_current_state_untouched()
+ {
     let dir = tempfile::tempdir().unwrap();
     let head = setup_git_repo(&dir);
     let sqlite_path = init_devql_schema(dir.path());

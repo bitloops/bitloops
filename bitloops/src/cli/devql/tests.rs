@@ -194,9 +194,23 @@ fn devql_cli_parses_sync_modes() {
 #[test]
 fn devql_cli_rejects_conflicting_sync_modes() {
     let cases = vec![
-        vec!["bitloops", "devql", "sync", "--full", "--paths", "src/lib.rs"],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+        ],
         vec!["bitloops", "devql", "sync", "--full", "--repair"],
-        vec!["bitloops", "devql", "sync", "--paths", "src/lib.rs", "--repair"],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
         vec!["bitloops", "devql", "sync", "--validate", "--repair"],
         vec!["bitloops", "devql", "sync", "--validate", "--full"],
         vec![
@@ -339,9 +353,7 @@ fn format_sync_completion_summary_for_validate_reports_path_drift() {
         "expected artefacts counters, got: {rendered}"
     );
     assert!(
-        rendered.contains(
-            "edges: expected=6 actual=6 missing=0 stale=0 mismatched=1"
-        ),
+        rendered.contains("edges: expected=6 actual=6 missing=0 stale=0 mismatched=1"),
         "expected edges counters, got: {rendered}"
     );
     assert!(

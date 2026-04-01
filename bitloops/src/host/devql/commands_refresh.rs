@@ -89,12 +89,19 @@ async fn refresh_checkpoint_projection_for_commit(
         &cfg.repo_root,
         checkpoint_id,
     )?
-    .ok_or_else(|| anyhow::anyhow!("checkpoint not found for projection refresh: {checkpoint_id}"))?;
+    .ok_or_else(|| {
+        anyhow::anyhow!("checkpoint not found for projection refresh: {checkpoint_id}")
+    })?;
     let commit_info = checkpoint_commit_info_from_sha(&cfg.repo_root, commit_sha);
 
-    let _projected_rows =
-        upsert_checkpoint_file_snapshot_rows(cfg, relational, &checkpoint, commit_sha, commit_info.as_ref())
-            .await?;
+    let _projected_rows = upsert_checkpoint_file_snapshot_rows(
+        cfg,
+        relational,
+        &checkpoint,
+        commit_sha,
+        commit_info.as_ref(),
+    )
+    .await?;
 
     Ok(())
 }

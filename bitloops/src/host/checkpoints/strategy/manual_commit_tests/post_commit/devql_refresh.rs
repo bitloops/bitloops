@@ -182,7 +182,6 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
         "current_file_state should track the committed blob for clean post-commit refreshes"
     );
     assert_eq!(current_state.1, "head");
-
 }
 
 #[test]
@@ -239,7 +238,10 @@ pub(crate) fn post_commit_refresh_removes_devql_current_state_for_deleted_files(
         after_delete, 0,
         "post_commit should remove deleted file rows from sync-owned current state"
     );
-    assert_eq!(file_state_rows, 0, "deleted paths should be removed from current_file_state");
+    assert_eq!(
+        file_state_rows, 0,
+        "deleted paths should be removed from current_file_state"
+    );
 }
 
 #[test]
@@ -300,7 +302,9 @@ pub(crate) fn post_commit_on_feature_branch_updates_sync_current_state() {
     assert_ne!(main_blob, feature_blob);
 
     git_ok(dir.path(), &["checkout", &main_branch]);
-    strategy.post_checkout(&feature_head, &main_head, true).unwrap();
+    strategy
+        .post_checkout(&feature_head, &main_head, true)
+        .unwrap();
 
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
     let main_state: (String, String) = sqlite

@@ -455,7 +455,8 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
             continue;
         }
 
-        let Some(blob_sha) = resolve_projection_blob_sha(cfg, relational, commit_sha, &path).await?
+        let Some(blob_sha) =
+            resolve_projection_blob_sha(cfg, relational, commit_sha, &path).await?
         else {
             log::warn!(
                 "skipping checkpoint snapshot projection: unresolved blob for commit path (checkpoint_id={}, commit_sha={}, path={})",

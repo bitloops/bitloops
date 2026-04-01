@@ -32,7 +32,10 @@ pub(super) fn build_file_context_lookup_sql(
         );
     }
 
-    if temporal_scope.and_then(ResolvedTemporalScope::save_revision).is_some() {
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
         // Save revision scoping relied on columns (revision_kind, revision_id) that no
         // longer exist on artefacts_current. Fall through to the default current lookup.
     }
@@ -86,7 +89,10 @@ pub(super) fn build_file_context_list_sql(
         );
     }
 
-    if temporal_scope.and_then(ResolvedTemporalScope::save_revision).is_some() {
+    if temporal_scope
+        .and_then(ResolvedTemporalScope::save_revision)
+        .is_some()
+    {
         // Fall through to default current lookup — revision columns removed from current tables.
     }
 
@@ -181,9 +187,7 @@ pub(super) fn build_current_artefacts_window_sql(spec: &ArtefactQuerySpec) -> St
            FROM filtered{pagination_clause} \
        ORDER BY {order} \
           LIMIT {limit}",
-        columns = filtered_artefact_columns_sql(
-            spec.temporal_scope.use_historical_tables(),
-        ),
+        columns = filtered_artefact_columns_sql(spec.temporal_scope.use_historical_tables(),),
         order = order,
         limit = pagination.limit,
     )
@@ -595,7 +599,10 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
     let (blob_sha_expr, content_hash_expr) = if use_historical_tables {
         (format!("{alias}.blob_sha"), format!("{alias}.content_hash"))
     } else {
-        (format!("{alias}.content_id AS blob_sha"), "NULL AS content_hash".to_string())
+        (
+            format!("{alias}.content_id AS blob_sha"),
+            "NULL AS content_hash".to_string(),
+        )
     };
     format!(
         "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \

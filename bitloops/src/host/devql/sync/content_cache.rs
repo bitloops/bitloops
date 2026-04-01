@@ -494,11 +494,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             .map(str::to_string)
     }
 
-    async fn count_rows(
-        relational: &RelationalStorage,
-        table: &str,
-        content_id: &str,
-    ) -> usize {
+    async fn count_rows(relational: &RelationalStorage, table: &str, content_id: &str) -> usize {
         let sql = format!(
             "SELECT COUNT(*) AS count FROM {} \
 WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' AND extractor_version = 'extractor-v1'",
@@ -627,7 +623,12 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             .expect("store deduplicated cache entry");
 
         assert_eq!(
-            count_rows(&relational, "content_cache_artefacts", &extraction.content_id).await,
+            count_rows(
+                &relational,
+                "content_cache_artefacts",
+                &extraction.content_id
+            )
+            .await,
             1
         );
         assert_eq!(
@@ -652,9 +653,18 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
         assert_eq!(cached.artefacts[0].end_line, 4);
         assert_eq!(cached.artefacts[0].signature, "fn new()");
         assert_eq!(cached.artefacts[0].docstring.as_deref(), Some("new"));
-        assert_eq!(cached.artefacts[0].metadata, Value::String("new".to_string()));
-        assert_eq!(cached.edges[0].to_artifact_key.as_deref(), Some("file::target"));
-        assert_eq!(cached.edges[0].to_symbol_ref.as_deref(), Some("new::target"));
+        assert_eq!(
+            cached.artefacts[0].metadata,
+            Value::String("new".to_string())
+        );
+        assert_eq!(
+            cached.edges[0].to_artifact_key.as_deref(),
+            Some("file::target")
+        );
+        assert_eq!(
+            cached.edges[0].to_symbol_ref.as_deref(),
+            Some("new::target")
+        );
         assert_eq!(cached.edges[0].start_line, Some(2));
         assert_eq!(cached.edges[0].metadata, Value::String("new".to_string()));
     }

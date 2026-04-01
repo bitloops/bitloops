@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use crate::host::devql::db_utils::esc_pg;
 use crate::host::devql::RelationalStorage;
+use crate::host::devql::db_utils::esc_pg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GcResult {
@@ -136,11 +136,11 @@ pub(crate) const DEFAULT_GC_TTL_DAYS: u32 = 7;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalStorage;
     use crate::host::devql::sync::content_cache::{
         CachedArtefact, CachedEdge, CachedExtraction, store_cached_content,
     };
     use crate::host::devql::sync::types::EffectiveSource;
-    use crate::host::devql::RelationalStorage;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -200,7 +200,11 @@ mod tests {
         relational.exec(&sql).await.expect("set last_accessed_at");
     }
 
-    async fn insert_test_file_state(relational: &RelationalStorage, repo_id: &str, content_id: &str) {
+    async fn insert_test_file_state(
+        relational: &RelationalStorage,
+        repo_id: &str,
+        content_id: &str,
+    ) {
         let sql = format!(
             "INSERT INTO current_file_state (repo_id, path, language, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index, exists_in_worktree, last_synced_at) \
 VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'extractor-v1', 0, 0, 0, '2026-03-01T00:00:00Z')",
@@ -208,7 +212,10 @@ VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'ex
             esc_pg(content_id),
             esc_pg(EffectiveSource::Head.as_str()),
         );
-        relational.exec(&sql).await.expect("insert current_file_state");
+        relational
+            .exec(&sql)
+            .await
+            .expect("insert current_file_state");
     }
 
     async fn lookup_cache_entry(
@@ -227,7 +234,11 @@ VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'ex
             .next()
     }
 
-    async fn count_cache_dependents(relational: &RelationalStorage, table: &str, content_id: &str) -> i64 {
+    async fn count_cache_dependents(
+        relational: &RelationalStorage,
+        table: &str,
+        content_id: &str,
+    ) -> i64 {
         let sql = format!(
             "SELECT COUNT(*) AS count FROM {table} WHERE content_id = '{}'",
             esc_pg(content_id),
@@ -260,8 +271,7 @@ VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'ex
             "2026-03-01 00:00:00",
         )
         .await;
-        insert_test_cache_entry(&relational, "git_hash", "git_backed", "2026-03-01 00:00:00")
-            .await;
+        insert_test_cache_entry(&relational, "git_hash", "git_backed", "2026-03-01 00:00:00").await;
         insert_test_cache_entry(
             &relational,
             "ref_hash",
@@ -314,7 +324,11 @@ VALUES ('{}', 'src/a.rs', 'rust', NULL, NULL, NULL, '{}', '{}', 'parser-v1', 'ex
 
         assert_eq!(result.candidate_count, 0);
         assert_eq!(result.deleted_count, 0);
-        assert!(lookup_cache_entry(&relational, shared_content_id).await.is_some());
+        assert!(
+            lookup_cache_entry(&relational, shared_content_id)
+                .await
+                .is_some()
+        );
         assert_eq!(
             count_cache_dependents(&relational, "content_cache_artefacts", shared_content_id).await,
             1
