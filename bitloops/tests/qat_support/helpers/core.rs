@@ -717,67 +717,24 @@ pub fn assert_store_paths_exist(world: &QatWorld) -> Result<()> {
     } else {
         xdg_config
     };
-    let content = fs::read_to_string(&config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
+    let resolved = resolve_daemon_config(Some(&config_path))
+        .with_context(|| format!("resolving daemon config from {}", config_path.display()))?;
 
-    // Extract sqlite_path value from TOML content
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("sqlite_path") {
-            let path_str = value
-                .trim()
-                .trim_start_matches('=')
-                .trim()
-                .trim_matches('"');
-            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
-                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
-            } else {
-                config_path.parent().unwrap().join(path_str)
-            };
-            ensure!(
-                resolved.exists(),
-                "SQLite store file does not exist at {}",
-                resolved.display()
-            );
-        }
-        if let Some(value) = trimmed.strip_prefix("duckdb_path") {
-            let path_str = value
-                .trim()
-                .trim_start_matches('=')
-                .trim()
-                .trim_matches('"');
-            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
-                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
-            } else {
-                config_path.parent().unwrap().join(path_str)
-            };
-            // DuckDB parent directory should exist (file created on first use)
-            if let Some(parent) = resolved.parent() {
-                ensure!(
-                    parent.exists(),
-                    "DuckDB store directory does not exist at {}",
-                    parent.display()
-                );
-            }
-        }
-        if let Some(value) = trimmed.strip_prefix("local_path") {
-            let path_str = value
-                .trim()
-                .trim_start_matches('=')
-                .trim()
-                .trim_matches('"');
-            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
-                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
-            } else {
-                config_path.parent().unwrap().join(path_str)
-            };
-            ensure!(
-                resolved.exists(),
-                "Blob store directory does not exist at {}",
-                resolved.display()
-            );
-        }
-    }
+    ensure!(
+        resolved.relational_db_path.is_file(),
+        "SQLite store file does not exist at {}",
+        resolved.relational_db_path.display()
+    );
+    ensure!(
+        resolved.events_db_path.is_file(),
+        "DuckDB store file does not exist at {}",
+        resolved.events_db_path.display()
+    );
+    ensure!(
+        resolved.blob_store_path.is_dir(),
+        "Blob store directory does not exist at {}",
+        resolved.blob_store_path.display()
+    );
     Ok(())
 }
 

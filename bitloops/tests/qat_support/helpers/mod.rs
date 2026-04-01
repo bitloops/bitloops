@@ -7,6 +7,7 @@ use bitloops::config::{
     REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy, resolve_duckdb_db_path_for_repo,
     resolve_sqlite_db_path_for_repo, resolve_store_backend_config_for_repo,
 };
+use bitloops::daemon::resolve_daemon_config;
 use bitloops::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_capture_enabled, write_project_bootstrap_settings,
 };
