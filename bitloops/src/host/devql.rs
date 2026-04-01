@@ -45,8 +45,12 @@ mod commands_projection;
 mod commands_query;
 #[path = "devql/commands_refresh.rs"]
 mod commands_refresh;
+#[path = "devql/commands_sync.rs"]
+mod commands_sync;
 mod connection_status;
 pub(crate) mod identity;
+#[path = "devql/sync/mod.rs"]
+pub(crate) mod sync;
 mod types;
 
 pub(crate) use self::commands_ingest::execute_ingest_with_observer;
@@ -67,14 +71,20 @@ pub use self::commands_refresh::{
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
+pub use self::commands_sync::{
+    SyncSummary, SyncValidationFileDrift, SyncValidationSummary, run_sync, run_sync_with_summary,
+};
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
+pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
 #[cfg(test)]
-pub(crate) use self::commands_ingest::promote_temporary_current_rows_for_head_commit;
+pub(crate) use self::commands_sync::execute_sync;
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,
@@ -92,6 +102,8 @@ const RUST_LANGUAGE_PACK_ID: &str = "rust-language-pack";
 const TS_JS_LANGUAGE_PACK_ID: &str = "ts-js-language-pack";
 #[cfg(test)]
 const PYTHON_LANGUAGE_PACK_ID: &str = "python-language-pack";
+#[cfg(test)]
+const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";
 pub(crate) const DEVQL_POSTGRES_DSN_REQUIRED_PREFIX: &str = "DevQL Postgres DSN is required";
@@ -715,6 +727,13 @@ fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
 }
 
 #[cfg(test)]
+#[path = "devql/tests/compat_current_state.rs"]
+mod compat_current_state;
+
+#[cfg(test)]
+pub(crate) use self::compat_current_state::*;
+
+#[cfg(test)]
 #[path = "devql/tests/devql_tests.rs"]
 mod tests;
 
@@ -745,3 +764,7 @@ mod cucumber_bdd;
 #[cfg(test)]
 #[path = "devql/tests/knowledge_support.rs"]
 mod knowledge_support;
+
+#[cfg(test)]
+#[path = "devql/tests/sync_tests.rs"]
+mod sync_tests;

@@ -114,6 +114,10 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
             .is_some(),
         "python language pack should be resolvable"
     );
+    assert!(
+        host.language_packs().resolve_for_language("go").is_some(),
+        "go language pack should be resolvable"
+    );
     assert_eq!(
         host.capability_packs()
             .resolve_ingester_owner("test-harness-ingester"),
@@ -137,6 +141,12 @@ fn core_extension_host_bootstraps_language_and_capability_builtins() {
             .language_pack_ids
             .iter()
             .any(|pack_id| pack_id == "python-language-pack")
+    );
+    assert!(
+        readiness
+            .language_pack_ids
+            .iter()
+            .any(|pack_id| pack_id == "go-language-pack")
     );
 }
 

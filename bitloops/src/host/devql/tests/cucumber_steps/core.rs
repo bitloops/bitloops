@@ -3288,27 +3288,31 @@ fn seed_target_production_artefact(
 
             conn.execute(
                 "INSERT INTO artefacts_current (
-                    repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
-                    canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-                    end_byte, modifiers, content_hash
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
+                    parent_artefact_id, start_line, end_line, start_byte, end_byte,
+                    signature, modifiers, docstring, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 rusqlite::params![
                     repo_id,
+                    path,
+                    blob_sha.as_str(),
                     symbol_id.as_str(),
                     current_artefact_id.as_str(),
-                    commit_sha,
-                    blob_sha.as_str(),
-                    path,
                     "rust",
                     "function",
                     "function_item",
                     symbol_fqn.as_str(),
+                    Option::<String>::None,
+                    Option::<String>::None,
                     1i64,
                     3i64,
                     0i64,
                     64i64,
+                    "fn create_user()",
                     "[]",
-                    "hash-current",
+                    Some("seeded current artefact".to_string()),
+                    "2026-03-31T00:00:00Z",
                 ],
             )
             .context("insert current artefact row")?;

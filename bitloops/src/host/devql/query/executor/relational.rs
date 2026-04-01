@@ -76,10 +76,6 @@ pub(crate) async fn build_relational_clones_query(
     repo_id: &str,
 ) -> Result<String> {
     let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
-    let branch = spec
-        .branch
-        .as_deref()
-        .expect("current clone queries require a resolved branch");
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
 
     let mut clone_filters = vec![format!("ce.repo_id = '{}'", esc_pg(repo_id))];
@@ -99,12 +95,11 @@ tgt.canonical_kind AS target_canonical_kind, tgt.language_kind AS target_languag
 ss.summary AS target_summary \
 FROM symbol_clone_edges ce \
 JOIN filtered src ON src.symbol_id = ce.source_symbol_id AND src.artefact_id = ce.source_artefact_id \
-JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.branch = '{}' AND tgt.symbol_id = ce.target_symbol_id \
+JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.symbol_id = ce.target_symbol_id \
 LEFT JOIN symbol_semantics ss ON ss.artefact_id = tgt.artefact_id \
 WHERE {} \
 ORDER BY ce.score DESC, tgt.path, tgt.symbol_fqn \
 LIMIT {}",
-        esc_pg(branch),
         clone_filters.join(" AND "),
         parsed.limit.max(1),
         filtered_cte = filtered_cte,

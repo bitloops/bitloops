@@ -359,7 +359,7 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
 fn persist_production_rows(
     db_path: &Path,
     repository: &RepositoryRecord,
-    branch_name: &str,
+    _branch_name: &str,
     commit: &CommitRecord,
     batch: &ProductionBatchBuilder,
 ) -> Result<()> {
@@ -397,21 +397,38 @@ fn persist_production_rows(
     )
     .context("failed clearing test_runs for commit")?;
     tx.execute(
-        "DELETE FROM artefact_edges_current WHERE commit_sha = ?1",
-        params![commit.commit_sha],
+        "DELETE FROM artefact_edges_current WHERE repo_id = ?1",
+        params![repository.repo_id],
     )
-    .context("failed clearing artefact_edges_current for commit")?;
+    .context("failed clearing artefact_edges_current for repo")?;
     tx.execute(
-        "DELETE FROM artefacts_current WHERE commit_sha = ?1",
-        params![commit.commit_sha],
+        "DELETE FROM artefacts_current WHERE repo_id = ?1",
+        params![repository.repo_id],
     )
-    .context("failed clearing artefacts_current for commit")?;
+    .context("failed clearing artefacts_current for repo")?;
     if table_exists(&tx, "current_file_state")? {
-        tx.execute(
+        match tx.execute(
             "DELETE FROM current_file_state WHERE commit_sha = ?1",
             params![commit.commit_sha],
-        )
-        .context("failed clearing current_file_state for commit")?;
+        ) {
+            Ok(_) => {}
+            Err(err)
+                if {
+                    let msg = err.to_string();
+                    msg.contains("no such column: commit_sha")
+                        || msg.contains("no column named commit_sha")
+                } =>
+            {
+                tx.execute(
+                    "DELETE FROM current_file_state WHERE repo_id = ?1",
+                    params![repository.repo_id],
+                )
+                .context("failed clearing sync-shaped current_file_state for repo")?;
+            }
+            Err(err) => {
+                return Err(err).context("failed clearing current_file_state for commit");
+            }
+        }
     }
     tx.execute(
         "DELETE FROM file_state WHERE commit_sha = ?1",
@@ -486,7 +503,7 @@ ON CONFLICT(repo_id, commit_sha, path) DO UPDATE SET
     }
 
     for row in &batch.current_file_states {
-        tx.execute(
+        match tx.execute(
             r#"
 INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
 VALUES (?1, ?2, ?3, ?4, ?5)
@@ -503,8 +520,67 @@ ON CONFLICT(repo_id, path) DO UPDATE SET
                 row.blob_sha,
                 row.committed_at
             ],
-        )
-        .with_context(|| format!("failed upserting current_file_state {}", row.path))?;
+        ) {
+            Ok(_) => {}
+            Err(err)
+                if {
+                    let msg = err.to_string();
+                    msg.contains("no such column: commit_sha")
+                        || msg.contains("no column named commit_sha")
+                } =>
+            {
+                let language = if row.path.ends_with(".rs") {
+                    "rust"
+                } else {
+                    "typescript"
+                };
+                tx.execute(
+                    r#"
+INSERT INTO current_file_state (
+  repo_id, path, language,
+  head_content_id, index_content_id, worktree_content_id,
+  effective_content_id, effective_source,
+  parser_version, extractor_version,
+  exists_in_head, exists_in_index, exists_in_worktree,
+  last_synced_at
+) VALUES (
+  ?1, ?2, ?3, ?4, ?4, ?4, ?4, 'head',
+  'test-harness', 'test-harness',
+  1, 1, 1, ?5
+)
+ON CONFLICT(repo_id, path) DO UPDATE SET
+  head_content_id = excluded.head_content_id,
+  index_content_id = excluded.index_content_id,
+  worktree_content_id = excluded.worktree_content_id,
+  effective_content_id = excluded.effective_content_id,
+  effective_source = excluded.effective_source,
+  parser_version = excluded.parser_version,
+  extractor_version = excluded.extractor_version,
+  exists_in_head = excluded.exists_in_head,
+  exists_in_index = excluded.exists_in_index,
+  exists_in_worktree = excluded.exists_in_worktree,
+  last_synced_at = excluded.last_synced_at
+"#,
+                    params![
+                        row.repo_id,
+                        row.path,
+                        language,
+                        row.blob_sha,
+                        row.committed_at
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed upserting sync-shaped current_file_state {}",
+                        row.path
+                    )
+                })?;
+            }
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed upserting current_file_state {}", row.path));
+            }
+        }
     }
 
     for artefact in &batch.artefacts {
@@ -564,17 +640,16 @@ ON CONFLICT(artefact_id) DO UPDATE SET
         tx.execute(
             r#"
 INSERT INTO artefacts_current (
-  repo_id, branch, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
+  repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
   language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-  start_byte, end_byte, signature, modifiers, docstring, content_hash
+  start_byte, end_byte, signature, modifiers, docstring, updated_at
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+  datetime('now')
 )
-ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
+ON CONFLICT(repo_id, path, symbol_id) DO UPDATE SET
+  content_id = excluded.content_id,
   artefact_id = excluded.artefact_id,
-  commit_sha = excluded.commit_sha,
-  blob_sha = excluded.blob_sha,
-  path = excluded.path,
   language = excluded.language,
   canonical_kind = excluded.canonical_kind,
   language_kind = excluded.language_kind,
@@ -588,17 +663,14 @@ ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
   signature = excluded.signature,
   modifiers = excluded.modifiers,
   docstring = excluded.docstring,
-  content_hash = excluded.content_hash,
-  updated_at = datetime('now')
+  updated_at = excluded.updated_at
 "#,
             params![
                 artefact.repo_id,
-                branch_name,
+                artefact.path,
+                artefact.blob_sha,
                 artefact.symbol_id,
                 artefact.artefact_id,
-                artefact.commit_sha,
-                artefact.blob_sha,
-                artefact.path,
                 artefact.language,
                 artefact.canonical_kind,
                 artefact.language_kind,
@@ -612,7 +684,6 @@ ON CONFLICT(repo_id, branch, symbol_id) DO UPDATE SET
                 artefact.signature,
                 artefact.modifiers,
                 artefact.docstring,
-                artefact.content_hash
             ],
         )
         .with_context(|| format!("failed upserting current artefact {}", artefact.symbol_id))?;

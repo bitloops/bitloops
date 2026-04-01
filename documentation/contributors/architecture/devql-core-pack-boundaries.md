@@ -2,7 +2,7 @@
 
 This document records the **target architecture** for keeping the DevQL **core** independent of concrete packs, while giving packs safe access to storage and a **controlled** path for cross-pack reuse.
 
-**Related:** [Capability pack implementation gaps](./devql-capability-packs-implementation-gaps.md) (items 2–3), Confluence compass links there.
+**Related:** internal review note `docs/devql-capability-packs-implementation-gaps.md` (items 2–3), plus the linked Confluence compass pages.
 
 ---
 

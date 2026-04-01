@@ -67,7 +67,7 @@ pub(super) fn build_symbol_records(
             symbol_id: symbol_id.clone(),
             artefact_id: artefact_id.clone(),
             canonical_kind: item.canonical_kind.clone(),
-            language_kind: item.language_kind.clone(),
+            language_kind: item.language_kind.to_string(),
             symbol_fqn: item.symbol_fqn.clone(),
             parent_symbol_id,
             parent_artefact_id,
@@ -137,74 +137,6 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
         modifiers_sql,
         docstring_sql,
         esc_pg(&record.content_hash),
-    )
-}
-
-pub(super) async fn upsert_current_artefact(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    rev: &FileRevision<'_>,
-    language: &str,
-    branch: &str,
-    record: &PersistedArtefactRecord,
-) -> Result<()> {
-    let sql = build_upsert_current_artefact_sql(cfg, relational, rev, language, record, branch);
-    relational.exec(&sql).await
-}
-
-pub(super) fn build_upsert_current_artefact_sql(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    rev: &FileRevision<'_>,
-    language: &str,
-    record: &PersistedArtefactRecord,
-    branch: &str,
-) -> String {
-    let _temporal_scope = CanonicalProvenanceRef::for_blob(&cfg.repo.repo_id, rev.blob_sha)
-        .with_source_anchor(rev.commit_sha, rev.path)
-        .temporal_identity_scope();
-    let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
-    let parent_symbol_sql = sql_nullable_text(record.parent_symbol_id.as_deref());
-    let parent_artefact_sql = sql_nullable_text(record.parent_artefact_id.as_deref());
-    let signature_sql = sql_nullable_text(record.signature.as_deref());
-    let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
-    let docstring_sql = sql_nullable_text(record.docstring.as_deref());
-    let temp_checkpoint_id_sql = rev
-        .revision
-        .temp_checkpoint_id
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string());
-    let updated_at_sql = revision_timestamp_sql(relational, rev.commit_unix);
-    format!(
-        "INSERT INTO artefacts_current (repo_id, branch, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, path, language, canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash, updated_at) \
-VALUES ('{}', '{}', '{}', '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', {}, '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {}, {}, '{}', {}) \
-ON CONFLICT (repo_id, branch, symbol_id) DO UPDATE SET artefact_id = EXCLUDED.artefact_id, commit_sha = EXCLUDED.commit_sha, revision_kind = EXCLUDED.revision_kind, revision_id = EXCLUDED.revision_id, temp_checkpoint_id = EXCLUDED.temp_checkpoint_id, blob_sha = EXCLUDED.blob_sha, path = EXCLUDED.path, language = EXCLUDED.language, canonical_kind = EXCLUDED.canonical_kind, language_kind = EXCLUDED.language_kind, symbol_fqn = EXCLUDED.symbol_fqn, parent_symbol_id = EXCLUDED.parent_symbol_id, parent_artefact_id = EXCLUDED.parent_artefact_id, start_line = EXCLUDED.start_line, end_line = EXCLUDED.end_line, start_byte = EXCLUDED.start_byte, end_byte = EXCLUDED.end_byte, signature = EXCLUDED.signature, modifiers = EXCLUDED.modifiers, docstring = EXCLUDED.docstring, content_hash = EXCLUDED.content_hash, updated_at = {}",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(branch),
-        esc_pg(&record.symbol_id),
-        esc_pg(&record.artefact_id),
-        esc_pg(rev.commit_sha),
-        esc_pg(rev.revision.kind.as_str()),
-        esc_pg(rev.revision.id),
-        temp_checkpoint_id_sql,
-        esc_pg(rev.blob_sha),
-        esc_pg(rev.path),
-        esc_pg(language),
-        canonical_kind_sql,
-        esc_pg(&record.language_kind),
-        esc_pg(&record.symbol_fqn),
-        parent_symbol_sql,
-        parent_artefact_sql,
-        record.start_line,
-        record.end_line,
-        record.start_byte,
-        record.end_byte,
-        signature_sql,
-        modifiers_sql,
-        docstring_sql,
-        esc_pg(&record.content_hash),
-        updated_at_sql,
-        updated_at_sql,
     )
 }
 
@@ -283,35 +215,6 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (artefact_id) DO UPDATE"),
             "historical builder should upsert on artefact_id"
-        );
-    }
-
-    #[test]
-    fn build_upsert_current_artefact_sql_accepts_branch_argument() {
-        let cfg = sample_cfg();
-        let relational = RelationalStorage::local_only(PathBuf::from("devql.sqlite"));
-        let record = sample_record();
-        let revision = TemporalRevisionRef {
-            kind: TemporalRevisionKind::Commit,
-            id: "commit-sha",
-            temp_checkpoint_id: None,
-        };
-        let rev = FileRevision {
-            commit_sha: "commit-sha",
-            revision,
-            commit_unix: 1,
-            path: "src/lib.rs",
-            blob_sha: "blob-sha",
-        };
-        let sql =
-            build_upsert_current_artefact_sql(&cfg, &relational, &rev, "rust", &record, "main");
-        assert!(
-            sql.contains("INSERT INTO artefacts_current"),
-            "current builder should insert into artefacts_current"
-        );
-        assert!(
-            sql.contains("revision_kind"),
-            "current builder should persist revision metadata"
         );
     }
 }

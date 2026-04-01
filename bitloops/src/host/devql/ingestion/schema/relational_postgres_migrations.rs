@@ -89,6 +89,7 @@ ON artefact_edges (
 "#
 }
 
+#[allow(dead_code)]
 pub(crate) fn current_state_hardening_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS current_file_state (
@@ -153,27 +154,9 @@ ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DE
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE artefacts_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
-UPDATE artefacts_current ac
-SET branch = COALESCE(
-    NULLIF(ac.branch, ''),
-    NULLIF(
-        (
-            SELECT r.default_branch
-            FROM repositories r
-            WHERE r.repo_id = ac.repo_id
-            LIMIT 1
-        ),
-        ''
-    ),
-    'main'
-)
-WHERE ac.branch IS NULL OR ac.branch = '';
 ALTER TABLE artefacts_current ALTER COLUMN branch SET DEFAULT 'main';
 ALTER TABLE artefacts_current ALTER COLUMN branch SET NOT NULL;
 ALTER TABLE artefacts_current ALTER COLUMN canonical_kind DROP NOT NULL;
-UPDATE artefacts_current
-SET modifiers = '[]'::jsonb
-WHERE modifiers IS NULL;
 ALTER TABLE artefacts_current ALTER COLUMN modifiers SET NOT NULL;
 ALTER TABLE artefacts_current DROP CONSTRAINT IF EXISTS artefacts_current_pkey;
 ALTER TABLE artefacts_current ADD PRIMARY KEY (repo_id, branch, symbol_id);
@@ -237,21 +220,6 @@ ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_kind TEXT NOT NULL DEFAULT 'commit';
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id BIGINT;
-UPDATE artefact_edges_current ec
-SET branch = COALESCE(
-    NULLIF(ec.branch, ''),
-    NULLIF(
-        (
-            SELECT r.default_branch
-            FROM repositories r
-            WHERE r.repo_id = ec.repo_id
-            LIMIT 1
-        ),
-        ''
-    ),
-    'main'
-)
-WHERE ec.branch IS NULL OR ec.branch = '';
 ALTER TABLE artefact_edges_current ALTER COLUMN branch SET DEFAULT 'main';
 ALTER TABLE artefact_edges_current ALTER COLUMN branch SET NOT NULL;
 ALTER TABLE artefact_edges_current DROP CONSTRAINT IF EXISTS artefact_edges_current_pkey;
@@ -356,10 +324,6 @@ UPDATE artefact_edges
 SET edge_kind = 'extends'
 WHERE edge_kind = 'inherits';
 
-UPDATE artefact_edges_current
-SET edge_kind = 'extends'
-WHERE edge_kind = 'inherits';
-
 UPDATE artefact_edges
 SET metadata = CASE
     WHEN edge_kind IN ('extends', 'implements') THEN '{}'::jsonb
@@ -367,18 +331,7 @@ SET metadata = CASE
 END
 WHERE metadata IS NOT NULL;
 
-UPDATE artefact_edges_current
-SET metadata = CASE
-    WHEN edge_kind IN ('extends', 'implements') THEN '{}'::jsonb
-    ELSE metadata - 'inherit_form' - 'relation'
-END
-WHERE metadata IS NOT NULL;
-
 UPDATE artefact_edges
-SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)
-WHERE metadata ->> 'import_form' IN ('module', 'use');
-
-UPDATE artefact_edges_current
 SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)
 WHERE metadata ->> 'import_form' IN ('module', 'use');
 "#
@@ -390,10 +343,6 @@ UPDATE artefact_edges
 SET edge_kind = 'extends'
 WHERE edge_kind = 'inherits';
 
-UPDATE artefact_edges_current
-SET edge_kind = 'extends'
-WHERE edge_kind = 'inherits';
-
 UPDATE artefact_edges
 SET metadata = CASE
     WHEN edge_kind IN ('extends', 'implements') THEN '{}'
@@ -401,18 +350,7 @@ SET metadata = CASE
 END
 WHERE metadata IS NOT NULL;
 
-UPDATE artefact_edges_current
-SET metadata = CASE
-    WHEN edge_kind IN ('extends', 'implements') THEN '{}'
-    ELSE json_remove(json_remove(COALESCE(metadata, '{}'), '$.inherit_form'), '$.relation')
-END
-WHERE metadata IS NOT NULL;
-
 UPDATE artefact_edges
-SET metadata = json_set(COALESCE(metadata, '{}'), '$.import_form', 'binding')
-WHERE json_extract(metadata, '$.import_form') IN ('module', 'use');
-
-UPDATE artefact_edges_current
 SET metadata = json_set(COALESCE(metadata, '{}'), '$.import_form', 'binding')
 WHERE json_extract(metadata, '$.import_form') IN ('module', 'use');
 "#
@@ -460,6 +398,24 @@ mod tests {
                 "ALTER TABLE artefact_edges_current ADD COLUMN IF NOT EXISTS temp_checkpoint_id"
             ),
             "migration must add temp_checkpoint_id to artefact_edges_current"
+        );
+    }
+
+    #[test]
+    fn edge_model_cleanup_postgres_sql_does_not_mutate_current_state_table() {
+        let sql = edge_model_cleanup_postgres_sql();
+        assert!(
+            !sql.contains("UPDATE artefact_edges_current"),
+            "cleanup should not write to artefact_edges_current"
+        );
+    }
+
+    #[test]
+    fn edge_model_cleanup_sqlite_sql_does_not_mutate_current_state_table() {
+        let sql = edge_model_cleanup_sqlite_sql();
+        assert!(
+            !sql.contains("UPDATE artefact_edges_current"),
+            "cleanup should not write to artefact_edges_current"
         );
     }
 }

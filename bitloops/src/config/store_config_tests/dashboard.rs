@@ -25,7 +25,14 @@ fn resolve_dashboard_config_reads_repo_config_via_public_helper() {
 #[test]
 fn dashboard_file_config_load_defaults_when_repo_config_missing() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let _guard = enter_process_state(Some(temp.path()), &[]);
+    let config_root = temp.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(temp.path()),
+        &[(
+            "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+            Some(config_root.as_str()),
+        )],
+    );
 
     assert_eq!(DashboardFileConfig::load(), DashboardFileConfig::default());
     assert_eq!(resolve_dashboard_config(), DashboardFileConfig::default());

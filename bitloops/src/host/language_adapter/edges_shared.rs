@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{DependencyEdge, EdgeMetadata, LanguageArtefact};
+use super::{DependencyEdge, EdgeMetadata, LanguageArtefact, LanguageKind, RustKind, TsJsKind};
 use crate::host::devql::{CanonicalKindProjection, EdgeKind, RefKind, Resolution};
 
 // Shared edge-building utilities used by all language edge extractors.
@@ -120,7 +120,7 @@ pub(crate) fn js_ts_reference_target_maps(
                     | CanonicalKindProjection::Type
                     | CanonicalKindProjection::Enum
             )
-        }) || artefact.language_kind == "class_declaration"
+        }) || artefact.language_kind == LanguageKind::ts_js(TsJsKind::ClassDeclaration)
         {
             type_targets
                 .entry(artefact.name.clone())
@@ -131,7 +131,7 @@ pub(crate) fn js_ts_reference_target_maps(
                 kind,
                 CanonicalKindProjection::Variable | CanonicalKindProjection::Function
             )
-        }) || artefact.language_kind == "class_declaration"
+        }) || artefact.language_kind == LanguageKind::ts_js(TsJsKind::ClassDeclaration)
         {
             value_targets
                 .entry(artefact.name.clone())
@@ -150,16 +150,21 @@ pub(crate) fn rust_reference_target_maps(
 
     for artefact in artefacts {
         if matches!(
-            artefact.language_kind.as_str(),
-            "struct_item" | "enum_item" | "trait_item" | "type_item"
+            artefact.language_kind,
+            LanguageKind::Rust(RustKind::StructItem)
+                | LanguageKind::Rust(RustKind::EnumItem)
+                | LanguageKind::Rust(RustKind::TraitItem)
+                | LanguageKind::Rust(RustKind::TypeItem)
         ) {
             type_targets
                 .entry(artefact.name.clone())
                 .or_insert_with(|| artefact.symbol_fqn.clone());
         }
         if matches!(
-            artefact.language_kind.as_str(),
-            "const_item" | "static_item" | "function_item"
+            artefact.language_kind,
+            LanguageKind::Rust(RustKind::ConstItem)
+                | LanguageKind::Rust(RustKind::StaticItem)
+                | LanguageKind::Rust(RustKind::FunctionItem)
         ) {
             value_targets
                 .entry(artefact.name.clone())
@@ -181,8 +186,10 @@ pub(crate) fn top_level_export_target_map(
         }
 
         if matches!(
-            artefact.language_kind.as_str(),
-            "import_statement" | "use_declaration" | "impl_item"
+            artefact.language_kind,
+            LanguageKind::TsJs(TsJsKind::ImportStatement)
+                | LanguageKind::Rust(RustKind::UseDeclaration)
+                | LanguageKind::Rust(RustKind::ImplItem)
         ) {
             continue;
         }

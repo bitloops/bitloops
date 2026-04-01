@@ -35,13 +35,18 @@ ON file_state (repo_id, commit_sha);
 CREATE TABLE IF NOT EXISTS current_file_state (
     repo_id TEXT NOT NULL,
     path TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id BIGINT,
-    blob_sha TEXT NOT NULL,
-    committed_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT now(),
+    language TEXT NOT NULL,
+    head_content_id TEXT,
+    index_content_id TEXT,
+    worktree_content_id TEXT,
+    effective_content_id TEXT NOT NULL,
+    effective_source TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    exists_in_head INTEGER NOT NULL,
+    exists_in_index INTEGER NOT NULL,
+    exists_in_worktree INTEGER NOT NULL,
+    last_synced_at TEXT NOT NULL,
     PRIMARY KEY (repo_id, path)
 );
 
@@ -112,15 +117,10 @@ WHERE symbol_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
-    branch TEXT NOT NULL DEFAULT 'main',
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id BIGINT,
-    blob_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
     language TEXT NOT NULL,
     canonical_kind TEXT,
     language_kind TEXT,
@@ -132,24 +132,21 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     start_byte INTEGER NOT NULL,
     end_byte INTEGER NOT NULL,
     signature TEXT,
-    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    modifiers JSONB NOT NULL DEFAULT '[]',
     docstring TEXT,
-    content_hash TEXT,
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (repo_id, branch, symbol_id)
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
 );
 
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx
-ON artefacts_current (repo_id, branch, path);
+CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
+ON artefacts_current (repo_id, path);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx
-ON artefacts_current (repo_id, branch, canonical_kind);
+CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx
+ON artefacts_current (repo_id, canonical_kind);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
-ON artefacts_current (repo_id, branch, artefact_id);
-
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx
-ON artefacts_current (repo_id, branch, symbol_fqn);
+CREATE INDEX IF NOT EXISTS artefacts_current_fqn_idx
+ON artefacts_current (repo_id, symbol_fqn);
 
 CREATE TABLE IF NOT EXISTS artefact_edges (
     edge_id TEXT PRIMARY KEY,
@@ -202,15 +199,10 @@ ON artefact_edges (
 );
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
-    edge_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
-    branch TEXT NOT NULL DEFAULT 'main',
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id BIGINT,
-    blob_sha TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
     from_symbol_id TEXT NOT NULL,
     from_artefact_id TEXT NOT NULL,
     to_symbol_id TEXT,
@@ -220,8 +212,8 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
     language TEXT NOT NULL,
     start_line INTEGER,
     end_line INTEGER,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    updated_at TIMESTAMPTZ DEFAULT now(),
+    metadata JSONB DEFAULT '{}',
+    updated_at TEXT NOT NULL,
     CONSTRAINT artefact_edges_current_target_chk
         CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL),
     CONSTRAINT artefact_edges_current_line_range_chk
@@ -229,37 +221,14 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
             (start_line IS NULL AND end_line IS NULL)
             OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
         ),
-    PRIMARY KEY (repo_id, branch, edge_id)
+    PRIMARY KEY (repo_id, edge_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
-ON artefact_edges_current (repo_id, branch, path);
+ON artefact_edges_current (repo_id, path);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx
-ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx
-ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_idx
-ON artefact_edges_current (repo_id, branch, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_symbol_ref_idx
-ON artefact_edges_current (repo_id, branch, to_symbol_ref)
-WHERE to_symbol_ref IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq
-ON artefact_edges_current (
-    repo_id,
-    branch,
-    from_symbol_id,
-    edge_kind,
-    COALESCE(to_symbol_id, ''),
-    COALESCE(to_symbol_ref, ''),
-    COALESCE(start_line, -1),
-    COALESCE(end_line, -1),
-    md5(metadata::text)
-);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx
+ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);
 
 CREATE TABLE IF NOT EXISTS workspace_revisions (
     id         BIGSERIAL PRIMARY KEY,
@@ -273,6 +242,69 @@ ON workspace_revisions (repo_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_revisions_repo_tree_unique_idx
 ON workspace_revisions (repo_id, tree_hash);
+
+CREATE TABLE IF NOT EXISTS repo_sync_state (
+    repo_id TEXT PRIMARY KEY,
+    repo_root TEXT NOT NULL,
+    active_branch TEXT,
+    head_commit_sha TEXT,
+    head_tree_sha TEXT,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    last_sync_started_at TEXT,
+    last_sync_completed_at TEXT,
+    last_sync_status TEXT,
+    last_sync_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS content_cache (
+    content_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    retention_class TEXT NOT NULL,
+    parse_status TEXT NOT NULL,
+    parsed_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL,
+    PRIMARY KEY (content_id, language, parser_version, extractor_version)
+);
+
+CREATE TABLE IF NOT EXISTS content_cache_artefacts (
+    content_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    artifact_key TEXT NOT NULL,
+    canonical_kind TEXT,
+    language_kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parent_artifact_key TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT NOT NULL,
+    modifiers JSONB NOT NULL DEFAULT '[]',
+    docstring TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY (content_id, language, parser_version, extractor_version, artifact_key)
+);
+
+CREATE TABLE IF NOT EXISTS content_cache_edges (
+    content_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    edge_key TEXT NOT NULL,
+    from_artifact_key TEXT NOT NULL,
+    to_artifact_key TEXT,
+    to_symbol_ref TEXT,
+    edge_kind TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    metadata JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY (content_id, language, parser_version, extractor_version, edge_key)
+);
 "#
 }
 
@@ -281,24 +313,22 @@ mod tests {
     use super::postgres_schema_sql;
 
     #[test]
-    fn postgres_schema_sql_uses_branch_aware_current_state_indexes() {
+    fn postgres_schema_sql_uses_sync_current_state_indexes() {
         let sql = postgres_schema_sql();
-        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx"));
-        assert!(sql.contains("ON artefacts_current (repo_id, branch, path);"));
-        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx"));
-        assert!(sql.contains("ON artefacts_current (repo_id, branch, canonical_kind);"));
-        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx"));
-        assert!(sql.contains("ON artefacts_current (repo_id, branch, symbol_fqn);"));
-        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx"));
-        assert!(
-            sql.contains("ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);")
-        );
-        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx"));
-        assert!(
-            sql.contains("ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);")
-        );
-        assert!(sql.contains(
-            "ON artefact_edges_current (\n    repo_id,\n    branch,\n    from_symbol_id,"
-        ));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_path_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, path);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, canonical_kind);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefacts_current_fqn_idx"));
+        assert!(sql.contains("ON artefacts_current (repo_id, symbol_fqn);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx"));
+        assert!(sql.contains("ON artefact_edges_current (repo_id, path);"));
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx"));
+        assert!(sql.contains("ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);"));
+        assert!(!sql.contains("artefacts_current_branch_path_idx"));
+        assert!(!sql.contains("artefacts_current_branch_kind_idx"));
+        assert!(!sql.contains("artefacts_current_branch_fqn_idx"));
+        assert!(!sql.contains("artefact_edges_current_branch_from_idx"));
+        assert!(!sql.contains("artefact_edges_current_branch_to_idx"));
     }
 }

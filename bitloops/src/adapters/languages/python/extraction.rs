@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use super::canonical::{PYTHON_CANONICAL_MAPPINGS, PYTHON_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, PythonKind, is_supported_language_kind, resolve_canonical_kind,
 };
 
 pub(crate) fn extract_python_artefacts(content: &str, path: &str) -> Result<Vec<LanguageArtefact>> {
@@ -19,7 +19,7 @@ pub(crate) fn extract_python_artefacts(content: &str, path: &str) -> Result<Vec<
 
     let root = tree.root_node();
     let mut out = Vec::new();
-    let mut seen: HashSet<(String, String, i32)> = HashSet::new();
+    let mut seen: HashSet<(LanguageKind, String, i32)> = HashSet::new();
     collect_python_nodes_recursive(root, content, path, &mut out, &mut seen, &[]);
     out.sort_by_key(|i| {
         (
@@ -45,7 +45,7 @@ fn collect_python_nodes_recursive(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     pending_modifiers: &[String],
 ) {
     match node.kind() {
@@ -81,7 +81,7 @@ fn push_python_class_artefact(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     pending_modifiers: &[String],
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -107,7 +107,7 @@ fn push_python_class_artefact(
         node,
         content,
         PythonArtefactDescriptor {
-            language_kind: "class_definition",
+            language_kind: LanguageKind::python(PythonKind::ClassDefinition),
             name: name.to_string(),
             symbol_fqn,
             parent_symbol_fqn,
@@ -125,7 +125,7 @@ fn push_python_function_artefact(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     pending_modifiers: &[String],
 ) {
     let Some(name_node) = node.child_by_field_name("name") else {
@@ -156,7 +156,7 @@ fn push_python_function_artefact(
         node,
         content,
         PythonArtefactDescriptor {
-            language_kind: "function_definition",
+            language_kind: LanguageKind::python(PythonKind::FunctionDefinition),
             name: name.to_string(),
             symbol_fqn,
             parent_symbol_fqn,
@@ -174,7 +174,7 @@ fn push_python_import_artefact(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
 ) {
     let start_line = node.start_position().row as i32 + 1;
     let name = format!("import@{start_line}");
@@ -184,7 +184,10 @@ fn push_python_import_artefact(
         node,
         content,
         PythonArtefactDescriptor {
-            language_kind: node.kind(),
+            language_kind: LanguageKind::python(
+                PythonKind::from_tree_sitter_kind(node.kind())
+                    .expect("validated python import node kind"),
+            ),
             name: name.clone(),
             symbol_fqn: format!("{path}::import::{name}"),
             parent_symbol_fqn: None,
@@ -200,7 +203,7 @@ fn push_python_assignment_artefacts(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
 ) {
     if !is_python_module_scope(node) {
         return;
@@ -219,7 +222,7 @@ fn push_python_assignment_artefacts(
                     node,
                     content,
                     PythonArtefactDescriptor {
-                        language_kind: "assignment",
+                        language_kind: LanguageKind::python(PythonKind::Assignment),
                         name: name.to_string(),
                         symbol_fqn: format!("{path}::{name}"),
                         parent_symbol_fqn: None,
@@ -250,7 +253,7 @@ fn push_python_assignment_artefacts(
             node,
             content,
             PythonArtefactDescriptor {
-                language_kind: "assignment",
+                language_kind: LanguageKind::python(PythonKind::Assignment),
                 name: name.to_string(),
                 symbol_fqn: format!("{path}::{name}"),
                 parent_symbol_fqn: None,
@@ -264,7 +267,7 @@ fn push_python_assignment_artefacts(
 
 fn push_python_artefact(
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     node: tree_sitter::Node,
     content: &str,
     descriptor: PythonArtefactDescriptor,
@@ -285,7 +288,7 @@ fn push_python_artefact(
     }
 
     let start_line = node.start_position().row as i32 + 1;
-    if !seen.insert((language_kind.to_string(), name.clone(), start_line)) {
+    if !seen.insert((language_kind, name.clone(), start_line)) {
         return;
     }
 
@@ -304,7 +307,7 @@ fn push_python_artefact(
             inside_parent,
         )
         .map(|projection| projection.as_str().to_string()),
-        language_kind: language_kind.to_string(),
+        language_kind,
         name,
         symbol_fqn,
         parent_symbol_fqn,
@@ -319,7 +322,7 @@ fn push_python_artefact(
 }
 
 struct PythonArtefactDescriptor {
-    language_kind: &'static str,
+    language_kind: LanguageKind,
     name: String,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,

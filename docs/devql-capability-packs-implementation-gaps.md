@@ -28,9 +28,9 @@ This document captures an architecture review of first-party capability packs ag
 - `commands/` → `cli/` (Presentation)
 - `server/dashboard/` → `api/` (Presentation)
 
-See [architecture-review.md](../bitloops/docs/archive/architecture-review.md) for the archived rationale and path mapping.
+See [architecture-review.md](./archive/architecture-review.md) for the archived rationale and path mapping.
 
-**Target boundaries (core ↔ packs, timeouts, optional cross-pack grants):** [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md). Implemented in-repo (2026-03-20): `HostInvocationPolicy` + `with_timeout` on stage/ingester dispatch; `execute_devql_subquery` wall-clock limit via `DevqlSubqueryOptions::subquery_timeout`; `host.cross_pack_access` grants **or** descriptor `dependencies` for registered-stage composition; `devql_relational_scoped` binds DevQL relational to the invoking ingester capability id; default `host` config block in `build_capability_config_root`.
+**Target boundaries (core ↔ packs, timeouts, optional cross-pack grants):** [devql-core-pack-boundaries.md](../documentation/contributors/architecture/devql-core-pack-boundaries.md). Implemented in-repo (2026-03-20): `HostInvocationPolicy` + `with_timeout` on stage/ingester dispatch; `execute_devql_subquery` wall-clock limit via `DevqlSubqueryOptions::subquery_timeout`; `host.cross_pack_access` grants **or** descriptor `dependencies` for registered-stage composition; `devql_relational_scoped` binds DevQL relational to the invoking ingester capability id; default `host` config block in `build_capability_config_root`.
 
 ---
 
@@ -90,7 +90,7 @@ See [architecture-review.md](../bitloops/docs/archive/architecture-review.md) fo
 
 **Update (2026-03-21):** **Clone-edge rebuild orchestration** moved from **`host/devql/ingestion/semantic_clones_persistence.rs`** to **`capability_packs/semantic_clones/pipeline.rs`**. **`devql ingest`** already triggered rebuild via **`invoke_ingester_with_relational`**; the **ingester** now calls **`pipeline::rebuild_symbol_clone_edges`** directly. **`crate::host::devql::rebuild_symbol_clone_edges`** is a **`#[cfg(test)] pub(crate)`** re-export for **`devql::tests`**. Postgres relational bootstrap calls **`pipeline::init_postgres_semantic_clones_schema`**. The duplicate/unused **`host/devql/ingest.rs`** file was removed.
 
-**Update (2026-03-21, follow-up):** **Stage 1–2 persistence** moved from **`host/devql/ingestion/semantic_*_persistence.rs`** to **`capability_packs/semantic_clones/stage_semantic_features.rs`** and **`stage_embeddings.rs`**, re-exported from **`capability_packs/semantic_clones/mod.rs`** for **`run_ingest`**. Relational bootstrap calls those modules’ **`init_*_schema`** functions. **Postgres vs SQLite DDL split** is documented in [devql-core-pack-boundaries.md](./devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack).
+**Update (2026-03-21, follow-up):** **Stage 1–2 persistence** moved from **`host/devql/ingestion/semantic_*_persistence.rs`** to **`capability_packs/semantic_clones/stage_semantic_features.rs`** and **`stage_embeddings.rs`**, re-exported from **`capability_packs/semantic_clones/mod.rs`** for **`run_ingest`**. Relational bootstrap calls those modules’ **`init_*_schema`** functions. **Postgres vs SQLite DDL split** is documented in [devql-core-pack-boundaries.md](../documentation/contributors/architecture/devql-core-pack-boundaries.md#relational-ddl-postgres-bootstrap-vs-sqlite-pack-migrations-semantic-stack).
 
 **Finding (historical):** Clone-edge build and persistence lived under **`devql/ingestion`**, while the compass positions Semantic Clones as owning enrichers, embeddings, clone edges, and pack-scoped migrations.
 

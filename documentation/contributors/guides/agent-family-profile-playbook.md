@@ -1,6 +1,6 @@
 # Agent Adapter Family/Profile Playbook
 
-For package/runtime guidance, see `docs/agent-extension-playbook.md` and `docs/layered-extension-architecture-agent-adapters.md`.
+For package/runtime guidance, see `./agent-extension-playbook.md` and `../architecture/agent-adapters.md`.
 
 ## Purpose
 

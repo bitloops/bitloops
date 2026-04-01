@@ -175,13 +175,7 @@ pub(super) enum TemporalRevisionKind {
 }
 
 impl TemporalRevisionKind {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Commit => "commit",
-            Self::Temporary => "temporary",
-        }
-    }
-
+    #[cfg(test)]
     pub(super) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "commit" => Some(Self::Commit),
@@ -191,6 +185,7 @@ impl TemporalRevisionKind {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct TemporalRevisionRef<'a> {
     pub(super) kind: TemporalRevisionKind,
@@ -222,16 +217,18 @@ impl<'a> CanonicalProvenanceRef<'a> {
         }
     }
 
+    pub(super) fn artefact_identity_scope(self) -> String {
+        format!("{}|{}", self.repo_id, self.blob_sha)
+    }
+
+    #[cfg(test)]
     pub(super) fn with_source_anchor(mut self, commit_sha: &'a str, path: &'a str) -> Self {
         self.commit_sha = Some(commit_sha);
         self.path = Some(path);
         self
     }
 
-    pub(super) fn artefact_identity_scope(self) -> String {
-        format!("{}|{}", self.repo_id, self.blob_sha)
-    }
-
+    #[cfg(test)]
     pub(super) fn temporal_identity_scope(self) -> Option<String> {
         let commit_sha = self.commit_sha?;
         let path = self.path?;
