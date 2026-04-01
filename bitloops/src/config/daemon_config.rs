@@ -35,6 +35,7 @@ pub struct LoadedDaemonSettings {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct DaemonTomlFile {
     #[serde(default)]
     runtime: RuntimeToml,
@@ -53,6 +54,7 @@ struct DaemonTomlFile {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct RuntimeToml {
     #[serde(default)]
     local_dev: bool,
@@ -60,11 +62,13 @@ struct RuntimeToml {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct TelemetryToml {
     enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct LoggingToml {
     level: Option<String>,
 }
@@ -383,7 +387,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn load_daemon_settings_ignores_legacy_top_level_fields() {
+    fn load_daemon_settings_rejects_unknown_top_level_fields() {
         let config = NamedTempFile::new().expect("create temp config");
         fs::write(
             config.path(),
@@ -402,14 +406,16 @@ level = "debug"
         )
         .expect("write temp config");
 
-        let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
-        assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
-        assert_eq!(loaded.cli.telemetry, Some(false));
-        assert_eq!(loaded.cli.log_level, "debug");
+        let err = load_daemon_settings(Some(config.path())).expect_err("unknown top-level key");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("unknown field `cli_version`"),
+            "expected unknown field error, got: {message}"
+        );
     }
 
     #[test]
-    fn load_daemon_settings_ignores_legacy_runtime_fields() {
+    fn load_daemon_settings_accepts_runtime_cli_version_field() {
         let config = NamedTempFile::new().expect("create temp config");
         fs::write(
             config.path(),
