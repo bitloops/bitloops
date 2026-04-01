@@ -455,7 +455,6 @@ fn devql_cli_parses_ingest_defaults() {
         panic!("expected devql ingest command");
     };
 
-    assert!(ingest.init);
     assert_eq!(ingest.max_checkpoints, 500);
 }
 

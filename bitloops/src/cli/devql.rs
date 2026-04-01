@@ -26,7 +26,7 @@ pub use args::{
     DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSyncArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -69,7 +69,7 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
         DevqlCommand::Ingest(args) => {
-            graphql::run_ingest_via_graphql(&scope, args.init, args.max_checkpoints).await
+            graphql::run_ingest_via_graphql(&scope, args.max_checkpoints).await
         }
         DevqlCommand::Sync(args) => {
             let mode = if args.repair {
