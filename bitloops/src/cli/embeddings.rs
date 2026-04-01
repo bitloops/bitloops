@@ -87,7 +87,7 @@ fn current_repo_root() -> Result<PathBuf> {
     find_repo_root(&cwd)
 }
 
-fn pull_profile(
+pub(crate) fn pull_profile(
     repo_root: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: &str,
@@ -121,7 +121,7 @@ fn pull_profile(
     ])
 }
 
-fn doctor_profile(
+pub(crate) fn doctor_profile(
     repo_root: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: Option<&str>,
@@ -174,7 +174,7 @@ fn doctor_profile(
     Ok(lines)
 }
 
-fn clear_cache_for_profile(
+pub(crate) fn clear_cache_for_profile(
     repo_root: &Path,
     capability: &EmbeddingCapabilityConfig,
     profile_name: &str,

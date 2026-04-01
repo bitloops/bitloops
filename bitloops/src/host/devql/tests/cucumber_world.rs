@@ -1,11 +1,14 @@
 use super::*;
 use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::capability_packs::test_harness::mapping::model::DiscoveryIssue;
+use crate::daemon::EnrichmentQueueStatus;
+use crate::host::capability_host::CapabilityHealthResult;
 use crate::host::devql::knowledge_support::KnowledgeBddHarness;
 use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 
 #[derive(Debug)]
 pub(super) struct EdgeExpectation<'a> {
@@ -41,6 +44,11 @@ pub(super) struct DevqlBddWorld {
     pub(super) materialized_links: Vec<TestArtefactEdgeCurrentRecord>,
     pub(super) discovery_issues: Vec<DiscoveryIssue>,
     pub(super) tests_query_response: Option<Value>,
+    pub(super) scenario_workspace: Option<TempDir>,
+    pub(super) health_results: HashMap<String, CapabilityHealthResult>,
+    pub(super) enrichment_status: Option<EnrichmentQueueStatus>,
+    pub(super) operation_error: Option<String>,
+    pub(super) operation_output: Vec<String>,
     pub(super) knowledge: Option<KnowledgeBddHarness>,
     pub(super) knowledge_last_ingest: Option<IngestKnowledgeResult>,
     pub(super) knowledge_last_association: Option<AssociateKnowledgeResult>,
@@ -72,6 +80,11 @@ impl Default for DevqlBddWorld {
             materialized_links: Vec::new(),
             discovery_issues: Vec::new(),
             tests_query_response: None,
+            scenario_workspace: None,
+            health_results: HashMap::new(),
+            enrichment_status: None,
+            operation_error: None,
+            operation_output: Vec::new(),
             knowledge: None,
             knowledge_last_ingest: None,
             knowledge_last_association: None,
@@ -104,6 +117,11 @@ impl DevqlBddWorld {
         self.materialized_links.clear();
         self.discovery_issues.clear();
         self.tests_query_response = None;
+        self.scenario_workspace = None;
+        self.health_results.clear();
+        self.enrichment_status = None;
+        self.operation_error = None;
+        self.operation_output.clear();
         self.knowledge = None;
         self.knowledge_last_ingest = None;
         self.knowledge_last_association = None;
@@ -154,6 +172,41 @@ impl DevqlBddWorld {
             .as_ref()
             .expect("logger workspace should be initialized")
             .path()
+    }
+
+    pub(super) fn ensure_scenario_workspace(&mut self) -> &Path {
+        if self.scenario_workspace.is_none() {
+            self.scenario_workspace =
+                Some(tempfile::tempdir().expect("create temp resilience workspace"));
+        }
+        self.scenario_workspace
+            .as_ref()
+            .expect("scenario workspace should be initialized")
+            .path()
+    }
+
+    pub(super) fn scenario_repo_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("repo");
+        std::fs::create_dir_all(&path).expect("create scenario repo root");
+        path
+    }
+
+    pub(super) fn scenario_config_override_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("config-root");
+        std::fs::create_dir_all(&path).expect("create scenario config root");
+        path
+    }
+
+    pub(super) fn scenario_state_override_root(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("state-root");
+        std::fs::create_dir_all(&path).expect("create scenario state root");
+        path
+    }
+
+    pub(super) fn scenario_bin_dir(&mut self) -> PathBuf {
+        let path = self.ensure_scenario_workspace().join("bin");
+        std::fs::create_dir_all(&path).expect("create scenario bin dir");
+        path
     }
 
     pub(super) fn read_log_entries(&self) -> Vec<Value> {
