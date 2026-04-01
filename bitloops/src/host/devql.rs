@@ -71,7 +71,9 @@ pub use self::commands_refresh::{
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
-pub use self::commands_sync::{SyncSummary, run_sync, run_sync_with_summary};
+pub use self::commands_sync::{
+    SyncSummary, SyncValidationFileDrift, SyncValidationSummary, run_sync, run_sync_with_summary,
+};
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub use self::sync::types::SyncMode;
@@ -83,6 +85,8 @@ pub mod watch;
 pub(crate) use self::commands_ingest::promote_temporary_current_rows_for_head_commit;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync;
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation;
 #[cfg(test)]
 pub(crate) use self::connection_status::{
     EVENTS_DUCKDB_LABEL, RELATIONAL_SQLITE_LABEL, collect_connection_status_rows,

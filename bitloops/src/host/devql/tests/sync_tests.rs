@@ -1755,6 +1755,71 @@ async fn full_sync_indexes_all_supported_files() {
 }
 
 #[tokio::test]
+async fn sync_validate_reports_clean_state_then_detects_stale_rows() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync before validation");
+
+    let clean = crate::host::devql::execute_sync_validation(&cfg, &relational)
+        .await
+        .expect("execute sync validation for clean state");
+    let clean_report = clean.validation.expect("validation report");
+    assert!(clean_report.valid, "freshly synced state should validate clean");
+    assert!(
+        clean_report.files_with_drift.is_empty(),
+        "clean validation should not report per-file drift"
+    );
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    db.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
+            language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
+            start_byte, end_byte, signature, modifiers, docstring, updated_at
+         )
+         SELECT
+            repo_id, path, content_id, 'sync-validation-stale-symbol', 'sync-validation-stale-artefact',
+            language, canonical_kind, language_kind, symbol_fqn || '::stale', parent_symbol_id,
+            parent_artefact_id, start_line, end_line, start_byte, end_byte, signature,
+            modifiers, docstring, datetime('now')
+         FROM artefacts_current
+         WHERE repo_id = ?1
+         LIMIT 1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("insert stale artefact row");
+
+    let drift = crate::host::devql::execute_sync_validation(&cfg, &relational)
+        .await
+        .expect("execute sync validation with stale rows");
+    let drift_report = drift.validation.expect("validation report");
+    assert!(
+        !drift_report.valid,
+        "validation should fail when stale rows exist"
+    );
+    assert!(
+        drift_report.stale_artefacts >= 1,
+        "stale artefacts should be counted in the validation report"
+    );
+    assert!(
+        drift_report
+            .files_with_drift
+            .iter()
+            .any(|file| file.stale_artefacts >= 1),
+        "stale artefact drift should be attributed to at least one file"
+    );
+}
+
+#[tokio::test]
 async fn auto_sync_uses_full_reason_and_git_backed_retention_for_clean_head_files() {
     let repo = seed_full_sync_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());

@@ -43,16 +43,20 @@ pub struct DevqlIngestArgs {
 #[derive(Debug, Clone, clap::Args)]
 pub struct DevqlSyncArgs {
     /// Run a full workspace reconciliation.
-    #[arg(long, conflicts_with_all = ["paths", "repair"])]
+    #[arg(long, conflicts_with_all = ["paths", "repair", "validate"])]
     pub full: bool,
 
     /// Reconcile only the specified workspace paths.
-    #[arg(long, value_delimiter = ',', conflicts_with_all = ["full", "repair"])]
+    #[arg(long, value_delimiter = ',', conflicts_with_all = ["full", "repair", "validate"])]
     pub paths: Option<Vec<String>>,
 
     /// Rebuild sync state from the current workspace and repair stored state.
-    #[arg(long, conflicts_with_all = ["full", "paths"])]
+    #[arg(long, conflicts_with_all = ["full", "paths", "validate"])]
     pub repair: bool,
+
+    /// Validate current-state tables against a full read-only workspace reconciliation.
+    #[arg(long, conflicts_with_all = ["full", "paths", "repair"])]
+    pub validate: bool,
 }
 
 #[derive(Args, Debug, Clone)]

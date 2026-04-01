@@ -149,6 +149,7 @@ fn devql_cli_parses_sync_modes() {
         Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()])
     );
     assert!(!sync.repair);
+    assert!(!sync.validate);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--repair"])
         .expect("devql sync repair should parse");
@@ -161,6 +162,7 @@ fn devql_cli_parses_sync_modes() {
     assert!(!sync.full);
     assert_eq!(sync.paths, None);
     assert!(sync.repair);
+    assert!(!sync.validate);
 
     let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--full"])
         .expect("devql sync full should parse");
@@ -173,6 +175,20 @@ fn devql_cli_parses_sync_modes() {
     assert!(sync.full);
     assert_eq!(sync.paths, None);
     assert!(!sync.repair);
+    assert!(!sync.validate);
+
+    let parsed = Cli::try_parse_from(["bitloops", "devql", "sync", "--validate"])
+        .expect("devql sync validate should parse");
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Sync(sync)) = args.command else {
+        panic!("expected devql sync command");
+    };
+    assert!(!sync.full);
+    assert_eq!(sync.paths, None);
+    assert!(!sync.repair);
+    assert!(sync.validate);
 }
 
 #[test]
@@ -181,10 +197,30 @@ fn devql_cli_rejects_conflicting_sync_modes() {
         vec!["bitloops", "devql", "sync", "--full", "--paths", "src/lib.rs"],
         vec!["bitloops", "devql", "sync", "--full", "--repair"],
         vec!["bitloops", "devql", "sync", "--paths", "src/lib.rs", "--repair"],
+        vec!["bitloops", "devql", "sync", "--validate", "--repair"],
+        vec!["bitloops", "devql", "sync", "--validate", "--full"],
         vec![
             "bitloops",
             "devql",
             "sync",
+            "--validate",
+            "--paths",
+            "src/lib.rs",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--full",
+            "--paths",
+            "src/lib.rs",
+            "--repair",
+        ],
+        vec![
+            "bitloops",
+            "devql",
+            "sync",
+            "--validate",
             "--full",
             "--paths",
             "src/lib.rs",
@@ -217,6 +253,7 @@ fn format_sync_completion_summary_includes_diagnostics_when_present() {
         cache_hits: 5,
         cache_misses: 2,
         parse_errors: 1,
+        validation: None,
     };
 
     assert_eq!(
@@ -242,11 +279,76 @@ fn format_sync_completion_summary_keeps_basic_happy_path_line() {
         cache_hits: 5,
         cache_misses: 0,
         parse_errors: 0,
+        validation: None,
     };
 
     assert_eq!(
         format_sync_completion_summary(&summary),
         "sync complete: 1 added, 2 changed, 3 removed, 4 unchanged, 5 cache hits"
+    );
+}
+
+#[test]
+fn format_sync_completion_summary_for_validate_reports_path_drift() {
+    let summary = SyncSummary {
+        success: false,
+        mode: "validate".to_string(),
+        parser_version: "parser@1".to_string(),
+        extractor_version: "extractor@1".to_string(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        head_tree_sha: Some("def456".to_string()),
+        paths_unchanged: 0,
+        paths_added: 0,
+        paths_changed: 0,
+        paths_removed: 0,
+        cache_hits: 0,
+        cache_misses: 0,
+        parse_errors: 0,
+        validation: Some(crate::host::devql::SyncValidationSummary {
+            valid: false,
+            expected_artefacts: 10,
+            actual_artefacts: 8,
+            expected_edges: 6,
+            actual_edges: 6,
+            missing_artefacts: 2,
+            stale_artefacts: 0,
+            mismatched_artefacts: 0,
+            missing_edges: 0,
+            stale_edges: 0,
+            mismatched_edges: 1,
+            files_with_drift: vec![crate::host::devql::SyncValidationFileDrift {
+                path: "src/lib.rs".to_string(),
+                missing_artefacts: 2,
+                stale_artefacts: 0,
+                mismatched_artefacts: 0,
+                missing_edges: 0,
+                stale_edges: 0,
+                mismatched_edges: 1,
+            }],
+        }),
+    };
+
+    let rendered = format_sync_completion_summary(&summary);
+    assert!(
+        rendered.contains("sync validation: drift detected"),
+        "expected validation header, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("artefacts: expected=10 actual=8 missing=2 stale=0 mismatched=0"),
+        "expected artefacts counters, got: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "edges: expected=6 actual=6 missing=0 stale=0 mismatched=1"
+        ),
+        "expected edges counters, got: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "src/lib.rs: artefacts missing=2 stale=0 mismatched=0; edges missing=0 stale=0 mismatched=1"
+        ),
+        "expected file drift entry, got: {rendered}"
     );
 }
 

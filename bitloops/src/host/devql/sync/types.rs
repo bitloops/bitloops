@@ -6,6 +6,7 @@ pub enum SyncMode {
     Full,
     Paths(Vec<String>),
     Repair,
+    Validate,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -114,11 +114,129 @@ fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
         .expect("apply symbol_clone_edges DDL");
 }
 
+fn apply_legacy_current_state_compat_schema(path: &Path) {
+    let conn = rusqlite::Connection::open(path).expect("open sqlite for legacy current-state DDL");
+    conn.execute_batch(
+        r#"
+PRAGMA foreign_keys=OFF;
+
+ALTER TABLE artefacts_current RENAME TO artefacts_current__sync_shape;
+CREATE TABLE artefacts_current (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL DEFAULT '',
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    canonical_kind TEXT,
+    language_kind TEXT,
+    symbol_fqn TEXT,
+    parent_symbol_id TEXT,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    docstring TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    branch TEXT NOT NULL DEFAULT 'main',
+    commit_sha TEXT,
+    revision_kind TEXT NOT NULL DEFAULT 'commit',
+    revision_id TEXT NOT NULL DEFAULT '',
+    temp_checkpoint_id INTEGER,
+    blob_sha TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
+);
+INSERT INTO artefacts_current (
+    repo_id, path, content_id, symbol_id, artefact_id, language,
+    canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+    start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at,
+    branch, commit_sha, revision_kind, revision_id, temp_checkpoint_id, blob_sha, content_hash
+)
+SELECT
+    repo_id, path, content_id, symbol_id, artefact_id, language,
+    canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+    start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at,
+    'main', '', 'commit', '', NULL, COALESCE(content_id, ''), COALESCE(content_id, '')
+FROM artefacts_current__sync_shape;
+DROP TABLE artefacts_current__sync_shape;
+CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
+ON artefacts_current (repo_id, path);
+CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx
+ON artefacts_current (repo_id, canonical_kind);
+CREATE INDEX IF NOT EXISTS artefacts_current_fqn_idx
+ON artefacts_current (repo_id, symbol_fqn);
+CREATE UNIQUE INDEX IF NOT EXISTS artefacts_current_branch_symbol_idx
+ON artefacts_current (repo_id, branch, symbol_id);
+
+ALTER TABLE artefact_edges_current RENAME TO artefact_edges_current__sync_shape;
+CREATE TABLE artefact_edges_current (
+    repo_id TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL DEFAULT '',
+    from_symbol_id TEXT NOT NULL,
+    from_artefact_id TEXT NOT NULL,
+    to_symbol_id TEXT,
+    to_artefact_id TEXT,
+    to_symbol_ref TEXT,
+    edge_kind TEXT NOT NULL,
+    language TEXT NOT NULL,
+    start_line INTEGER,
+    end_line INTEGER,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    branch TEXT NOT NULL DEFAULT 'main',
+    commit_sha TEXT,
+    revision_kind TEXT NOT NULL DEFAULT 'commit',
+    revision_id TEXT NOT NULL DEFAULT '',
+    temp_checkpoint_id INTEGER,
+    blob_sha TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, edge_id)
+);
+INSERT INTO artefact_edges_current (
+    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+    start_line, end_line, metadata, updated_at, branch, commit_sha,
+    revision_kind, revision_id, temp_checkpoint_id, blob_sha
+)
+SELECT
+    repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+    to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language,
+    start_line, end_line, metadata, updated_at, 'main', '',
+    'commit', '', NULL, COALESCE(content_id, '')
+FROM artefact_edges_current__sync_shape;
+DROP TABLE artefact_edges_current__sync_shape;
+CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
+ON artefact_edges_current (repo_id, path);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_from_symbol_idx
+ON artefact_edges_current (repo_id, from_symbol_id);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_to_symbol_idx
+ON artefact_edges_current (repo_id, to_symbol_id);
+CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_branch_edge_idx
+ON artefact_edges_current (repo_id, branch, edge_id);
+
+PRAGMA foreign_keys=ON;
+"#,
+    )
+    .expect("apply legacy current-state compatibility schema");
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
         .expect("initialise sqlite relational schema");
     let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking({
+        let path = path_buf.clone();
+        move || apply_legacy_current_state_compat_schema(&path)
+    })
+    .await
+    .expect("join blocking legacy current-state DDL");
     tokio::task::spawn_blocking({
         let path = path_buf.clone();
         move || apply_symbol_clone_edges_sqlite_schema(&path)

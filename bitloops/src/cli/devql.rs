@@ -72,7 +72,9 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             graphql::run_ingest_via_graphql(&scope, args.init, args.max_checkpoints).await
         }
         DevqlCommand::Sync(args) => {
-            let mode = if args.repair {
+            let mode = if args.validate {
+                SyncMode::Validate
+            } else if args.repair {
                 SyncMode::Repair
             } else if let Some(paths) = args.paths {
                 SyncMode::Paths(paths)
@@ -201,6 +203,10 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 }
 
 fn format_sync_completion_summary(summary: &SyncSummary) -> String {
+    if summary.mode == "validate" {
+        return format_sync_validation_summary(summary);
+    }
+
     let mut message = format!(
         "sync complete: {} added, {} changed, {} removed, {} unchanged, {} cache hits",
         summary.paths_added,
@@ -228,6 +234,57 @@ fn format_sync_completion_summary(summary: &SyncSummary) -> String {
     }
 
     message
+}
+
+fn format_sync_validation_summary(summary: &SyncSummary) -> String {
+    let Some(validation) = summary.validation.as_ref() else {
+        return "sync validation: no report available".to_string();
+    };
+
+    if validation.valid {
+        return format!(
+            "sync validation: clean (artefacts: expected={} actual={}, edges: expected={} actual={})",
+            validation.expected_artefacts,
+            validation.actual_artefacts,
+            validation.expected_edges,
+            validation.actual_edges,
+        );
+    }
+
+    let mut lines = vec![
+        "sync validation: drift detected".to_string(),
+        format!(
+            "artefacts: expected={} actual={} missing={} stale={} mismatched={}",
+            validation.expected_artefacts,
+            validation.actual_artefacts,
+            validation.missing_artefacts,
+            validation.stale_artefacts,
+            validation.mismatched_artefacts,
+        ),
+        format!(
+            "edges: expected={} actual={} missing={} stale={} mismatched={}",
+            validation.expected_edges,
+            validation.actual_edges,
+            validation.missing_edges,
+            validation.stale_edges,
+            validation.mismatched_edges,
+        ),
+    ];
+
+    for file in &validation.files_with_drift {
+        lines.push(format!(
+            "{}: artefacts missing={} stale={} mismatched={}; edges missing={} stale={} mismatched={}",
+            file.path,
+            file.missing_artefacts,
+            file.stale_artefacts,
+            file.mismatched_artefacts,
+            file.missing_edges,
+            file.stale_edges,
+            file.mismatched_edges,
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn compile_slim_query_document(
