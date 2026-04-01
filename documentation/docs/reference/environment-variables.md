@@ -13,7 +13,7 @@ Bitloops prefers daemon config and repo policy over environment variables, but a
 | --- | --- |
 | `BITLOOPS_TELEMETRY_OPTOUT` | Disables telemetry dispatch at runtime. It does not answer the CLI consent prompt or rewrite stored daemon-config consent. |
 | `BITLOOPS_DISABLE_VERSION_CHECK` | Skips update checks |
-| `BITLOOPS_LOG_LEVEL` | Overrides the effective daemon log level (`daemon.log`) |
+| `BITLOOPS_LOG_LEVEL` | Sets the log level for both the daemon log (`daemon.log`) and the telemetry file logger |
 | `ACCESSIBLE` | Uses simpler terminal prompts for accessibility workflows |
 
 ## DevQL Semantic Overrides
