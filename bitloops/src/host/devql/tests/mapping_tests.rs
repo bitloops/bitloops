@@ -10,9 +10,12 @@ use crate::adapters::languages::python::extraction::extract_python_artefacts;
 use crate::adapters::languages::rust::canonical::{
     RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS,
 };
+use crate::adapters::languages::rust::extraction::extract_rust_artefacts;
 use crate::adapters::languages::ts_js::canonical::{
     TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS,
 };
+use crate::adapters::languages::ts_js::extraction::extract_js_ts_artefacts;
+use crate::host::language_adapter::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
 use crate::host::language_adapter::{is_supported_language_kind, resolve_canonical_kind};
 
 fn extension_runtime_cfg() -> DevqlConfig {
@@ -46,44 +49,92 @@ fn canonical_kind(artefact: &LanguageArtefact) -> Option<&str> {
     artefact.canonical_kind.as_deref()
 }
 
-fn artefact_by_language_kind<'a>(
-    artefacts: &'a [LanguageArtefact],
-    language_kind: &str,
-) -> &'a LanguageArtefact {
+fn artefact_by_language_kind(
+    artefacts: &[LanguageArtefact],
+    language_kind: LanguageKind,
+) -> &LanguageArtefact {
     artefacts
         .iter()
         .find(|artefact| artefact.language_kind == language_kind)
-        .unwrap_or_else(|| panic!("missing artefact with language_kind {language_kind}"))
+        .unwrap_or_else(|| panic!("missing artefact with language_kind {}", language_kind))
 }
 
 fn artefact_by_name_and_language_kind<'a>(
     artefacts: &'a [LanguageArtefact],
-    language_kind: &str,
+    language_kind: LanguageKind,
     name: &str,
 ) -> &'a LanguageArtefact {
     artefacts
         .iter()
         .find(|artefact| artefact.language_kind == language_kind && artefact.name == name)
-        .unwrap_or_else(|| panic!("missing artefact {name} with language_kind {language_kind}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing artefact {name} with language_kind {}",
+                language_kind
+            )
+        })
 }
 
 #[test]
 fn js_ts_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        ("function_declaration", true, Some("function")),
-        ("method_definition", true, Some("method")),
-        ("interface_declaration", true, Some("interface")),
-        ("type_alias_declaration", true, Some("type")),
-        ("enum_declaration", true, Some("enum")),
-        ("variable_declarator", true, Some("variable")),
-        ("import_statement", true, Some("import")),
-        ("module_declaration", true, Some("module")),
-        ("internal_module", true, Some("module")),
-        ("class_declaration", true, None),
-        ("constructor", true, None),
-        ("property_declaration", true, None),
-        ("public_field_definition", true, None),
-        ("call_expression", false, None),
+        (
+            LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
+            true,
+            Some("function"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::MethodDefinition),
+            true,
+            Some("method"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::InterfaceDeclaration),
+            true,
+            Some("interface"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::TypeAliasDeclaration),
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::EnumDeclaration),
+            true,
+            Some("enum"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::VariableDeclarator),
+            true,
+            Some("variable"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::ImportStatement),
+            true,
+            Some("import"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::ModuleDeclaration),
+            true,
+            Some("module"),
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::InternalModule),
+            true,
+            Some("module"),
+        ),
+        (LanguageKind::ts_js(TsJsKind::ClassDeclaration), true, None),
+        (LanguageKind::ts_js(TsJsKind::Constructor), true, None),
+        (
+            LanguageKind::ts_js(TsJsKind::PropertyDeclaration),
+            true,
+            None,
+        ),
+        (
+            LanguageKind::ts_js(TsJsKind::PublicFieldDefinition),
+            true,
+            None,
+        ),
     ];
 
     for (language_kind, supported, canonical_kind) in expected {
@@ -124,62 +175,153 @@ export function helper() {
 
     let artefacts = extract_js_ts_artefacts(content, "src/sample.ts").unwrap();
 
-    let import = artefact_by_language_kind(&artefacts, "import_statement");
+    let import =
+        artefact_by_language_kind(&artefacts, LanguageKind::ts_js(TsJsKind::ImportStatement));
     assert_eq!(canonical_kind(import), Some("import"));
 
-    let interface =
-        artefact_by_name_and_language_kind(&artefacts, "interface_declaration", "Contract");
+    let interface = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::InterfaceDeclaration),
+        "Contract",
+    );
     assert_eq!(canonical_kind(interface), Some("interface"));
 
-    let type_alias =
-        artefact_by_name_and_language_kind(&artefacts, "type_alias_declaration", "Identifier");
+    let type_alias = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::TypeAliasDeclaration),
+        "Identifier",
+    );
     assert_eq!(canonical_kind(type_alias), Some("type"));
 
-    let variable = artefact_by_name_and_language_kind(&artefacts, "variable_declarator", "API_URL");
+    let variable = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::VariableDeclarator),
+        "API_URL",
+    );
     assert_eq!(canonical_kind(variable), Some("variable"));
 
-    let function = artefact_by_name_and_language_kind(&artefacts, "function_declaration", "helper");
+    let function = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
+        "helper",
+    );
     assert_eq!(canonical_kind(function), Some("function"));
 
-    let constructor = artefact_by_name_and_language_kind(&artefacts, "constructor", "constructor");
+    let constructor = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::Constructor),
+        "constructor",
+    );
     assert_eq!(canonical_kind(constructor), None);
 
-    let method = artefact_by_name_and_language_kind(&artefacts, "method_definition", "run");
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::MethodDefinition),
+        "run",
+    );
     assert_eq!(canonical_kind(method), Some("method"));
 
-    let class = artefact_by_name_and_language_kind(&artefacts, "class_declaration", "Service");
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::ts_js(TsJsKind::ClassDeclaration),
+        "Service",
+    );
     assert_eq!(canonical_kind(class), None);
 }
 
 #[test]
 fn rust_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        (("function_item", false), true, Some("function")),
-        (("function_item", true), true, Some("method")),
-        (("trait_item", false), true, Some("interface")),
-        (("type_item", false), true, Some("type")),
-        (("enum_item", false), true, Some("enum")),
-        (("use_declaration", false), true, Some("import")),
-        (("mod_item", false), true, Some("module")),
-        (("let_declaration", false), true, Some("variable")),
-        (("impl_item", false), true, None),
-        (("struct_item", false), true, None),
-        (("const_item", false), true, None),
-        (("static_item", false), true, None),
-        (("macro_definition", false), true, None),
-        (("call_expression", false), false, None),
+        (
+            Some(LanguageKind::rust(RustKind::FunctionItem)),
+            false,
+            true,
+            Some("function"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::FunctionItem)),
+            true,
+            true,
+            Some("method"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::TraitItem)),
+            false,
+            true,
+            Some("interface"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::TypeItem)),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::EnumItem)),
+            false,
+            true,
+            Some("enum"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::UseDeclaration)),
+            false,
+            true,
+            Some("import"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::ModItem)),
+            false,
+            true,
+            Some("module"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::LetDeclaration)),
+            false,
+            true,
+            Some("variable"),
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::ImplItem)),
+            false,
+            true,
+            None,
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::StructItem)),
+            false,
+            true,
+            None,
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::ConstItem)),
+            false,
+            true,
+            None,
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::StaticItem)),
+            false,
+            true,
+            None,
+        ),
+        (
+            Some(LanguageKind::rust(RustKind::MacroDefinition)),
+            false,
+            true,
+            None,
+        ),
+        (None, false, false, None),
     ];
 
-    for ((language_kind, inside_impl), supported, canonical_kind) in expected {
-        assert_eq!(
-            is_supported_language_kind(RUST_SUPPORTED_LANGUAGE_KINDS, language_kind),
-            supported
-        );
-        assert_eq!(
-            resolve_canonical_kind(RUST_CANONICAL_MAPPINGS, language_kind, inside_impl)
-                .map(CanonicalKindProjection::as_str),
-            canonical_kind
-        );
+    for (language_kind, inside_impl, supported, canonical_kind) in expected {
+        let actual_supported = language_kind
+            .map(|kind| is_supported_language_kind(RUST_SUPPORTED_LANGUAGE_KINDS, kind))
+            .unwrap_or(false);
+        let actual_canonical = language_kind
+            .and_then(|kind| resolve_canonical_kind(RUST_CANONICAL_MAPPINGS, kind, inside_impl))
+            .map(CanonicalKindProjection::as_str);
+        assert_eq!(actual_supported, supported);
+        assert_eq!(actual_canonical, canonical_kind);
     }
 }
 
@@ -211,41 +353,70 @@ fn run() {}
 
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
 
-    let import = artefact_by_language_kind(&artefacts, "use_declaration");
+    let import =
+        artefact_by_language_kind(&artefacts, LanguageKind::rust(RustKind::UseDeclaration));
     assert_eq!(canonical_kind(import), Some("import"));
 
-    let module = artefact_by_name_and_language_kind(&artefacts, "mod_item", "api");
+    let module = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::ModItem),
+        "api",
+    );
     assert_eq!(canonical_kind(module), Some("module"));
 
-    let type_item = artefact_by_name_and_language_kind(&artefacts, "type_item", "UserId");
+    let type_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::TypeItem),
+        "UserId",
+    );
     assert_eq!(canonical_kind(type_item), Some("type"));
 
-    let enum_item = artefact_by_name_and_language_kind(&artefacts, "enum_item", "Role");
+    let enum_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::EnumItem),
+        "Role",
+    );
     assert_eq!(canonical_kind(enum_item), Some("enum"));
 
-    let trait_item = artefact_by_name_and_language_kind(&artefacts, "trait_item", "Repository");
+    let trait_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::TraitItem),
+        "Repository",
+    );
     assert_eq!(canonical_kind(trait_item), Some("interface"));
 
     let free_function = artefacts
         .iter()
         .find(|artefact| {
-            artefact.language_kind == "function_item"
+            artefact.language_kind == LanguageKind::rust(RustKind::FunctionItem)
                 && artefact.name == "run"
                 && artefact.parent_symbol_fqn.is_none()
         })
         .expect("missing free function artefact");
     assert_eq!(canonical_kind(free_function), Some("function"));
 
-    let struct_item = artefact_by_name_and_language_kind(&artefacts, "struct_item", "User");
+    let struct_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::StructItem),
+        "User",
+    );
     assert_eq!(canonical_kind(struct_item), None);
 
-    let impl_item = artefact_by_language_kind(&artefacts, "impl_item");
+    let impl_item = artefact_by_language_kind(&artefacts, LanguageKind::rust(RustKind::ImplItem));
     assert_eq!(canonical_kind(impl_item), None);
 
-    let const_item = artefact_by_name_and_language_kind(&artefacts, "const_item", "LIMIT");
+    let const_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::ConstItem),
+        "LIMIT",
+    );
     assert_eq!(canonical_kind(const_item), None);
 
-    let static_item = artefact_by_name_and_language_kind(&artefacts, "static_item", "NAME");
+    let static_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::StaticItem),
+        "NAME",
+    );
     assert_eq!(canonical_kind(static_item), None);
 }
 
@@ -264,7 +435,11 @@ impl Repository for User {
 
     let artefacts = extract_rust_artefacts(content, "src/lib.rs").unwrap();
 
-    let trait_item = artefact_by_name_and_language_kind(&artefacts, "trait_item", "Repository");
+    let trait_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::rust(RustKind::TraitItem),
+        "Repository",
+    );
     assert_eq!(canonical_kind(trait_item), Some("interface"));
 
     let save_callables = artefacts
@@ -295,27 +470,61 @@ impl Repository for User {
 #[test]
 fn python_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        (("function_definition", false), true, Some("function")),
-        (("function_definition", true), true, Some("method")),
-        (("class_definition", false), true, Some("type")),
-        (("import_statement", false), true, Some("import")),
-        (("import_from_statement", false), true, Some("import")),
-        (("future_import_statement", false), true, Some("import")),
-        (("assignment", false), true, Some("variable")),
-        (("decorated_definition", false), false, None),
-        (("call", false), false, None),
+        (
+            Some(LanguageKind::python(PythonKind::FunctionDefinition)),
+            false,
+            true,
+            Some("function"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::FunctionDefinition)),
+            true,
+            true,
+            Some("method"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::ClassDefinition)),
+            false,
+            true,
+            Some("type"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::ImportStatement)),
+            false,
+            true,
+            Some("import"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::ImportFromStatement)),
+            false,
+            true,
+            Some("import"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::FutureImportStatement)),
+            false,
+            true,
+            Some("import"),
+        ),
+        (
+            Some(LanguageKind::python(PythonKind::Assignment)),
+            false,
+            true,
+            Some("variable"),
+        ),
+        (None, false, false, None),
+        (None, false, false, None),
     ];
 
-    for ((language_kind, inside_parent), supported, canonical_kind) in expected {
-        assert_eq!(
-            is_supported_language_kind(PYTHON_SUPPORTED_LANGUAGE_KINDS, language_kind),
-            supported
-        );
-        assert_eq!(
-            resolve_canonical_kind(PYTHON_CANONICAL_MAPPINGS, language_kind, inside_parent)
-                .map(CanonicalKindProjection::as_str),
-            canonical_kind
-        );
+    for (language_kind, inside_parent, supported, canonical_kind) in expected {
+        let actual_supported = language_kind
+            .map(|kind| is_supported_language_kind(PYTHON_SUPPORTED_LANGUAGE_KINDS, kind))
+            .unwrap_or(false);
+        let actual_canonical = language_kind
+            .and_then(|kind| resolve_canonical_kind(PYTHON_CANONICAL_MAPPINGS, kind, inside_parent))
+            .map(CanonicalKindProjection::as_str);
+        assert_eq!(actual_supported, supported);
+        assert_eq!(actual_canonical, canonical_kind);
     }
 }
 
@@ -347,26 +556,48 @@ def run():
 
     let artefacts = extract_python_artefacts(content, "src/main.py").unwrap();
 
-    let import = artefact_by_language_kind(&artefacts, "import_from_statement");
+    let import = artefact_by_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::ImportFromStatement),
+    );
     assert_eq!(canonical_kind(import), Some("import"));
 
-    let class = artefact_by_name_and_language_kind(&artefacts, "class_definition", "Greeter");
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::ClassDefinition),
+        "Greeter",
+    );
     assert_eq!(canonical_kind(class), Some("type"));
     assert_eq!(class.docstring.as_deref(), Some("class docs"));
 
-    let variable = artefact_by_name_and_language_kind(&artefacts, "assignment", "VALUE");
+    let variable = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::Assignment),
+        "VALUE",
+    );
     assert_eq!(canonical_kind(variable), Some("variable"));
 
-    let function = artefact_by_name_and_language_kind(&artefacts, "function_definition", "run");
+    let function = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::FunctionDefinition),
+        "run",
+    );
     assert_eq!(canonical_kind(function), Some("function"));
     assert_eq!(function.docstring.as_deref(), Some("function docs"));
 
-    let method = artefact_by_name_and_language_kind(&artefacts, "function_definition", "greet");
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::FunctionDefinition),
+        "greet",
+    );
     assert_eq!(canonical_kind(method), Some("method"));
     assert_eq!(method.docstring.as_deref(), Some("method docs"));
 
-    let static_method =
-        artefact_by_name_and_language_kind(&artefacts, "function_definition", "helper");
+    let static_method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::python(PythonKind::FunctionDefinition),
+        "helper",
+    );
     assert_eq!(canonical_kind(static_method), Some("method"));
     assert!(
         static_method
@@ -379,28 +610,59 @@ def run():
 #[test]
 fn go_canonical_mapping_covers_supported_kind_table() {
     let expected = [
-        ("function_declaration", true, Some("function")),
-        ("method_declaration", true, Some("method")),
-        ("type_spec", true, Some("type")),
-        ("type_alias", true, Some("type")),
-        ("struct_type", true, Some("type")),
-        ("interface_type", true, Some("interface")),
-        ("import_spec", true, Some("import")),
-        ("var_spec", true, Some("variable")),
-        ("const_spec", true, Some("variable")),
-        ("call_expression", false, None),
+        (
+            Some(LanguageKind::go(GoKind::FunctionDeclaration)),
+            true,
+            Some("function"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::MethodDeclaration)),
+            true,
+            Some("method"),
+        ),
+        (Some(LanguageKind::go(GoKind::TypeSpec)), true, Some("type")),
+        (
+            Some(LanguageKind::go(GoKind::TypeAlias)),
+            true,
+            Some("type"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::StructType)),
+            true,
+            Some("type"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::InterfaceType)),
+            true,
+            Some("interface"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::ImportSpec)),
+            true,
+            Some("import"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::VarSpec)),
+            true,
+            Some("variable"),
+        ),
+        (
+            Some(LanguageKind::go(GoKind::ConstSpec)),
+            true,
+            Some("variable"),
+        ),
+        (None, false, None),
     ];
 
     for (language_kind, supported, canonical_kind) in expected {
-        assert_eq!(
-            is_supported_language_kind(GO_SUPPORTED_LANGUAGE_KINDS, language_kind),
-            supported
-        );
-        assert_eq!(
-            resolve_canonical_kind(GO_CANONICAL_MAPPINGS, language_kind, false)
-                .map(CanonicalKindProjection::as_str),
-            canonical_kind
-        );
+        let actual_supported = language_kind
+            .map(|kind| is_supported_language_kind(GO_SUPPORTED_LANGUAGE_KINDS, kind))
+            .unwrap_or(false);
+        let actual_canonical = language_kind
+            .and_then(|kind| resolve_canonical_kind(GO_CANONICAL_MAPPINGS, kind, false))
+            .map(CanonicalKindProjection::as_str);
+        assert_eq!(actual_supported, supported);
+        assert_eq!(actual_canonical, canonical_kind);
     }
 }
 
@@ -429,23 +691,46 @@ func (h *Handler) ServeHTTP() {}
 
     let artefacts = extract_go_artefacts(content, "service/handler.go").unwrap();
 
-    let import = artefact_by_name_and_language_kind(&artefacts, "import_spec", "alias");
+    let import = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::ImportSpec),
+        "alias",
+    );
     assert_eq!(canonical_kind(import), Some("import"));
 
-    let struct_type = artefact_by_name_and_language_kind(&artefacts, "struct_type", "Handler");
+    let struct_type = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::StructType),
+        "Handler",
+    );
     assert_eq!(canonical_kind(struct_type), Some("type"));
 
-    let interface_type = artefact_by_name_and_language_kind(&artefacts, "interface_type", "Runner");
+    let interface_type = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::InterfaceType),
+        "Runner",
+    );
     assert_eq!(canonical_kind(interface_type), Some("interface"));
 
-    let variable = artefact_by_name_and_language_kind(&artefacts, "const_spec", "DefaultPort");
+    let variable = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::ConstSpec),
+        "DefaultPort",
+    );
     assert_eq!(canonical_kind(variable), Some("variable"));
 
-    let function =
-        artefact_by_name_and_language_kind(&artefacts, "function_declaration", "NewHandler");
+    let function = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::FunctionDeclaration),
+        "NewHandler",
+    );
     assert_eq!(canonical_kind(function), Some("function"));
 
-    let method = artefact_by_name_and_language_kind(&artefacts, "method_declaration", "ServeHTTP");
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::go(GoKind::MethodDeclaration),
+        "ServeHTTP",
+    );
     assert_eq!(canonical_kind(method), Some("method"));
     assert_eq!(
         method.parent_symbol_fqn.as_deref(),

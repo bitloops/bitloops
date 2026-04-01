@@ -5,11 +5,11 @@ use tree_sitter::Node;
 
 use super::canonical::{GO_CANONICAL_MAPPINGS, GO_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    GolangKinds, LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+    GoKind, LanguageArtefact, LanguageKind, is_supported_language_kind, resolve_canonical_kind,
 };
 
 struct GoArtefactDescriptor {
-    language_kind: String,
+    language_kind: LanguageKind,
     name: String,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,
@@ -28,7 +28,7 @@ pub(crate) fn extract_go_artefacts(content: &str, path: &str) -> Result<Vec<Lang
 
     let root = tree.root_node();
     let mut out = Vec::new();
-    let mut seen: HashSet<(String, String, i32)> = HashSet::new();
+    let mut seen: HashSet<(LanguageKind, String, i32)> = HashSet::new();
     collect_go_nodes_recursive(root, content, path, &mut out, &mut seen);
     out.sort_by_key(|artefact| {
         (
@@ -97,7 +97,7 @@ fn collect_go_nodes_recursive(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
 ) {
     match node.kind() {
         "function_declaration" => {
@@ -110,7 +110,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: GolangKinds::FunctionDeclaration.to_string(),
+                        language_kind: LanguageKind::go(GoKind::FunctionDeclaration),
                         name: name.clone(),
                         symbol_fqn: format!("{path}::{name}"),
                         parent_symbol_fqn: None,
@@ -132,7 +132,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: GolangKinds::MethodDeclaration.to_string(),
+                        language_kind: LanguageKind::go(GoKind::MethodDeclaration),
                         name: name.clone(),
                         symbol_fqn: format!("{parent_symbol_fqn}::{name}"),
                         parent_symbol_fqn: Some(parent_symbol_fqn),
@@ -147,13 +147,17 @@ fn collect_go_nodes_recursive(
             {
                 let type_node = node.child_by_field_name("type");
                 let language_kind = type_node
-                    .map(|inner| match inner.kind() {
-                        "struct_type" => GolangKinds::StructType,
-                        "interface_type" => GolangKinds::InterfaceType,
-                        _ => node.kind(),
+                    .and_then(|inner| match inner.kind() {
+                        "struct_type" => Some(LanguageKind::go(GoKind::StructType)),
+                        "interface_type" => Some(LanguageKind::go(GoKind::InterfaceType)),
+                        _ => None,
                     })
-                    .unwrap_or(node.kind())
-                    .to_string();
+                    .unwrap_or_else(|| {
+                        LanguageKind::go(
+                            GoKind::from_tree_sitter_kind(node.kind())
+                                .expect("validated go type node kind"),
+                        )
+                    });
                 let modifiers = type_modifiers(node, type_node, content);
                 push_go_artefact(
                     out,
@@ -185,7 +189,7 @@ fn collect_go_nodes_recursive(
                     node,
                     content,
                     GoArtefactDescriptor {
-                        language_kind: GolangKinds::ImportSpec.to_string(),
+                        language_kind: LanguageKind::go(GoKind::ImportSpec),
                         name: import_name.clone(),
                         symbol_fqn: format!("{path}::import::{import_name}@{line_no}"),
                         parent_symbol_fqn: None,
@@ -196,7 +200,9 @@ fn collect_go_nodes_recursive(
         }
         "const_spec" | "var_spec" => {
             if is_module_scope(node) {
-                let language_kind = node.kind().to_string();
+                let language_kind = LanguageKind::go(
+                    GoKind::from_tree_sitter_kind(node.kind()).expect("validated go value kind"),
+                );
                 let mut cursor = node.walk();
                 for name_node in node.children_by_field_name("name", &mut cursor) {
                     if let Some(name) = trimmed_node_text(name_node, content) {
@@ -206,7 +212,7 @@ fn collect_go_nodes_recursive(
                             node,
                             content,
                             GoArtefactDescriptor {
-                                language_kind: language_kind.clone(),
+                                language_kind,
                                 name: name.clone(),
                                 symbol_fqn: format!("{path}::{name}"),
                                 parent_symbol_fqn: None,
@@ -228,7 +234,7 @@ fn collect_go_nodes_recursive(
 
 fn push_go_artefact(
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     node: Node<'_>,
     content: &str,
     descriptor: GoArtefactDescriptor,
@@ -241,12 +247,12 @@ fn push_go_artefact(
         modifiers,
     } = descriptor;
 
-    if name.is_empty() || !is_supported_language_kind(GO_SUPPORTED_LANGUAGE_KINDS, &language_kind) {
+    if name.is_empty() || !is_supported_language_kind(GO_SUPPORTED_LANGUAGE_KINDS, language_kind) {
         return;
     }
 
     let start_line = node.start_position().row as i32 + 1;
-    if !seen.insert((language_kind.clone(), name.clone(), start_line)) {
+    if !seen.insert((language_kind, name.clone(), start_line)) {
         return;
     }
 
@@ -255,7 +261,7 @@ fn push_go_artefact(
         .unwrap_or_default();
 
     out.push(LanguageArtefact {
-        canonical_kind: resolve_canonical_kind(GO_CANONICAL_MAPPINGS, &language_kind, false)
+        canonical_kind: resolve_canonical_kind(GO_CANONICAL_MAPPINGS, language_kind, false)
             .map(|kind| kind.as_str().to_string()),
         language_kind,
         name,
@@ -344,6 +350,7 @@ pub(crate) fn import_path_stem(import_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::extract_go_artefacts;
+    use crate::host::language_adapter::{GoKind, LanguageKind};
 
     #[test]
     fn extract_go_artefacts_collects_functions_methods_types_imports_and_values() {
@@ -372,31 +379,33 @@ func (h *Handler) ServeHTTP() {}
         let artefacts = extract_go_artefacts(content, "service/handler.go").unwrap();
 
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "function_declaration"
+            artefact.language_kind == LanguageKind::go(GoKind::FunctionDeclaration)
                 && artefact.name == "NewHandler"
                 && artefact.canonical_kind.as_deref() == Some("function")
         }));
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "method_declaration"
+            artefact.language_kind == LanguageKind::go(GoKind::MethodDeclaration)
                 && artefact.name == "ServeHTTP"
                 && artefact.parent_symbol_fqn.as_deref() == Some("service/handler.go::Handler")
                 && artefact.canonical_kind.as_deref() == Some("method")
         }));
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "struct_type"
+            artefact.language_kind == LanguageKind::go(GoKind::StructType)
                 && artefact.name == "Handler"
                 && artefact.canonical_kind.as_deref() == Some("type")
         }));
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "interface_type"
+            artefact.language_kind == LanguageKind::go(GoKind::InterfaceType)
                 && artefact.name == "Runner"
                 && artefact.canonical_kind.as_deref() == Some("interface")
         }));
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "import_spec" && artefact.name == "alias"
+            artefact.language_kind == LanguageKind::go(GoKind::ImportSpec)
+                && artefact.name == "alias"
         }));
         assert!(artefacts.iter().any(|artefact| {
-            artefact.language_kind == "const_spec" && artefact.name == "DefaultPort"
+            artefact.language_kind == LanguageKind::go(GoKind::ConstSpec)
+                && artefact.name == "DefaultPort"
         }));
     }
 }

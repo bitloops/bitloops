@@ -1,16 +1,24 @@
 use super::*;
 use crate::adapters::languages::rust::canonical::RUST_CANONICAL_MAPPINGS;
 use crate::adapters::languages::ts_js::canonical::TS_JS_CANONICAL_MAPPINGS;
-use crate::host::language_adapter::resolve_canonical_kind;
+use crate::host::language_adapter::{LanguageKind, RustKind, TsJsKind, resolve_canonical_kind};
 
 #[test]
 fn canonical_projection_maps_to_core_contract_kinds() {
     assert_eq!(
-        resolve_canonical_kind(TS_JS_CANONICAL_MAPPINGS, "function_declaration", false),
+        resolve_canonical_kind(
+            TS_JS_CANONICAL_MAPPINGS,
+            LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
+            false,
+        ),
         Some(CanonicalKindProjection::Function)
     );
     assert_eq!(
-        resolve_canonical_kind(RUST_CANONICAL_MAPPINGS, "function_item", true),
+        resolve_canonical_kind(
+            RUST_CANONICAL_MAPPINGS,
+            LanguageKind::rust(RustKind::FunctionItem),
+            true,
+        ),
         Some(CanonicalKindProjection::Method)
     );
     assert_eq!(

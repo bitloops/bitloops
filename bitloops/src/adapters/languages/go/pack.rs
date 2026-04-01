@@ -8,7 +8,8 @@ use super::test_support::go_test_support;
 use crate::host::extension_host::LanguagePackDescriptor;
 use crate::host::extension_host::builtins::GO_LANGUAGE_PACK;
 use crate::host::language_adapter::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageTestSupport,
+    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageKind,
+    LanguageTestSupport,
 };
 
 pub(crate) struct GoLanguageAdapterPack;
@@ -22,7 +23,7 @@ impl LanguageAdapterPack for GoLanguageAdapterPack {
         GO_CANONICAL_MAPPINGS
     }
 
-    fn supported_language_kinds(&self) -> &'static [&'static str] {
+    fn supported_language_kinds(&self) -> &'static [LanguageKind] {
         GO_SUPPORTED_LANGUAGE_KINDS
     }
 

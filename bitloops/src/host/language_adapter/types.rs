@@ -2,10 +2,12 @@ use serde_json::{Value, json};
 
 use crate::host::devql::{CallForm, EdgeKind, ExportForm, ImportForm, RefKind, Resolution};
 
+use super::LanguageKind;
+
 #[derive(Debug, Clone)]
 pub(crate) struct LanguageArtefact {
     pub(crate) canonical_kind: Option<String>,
-    pub(crate) language_kind: String,
+    pub(crate) language_kind: LanguageKind,
     pub(crate) name: String,
     pub(crate) symbol_fqn: String,
     pub(crate) parent_symbol_fqn: Option<String>,

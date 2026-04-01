@@ -466,7 +466,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::host::extension_host::LanguagePackDescriptor;
-    use crate::host::language_adapter::{CanonicalMapping, MappingCondition};
+    use crate::host::language_adapter::{
+        CanonicalMapping, LanguageKind, MappingCondition, RustKind,
+    };
 
     use super::*;
 
@@ -513,6 +515,13 @@ mod tests {
         name: "pending-migrations",
         run: health_fails_when_pending,
     }];
+    static TEST_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[CanonicalMapping {
+        language_kind: LanguageKind::rust(RustKind::FunctionItem),
+        projection: crate::host::devql::CanonicalKindProjection::Function,
+        condition: MappingCondition::Always,
+    }];
+    static TEST_SUPPORTED_LANGUAGE_KINDS: &[LanguageKind] =
+        &[LanguageKind::rust(RustKind::FunctionItem)];
 
     struct TestPack;
 
@@ -522,15 +531,11 @@ mod tests {
         }
 
         fn canonical_mappings(&self) -> &'static [CanonicalMapping] {
-            &[CanonicalMapping {
-                language_kind: "function_item",
-                projection: crate::host::devql::CanonicalKindProjection::Function,
-                condition: MappingCondition::Always,
-            }]
+            TEST_CANONICAL_MAPPINGS
         }
 
-        fn supported_language_kinds(&self) -> &'static [&'static str] {
-            &["function_item"]
+        fn supported_language_kinds(&self) -> &'static [LanguageKind] {
+            TEST_SUPPORTED_LANGUAGE_KINDS
         }
 
         fn extract_artefacts(&self, _content: &str, _path: &str) -> Result<Vec<LanguageArtefact>> {

@@ -1,62 +1,361 @@
-macro_rules! define_language_kinds {
-    ($name:ident { $($kind:ident => $value:literal,)* }) => {
-        pub(crate) struct $name;
-
-        #[allow(non_upper_case_globals)]
-        impl $name {
-            $(pub(crate) const $kind: &'static str = $value;)*
-        }
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LanguageKind {
+    Go(GoKind),
+    Python(PythonKind),
+    Rust(RustKind),
+    TsJs(TsJsKind),
 }
 
-define_language_kinds!(GolangKinds {
-    FunctionDeclaration => "function_declaration",
-    MethodDeclaration => "method_declaration",
-    TypeSpec => "type_spec",
-    TypeAlias => "type_alias",
-    StructType => "struct_type",
-    InterfaceType => "interface_type",
-    ImportSpec => "import_spec",
-    VarSpec => "var_spec",
-    ConstSpec => "const_spec",
-});
+impl LanguageKind {
+    pub(crate) const fn go(kind: GoKind) -> Self {
+        Self::Go(kind)
+    }
 
-define_language_kinds!(TsJsKinds {
-    ClassDeclaration => "class_declaration",
-    Constructor => "constructor",
-    EnumDeclaration => "enum_declaration",
-    FunctionDeclaration => "function_declaration",
-    ImportStatement => "import_statement",
-    InterfaceDeclaration => "interface_declaration",
-    InternalModule => "internal_module",
-    MethodDefinition => "method_definition",
-    ModuleDeclaration => "module_declaration",
-    PropertyDeclaration => "property_declaration",
-    PublicFieldDefinition => "public_field_definition",
-    TypeAliasDeclaration => "type_alias_declaration",
-    VariableDeclarator => "variable_declarator",
-});
+    pub(crate) const fn python(kind: PythonKind) -> Self {
+        Self::Python(kind)
+    }
 
-define_language_kinds!(RustKinds {
-    ConstItem => "const_item",
-    EnumItem => "enum_item",
-    FunctionItem => "function_item",
-    ImplItem => "impl_item",
-    LetDeclaration => "let_declaration",
-    MacroDefinition => "macro_definition",
-    ModItem => "mod_item",
-    StaticItem => "static_item",
-    StructItem => "struct_item",
-    TraitItem => "trait_item",
-    TypeItem => "type_item",
-    UseDeclaration => "use_declaration",
-});
+    pub(crate) const fn rust(kind: RustKind) -> Self {
+        Self::Rust(kind)
+    }
 
-define_language_kinds!(PythonKinds {
-    Assignment => "assignment",
-    ClassDefinition => "class_definition",
-    ImportFromStatement => "import_from_statement",
-    FunctionDefinition => "function_definition",
-    FutureImportStatement => "future_import_statement",
-    ImportStatement => "import_statement",
-});
+    pub(crate) const fn ts_js(kind: TsJsKind) -> Self {
+        Self::TsJs(kind)
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Go(kind) => kind.as_str(),
+            Self::Python(kind) => kind.as_str(),
+            Self::Rust(kind) => kind.as_str(),
+            Self::TsJs(kind) => kind.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for LanguageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum GoKind {
+    FunctionDeclaration,
+    MethodDeclaration,
+    TypeSpec,
+    TypeAlias,
+    StructType,
+    InterfaceType,
+    ImportSpec,
+    VarSpec,
+    ConstSpec,
+}
+
+impl GoKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::FunctionDeclaration => "function_declaration",
+            Self::MethodDeclaration => "method_declaration",
+            Self::TypeSpec => "type_spec",
+            Self::TypeAlias => "type_alias",
+            Self::StructType => "struct_type",
+            Self::InterfaceType => "interface_type",
+            Self::ImportSpec => "import_spec",
+            Self::VarSpec => "var_spec",
+            Self::ConstSpec => "const_spec",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "function_declaration" => Some(Self::FunctionDeclaration),
+            "method_declaration" => Some(Self::MethodDeclaration),
+            "type_spec" => Some(Self::TypeSpec),
+            "type_alias" => Some(Self::TypeAlias),
+            "struct_type" => Some(Self::StructType),
+            "interface_type" => Some(Self::InterfaceType),
+            "import_spec" => Some(Self::ImportSpec),
+            "var_spec" => Some(Self::VarSpec),
+            "const_spec" => Some(Self::ConstSpec),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PythonKind {
+    Assignment,
+    ClassDefinition,
+    ImportFromStatement,
+    FunctionDefinition,
+    FutureImportStatement,
+    ImportStatement,
+}
+
+impl PythonKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Assignment => "assignment",
+            Self::ClassDefinition => "class_definition",
+            Self::ImportFromStatement => "import_from_statement",
+            Self::FunctionDefinition => "function_definition",
+            Self::FutureImportStatement => "future_import_statement",
+            Self::ImportStatement => "import_statement",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "assignment" => Some(Self::Assignment),
+            "class_definition" => Some(Self::ClassDefinition),
+            "import_from_statement" => Some(Self::ImportFromStatement),
+            "function_definition" => Some(Self::FunctionDefinition),
+            "future_import_statement" => Some(Self::FutureImportStatement),
+            "import_statement" => Some(Self::ImportStatement),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum RustKind {
+    ConstItem,
+    EnumItem,
+    FunctionItem,
+    ImplItem,
+    LetDeclaration,
+    MacroDefinition,
+    ModItem,
+    StaticItem,
+    StructItem,
+    TraitItem,
+    TypeItem,
+    UseDeclaration,
+}
+
+impl RustKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConstItem => "const_item",
+            Self::EnumItem => "enum_item",
+            Self::FunctionItem => "function_item",
+            Self::ImplItem => "impl_item",
+            Self::LetDeclaration => "let_declaration",
+            Self::MacroDefinition => "macro_definition",
+            Self::ModItem => "mod_item",
+            Self::StaticItem => "static_item",
+            Self::StructItem => "struct_item",
+            Self::TraitItem => "trait_item",
+            Self::TypeItem => "type_item",
+            Self::UseDeclaration => "use_declaration",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "const_item" => Some(Self::ConstItem),
+            "enum_item" => Some(Self::EnumItem),
+            "function_item" => Some(Self::FunctionItem),
+            "impl_item" => Some(Self::ImplItem),
+            "let_declaration" => Some(Self::LetDeclaration),
+            "macro_definition" => Some(Self::MacroDefinition),
+            "mod_item" => Some(Self::ModItem),
+            "static_item" => Some(Self::StaticItem),
+            "struct_item" => Some(Self::StructItem),
+            "trait_item" => Some(Self::TraitItem),
+            "type_item" => Some(Self::TypeItem),
+            "use_declaration" => Some(Self::UseDeclaration),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TsJsKind {
+    ClassDeclaration,
+    Constructor,
+    EnumDeclaration,
+    FunctionDeclaration,
+    ImportStatement,
+    InterfaceDeclaration,
+    InternalModule,
+    MethodDefinition,
+    ModuleDeclaration,
+    PropertyDeclaration,
+    PublicFieldDefinition,
+    TypeAliasDeclaration,
+    VariableDeclarator,
+}
+
+impl TsJsKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClassDeclaration => "class_declaration",
+            Self::Constructor => "constructor",
+            Self::EnumDeclaration => "enum_declaration",
+            Self::FunctionDeclaration => "function_declaration",
+            Self::ImportStatement => "import_statement",
+            Self::InterfaceDeclaration => "interface_declaration",
+            Self::InternalModule => "internal_module",
+            Self::MethodDefinition => "method_definition",
+            Self::ModuleDeclaration => "module_declaration",
+            Self::PropertyDeclaration => "property_declaration",
+            Self::PublicFieldDefinition => "public_field_definition",
+            Self::TypeAliasDeclaration => "type_alias_declaration",
+            Self::VariableDeclarator => "variable_declarator",
+        }
+    }
+
+    pub(crate) fn from_tree_sitter_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "class_declaration" => Some(Self::ClassDeclaration),
+            "constructor" => Some(Self::Constructor),
+            "enum_declaration" => Some(Self::EnumDeclaration),
+            "function_declaration" => Some(Self::FunctionDeclaration),
+            "import_statement" => Some(Self::ImportStatement),
+            "interface_declaration" => Some(Self::InterfaceDeclaration),
+            "internal_module" => Some(Self::InternalModule),
+            "method_definition" => Some(Self::MethodDefinition),
+            "module_declaration" => Some(Self::ModuleDeclaration),
+            "property_declaration" => Some(Self::PropertyDeclaration),
+            "public_field_definition" => Some(Self::PublicFieldDefinition),
+            "type_alias_declaration" => Some(Self::TypeAliasDeclaration),
+            "variable_declarator" => Some(Self::VariableDeclarator),
+            _ => None,
+        }
+    }
+}
+
+impl From<GoKind> for LanguageKind {
+    fn from(value: GoKind) -> Self {
+        Self::Go(value)
+    }
+}
+
+impl From<PythonKind> for LanguageKind {
+    fn from(value: PythonKind) -> Self {
+        Self::Python(value)
+    }
+}
+
+impl From<RustKind> for LanguageKind {
+    fn from(value: RustKind) -> Self {
+        Self::Rust(value)
+    }
+}
+
+impl From<TsJsKind> for LanguageKind {
+    fn from(value: TsJsKind) -> Self {
+        Self::TsJs(value)
+    }
+}
+
+impl TryFrom<&str> for LanguageKind {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let rust = RustKind::from_tree_sitter_kind(value).map(Self::Rust);
+        let ts_js = TsJsKind::from_tree_sitter_kind(value).map(Self::TsJs);
+        let python = PythonKind::from_tree_sitter_kind(value).map(Self::Python);
+        let go = GoKind::from_tree_sitter_kind(value).map(Self::Go);
+
+        match [rust, ts_js, python, go]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [kind] => Ok(*kind),
+            _ => Err(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GoKind, LanguageKind, PythonKind, RustKind, TsJsKind};
+
+    #[test]
+    fn per_language_kind_parsers_round_trip() {
+        let go_cases = [
+            GoKind::FunctionDeclaration,
+            GoKind::MethodDeclaration,
+            GoKind::TypeSpec,
+            GoKind::TypeAlias,
+            GoKind::StructType,
+            GoKind::InterfaceType,
+            GoKind::ImportSpec,
+            GoKind::VarSpec,
+            GoKind::ConstSpec,
+        ];
+        for kind in go_cases {
+            assert_eq!(GoKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
+        let python_cases = [
+            PythonKind::Assignment,
+            PythonKind::ClassDefinition,
+            PythonKind::ImportFromStatement,
+            PythonKind::FunctionDefinition,
+            PythonKind::FutureImportStatement,
+            PythonKind::ImportStatement,
+        ];
+        for kind in python_cases {
+            assert_eq!(PythonKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
+        let rust_cases = [
+            RustKind::ConstItem,
+            RustKind::EnumItem,
+            RustKind::FunctionItem,
+            RustKind::ImplItem,
+            RustKind::LetDeclaration,
+            RustKind::MacroDefinition,
+            RustKind::ModItem,
+            RustKind::StaticItem,
+            RustKind::StructItem,
+            RustKind::TraitItem,
+            RustKind::TypeItem,
+            RustKind::UseDeclaration,
+        ];
+        for kind in rust_cases {
+            assert_eq!(RustKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+
+        let ts_js_cases = [
+            TsJsKind::ClassDeclaration,
+            TsJsKind::Constructor,
+            TsJsKind::EnumDeclaration,
+            TsJsKind::FunctionDeclaration,
+            TsJsKind::ImportStatement,
+            TsJsKind::InterfaceDeclaration,
+            TsJsKind::InternalModule,
+            TsJsKind::MethodDefinition,
+            TsJsKind::ModuleDeclaration,
+            TsJsKind::PropertyDeclaration,
+            TsJsKind::PublicFieldDefinition,
+            TsJsKind::TypeAliasDeclaration,
+            TsJsKind::VariableDeclarator,
+        ];
+        for kind in ts_js_cases {
+            assert_eq!(TsJsKind::from_tree_sitter_kind(kind.as_str()), Some(kind));
+        }
+    }
+
+    #[test]
+    fn top_level_parser_rejects_ambiguous_or_unknown_kinds() {
+        assert_eq!(LanguageKind::try_from("function_declaration").ok(), None);
+        assert_eq!(LanguageKind::try_from("import_statement").ok(), None);
+        assert_eq!(LanguageKind::try_from("totally_unknown_kind").ok(), None);
+
+        assert_eq!(
+            LanguageKind::try_from("impl_item").ok(),
+            Some(LanguageKind::rust(RustKind::ImplItem))
+        );
+        assert_eq!(
+            LanguageKind::try_from("assignment").ok(),
+            Some(LanguageKind::python(PythonKind::Assignment))
+        );
+    }
+}

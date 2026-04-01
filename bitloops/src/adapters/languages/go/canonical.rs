@@ -1,62 +1,62 @@
 use crate::host::devql::CanonicalKindProjection;
-use crate::host::language_adapter::{CanonicalMapping, GolangKinds, MappingCondition};
+use crate::host::language_adapter::{CanonicalMapping, GoKind, LanguageKind, MappingCondition};
 
 pub(crate) static GO_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {
-        language_kind: GolangKinds::FunctionDeclaration,
+        language_kind: LanguageKind::go(GoKind::FunctionDeclaration),
         projection: CanonicalKindProjection::Function,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::MethodDeclaration,
+        language_kind: LanguageKind::go(GoKind::MethodDeclaration),
         projection: CanonicalKindProjection::Method,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::TypeSpec,
+        language_kind: LanguageKind::go(GoKind::TypeSpec),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::TypeAlias,
+        language_kind: LanguageKind::go(GoKind::TypeAlias),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::StructType,
+        language_kind: LanguageKind::go(GoKind::StructType),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::InterfaceType,
+        language_kind: LanguageKind::go(GoKind::InterfaceType),
         projection: CanonicalKindProjection::Interface,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::ImportSpec,
+        language_kind: LanguageKind::go(GoKind::ImportSpec),
         projection: CanonicalKindProjection::Import,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::VarSpec,
+        language_kind: LanguageKind::go(GoKind::VarSpec),
         projection: CanonicalKindProjection::Variable,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: GolangKinds::ConstSpec,
+        language_kind: LanguageKind::go(GoKind::ConstSpec),
         projection: CanonicalKindProjection::Variable,
         condition: MappingCondition::Always,
     },
 ];
 
-pub(crate) static GO_SUPPORTED_LANGUAGE_KINDS: &[&str] = &[
-    GolangKinds::FunctionDeclaration,
-    GolangKinds::MethodDeclaration,
-    GolangKinds::TypeSpec,
-    GolangKinds::TypeAlias,
-    GolangKinds::StructType,
-    GolangKinds::InterfaceType,
-    GolangKinds::ImportSpec,
-    GolangKinds::VarSpec,
-    GolangKinds::ConstSpec,
+pub(crate) static GO_SUPPORTED_LANGUAGE_KINDS: &[LanguageKind] = &[
+    LanguageKind::go(GoKind::FunctionDeclaration),
+    LanguageKind::go(GoKind::MethodDeclaration),
+    LanguageKind::go(GoKind::TypeSpec),
+    LanguageKind::go(GoKind::TypeAlias),
+    LanguageKind::go(GoKind::StructType),
+    LanguageKind::go(GoKind::InterfaceType),
+    LanguageKind::go(GoKind::ImportSpec),
+    LanguageKind::go(GoKind::VarSpec),
+    LanguageKind::go(GoKind::ConstSpec),
 ];

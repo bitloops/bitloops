@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::language_adapter::{LanguageKind, TsJsKind};
 
 #[test]
 fn sql_helpers_escape_nullable_and_json_values() {
@@ -112,7 +113,7 @@ fn build_symbol_records_chain_file_and_nested_parent_links() {
     let items = vec![
         LanguageArtefact {
             canonical_kind: Some("class".to_string()),
-            language_kind: "class_declaration".to_string(),
+            language_kind: LanguageKind::ts_js(TsJsKind::ClassDeclaration),
             name: "Widget".to_string(),
             symbol_fqn: format!("{path}::Widget"),
             parent_symbol_fqn: None,
@@ -126,7 +127,7 @@ fn build_symbol_records_chain_file_and_nested_parent_links() {
         },
         LanguageArtefact {
             canonical_kind: Some("method".to_string()),
-            language_kind: "method_definition".to_string(),
+            language_kind: LanguageKind::ts_js(TsJsKind::MethodDefinition),
             name: "render".to_string(),
             symbol_fqn: format!("{path}::Widget::render"),
             parent_symbol_fqn: Some(format!("{path}::Widget")),
@@ -175,7 +176,7 @@ fn build_symbol_records_derive_content_hash_from_symbol_content_not_blob() {
     let content = "export function render() {\n  return 1;\n}\n";
     let items = vec![LanguageArtefact {
         canonical_kind: Some("function".to_string()),
-        language_kind: "function_declaration".to_string(),
+        language_kind: LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
         name: "render".to_string(),
         symbol_fqn: format!("{path}::render"),
         parent_symbol_fqn: None,

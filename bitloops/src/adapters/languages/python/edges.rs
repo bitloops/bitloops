@@ -6,7 +6,7 @@ use crate::host::devql::{
     CallForm, CanonicalKindProjection, EdgeKind, ImportForm, RefKind, Resolution,
 };
 use crate::host::language_adapter::{
-    DependencyEdge, EdgeMetadata, LanguageArtefact,
+    DependencyEdge, EdgeMetadata, LanguageArtefact, LanguageKind, PythonKind,
     edges_shared::{
         CallCtx, EdgeCollector, ReferenceCtx, SymbolLookup, push_extends_edge, push_reference_edge,
         smallest_enclosing_callable, symbol_lookup_name_from_node,
@@ -555,7 +555,7 @@ fn python_reference_target_maps(
             .and_then(CanonicalKindProjection::from_str);
 
         if projected_kind == Some(CanonicalKindProjection::Type)
-            || artefact.language_kind == "class_definition"
+            || artefact.language_kind == LanguageKind::python(PythonKind::ClassDefinition)
         {
             type_targets
                 .entry(artefact.name.clone())
