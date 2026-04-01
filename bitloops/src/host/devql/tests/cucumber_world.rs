@@ -1,4 +1,7 @@
 use super::*;
+use crate::capability_packs::semantic_clones::features::{
+    SemanticFeatureInput, SemanticSummaryCandidate,
+};
 use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::capability_packs::test_harness::mapping::model::DiscoveryIssue;
 use crate::host::devql::knowledge_support::KnowledgeBddHarness;
@@ -41,6 +44,23 @@ pub(super) struct DevqlBddWorld {
     pub(super) materialized_links: Vec<TestArtefactEdgeCurrentRecord>,
     pub(super) discovery_issues: Vec<DiscoveryIssue>,
     pub(super) tests_query_response: Option<Value>,
+    pub(super) semantic_clone_fixture: Option<String>,
+    pub(super) clone_query_rows: Vec<Value>,
+    pub(super) stage1_input: Option<SemanticFeatureInput>,
+    pub(super) stage1_provider_candidate: Option<SemanticSummaryCandidate>,
+    pub(super) stage1_persisted_semantics_row: Option<Value>,
+    pub(super) semantic_clone_stage1_upserted: usize,
+    pub(super) semantic_clone_stage1_skipped: usize,
+    pub(super) semantic_clone_stage2_upserted: usize,
+    pub(super) semantic_clone_stage2_skipped: usize,
+    pub(super) semantic_clone_semantic_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_semantic_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_embedding_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_embedding_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_edge_hashes_before: HashMap<String, String>,
+    pub(super) semantic_clone_edge_hashes_after: HashMap<String, String>,
+    pub(super) semantic_clone_stage2_error: Option<anyhow::Error>,
+    pub(super) semantic_clone_stage2_embedding_rows_written: usize,
     pub(super) knowledge: Option<KnowledgeBddHarness>,
     pub(super) knowledge_last_ingest: Option<IngestKnowledgeResult>,
     pub(super) knowledge_last_association: Option<AssociateKnowledgeResult>,
@@ -72,6 +92,23 @@ impl Default for DevqlBddWorld {
             materialized_links: Vec::new(),
             discovery_issues: Vec::new(),
             tests_query_response: None,
+            semantic_clone_fixture: None,
+            clone_query_rows: Vec::new(),
+            stage1_input: None,
+            stage1_provider_candidate: None,
+            stage1_persisted_semantics_row: None,
+            semantic_clone_stage1_upserted: 0,
+            semantic_clone_stage1_skipped: 0,
+            semantic_clone_stage2_upserted: 0,
+            semantic_clone_stage2_skipped: 0,
+            semantic_clone_semantic_hashes_before: HashMap::new(),
+            semantic_clone_semantic_hashes_after: HashMap::new(),
+            semantic_clone_embedding_hashes_before: HashMap::new(),
+            semantic_clone_embedding_hashes_after: HashMap::new(),
+            semantic_clone_edge_hashes_before: HashMap::new(),
+            semantic_clone_edge_hashes_after: HashMap::new(),
+            semantic_clone_stage2_error: None,
+            semantic_clone_stage2_embedding_rows_written: 0,
             knowledge: None,
             knowledge_last_ingest: None,
             knowledge_last_association: None,
@@ -104,6 +141,23 @@ impl DevqlBddWorld {
         self.materialized_links.clear();
         self.discovery_issues.clear();
         self.tests_query_response = None;
+        self.semantic_clone_fixture = None;
+        self.clone_query_rows.clear();
+        self.stage1_input = None;
+        self.stage1_provider_candidate = None;
+        self.stage1_persisted_semantics_row = None;
+        self.semantic_clone_stage1_upserted = 0;
+        self.semantic_clone_stage1_skipped = 0;
+        self.semantic_clone_stage2_upserted = 0;
+        self.semantic_clone_stage2_skipped = 0;
+        self.semantic_clone_semantic_hashes_before.clear();
+        self.semantic_clone_semantic_hashes_after.clear();
+        self.semantic_clone_embedding_hashes_before.clear();
+        self.semantic_clone_embedding_hashes_after.clear();
+        self.semantic_clone_edge_hashes_before.clear();
+        self.semantic_clone_edge_hashes_after.clear();
+        self.semantic_clone_stage2_error = None;
+        self.semantic_clone_stage2_embedding_rows_written = 0;
         self.knowledge = None;
         self.knowledge_last_ingest = None;
         self.knowledge_last_association = None;
