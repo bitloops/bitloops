@@ -11,7 +11,7 @@ use super::repo_policy::discover_repo_policy_optional;
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
     normalize_sqlite_path, read_any_string, read_any_u64, read_non_empty_env,
-    resolve_configured_path, resolve_required_provider_string,
+    resolve_configured_path, resolve_optional_env_indirection, resolve_required_provider_string,
 };
 use super::types::{
     AtlassianProviderConfig, BlobStorageConfig, DashboardFileConfig, EmbeddingCapabilityConfig,
@@ -255,13 +255,13 @@ where
 {
     StoreSemanticConfig {
         semantic_provider: read_non_empty_env(&env_lookup, ENV_SEMANTIC_PROVIDER)
-            .or(file_cfg.semantic_provider),
+            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_provider, &env_lookup)),
         semantic_model: read_non_empty_env(&env_lookup, ENV_SEMANTIC_MODEL)
-            .or(file_cfg.semantic_model),
+            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_model, &env_lookup)),
         semantic_api_key: read_non_empty_env(&env_lookup, ENV_SEMANTIC_API_KEY)
-            .or(file_cfg.semantic_api_key),
+            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_api_key, &env_lookup)),
         semantic_base_url: read_non_empty_env(&env_lookup, ENV_SEMANTIC_BASE_URL)
-            .or(file_cfg.semantic_base_url),
+            .or_else(|| resolve_optional_env_indirection(file_cfg.semantic_base_url, &env_lookup)),
     }
 }
 

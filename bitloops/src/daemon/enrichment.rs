@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,13 +38,15 @@ pub enum EnrichmentJobStatus {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EnrichmentJobKind {
     SemanticSummaries {
-        inputs: Vec<semantic_features::SemanticFeatureInput>,
+        #[serde(alias = "inputs", deserialize_with = "deserialize_job_artefact_ids")]
+        artefact_ids: Vec<String>,
         input_hashes: BTreeMap<String, String>,
         batch_key: String,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
     SymbolEmbeddings {
-        inputs: Vec<semantic_features::SemanticFeatureInput>,
+        #[serde(alias = "inputs", deserialize_with = "deserialize_job_artefact_ids")]
+        artefact_ids: Vec<String>,
         input_hashes: BTreeMap<String, String>,
         batch_key: String,
         embedding_mode: SemanticCloneEmbeddingMode,
@@ -126,7 +129,7 @@ pub struct EnrichmentCoordinator {
 enum FollowUpJob {
     SymbolEmbeddings {
         target: EnrichmentJobTarget,
-        inputs: Vec<semantic_features::SemanticFeatureInput>,
+        artefact_ids: Vec<String>,
         input_hashes: BTreeMap<String, String>,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
@@ -158,6 +161,29 @@ impl JobExecutionOutcome {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PersistedEnrichmentJobInput {
+    ArtefactId(String),
+    LegacyInput(semantic_features::SemanticFeatureInput),
+}
+
+fn deserialize_job_artefact_ids<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let inputs = Vec::<PersistedEnrichmentJobInput>::deserialize(deserializer)?;
+    Ok(inputs
+        .into_iter()
+        .map(|input| match input {
+            PersistedEnrichmentJobInput::ArtefactId(artefact_id) => artefact_id,
+            PersistedEnrichmentJobInput::LegacyInput(input) => input.artefact_id,
+        })
+        .collect())
+}
+
 impl EnrichmentCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
         static INSTANCE: OnceLock<Arc<EnrichmentCoordinator>> = OnceLock::new();
@@ -183,13 +209,17 @@ impl EnrichmentCoordinator {
         if inputs.is_empty() {
             return Ok(());
         }
+        let artefact_ids = inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect::<Vec<_>>();
 
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
         state
             .active_branch_by_repo
             .insert(target.repo_id.clone(), target.branch.clone());
-        let batch_key = build_batch_key(&inputs);
+        let batch_key = build_batch_key(&artefact_ids);
         if let Some(existing) = state.jobs.iter_mut().find(|job| {
             job.repo_id == target.repo_id
                 && job.branch == target.branch
@@ -207,7 +237,7 @@ impl EnrichmentCoordinator {
             existing.updated_at_unix = unix_timestamp_now();
             existing.error = None;
             existing.job = EnrichmentJobKind::SemanticSummaries {
-                inputs,
+                artefact_ids,
                 input_hashes,
                 batch_key,
                 embedding_mode,
@@ -225,7 +255,7 @@ impl EnrichmentCoordinator {
                 created_at_unix: unix_timestamp_now(),
                 updated_at_unix: unix_timestamp_now(),
                 job: EnrichmentJobKind::SemanticSummaries {
-                    inputs,
+                    artefact_ids,
                     input_hashes,
                     batch_key,
                     embedding_mode,
@@ -248,13 +278,17 @@ impl EnrichmentCoordinator {
         if inputs.is_empty() {
             return Ok(());
         }
+        let artefact_ids = inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect::<Vec<_>>();
 
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
         state
             .active_branch_by_repo
             .insert(target.repo_id.clone(), target.branch.clone());
-        let batch_key = build_batch_key(&inputs);
+        let batch_key = build_batch_key(&artefact_ids);
         if let Some(existing) = state.jobs.iter_mut().find(|job| {
             job.repo_id == target.repo_id
                 && job.branch == target.branch
@@ -272,7 +306,7 @@ impl EnrichmentCoordinator {
             existing.updated_at_unix = unix_timestamp_now();
             existing.error = None;
             existing.job = EnrichmentJobKind::SymbolEmbeddings {
-                inputs,
+                artefact_ids,
                 input_hashes,
                 batch_key,
                 embedding_mode,
@@ -290,7 +324,7 @@ impl EnrichmentCoordinator {
                 created_at_unix: unix_timestamp_now(),
                 updated_at_unix: unix_timestamp_now(),
                 job: EnrichmentJobKind::SymbolEmbeddings {
-                    inputs,
+                    artefact_ids,
                     input_hashes,
                     batch_key,
                     embedding_mode,
@@ -430,12 +464,17 @@ impl EnrichmentCoordinator {
         match follow_up {
             FollowUpJob::SymbolEmbeddings {
                 target,
-                inputs,
+                artefact_ids,
                 input_hashes,
                 embedding_mode,
             } => {
-                self.enqueue_symbol_embeddings(target, inputs, input_hashes, embedding_mode)
-                    .await
+                self.enqueue_symbol_embeddings_from_artefact_ids(
+                    target,
+                    artefact_ids,
+                    input_hashes,
+                    embedding_mode,
+                )
+                .await
             }
             FollowUpJob::CloneEdgesRebuild {
                 target,
@@ -455,6 +494,71 @@ impl EnrichmentCoordinator {
         state.version = 1;
         state.updated_at_unix = unix_timestamp_now();
         write_json(&self.state_path, state)
+    }
+
+    async fn enqueue_symbol_embeddings_from_artefact_ids(
+        &self,
+        target: EnrichmentJobTarget,
+        artefact_ids: Vec<String>,
+        input_hashes: BTreeMap<String, String>,
+        embedding_mode: SemanticCloneEmbeddingMode,
+    ) -> Result<()> {
+        if artefact_ids.is_empty() {
+            return Ok(());
+        }
+
+        let _guard = self.lock.lock().await;
+        let mut state = self.load_state()?;
+        state
+            .active_branch_by_repo
+            .insert(target.repo_id.clone(), target.branch.clone());
+        let batch_key = build_batch_key(&artefact_ids);
+        if let Some(existing) = state.jobs.iter_mut().find(|job| {
+            job.repo_id == target.repo_id
+                && job.branch == target.branch
+                && matches!(
+                    (&job.status, &job.job),
+                    (
+                        EnrichmentJobStatus::Pending,
+                        EnrichmentJobKind::SymbolEmbeddings {
+                            batch_key: existing_key,
+                            ..
+                        },
+                    ) if existing_key == &batch_key
+                )
+        }) {
+            existing.updated_at_unix = unix_timestamp_now();
+            existing.error = None;
+            existing.job = EnrichmentJobKind::SymbolEmbeddings {
+                artefact_ids,
+                input_hashes,
+                batch_key,
+                embedding_mode,
+            };
+        } else {
+            state.jobs.push(EnrichmentJob {
+                id: format!("embedding-job-{}", Uuid::new_v4()),
+                repo_id: target.repo_id,
+                repo_root: target.repo_root,
+                config_root: target.config_root,
+                branch: target.branch,
+                status: EnrichmentJobStatus::Pending,
+                attempts: 0,
+                error: None,
+                created_at_unix: unix_timestamp_now(),
+                updated_at_unix: unix_timestamp_now(),
+                job: EnrichmentJobKind::SymbolEmbeddings {
+                    artefact_ids,
+                    input_hashes,
+                    batch_key,
+                    embedding_mode,
+                },
+            });
+        }
+        state.last_action = Some("enqueue_embeddings".to_string());
+        self.save_state(&mut state)?;
+        self.notify.notify_waiters();
+        Ok(())
     }
 }
 
@@ -552,10 +656,78 @@ fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
     }
 }
 
-fn build_batch_key(inputs: &[semantic_features::SemanticFeatureInput]) -> String {
-    inputs
-        .iter()
-        .map(|input| input.artefact_id.as_str())
-        .collect::<Vec<_>>()
-        .join("|")
+fn build_batch_key(artefact_ids: &[String]) -> String {
+    artefact_ids.join("|")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_input() -> semantic_features::SemanticFeatureInput {
+        semantic_features::SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/service.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/service.rs::load_user".to_string(),
+            name: "load_user".to_string(),
+            signature: Some("fn load_user(id: &str)".to_string()),
+            modifiers: vec!["pub".to_string()],
+            body: "load_user_impl(id)".to_string(),
+            docstring: Some("Loads a user.".to_string()),
+            parent_kind: None,
+            dependency_signals: vec!["calls:user_store::load".to_string()],
+            content_hash: Some("content-hash".to_string()),
+        }
+    }
+
+    #[test]
+    fn enrichment_job_kind_serializes_lightweight_artefact_ids() {
+        let job = EnrichmentJobKind::SemanticSummaries {
+            artefact_ids: vec!["artefact-1".to_string()],
+            input_hashes: BTreeMap::from([("artefact-1".to_string(), "hash-1".to_string())]),
+            batch_key: "artefact-1".to_string(),
+            embedding_mode: SemanticCloneEmbeddingMode::SemanticAwareOnce,
+        };
+
+        let value = serde_json::to_value(job).expect("serialize job kind");
+        assert_eq!(
+            value.get("kind").and_then(|value| value.as_str()),
+            Some("semantic_summaries")
+        );
+        assert_eq!(
+            value
+                .get("artefact_ids")
+                .and_then(|value| value.as_array())
+                .map(|values| values.len()),
+            Some(1)
+        );
+        assert!(value.get("inputs").is_none());
+    }
+
+    #[test]
+    fn enrichment_job_kind_deserializes_legacy_inputs_into_artefact_ids() {
+        let input = sample_input();
+        let job = serde_json::from_value::<EnrichmentJobKind>(json!({
+            "kind": "semantic_summaries",
+            "inputs": [input],
+            "input_hashes": { "artefact-1": "hash-1" },
+            "batch_key": "artefact-1",
+            "embedding_mode": "semantic_aware_once"
+        }))
+        .expect("deserialize legacy job kind");
+
+        match job {
+            EnrichmentJobKind::SemanticSummaries { artefact_ids, .. } => {
+                assert_eq!(artefact_ids, vec!["artefact-1".to_string()]);
+            }
+            other => panic!("expected semantic summaries job, got {other:?}"),
+        }
+    }
 }

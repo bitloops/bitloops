@@ -9,8 +9,8 @@ use crate::capability_packs::semantic_clones::extension_descriptor::{
 use crate::capability_packs::semantic_clones::features as semantic_features;
 use crate::capability_packs::semantic_clones::features::SemanticSummaryProviderConfig;
 use crate::capability_packs::semantic_clones::{
-    clear_repo_symbol_embedding_rows, load_semantic_summary_snapshot, persist_semantic_summary_row,
-    upsert_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows, load_semantic_feature_inputs_for_artefacts,
+    load_semantic_summary_snapshot, persist_semantic_summary_row, upsert_symbol_embedding_rows,
 };
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, SemanticCloneEmbeddingMode,
@@ -45,17 +45,29 @@ pub(super) async fn execute_job(job: &EnrichmentJob) -> JobExecutionOutcome {
 
     match &job.job {
         EnrichmentJobKind::SemanticSummaries {
-            inputs,
+            artefact_ids,
             input_hashes,
             embedding_mode,
             ..
-        } => execute_semantic_job(&relational, job, inputs, input_hashes, *embedding_mode).await,
+        } => {
+            let inputs = match load_enrichment_job_inputs(&relational, job, artefact_ids).await {
+                Ok(inputs) => inputs,
+                Err(err) => return JobExecutionOutcome::failed(err),
+            };
+            execute_semantic_job(&relational, job, &inputs, input_hashes, *embedding_mode).await
+        }
         EnrichmentJobKind::SymbolEmbeddings {
-            inputs,
+            artefact_ids,
             input_hashes,
             embedding_mode,
             ..
-        } => execute_embedding_job(&relational, job, inputs, input_hashes, *embedding_mode).await,
+        } => {
+            let inputs = match load_enrichment_job_inputs(&relational, job, artefact_ids).await {
+                Ok(inputs) => inputs,
+                Err(err) => return JobExecutionOutcome::failed(err),
+            };
+            execute_embedding_job(&relational, job, &inputs, input_hashes, *embedding_mode).await
+        }
         EnrichmentJobKind::CloneEdgesRebuild { embedding_mode } => {
             execute_clone_edges_rebuild_job(&cfg, &relational, job, *embedding_mode).await
         }
@@ -69,6 +81,10 @@ async fn execute_semantic_job(
     input_hashes: &BTreeMap<String, String>,
     embedding_mode: SemanticCloneEmbeddingMode,
 ) -> JobExecutionOutcome {
+    let artefact_ids = inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
     let semantic_cfg = resolve_store_semantic_config_for_repo(&job.config_root);
     let summary_provider = match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
         semantic_provider: semantic_cfg.semantic_provider,
@@ -82,7 +98,7 @@ async fn execute_semantic_job(
             if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
                 outcome.follow_ups.push(symbol_embeddings_follow_up(
                     job,
-                    inputs,
+                    &artefact_ids,
                     input_hashes,
                     embedding_mode,
                 ));
@@ -106,6 +122,9 @@ async fn execute_semantic_job(
         if current.semantic_features_input_hash != *expected_hash {
             continue;
         }
+        if current.is_llm_enriched() {
+            continue;
+        }
 
         let input = input.clone();
         let summary_provider = Arc::clone(&summary_provider);
@@ -121,7 +140,7 @@ async fn execute_semantic_job(
                 if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
                     outcome.follow_ups.push(symbol_embeddings_follow_up(
                         job,
-                        inputs,
+                        &artefact_ids,
                         input_hashes,
                         embedding_mode,
                     ));
@@ -140,7 +159,7 @@ async fn execute_semantic_job(
             if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
                 outcome.follow_ups.push(symbol_embeddings_follow_up(
                     job,
-                    inputs,
+                    &artefact_ids,
                     input_hashes,
                     embedding_mode,
                 ));
@@ -154,7 +173,7 @@ async fn execute_semantic_job(
         SemanticCloneEmbeddingMode::SemanticAwareOnce => {
             outcome.follow_ups.push(symbol_embeddings_follow_up(
                 job,
-                inputs,
+                &artefact_ids,
                 input_hashes,
                 embedding_mode,
             ));
@@ -162,7 +181,7 @@ async fn execute_semantic_job(
         SemanticCloneEmbeddingMode::RefreshOnUpgrade if summary_changed => {
             outcome.follow_ups.push(symbol_embeddings_follow_up(
                 job,
-                inputs,
+                &artefact_ids,
                 input_hashes,
                 embedding_mode,
             ));
@@ -277,13 +296,13 @@ async fn execute_clone_edges_rebuild_job(
 
 fn symbol_embeddings_follow_up(
     job: &EnrichmentJob,
-    inputs: &[semantic_features::SemanticFeatureInput],
+    artefact_ids: &[String],
     input_hashes: &BTreeMap<String, String>,
     embedding_mode: SemanticCloneEmbeddingMode,
 ) -> FollowUpJob {
     FollowUpJob::SymbolEmbeddings {
         target: EnrichmentJobTarget::from_job(job),
-        inputs: inputs.to_vec(),
+        artefact_ids: artefact_ids.to_vec(),
         input_hashes: input_hashes.clone(),
         embedding_mode,
     }
@@ -326,4 +345,19 @@ async fn filter_current_inputs(
         }
     }
     Ok(filtered)
+}
+
+async fn load_enrichment_job_inputs(
+    relational: &RelationalStorage,
+    job: &EnrichmentJob,
+    artefact_ids: &[String],
+) -> Result<Vec<semantic_features::SemanticFeatureInput>> {
+    load_semantic_feature_inputs_for_artefacts(relational, &job.repo_root, artefact_ids)
+        .await
+        .with_context(|| {
+            format!(
+                "rehydrating enrichment inputs for job `{}` in repo `{}`",
+                job.id, job.repo_id
+            )
+        })
 }

@@ -56,3 +56,5 @@ token = "${GITHUB_TOKEN}"
 ```
 
 Use this for secrets and per-machine credentials. Repo policy files should not contain secrets.
+
+This interpolation also applies to semantic daemon config values such as `[semantic].api_key`.

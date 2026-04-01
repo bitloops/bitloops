@@ -1,5 +1,6 @@
 //! Stage 1: semantic feature rows (`symbol_semantics`, `symbol_features`) for the semantic_clones pipeline.
 
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -7,6 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::capability_packs::semantic_clones::features as semantic;
+use crate::host::checkpoints::strategy::manual_commit::run_git;
 use crate::host::devql::{
     RelationalDialect, RelationalStorage, esc_pg, postgres_exec, sqlite_exec_path_allow_create,
 };
@@ -247,10 +249,80 @@ pub(crate) async fn upsert_semantic_feature_rows(
     Ok(stats)
 }
 
+pub(crate) async fn load_semantic_feature_inputs_for_artefacts(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    artefact_ids: &[String],
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    if artefact_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let requested_order = artefact_ids
+        .iter()
+        .enumerate()
+        .map(|(index, artefact_id)| (artefact_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let requested_ids = artefact_ids.iter().cloned().collect::<BTreeSet<_>>();
+
+    let target_rows = relational
+        .query_rows(&build_semantic_get_artefacts_by_ids_sql(artefact_ids))
+        .await?;
+    let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+
+    let groups = target_artefacts
+        .iter()
+        .map(|row| (row.repo_id.clone(), row.blob_sha.clone(), row.path.clone()))
+        .collect::<BTreeSet<_>>();
+
+    let mut hydrated_inputs = Vec::with_capacity(requested_ids.len());
+    for (repo_id, blob_sha, path) in groups {
+        let artefacts =
+            load_pre_stage_artefacts_for_blob(relational, &repo_id, &blob_sha, &path).await?;
+        let dependencies =
+            load_pre_stage_dependencies_for_blob(relational, &repo_id, &blob_sha, &path).await?;
+        let blob_content = load_blob_content_from_git(repo_root, &blob_sha)
+            .with_context(|| format!("loading blob `{blob_sha}` for `{path}`"))?;
+
+        hydrated_inputs.extend(
+            semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                &artefacts,
+                &dependencies,
+                &blob_content,
+            )
+            .into_iter()
+            .filter(|input| requested_ids.contains(&input.artefact_id)),
+        );
+    }
+
+    hydrated_inputs.sort_by_key(|input| {
+        requested_order
+            .get(&input.artefact_id)
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
+    Ok(hydrated_inputs)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticSummarySnapshot {
     pub semantic_features_input_hash: String,
     pub summary: String,
+    pub llm_summary: Option<String>,
+    pub source_model: Option<String>,
+}
+
+impl SemanticSummarySnapshot {
+    pub(crate) fn is_llm_enriched(&self) -> bool {
+        self.llm_summary
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .source_model
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+    }
 }
 
 pub(crate) async fn load_semantic_summary_snapshot(
@@ -278,10 +350,20 @@ pub(crate) async fn load_semantic_summary_snapshot(
     else {
         return Ok(None);
     };
+    let llm_summary = row
+        .get("llm_summary")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let source_model = row
+        .get("source_model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     Ok(Some(SemanticSummarySnapshot {
         semantic_features_input_hash: input_hash,
         summary,
+        llm_summary,
+        source_model,
     }))
 }
 
@@ -392,9 +474,27 @@ fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     )
 }
 
+fn build_semantic_get_artefacts_by_ids_sql(artefact_ids: &[String]) -> String {
+    let artefact_ids = artefact_ids
+        .iter()
+        .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "SELECT artefact_id, symbol_id, repo_id, blob_sha, path, language, \
+COALESCE(canonical_kind, COALESCE(language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(language_kind, COALESCE(canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(symbol_fqn, path) AS symbol_fqn, parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, content_hash \
+FROM artefacts \
+WHERE artefact_id IN ({artefact_ids}) \
+ORDER BY repo_id, blob_sha, path, coalesce(start_byte, 0), coalesce(start_line, 0), artefact_id",
+    )
+}
+
 fn build_semantic_get_summary_sql(artefact_id: &str) -> String {
     format!(
-        "SELECT semantic_features_input_hash, summary \
+        "SELECT semantic_features_input_hash, summary, llm_summary, source_model \
 FROM symbol_semantics \
 WHERE artefact_id = '{artefact_id}'",
         artefact_id = esc_pg(artefact_id),
@@ -524,6 +624,10 @@ fn parse_semantic_json_string_array(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+fn load_blob_content_from_git(repo_root: &Path, blob_sha: &str) -> Result<String> {
+    run_git(repo_root, &["cat-file", "-p", blob_sha])
+}
+
 #[cfg(test)]
 mod semantic_feature_persistence_tests {
     use super::*;
@@ -590,6 +694,16 @@ mod semantic_feature_persistence_tests {
     }
 
     #[test]
+    fn semantic_feature_persistence_builds_get_artefacts_by_ids_sql_with_escaped_values() {
+        let sql = build_semantic_get_artefacts_by_ids_sql(&[
+            "artefact'1".to_string(),
+            "artefact-2".to_string(),
+        ]);
+        assert!(sql.contains("WHERE artefact_id IN ('artefact''1', 'artefact-2')"));
+        assert!(sql.contains("ORDER BY repo_id, blob_sha, path"));
+    }
+
+    #[test]
     fn semantic_feature_persistence_parses_index_state_rows_and_defaults() {
         let empty = parse_semantic_index_state_rows(&[]);
         assert_eq!(empty, semantic::SemanticFeatureIndexState::default());
@@ -629,6 +743,16 @@ mod semantic_feature_persistence_tests {
     }
 
     #[test]
+    fn semantic_feature_persistence_builds_summary_snapshot_sql_with_enrichment_markers() {
+        let sql = build_semantic_get_summary_sql("artefact'1");
+        assert!(sql.contains("semantic_features_input_hash"));
+        assert!(sql.contains("summary"));
+        assert!(sql.contains("llm_summary"));
+        assert!(sql.contains("source_model"));
+        assert!(sql.contains("artefact_id = 'artefact''1'"));
+    }
+
+    #[test]
     fn semantic_feature_persistence_parses_modifiers_from_json_string_rows() {
         let parsed = parse_semantic_artefact_rows(vec![json!({
             "artefact_id": "artefact-1",
@@ -661,5 +785,38 @@ mod semantic_feature_persistence_tests {
 
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].edge_kind, "calls");
+    }
+
+    #[test]
+    fn semantic_summary_snapshot_marks_llm_enrichment_from_summary_or_model() {
+        assert!(
+            SemanticSummarySnapshot {
+                semantic_features_input_hash: "hash-1".to_string(),
+                summary: "Function load user.".to_string(),
+                llm_summary: Some("Loads a user by id.".to_string()),
+                source_model: None,
+            }
+            .is_llm_enriched()
+        );
+
+        assert!(
+            SemanticSummarySnapshot {
+                semantic_features_input_hash: "hash-1".to_string(),
+                summary: "Function load user.".to_string(),
+                llm_summary: None,
+                source_model: Some("openai:gpt-test".to_string()),
+            }
+            .is_llm_enriched()
+        );
+
+        assert!(
+            !SemanticSummarySnapshot {
+                semantic_features_input_hash: "hash-1".to_string(),
+                summary: "Function load user.".to_string(),
+                llm_summary: None,
+                source_model: None,
+            }
+            .is_llm_enriched()
+        );
     }
 }

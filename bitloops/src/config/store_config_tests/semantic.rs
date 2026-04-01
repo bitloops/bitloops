@@ -53,6 +53,37 @@ fn semantic_config_honors_env_over_file_precedence() {
 }
 
 #[test]
+fn semantic_config_resolves_env_indirection_from_file_values() {
+    let value = serde_json::json!({
+        "semantic": {
+            "provider": "${BITLOOPS_SEMANTIC_PROVIDER_FROM_FILE}",
+            "model": "${BITLOOPS_SEMANTIC_MODEL_FROM_FILE}",
+            "api_key": "${OPENAI_API_KEY}",
+            "base_url": "${BITLOOPS_SEMANTIC_BASE_URL_FROM_FILE}"
+        }
+    });
+    let file_cfg = StoreFileConfig::from_json_value(&value);
+    let env = [
+        ("BITLOOPS_SEMANTIC_PROVIDER_FROM_FILE", "openai_compatible"),
+        ("BITLOOPS_SEMANTIC_MODEL_FROM_FILE", "qwen2.5-coder"),
+        ("OPENAI_API_KEY", "indirected-key"),
+        (
+            "BITLOOPS_SEMANTIC_BASE_URL_FROM_FILE",
+            "http://localhost:11434/v1/chat/completions",
+        ),
+    ];
+
+    let cfg = resolve_store_semantic_config_for_tests(file_cfg, &env);
+    assert_eq!(cfg.semantic_provider.as_deref(), Some("openai_compatible"));
+    assert_eq!(cfg.semantic_model.as_deref(), Some("qwen2.5-coder"));
+    assert_eq!(cfg.semantic_api_key.as_deref(), Some("indirected-key"));
+    assert_eq!(
+        cfg.semantic_base_url.as_deref(),
+        Some("http://localhost:11434/v1/chat/completions")
+    );
+}
+
+#[test]
 fn resolve_store_semantic_config_reads_file_and_env() {
     let temp = tempfile::tempdir().expect("temp dir");
     write_envelope_config(

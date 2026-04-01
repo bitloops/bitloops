@@ -25,7 +25,8 @@ pub(crate) use stage_embeddings::{
 pub(crate) use stage_semantic_features::{
     init_postgres_semantic_features_schema, init_sqlite_semantic_features_schema,
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    load_semantic_summary_snapshot, persist_semantic_summary_row, upsert_semantic_feature_rows,
+    load_semantic_feature_inputs_for_artefacts, load_semantic_summary_snapshot,
+    persist_semantic_summary_row, upsert_semantic_feature_rows,
 };
 
 pub use pack::SemanticClonesPack;
