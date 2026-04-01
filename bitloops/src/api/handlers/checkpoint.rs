@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::{
     Json,
@@ -19,8 +19,9 @@ use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_sess
 
 #[utoipa::path(
     get,
-    path = "/api/checkpoints/{checkpoint_id}",
+    path = "/api/checkpoints/{repo_id}/{checkpoint_id}",
     params(
+        ("repo_id" = String, Path, description = "Repository id"),
         ("checkpoint_id" = String, Path, description = "Checkpoint id (12 hex characters)")
     ),
     responses(
@@ -32,11 +33,57 @@ use crate::host::checkpoints::strategy::manual_commit::{CommittedInfo, read_sess
 )]
 pub(crate) async fn handle_api_checkpoint(
     State(state): State<DashboardState>,
-    AxumPath(checkpoint_id): AxumPath<String>,
+    AxumPath((repo_id, checkpoint_id)): AxumPath<(String, String)>,
 ) -> std::result::Result<Json<ApiCheckpointDetailResponse>, ApiError> {
+    let repo_root = resolve_repo_root_from_repo_id(&state, &repo_id).await?;
+    Ok(Json(
+        load_checkpoint_detail(&repo_root, checkpoint_id).await?,
+    ))
+}
+
+fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {
+    info.token_usage.as_ref().map(|usage| ApiTokenUsageDto {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        api_call_count: usage.api_call_count,
+    })
+}
+
+async fn resolve_repo_root_from_repo_id(
+    state: &DashboardState,
+    repo_id: &str,
+) -> std::result::Result<PathBuf, ApiError> {
+    let repo_id = repo_id.trim();
+    if repo_id.is_empty() {
+        return Err(ApiError::bad_request("repo_id is required"));
+    }
+
+    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
+        state.config_root.clone(),
+        state.repo_root.clone(),
+        state.repo_registry_path().map(std::path::Path::to_path_buf),
+        state.db.clone(),
+    );
+    let repository = context
+        .resolve_repository_selection(repo_id)
+        .await
+        .map_err(|_| ApiError::not_found(format!("repository not found: {repo_id}")))?;
+
+    repository
+        .repo_root()
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("repository checkout unknown for `{repo_id}`")))
+}
+
+async fn load_checkpoint_detail(
+    repo_root: &Path,
+    checkpoint_id: String,
+) -> std::result::Result<ApiCheckpointDetailResponse, ApiError> {
     let checkpoint_id = normalize_checkpoint_id(checkpoint_id)?;
     let Some(info) =
-        read_checkpoint_info_for_filtering(&state.repo_root, &checkpoint_id).map_err(|err| {
+        read_checkpoint_info_for_filtering(repo_root, &checkpoint_id).map_err(|err| {
             ApiError::internal(format!(
                 "failed to read checkpoint metadata for {checkpoint_id}: {err:#}"
             ))
@@ -49,7 +96,7 @@ pub(crate) async fn handle_api_checkpoint(
 
     let mut sessions = Vec::new();
     for session_index in 0..info.session_count {
-        let content = match read_session_content(&state.repo_root, &checkpoint_id, session_index) {
+        let content = match read_session_content(repo_root, &checkpoint_id, session_index) {
             Ok(content) => content,
             Err(err) => {
                 log::warn!(
@@ -98,13 +145,13 @@ pub(crate) async fn handle_api_checkpoint(
     }
 
     let files_touched = resolve_checkpoint_files_touched(
-        &state.repo_root,
+        repo_root,
         &info.branch,
         &info.checkpoint_id,
         &info.files_touched,
     );
     let token_usage = api_token_usage_from_committed(&info);
-    Ok(Json(ApiCheckpointDetailResponse {
+    Ok(ApiCheckpointDetailResponse {
         checkpoint_id: info.checkpoint_id,
         strategy: info.strategy,
         branch: info.branch,
@@ -113,16 +160,6 @@ pub(crate) async fn handle_api_checkpoint(
         session_count: info.session_count,
         token_usage,
         sessions,
-    }))
-}
-
-fn api_token_usage_from_committed(info: &CommittedInfo) -> Option<ApiTokenUsageDto> {
-    info.token_usage.as_ref().map(|usage| ApiTokenUsageDto {
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_creation_tokens: usage.cache_creation_tokens,
-        cache_read_tokens: usage.cache_read_tokens,
-        api_call_count: usage.api_call_count,
     })
 }
 
