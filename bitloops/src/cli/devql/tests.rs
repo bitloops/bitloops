@@ -520,28 +520,30 @@ embedding_mode = "off"
 "#,
     )
     .expect("write deterministic-only config");
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let graphql_calls = Rc::new(RefCell::new(0usize));
+    {
+        let _guard = enter_process_state(Some(repo.path()), &[]);
 
-    with_graphql_executor_hook(
-        {
-            let graphql_calls = Rc::clone(&graphql_calls);
-            move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
-                *graphql_calls.borrow_mut() += 1;
-                panic!("graphql should not be used when enrichment is disabled");
-            }
-        },
-        || {
-            test_runtime()
-                .block_on(run(DevqlArgs {
-                    command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
-                        init: true,
-                        max_checkpoints: 25,
-                    })),
-                }))
-                .expect("local deterministic ingest should succeed");
-        },
-    );
+        with_graphql_executor_hook(
+            {
+                let graphql_calls = Rc::clone(&graphql_calls);
+                move |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
+                    *graphql_calls.borrow_mut() += 1;
+                    panic!("graphql should not be used when enrichment is disabled");
+                }
+            },
+            || {
+                test_runtime()
+                    .block_on(run(DevqlArgs {
+                        command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
+                            init: true,
+                            max_checkpoints: 25,
+                        })),
+                    }))
+                    .expect("local deterministic ingest should succeed");
+            },
+        );
+    }
 
     assert_eq!(*graphql_calls.borrow(), 0);
     assert!(
@@ -549,19 +551,14 @@ embedding_mode = "off"
         "local ingest should initialize the relational database",
     );
     with_isolated_daemon_state(repo.path(), || {
-        let err = test_runtime()
+        test_runtime()
             .block_on(run(DevqlArgs {
                 command: Some(DevqlCommand::Ingest(DevqlIngestArgs {
                     init: true,
                     max_checkpoints: 500,
                 })),
             }))
-            .expect_err("devql ingest should require a running daemon");
-
-        assert!(
-            err.to_string().contains("Bitloops daemon is not running"),
-            "expected daemon-required error, got: {err:#}"
-        );
+            .expect("deterministic-only ingest should stay local without a daemon");
     });
 }
 
