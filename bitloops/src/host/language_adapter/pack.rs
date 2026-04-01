@@ -3,14 +3,14 @@ use std::sync::Arc;
 
 use super::{
     CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck,
-    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageTestSupport,
+    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageKind, LanguageTestSupport,
 };
 use crate::host::extension_host::LanguagePackDescriptor;
 
 pub(crate) trait LanguageAdapterPack: Send + Sync {
     fn descriptor(&self) -> &'static LanguagePackDescriptor;
     fn canonical_mappings(&self) -> &'static [CanonicalMapping];
-    fn supported_language_kinds(&self) -> &'static [&'static str];
+    fn supported_language_kinds(&self) -> &'static [LanguageKind];
     fn extract_artefacts(&self, content: &str, path: &str) -> Result<Vec<LanguageArtefact>>;
     fn extract_dependency_edges(
         &self,

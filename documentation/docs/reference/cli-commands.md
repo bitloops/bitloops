@@ -171,7 +171,7 @@ bitloops daemon restart
 
 ### `bitloops status`
 
-Shows daemon status, URL, config path, PID, and supervisor information.
+Shows daemon status, URL, config path, log file path, PID, and supervisor information.
 
 ```bash
 bitloops status
@@ -185,12 +185,31 @@ Bitloops daemon: running
 Mode: always-on service
 URL: https://127.0.0.1:5667
 Config: /Users/alex/.config/bitloops/config.toml
+Log file: /Users/alex/.local/state/bitloops/logs/daemon.log
 PID: 12345
 Supervisor service: com.bitloops.daemon (launchd, installed)
 Supervisor state: running
 ```
 
 If Bitloops finds legacy repo-local data such as old store directories, `status` also prints a warning that those paths are ignored unless explicitly configured.
+
+### `bitloops daemon logs`
+
+Prints the daemon log file as raw JSON lines.
+
+```bash
+bitloops daemon logs
+bitloops daemon logs --tail 50
+bitloops daemon logs --follow
+bitloops daemon logs --path
+```
+
+Notes:
+
+- The default view prints the last 200 lines from `daemon.log`.
+- `--follow` keeps streaming appended lines after the initial tail.
+- `--path` prints the absolute log file path without reading the file.
+- The daemon log lives under the Bitloops state directory at `logs/daemon.log`.
 
 ## Dashboard
 

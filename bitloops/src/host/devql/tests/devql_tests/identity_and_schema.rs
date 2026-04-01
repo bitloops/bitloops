@@ -1,10 +1,11 @@
 use super::*;
+use crate::host::language_adapter::{LanguageKind, RustKind};
 
 #[test]
 fn symbol_id_is_stable_when_impl_block_moves_lines() {
     let original = LanguageArtefact {
         canonical_kind: None,
-        language_kind: "impl_item".to_string(),
+        language_kind: LanguageKind::rust(RustKind::ImplItem),
         name: "impl@12".to_string(),
         symbol_fqn: "src/lib.rs::impl@12".to_string(),
         parent_symbol_fqn: None,
@@ -99,11 +100,11 @@ impl Service for Repo {
 
     let original_impl = original_artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "impl_item")
+        .find(|artefact| artefact.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact in original ingest");
     let moved_impl = moved_artefacts
         .iter()
-        .find(|artefact| artefact.language_kind == "impl_item")
+        .find(|artefact| artefact.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact in moved ingest");
     let original_impl_symbol_id = structural_symbol_id_for_artefact(original_impl, None);
     let moved_impl_symbol_id = structural_symbol_id_for_artefact(moved_impl, None);

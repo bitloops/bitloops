@@ -67,7 +67,7 @@ pub(super) fn build_symbol_records(
             symbol_id: symbol_id.clone(),
             artefact_id: artefact_id.clone(),
             canonical_kind: item.canonical_kind.clone(),
-            language_kind: item.language_kind.clone(),
+            language_kind: item.language_kind.to_string(),
             symbol_fqn: item.symbol_fqn.clone(),
             parent_symbol_id,
             parent_artefact_id,

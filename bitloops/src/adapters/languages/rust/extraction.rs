@@ -5,7 +5,7 @@ use regex::Regex;
 
 use super::canonical::{RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, RustKind, is_supported_language_kind, resolve_canonical_kind,
 };
 
 // Rust artefact extraction via tree-sitter.
@@ -22,7 +22,7 @@ pub(crate) fn extract_rust_artefacts(content: &str, path: &str) -> Result<Vec<La
 
     let root = tree.root_node();
     let mut out = Vec::new();
-    let mut seen: HashSet<(String, String, i32)> = HashSet::new();
+    let mut seen: HashSet<(LanguageKind, String, i32)> = HashSet::new();
     collect_rust_nodes_recursive(root, content, path, &mut out, &mut seen, None);
     out.sort_by_key(|i| {
         (
@@ -44,7 +44,7 @@ pub(crate) fn collect_rust_nodes_recursive(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     current_impl_fqn: Option<String>,
 ) {
     let kind = node.kind();
@@ -61,8 +61,8 @@ pub(crate) fn collect_rust_nodes_recursive(
         .to_string();
 
     let push = |out: &mut Vec<LanguageArtefact>,
-                seen: &mut HashSet<(String, String, i32)>,
-                language_kind: &str,
+                seen: &mut HashSet<(LanguageKind, String, i32)>,
+                language_kind: LanguageKind,
                 name: String,
                 symbol_fqn: String,
                 parent_symbol_fqn: Option<String>,
@@ -74,7 +74,7 @@ pub(crate) fn collect_rust_nodes_recursive(
         if !is_supported_language_kind(RUST_SUPPORTED_LANGUAGE_KINDS, language_kind) {
             return;
         }
-        if !seen.insert((language_kind.to_string(), name.clone(), start_line)) {
+        if !seen.insert((language_kind, name.clone(), start_line)) {
             return;
         }
         out.push(LanguageArtefact {
@@ -84,7 +84,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 inside_impl,
             )
             .map(|p| p.as_str().to_string()),
-            language_kind: language_kind.to_string(),
+            language_kind,
             name,
             symbol_fqn,
             parent_symbol_fqn,
@@ -108,7 +108,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "mod_item",
+                    LanguageKind::rust(RustKind::ModItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -124,7 +124,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "struct_item",
+                    LanguageKind::rust(RustKind::StructItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -140,7 +140,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "enum_item",
+                    LanguageKind::rust(RustKind::EnumItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -156,7 +156,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "trait_item",
+                    LanguageKind::rust(RustKind::TraitItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -172,7 +172,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "type_item",
+                    LanguageKind::rust(RustKind::TypeItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -188,7 +188,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "const_item",
+                    LanguageKind::rust(RustKind::ConstItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -204,7 +204,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                 push(
                     out,
                     seen,
-                    "static_item",
+                    LanguageKind::rust(RustKind::StaticItem),
                     name.to_string(),
                     format!("{path}::{name}"),
                     None,
@@ -218,7 +218,7 @@ pub(crate) fn collect_rust_nodes_recursive(
             push(
                 out,
                 seen,
-                "use_declaration",
+                LanguageKind::rust(RustKind::UseDeclaration),
                 name.clone(),
                 format!("{path}::{name}"),
                 None,
@@ -232,7 +232,7 @@ pub(crate) fn collect_rust_nodes_recursive(
             push(
                 out,
                 seen,
-                "impl_item",
+                LanguageKind::rust(RustKind::ImplItem),
                 name.clone(),
                 impl_fqn.clone(),
                 None,
@@ -249,7 +249,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                     push(
                         out,
                         seen,
-                        "function_item",
+                        LanguageKind::rust(RustKind::FunctionItem),
                         name.to_string(),
                         format!("{impl_fqn}::{name}"),
                         Some(impl_fqn),
@@ -260,7 +260,7 @@ pub(crate) fn collect_rust_nodes_recursive(
                     push(
                         out,
                         seen,
-                        "function_item",
+                        LanguageKind::rust(RustKind::FunctionItem),
                         name.to_string(),
                         format!("{path}::{name}"),
                         None,

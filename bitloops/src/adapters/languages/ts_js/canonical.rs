@@ -1,66 +1,66 @@
 use crate::host::devql::CanonicalKindProjection;
-use crate::host::language_adapter::{CanonicalMapping, MappingCondition};
+use crate::host::language_adapter::{CanonicalMapping, LanguageKind, MappingCondition, TsJsKind};
 
 pub(crate) static TS_JS_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {
-        language_kind: "function_declaration",
+        language_kind: LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
         projection: CanonicalKindProjection::Function,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "method_definition",
+        language_kind: LanguageKind::ts_js(TsJsKind::MethodDefinition),
         projection: CanonicalKindProjection::Method,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "interface_declaration",
+        language_kind: LanguageKind::ts_js(TsJsKind::InterfaceDeclaration),
         projection: CanonicalKindProjection::Interface,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "type_alias_declaration",
+        language_kind: LanguageKind::ts_js(TsJsKind::TypeAliasDeclaration),
         projection: CanonicalKindProjection::Type,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "enum_declaration",
+        language_kind: LanguageKind::ts_js(TsJsKind::EnumDeclaration),
         projection: CanonicalKindProjection::Enum,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "variable_declarator",
+        language_kind: LanguageKind::ts_js(TsJsKind::VariableDeclarator),
         projection: CanonicalKindProjection::Variable,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "import_statement",
+        language_kind: LanguageKind::ts_js(TsJsKind::ImportStatement),
         projection: CanonicalKindProjection::Import,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "module_declaration",
+        language_kind: LanguageKind::ts_js(TsJsKind::ModuleDeclaration),
         projection: CanonicalKindProjection::Module,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
-        language_kind: "internal_module",
+        language_kind: LanguageKind::ts_js(TsJsKind::InternalModule),
         projection: CanonicalKindProjection::Module,
         condition: MappingCondition::Always,
     },
 ];
 
-pub(crate) static TS_JS_SUPPORTED_LANGUAGE_KINDS: &[&str] = &[
-    "function_declaration",
-    "method_definition",
-    "interface_declaration",
-    "type_alias_declaration",
-    "enum_declaration",
-    "variable_declarator",
-    "import_statement",
-    "module_declaration",
-    "internal_module",
-    "class_declaration",
-    "constructor",
-    "property_declaration",
-    "public_field_definition",
+pub(crate) static TS_JS_SUPPORTED_LANGUAGE_KINDS: &[LanguageKind] = &[
+    LanguageKind::ts_js(TsJsKind::FunctionDeclaration),
+    LanguageKind::ts_js(TsJsKind::MethodDefinition),
+    LanguageKind::ts_js(TsJsKind::InterfaceDeclaration),
+    LanguageKind::ts_js(TsJsKind::TypeAliasDeclaration),
+    LanguageKind::ts_js(TsJsKind::EnumDeclaration),
+    LanguageKind::ts_js(TsJsKind::VariableDeclarator),
+    LanguageKind::ts_js(TsJsKind::ImportStatement),
+    LanguageKind::ts_js(TsJsKind::ModuleDeclaration),
+    LanguageKind::ts_js(TsJsKind::InternalModule),
+    LanguageKind::ts_js(TsJsKind::ClassDeclaration),
+    LanguageKind::ts_js(TsJsKind::Constructor),
+    LanguageKind::ts_js(TsJsKind::PropertyDeclaration),
+    LanguageKind::ts_js(TsJsKind::PublicFieldDefinition),
 ];
