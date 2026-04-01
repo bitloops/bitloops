@@ -6,9 +6,9 @@ use crate::capability_packs::knowledge::run_knowledge_versions_via_host;
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{
     CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
-    compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
-    parse_devql_query, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
-    use_raw_graphql_mode,
+    SyncMode, SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document,
+    format_query_output, parse_devql_query, run_capability_packs_report,
+    run_checkpoint_file_snapshot_backfill, run_sync_with_summary, use_raw_graphql_mode,
 };
 
 mod args;
@@ -23,10 +23,10 @@ pub use args::{
     DevqlArgs, DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs,
     DevqlIngestArgs, DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs,
     DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs,
-    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs,
+    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSyncArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql ingest`, `bitloops devql sync`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`";
 
 pub async fn run(args: DevqlArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -70,6 +70,22 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
         DevqlCommand::Ingest(args) => {
             graphql::run_ingest_via_graphql(&scope, args.init, args.max_checkpoints).await
+        }
+        DevqlCommand::Sync(args) => {
+            let mode = if args.validate {
+                SyncMode::Validate
+            } else if args.repair {
+                SyncMode::Repair
+            } else if let Some(paths) = args.paths {
+                SyncMode::Paths(paths)
+            } else if args.full {
+                SyncMode::Full
+            } else {
+                SyncMode::Auto
+            };
+            let summary = run_sync_with_summary(&cfg, mode).await?;
+            println!("{}", format_sync_completion_summary(&summary));
+            Ok(())
         }
         DevqlCommand::Projection(args) => match args.command {
             DevqlProjectionCommand::CheckpointFileSnapshots(backfill) => {
@@ -184,6 +200,91 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
     }
+}
+
+fn format_sync_completion_summary(summary: &SyncSummary) -> String {
+    if summary.mode == "validate" {
+        return format_sync_validation_summary(summary);
+    }
+
+    let mut message = format!(
+        "sync complete: {} added, {} changed, {} removed, {} unchanged, {} cache hits",
+        summary.paths_added,
+        summary.paths_changed,
+        summary.paths_removed,
+        summary.paths_unchanged,
+        summary.cache_hits,
+    );
+
+    let mut diagnostics = Vec::new();
+    if summary.mode != "full" {
+        diagnostics.push(format!("mode={}", summary.mode));
+    }
+    if summary.cache_misses > 0 {
+        diagnostics.push(format!("{} cache misses", summary.cache_misses));
+    }
+    if summary.parse_errors > 0 {
+        diagnostics.push(format!("{} parse errors", summary.parse_errors));
+    }
+
+    if !diagnostics.is_empty() {
+        message.push_str(" (");
+        message.push_str(&diagnostics.join(", "));
+        message.push(')');
+    }
+
+    message
+}
+
+fn format_sync_validation_summary(summary: &SyncSummary) -> String {
+    let Some(validation) = summary.validation.as_ref() else {
+        return "sync validation: no report available".to_string();
+    };
+
+    if validation.valid {
+        return format!(
+            "sync validation: clean (artefacts: expected={} actual={}, edges: expected={} actual={})",
+            validation.expected_artefacts,
+            validation.actual_artefacts,
+            validation.expected_edges,
+            validation.actual_edges,
+        );
+    }
+
+    let mut lines = vec![
+        "sync validation: drift detected".to_string(),
+        format!(
+            "artefacts: expected={} actual={} missing={} stale={} mismatched={}",
+            validation.expected_artefacts,
+            validation.actual_artefacts,
+            validation.missing_artefacts,
+            validation.stale_artefacts,
+            validation.mismatched_artefacts,
+        ),
+        format!(
+            "edges: expected={} actual={} missing={} stale={} mismatched={}",
+            validation.expected_edges,
+            validation.actual_edges,
+            validation.missing_edges,
+            validation.stale_edges,
+            validation.mismatched_edges,
+        ),
+    ];
+
+    for file in &validation.files_with_drift {
+        lines.push(format!(
+            "{}: artefacts missing={} stale={} mismatched={}; edges missing={} stale={} mismatched={}",
+            file.path,
+            file.missing_artefacts,
+            file.stale_artefacts,
+            file.mismatched_artefacts,
+            file.missing_edges,
+            file.stale_edges,
+            file.mismatched_edges,
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn compile_slim_query_document(

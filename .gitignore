@@ -33,7 +33,17 @@ ref/
 .claude/
 bitloops/.fastembed_cache
 
-docs/superpowers
+
 docs/temp
 .codex
 AGENTS.md
+
+docs/superpowers/*
+
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-03-31-devql-sync-command.md
+
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-03-30-devql-sync-command-design.md

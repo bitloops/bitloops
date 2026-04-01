@@ -140,7 +140,6 @@ pub(crate) async fn execute_ingest_with_observer(
             let blob_sha = git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, &normalized_path)
                 .or_else(|| git_blob_sha_at_commit(&cfg.repo_root, &commit_sha, path));
             let Some(blob_sha) = blob_sha else {
-                delete_current_state_for_path(cfg, &relational, &normalized_path).await?;
                 continue;
             };
             let content = git_blob_content(&cfg.repo_root, &blob_sha).unwrap_or_default();
@@ -251,9 +250,6 @@ pub(crate) async fn execute_ingest_with_observer(
         );
     }
 
-    counters.temporary_rows_promoted =
-        promote_temporary_current_rows_for_head_commit(cfg, &relational).await?;
-
     let capability_host = build_capability_host(&cfg.repo_root, cfg.repo.clone())?;
     let clone_ingest = capability_host
         .invoke_ingester_with_relational(
@@ -339,85 +335,4 @@ fn emit_checkpoint_ingested(
         checkpoint,
         commit_sha,
     });
-}
-
-pub(crate) async fn promote_temporary_current_rows_for_head_commit(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-) -> Result<usize> {
-    let head_sha = run_git(&cfg.repo_root, &["rev-parse", "HEAD"]).unwrap_or_default();
-    if head_sha.is_empty() {
-        return Ok(0);
-    }
-    let head_unix = run_git(&cfg.repo_root, &["show", "-s", "--format=%ct", &head_sha])
-        .ok()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .unwrap_or_default();
-    let updated_at_sql = revision_timestamp_sql(relational, head_unix);
-    let branch = active_branch_name(&cfg.repo_root);
-
-    let sql = format!(
-        "SELECT path, blob_sha FROM artefacts_current \
-		WHERE repo_id = '{}' AND branch = '{}' AND canonical_kind = 'file' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
-        esc_pg(&cfg.repo.repo_id),
-        esc_pg(&branch),
-    );
-    let rows = relational.query_rows(&sql).await?;
-    let mut promoted = 0usize;
-
-    for row in rows {
-        let Some(path) = row.get("path").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(blob_sha) = row.get("blob_sha").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(head_blob_sha) = git_blob_sha_at_commit(&cfg.repo_root, &head_sha, path) else {
-            continue;
-        };
-        if head_blob_sha != blob_sha {
-            continue;
-        }
-
-        upsert_file_state_row(
-            &cfg.repo.repo_id,
-            relational,
-            &head_sha,
-            path,
-            &head_blob_sha,
-        )
-        .await?;
-
-        let sql_artefacts = format!(
-            "UPDATE artefacts_current \
-		SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-		WHERE repo_id = '{}' AND branch = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
-            esc_pg(&head_sha),
-            esc_pg(&head_sha),
-            esc_pg(&head_blob_sha),
-            updated_at_sql,
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(&branch),
-            esc_pg(path),
-        );
-        relational.exec(&sql_artefacts).await?;
-
-        let sql_edges = format!(
-            "UPDATE artefact_edges_current \
-		SET commit_sha = '{}', revision_kind = 'commit', revision_id = '{}', temp_checkpoint_id = NULL, blob_sha = '{}', updated_at = {} \
-		WHERE repo_id = '{}' AND branch = '{}' AND path = '{}' AND (revision_kind = 'temporary' OR revision_id LIKE 'temp:%')",
-            esc_pg(&head_sha),
-            esc_pg(&head_sha),
-            esc_pg(&head_blob_sha),
-            updated_at_sql,
-            esc_pg(&cfg.repo.repo_id),
-            esc_pg(&branch),
-            esc_pg(path),
-        );
-        relational.exec(&sql_edges).await?;
-
-        promoted += 1;
-    }
-
-    Ok(promoted)
 }

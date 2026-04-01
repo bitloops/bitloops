@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 
 // Shared record types for artefact persistence.

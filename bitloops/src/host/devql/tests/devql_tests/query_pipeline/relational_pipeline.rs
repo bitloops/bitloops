@@ -36,7 +36,7 @@ async fn build_relational_artefacts_query_uses_projection_exists_for_activity_fi
     assert!(sql.contains("WITH filtered AS"));
     assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
     assert!(sql.contains("cfs.path = a.path"));
-    assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+    assert!(sql.contains("cfs.blob_sha = a.content_id"));
     assert!(sql.contains("cfs.agent = 'codex'"));
     assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
     assert!(!sql.contains("blob_sha IN"));
@@ -63,7 +63,7 @@ async fn build_relational_clones_query_uses_shared_filtered_artefact_cte() {
     assert!(sql.contains("FROM checkpoint_file_snapshots cfs"));
     assert!(sql.contains("JOIN filtered src ON src.symbol_id = ce.source_symbol_id"));
     assert!(sql.contains("cfs.path = a.path"));
-    assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+    assert!(sql.contains("cfs.blob_sha = a.content_id"));
     assert!(sql.contains("cfs.agent = 'codex'"));
     assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00+00:00'"));
     assert!(sql.contains("ce.score >= 0.75"));
@@ -81,15 +81,14 @@ async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_stor
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, docstring, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            end_byte, modifiers, docstring, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::greet",
             "artefact::greet",
-            "commit-1",
             "blob-1",
             "src/main.ts",
             "typescript",
@@ -102,7 +101,7 @@ async fn execute_relational_pipeline_reads_artefacts_from_sqlite_relational_stor
             42,
             "[\"export\"]",
             "docs",
-            "hash-1",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert artefact row");
@@ -143,15 +142,14 @@ async fn execute_relational_pipeline_filters_activity_by_exact_snapshot_identity
     ] {
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                repo_id, symbol_id, artefact_id, content_id, path, language,
                 canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-                end_byte, modifiers, content_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                end_byte, modifiers, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 cfg.repo.repo_id.as_str(),
                 symbol_id,
                 artefact_id,
-                "commit-1",
                 "shared-blob",
                 path,
                 "typescript",
@@ -163,7 +161,7 @@ async fn execute_relational_pipeline_filters_activity_by_exact_snapshot_identity
                 0,
                 42,
                 "[]",
-                format!("hash-{artefact_id}"),
+                "2026-03-26T09:00:00Z",
             ],
         )
         .expect("insert artefact");
@@ -216,15 +214,14 @@ async fn execute_relational_pipeline_does_not_duplicate_artefacts_for_multiple_m
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::deduped",
             "artefact::deduped",
-            "commit-1",
             "blob-1",
             "src/deduped.ts",
             "typescript",
@@ -236,7 +233,7 @@ async fn execute_relational_pipeline_does_not_duplicate_artefacts_for_multiple_m
             0,
             42,
             "[]",
-            "hash-deduped",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert artefact row");
@@ -291,15 +288,14 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::caller",
             "artefact::caller",
-            "commit-1",
             "blob-1",
             "src/caller.ts",
             "typescript",
@@ -311,21 +307,20 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
             0,
             42,
             "[]",
-            "hash-caller",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert caller artefact");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::target",
             "artefact::target",
-            "commit-1",
             "blob-2",
             "src/target.ts",
             "typescript",
@@ -337,22 +332,21 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
             0,
             24,
             "[]",
-            "hash-target",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert target artefact");
     conn.execute(
         "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+            repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
             to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
-            end_line, metadata
+            end_line, metadata, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
-            "edge-1",
             cfg.repo.repo_id.as_str(),
-            "commit-1",
-            "blob-1",
+            "edge-1",
             "src/caller.ts",
+            "blob-1",
             "sym::caller",
             "artefact::caller",
             "sym::target",
@@ -363,6 +357,7 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
             2,
             2,
             "{\"resolution\":\"local\"}",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert deps edge");
@@ -918,17 +913,14 @@ async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
-            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
-            start_byte, end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            repo_id, symbol_id, artefact_id, content_id, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::caller-temp",
             "artefact::caller-temp",
-            "temp:42",
-            "temporary",
-            "temp:42",
             "blob-temp",
             "src/caller.ts",
             "typescript",
@@ -940,23 +932,20 @@ async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_
             0,
             42,
             "[]",
-            "hash-caller-temp",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert temporary caller");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
-            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
-            start_byte, end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            repo_id, symbol_id, artefact_id, content_id, path, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::target-temp",
             "artefact::target-temp",
-            "temp:42",
-            "temporary",
-            "temp:42",
             "blob-target-temp",
             "src/target.ts",
             "typescript",
@@ -968,81 +957,22 @@ async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_
             0,
             24,
             "[]",
-            "hash-target-temp",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert temporary target");
-    conn.execute(
-        "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
-            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
-            start_byte, end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
-        rusqlite::params![
-            cfg.repo.repo_id.as_str(),
-            "sym::caller-commit",
-            "artefact::caller-commit",
-            "commit-1",
-            "commit",
-            "commit-1",
-            "blob-commit",
-            "src/caller.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/caller.ts::callerCommit",
-            1,
-            5,
-            0,
-            42,
-            "[]",
-            "hash-caller-commit",
-        ],
-    )
-    .expect("insert committed caller");
-    conn.execute(
-        "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, revision_kind, revision_id, blob_sha,
-            path, language, canonical_kind, language_kind, symbol_fqn, start_line, end_line,
-            start_byte, end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
-        rusqlite::params![
-            cfg.repo.repo_id.as_str(),
-            "sym::target-commit",
-            "artefact::target-commit",
-            "commit-1",
-            "commit",
-            "commit-1",
-            "blob-target-commit",
-            "src/target.ts",
-            "typescript",
-            "function",
-            "function_declaration",
-            "src/target.ts::targetCommit",
-            1,
-            3,
-            0,
-            24,
-            "[]",
-            "hash-target-commit",
-        ],
-    )
-    .expect("insert committed target");
 
     conn.execute(
         "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, commit_sha, revision_kind, revision_id, blob_sha, path,
-            from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref,
-            edge_kind, language, start_line, end_line, metadata
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
+            to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
+            end_line, metadata, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
-            "edge-temp",
             cfg.repo.repo_id.as_str(),
-            "temp:42",
-            "temporary",
-            "temp:42",
-            "blob-temp",
+            "edge-temp",
             "src/caller.ts",
+            "blob-temp",
             "sym::caller-temp",
             "artefact::caller-temp",
             "sym::target-temp",
@@ -1053,36 +983,10 @@ async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_
             2,
             2,
             "{\"resolution\":\"local\"}",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert temporary edge");
-    conn.execute(
-        "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, commit_sha, revision_kind, revision_id, blob_sha, path,
-            from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref,
-            edge_kind, language, start_line, end_line, metadata
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-        rusqlite::params![
-            "edge-commit",
-            cfg.repo.repo_id.as_str(),
-            "commit-1",
-            "commit",
-            "commit-1",
-            "blob-commit",
-            "src/caller.ts",
-            "sym::caller-commit",
-            "artefact::caller-commit",
-            "sym::target-commit",
-            "artefact::target-commit",
-            "src/target.ts::targetCommit",
-            "calls",
-            "typescript",
-            4,
-            4,
-            "{\"resolution\":\"local\"}",
-        ],
-    )
-    .expect("insert committed edge");
 
     let parsed = parse_devql_query(
         r#"repo("temp2")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
@@ -1115,15 +1019,14 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::target",
             "artefact::target",
-            "commit-1",
             "blob-target",
             "src/target.ts",
             "typescript",
@@ -1135,21 +1038,20 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
             0,
             30,
             "[]",
-            "hash-target",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert target artefact");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::caller_a",
             "artefact::caller_a",
-            "commit-1",
             "blob-caller-a",
             "src/caller-a.ts",
             "typescript",
@@ -1161,21 +1063,20 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
             0,
             40,
             "[]",
-            "hash-caller-a",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert caller A artefact");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, symbol_id, artefact_id, content_id, path, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            end_byte, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
             "sym::caller_b",
             "artefact::caller_b",
-            "commit-1",
             "blob-caller-b",
             "src/caller-b.ts",
             "typescript",
@@ -1187,23 +1088,22 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
             0,
             40,
             "[]",
-            "hash-caller-b",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert caller B artefact");
 
     conn.execute(
         "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+            repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
             to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
-            end_line, metadata
+            end_line, metadata, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
-            "edge-call-a",
             cfg.repo.repo_id.as_str(),
-            "commit-1",
-            "blob-caller-a",
+            "edge-call-a",
             "src/caller-a.ts",
+            "blob-caller-a",
             "sym::caller_a",
             "artefact::caller_a",
             "sym::target",
@@ -1214,21 +1114,21 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
             2,
             2,
             "{\"resolution\":\"local\"}",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert edge caller A -> target");
     conn.execute(
         "INSERT INTO artefact_edges_current (
-            edge_id, repo_id, commit_sha, blob_sha, path, from_symbol_id, from_artefact_id,
+            repo_id, edge_id, path, content_id, from_symbol_id, from_artefact_id,
             to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line,
-            end_line, metadata
+            end_line, metadata, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         rusqlite::params![
-            "edge-call-b",
             cfg.repo.repo_id.as_str(),
-            "commit-1",
-            "blob-caller-b",
+            "edge-call-b",
             "src/caller-b.ts",
+            "blob-caller-b",
             "sym::caller_b",
             "artefact::caller_b",
             "sym::target",
@@ -1239,6 +1139,7 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
             3,
             3,
             "{\"resolution\":\"local\"}",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert edge caller B -> target");
