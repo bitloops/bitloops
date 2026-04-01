@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::super::dto::{
     ApiBranchSummaryDto, ApiCommitDto, ApiCommitFileDiffDto, ApiCommitRowDto, ApiError,
-    ApiKpisResponse, ApiTokenUsageDto,
+    ApiKpisResponse, ApiRepositoryDto, ApiTokenUsageDto,
 };
 use super::super::{CommitCheckpointQuery, DashboardState, canonical_agent_key};
 
@@ -146,6 +146,32 @@ pub(super) async fn load_dashboard_branches_via_graphql(
         .map(|branch| ApiBranchSummaryDto {
             branch: branch.name,
             checkpoint_commits: branch.checkpoint_count,
+        })
+        .collect())
+}
+
+pub(super) async fn load_dashboard_repositories(
+    state: &DashboardState,
+) -> std::result::Result<Vec<ApiRepositoryDto>, ApiError> {
+    let context = crate::graphql::DevqlGraphqlContext::for_global_request(
+        state.config_root.clone(),
+        state.repo_root.clone(),
+        state.repo_registry_path().map(std::path::Path::to_path_buf),
+        state.db.clone(),
+    );
+    let repositories = context.list_known_repositories().await.map_err(|err| {
+        ApiError::internal(format!("failed to load dashboard repositories: {err:#}"))
+    })?;
+
+    Ok(repositories
+        .into_iter()
+        .map(|repository| ApiRepositoryDto {
+            repo_id: repository.repo_id().to_string(),
+            identity: repository.identity().to_string(),
+            name: repository.name().to_string(),
+            provider: repository.provider().to_string(),
+            organization: repository.organization().to_string(),
+            default_branch: repository.default_branch().map(str::to_string),
         })
         .collect())
 }
