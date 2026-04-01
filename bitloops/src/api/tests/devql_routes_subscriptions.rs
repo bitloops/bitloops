@@ -1097,6 +1097,7 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
               ingest(input: { init: true, maxCheckpoints: 1 }) {
                 success
                 checkpointsProcessed
+                temporaryRowsPromoted
               }
             }
             "#,
@@ -1109,6 +1110,7 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
         response.errors
     );
     let response_json = response.data.into_json().expect("mutation data to json");
+    assert_eq!(response_json["ingest"]["temporaryRowsPromoted"], 0);
     if response_json["ingest"]["checkpointsProcessed"].as_i64() == Some(1) {
         let checkpoint =
             tokio::time::timeout(std::time::Duration::from_secs(5), checkpoint_rx.recv())
@@ -1122,6 +1124,7 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
     }
 
     let mut saw_complete = false;
+    let mut complete_temporary_rows_promoted = None;
     for _ in 0..8 {
         let progress = tokio::time::timeout(std::time::Duration::from_secs(5), progress_rx.recv())
             .await
@@ -1129,8 +1132,10 @@ async fn devql_ingest_mutation_publishes_progress_and_checkpoint_events_to_subsc
             .expect("progress subscription payload");
         if progress.event.phase == crate::graphql::IngestionPhase::Complete {
             saw_complete = true;
+            complete_temporary_rows_promoted = Some(progress.event.temporary_rows_promoted);
             break;
         }
     }
     assert!(saw_complete, "expected a COMPLETE ingestion progress event");
+    assert_eq!(complete_temporary_rows_promoted, Some(0));
 }

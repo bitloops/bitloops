@@ -34,10 +34,18 @@ ON file_state (repo_id, commit_sha);
 CREATE TABLE IF NOT EXISTS current_file_state (
     repo_id TEXT NOT NULL,
     path TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    blob_sha TEXT NOT NULL,
-    committed_at TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now')),
+    language TEXT NOT NULL,
+    head_content_id TEXT,
+    index_content_id TEXT,
+    worktree_content_id TEXT,
+    effective_content_id TEXT NOT NULL,
+    effective_source TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    exists_in_head INTEGER NOT NULL,
+    exists_in_index INTEGER NOT NULL,
+    exists_in_worktree INTEGER NOT NULL,
+    last_synced_at TEXT NOT NULL,
     PRIMARY KEY (repo_id, path)
 );
 
@@ -77,15 +85,10 @@ ON artefacts (repo_id, symbol_id);
 
 CREATE TABLE IF NOT EXISTS artefacts_current (
     repo_id TEXT NOT NULL,
-    branch TEXT NOT NULL DEFAULT 'main',
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
     symbol_id TEXT NOT NULL,
     artefact_id TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id INTEGER,
-    blob_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
     language TEXT NOT NULL,
     canonical_kind TEXT,
     language_kind TEXT,
@@ -99,22 +102,19 @@ CREATE TABLE IF NOT EXISTS artefacts_current (
     signature TEXT,
     modifiers TEXT NOT NULL DEFAULT '[]',
     docstring TEXT,
-    content_hash TEXT,
-    updated_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, branch, symbol_id)
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
 );
 
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_path_idx
-ON artefacts_current (repo_id, branch, path);
+CREATE INDEX IF NOT EXISTS artefacts_current_path_idx
+ON artefacts_current (repo_id, path);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_kind_idx
-ON artefacts_current (repo_id, branch, canonical_kind);
+CREATE INDEX IF NOT EXISTS artefacts_current_kind_idx
+ON artefacts_current (repo_id, canonical_kind);
 
-CREATE INDEX IF NOT EXISTS artefacts_current_artefact_idx
-ON artefacts_current (repo_id, branch, artefact_id);
-
-CREATE INDEX IF NOT EXISTS artefacts_current_branch_fqn_idx
-ON artefacts_current (repo_id, branch, symbol_fqn);
+CREATE INDEX IF NOT EXISTS artefacts_current_fqn_idx
+ON artefacts_current (repo_id, symbol_fqn);
 
 CREATE TABLE IF NOT EXISTS artefact_edges (
     edge_id TEXT PRIMARY KEY,
@@ -164,15 +164,10 @@ ON artefact_edges (
 );
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
-    edge_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
-    branch TEXT NOT NULL DEFAULT 'main',
-    commit_sha TEXT NOT NULL,
-    revision_kind TEXT NOT NULL DEFAULT 'commit',
-    revision_id TEXT NOT NULL DEFAULT '',
-    temp_checkpoint_id INTEGER,
-    blob_sha TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
     path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
     from_symbol_id TEXT NOT NULL,
     from_artefact_id TEXT NOT NULL,
     to_symbol_id TEXT,
@@ -183,42 +178,20 @@ CREATE TABLE IF NOT EXISTS artefact_edges_current (
     start_line INTEGER,
     end_line INTEGER,
     metadata TEXT DEFAULT '{}',
-    updated_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL,
     CHECK (to_symbol_id IS NOT NULL OR to_symbol_ref IS NOT NULL),
     CHECK (
         (start_line IS NULL AND end_line IS NULL)
         OR (start_line IS NOT NULL AND end_line IS NOT NULL AND start_line > 0 AND end_line >= start_line)
     ),
-    PRIMARY KEY (repo_id, branch, edge_id)
+    PRIMARY KEY (repo_id, edge_id)
 );
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_path_idx
-ON artefact_edges_current (repo_id, branch, path);
+ON artefact_edges_current (repo_id, path);
 
-CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_from_idx
-ON artefact_edges_current (repo_id, branch, from_symbol_id, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_branch_to_idx
-ON artefact_edges_current (repo_id, branch, to_symbol_id, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_idx
-ON artefact_edges_current (repo_id, branch, edge_kind);
-
-CREATE INDEX IF NOT EXISTS artefact_edges_current_symbol_ref_idx
-ON artefact_edges_current (repo_id, branch, to_symbol_ref);
-
-CREATE UNIQUE INDEX IF NOT EXISTS artefact_edges_current_natural_uq
-ON artefact_edges_current (
-    repo_id,
-    branch,
-    from_symbol_id,
-    edge_kind,
-    COALESCE(to_symbol_id, ''),
-    COALESCE(to_symbol_ref, ''),
-    COALESCE(start_line, -1),
-    COALESCE(end_line, -1),
-    COALESCE(metadata, '{}')
-);
+CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx
+ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);
 
 CREATE TABLE IF NOT EXISTS test_artefacts_current (
     artefact_id TEXT NOT NULL,

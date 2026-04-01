@@ -32,37 +32,43 @@ pub(crate) fn post_merge_refreshes_devql_current_state_for_merged_files() {
         dir.path(),
         &["merge", "--ff-only", "feature/post-merge-refresh"],
     );
-    let merged_head = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let _merged_head = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let merged_blob = run_git(dir.path(), &["rev-parse", "HEAD:src/post_merge.ts"]).unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
 
     ManualCommitStrategy::new(dir.path())
         .post_merge(false)
         .unwrap();
 
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
-    let current_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let indexed_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND commit_sha = ?2 AND branch = ?3 AND revision_kind = 'commit'",
-            rusqlite::params!["src/post_merge.ts", merged_head.as_str(), current_branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/post_merge.ts"],
             |row| row.get(0),
         )
         .unwrap();
     assert!(
         indexed_rows > 0,
-        "post_merge should index files changed by pull/merge into artefacts_current"
+        "post_merge should refresh sync-owned current-state artefacts for merged files"
     );
 
-    let commit_rows: i64 = sqlite
+    let current_state: (String, String) = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM commits WHERE commit_sha = ?1",
-            rusqlite::params![merged_head.as_str()],
-            |row| row.get(0),
+            "SELECT effective_content_id, effective_source FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/post_merge.ts"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(
-        commit_rows, 1,
-        "post_merge should upsert commit metadata in DevQL commits table"
-    );
+    assert_eq!(current_state.0, merged_blob);
+    assert_eq!(current_state.1, "head");
+
+    let current_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
+    assert_eq!(current_branch, primary_branch);
+
 }
 
 #[test]
@@ -78,13 +84,16 @@ pub(crate) fn post_merge_refresh_removes_devql_current_state_for_deleted_files()
         "src/remove_on_merge.ts",
         "export const removeOnMerge = () => 'remove';\n",
     );
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let sqlite = rusqlite::Connection::open(&devql_sqlite_path).unwrap();
     let before_delete: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2",
-            rusqlite::params!["src/remove_on_merge.ts", primary_branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_on_merge.ts"],
             |row| row.get(0),
         )
         .unwrap();
@@ -110,16 +119,23 @@ pub(crate) fn post_merge_refresh_removes_devql_current_state_for_deleted_files()
         .unwrap();
 
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
-    let current_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let after_delete: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2",
-            rusqlite::params!["src/remove_on_merge.ts", current_branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_on_merge.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let file_state_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_on_merge.ts"],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(
         after_delete, 0,
-        "post_merge should remove deleted file rows from branch-scoped current state"
+        "post_merge should remove deleted file rows from sync-owned current state"
     );
+    assert_eq!(file_state_rows, 0, "deleted merge paths should be removed from current_file_state");
 }

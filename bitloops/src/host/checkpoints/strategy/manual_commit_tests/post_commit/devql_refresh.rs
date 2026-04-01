@@ -149,35 +149,40 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
         "src/post_commit.ts",
         "export function run(value: number) { return value + 1; }\n",
     );
-    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD:src/post_commit.ts"]).unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
 
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
-    let branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let indexed_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND commit_sha = ?2 AND branch = ?3 AND revision_kind = 'commit'",
-            rusqlite::params!["src/post_commit.ts", head_sha.as_str(), branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/post_commit.ts"],
             |row| row.get(0),
         )
         .unwrap();
     assert!(
         indexed_rows > 0,
-        "post_commit should index changed files into artefacts_current"
+        "post_commit should refresh sync-owned current-state artefacts for changed files"
     );
 
-    let commit_rows: i64 = sqlite
+    let current_state: (String, String) = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM commits WHERE commit_sha = ?1",
-            rusqlite::params![head_sha.as_str()],
-            |row| row.get(0),
+            "SELECT effective_content_id, effective_source FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/post_commit.ts"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
     assert_eq!(
-        commit_rows, 1,
-        "post_commit should upsert commit metadata in DevQL commits table"
+        current_state.0, head_sha,
+        "current_file_state should track the committed blob for clean post-commit refreshes"
     );
+    assert_eq!(current_state.1, "head");
+
 }
 
 #[test]
@@ -192,15 +197,17 @@ pub(crate) fn post_commit_refresh_removes_devql_current_state_for_deleted_files(
         "src/remove_me.ts",
         "export const removeMe = () => 'remove';\n",
     );
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
     ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
 
     let sqlite_path = devql_sqlite_path;
     let sqlite = rusqlite::Connection::open(&sqlite_path).unwrap();
-    let branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let before_delete: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2",
-            rusqlite::params!["src/remove_me.ts", branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_me.ts"],
             |row| row.get(0),
         )
         .unwrap();
@@ -216,19 +223,27 @@ pub(crate) fn post_commit_refresh_removes_devql_current_state_for_deleted_files(
     let sqlite = rusqlite::Connection::open(&sqlite_path).unwrap();
     let after_delete: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2",
-            rusqlite::params!["src/remove_me.ts", branch.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_me.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let file_state_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/remove_me.ts"],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(
         after_delete, 0,
-        "post_commit should remove deleted file rows from branch-scoped current state"
+        "post_commit should remove deleted file rows from sync-owned current state"
     );
+    assert_eq!(file_state_rows, 0, "deleted paths should be removed from current_file_state");
 }
 
 #[test]
-pub(crate) fn post_commit_on_feature_branch_preserves_main_branch_current_state() {
+pub(crate) fn post_commit_on_feature_branch_updates_sync_current_state() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
@@ -241,6 +256,10 @@ pub(crate) fn post_commit_on_feature_branch_preserves_main_branch_current_state(
     );
     let main_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let main_head = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let main_blob = run_git(dir.path(), &["rev-parse", "HEAD:src/shared.ts"]).unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
 
     let strategy = ManualCommitStrategy::new(dir.path());
     strategy.post_commit().unwrap();
@@ -255,62 +274,47 @@ pub(crate) fn post_commit_on_feature_branch_preserves_main_branch_current_state(
     git_ok(dir.path(), &["commit", "-m", "feature change"]);
     let feature_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
     let feature_head = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let feature_blob = run_git(dir.path(), &["rev-parse", "HEAD:src/shared.ts"]).unwrap();
 
     strategy.post_commit().unwrap();
 
     let sqlite = rusqlite::Connection::open(&devql_sqlite_path).unwrap();
-    let feature_rows: i64 = sqlite
+    let current_rows: i64 = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2 AND commit_sha = ?3 AND revision_kind = 'commit'",
-            rusqlite::params!["src/shared.ts", feature_branch.as_str(), feature_head.as_str()],
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/shared.ts"],
             |row| row.get(0),
         )
         .unwrap();
-    assert!(
-        feature_rows > 0,
-        "feature branch should be indexed at feature HEAD after post_commit"
-    );
-
-    let main_rows_at_main_head: i64 = sqlite
+    let current_state: (String, String) = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2 AND commit_sha = ?3 AND revision_kind = 'commit'",
-            rusqlite::params!["src/shared.ts", main_branch.as_str(), main_head.as_str()],
-            |row| row.get(0),
+            "SELECT effective_content_id, effective_source FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/shared.ts"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert!(
-        main_rows_at_main_head > 0,
-        "feature indexing should not overwrite main branch current-state rows"
-    );
-
-    let leaked_main_rows: i64 = sqlite
-        .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2 AND commit_sha = ?3",
-            rusqlite::params!["src/shared.ts", main_branch.as_str(), feature_head.as_str()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        leaked_main_rows, 0,
-        "main branch should not receive feature commit rows"
-    );
-    drop(sqlite);
+    assert!(current_rows > 0);
+    assert_eq!(current_state.0, feature_blob);
+    assert_eq!(current_state.1, "head");
+    assert_ne!(main_blob, feature_blob);
 
     git_ok(dir.path(), &["checkout", &main_branch]);
-    strategy
-        .post_checkout(&feature_head, &main_head, true)
-        .unwrap();
+    strategy.post_checkout(&feature_head, &main_head, true).unwrap();
 
     let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
-    let main_rows_after_switch: i64 = sqlite
+    let main_state: (String, String) = sqlite
         .query_row(
-            "SELECT COUNT(*) FROM artefacts_current WHERE path = ?1 AND branch = ?2 AND commit_sha = ?3",
-            rusqlite::params!["src/shared.ts", main_branch.as_str(), main_head.as_str()],
-            |row| row.get(0),
+            "SELECT effective_content_id, effective_source FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/shared.ts"],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert!(
-        main_rows_after_switch > 0,
-        "switching back to main should keep the existing indexed main rows"
+    assert_eq!(feature_branch, "feature/branch-isolation");
+    assert_eq!(
+        main_state.0, main_blob,
+        "switching back to main should refresh the sync-owned current state to the checked-out HEAD"
     );
+    assert_eq!(main_state.1, "head");
 }

@@ -205,6 +205,12 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
                 artefactsUpserted
                 checkpointsWithoutCommit
                 temporaryRowsPromoted
+                semanticFeatureRowsUpserted
+                semanticFeatureRowsSkipped
+                symbolEmbeddingRowsUpserted
+                symbolEmbeddingRowsSkipped
+                symbolCloneEdgesUpserted
+                symbolCloneSourcesScored
               }
             }
             "#,
@@ -224,7 +230,15 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     assert_eq!(ingest_json["ingest"]["initRequested"], true);
     assert_eq!(ingest_json["ingest"]["checkpointsProcessed"], 0);
     assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
+    assert_eq!(ingest_json["ingest"]["artefactsUpserted"], 0);
+    assert_eq!(ingest_json["ingest"]["checkpointsWithoutCommit"], 0);
     assert_eq!(ingest_json["ingest"]["temporaryRowsPromoted"], 0);
+    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsUpserted"], 0);
+    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsSkipped"], 0);
+    assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsUpserted"], 0);
+    assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsSkipped"], 0);
+    assert_eq!(ingest_json["ingest"]["symbolCloneEdgesUpserted"], 0);
+    assert_eq!(ingest_json["ingest"]["symbolCloneSourcesScored"], 0);
 
     let repository_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM repositories", [], |row| row.get(0))

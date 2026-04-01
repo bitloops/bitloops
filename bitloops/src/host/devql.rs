@@ -82,8 +82,6 @@ pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
 #[cfg(test)]
-pub(crate) use self::commands_ingest::promote_temporary_current_rows_for_head_commit;
-#[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync;
 #[cfg(test)]
 pub(crate) use self::commands_sync::execute_sync_validation;
@@ -725,6 +723,13 @@ use crate::host::language_adapter::{DependencyEdge, LanguageArtefact};
 fn symbol_id_for_artefact(item: &LanguageArtefact) -> String {
     structural_symbol_id_for_artefact(item, None)
 }
+
+#[cfg(test)]
+#[path = "devql/tests/compat_current_state.rs"]
+mod compat_current_state;
+
+#[cfg(test)]
+pub(crate) use self::compat_current_state::*;
 
 #[cfg(test)]
 #[path = "devql/tests/devql_tests.rs"]
