@@ -7,13 +7,14 @@ use axum::{
 
 use super::super::dto::{
     ApiAgentDto, ApiAgentsQuery, ApiBranchSummaryDto, ApiBranchesQuery, ApiCommitRowDto,
-    ApiCommitsQuery, ApiError, ApiErrorEnvelope, ApiKpisQuery, ApiKpisResponse, ApiUserDto,
-    ApiUsersQuery,
+    ApiCommitsQuery, ApiError, ApiErrorEnvelope, ApiKpisQuery, ApiKpisResponse, ApiRepositoryDto,
+    ApiUserDto, ApiUsersQuery,
 };
 use super::super::{API_DEFAULT_PAGE_LIMIT, ApiPage, DashboardState, read_commit_numstat};
 use super::dashboard_graphql::{
     api_commit_row_from_graphql, build_kpis_response_from_graphql_rows, checkpoint_agents,
     load_dashboard_branches_via_graphql, load_dashboard_commit_rows_via_graphql,
+    load_dashboard_repositories,
 };
 use super::file_diffs::{api_file_diff_list_from_numstat, api_zeroed_file_diff_list};
 use super::params::{
@@ -114,6 +115,20 @@ pub(crate) async fn handle_api_branches(
     Ok(Json(
         load_dashboard_branches_via_graphql(&state, from_unix, to_unix).await?,
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/repositories",
+    responses(
+        (status = 200, description = "Known repositories for the dashboard", body = [ApiRepositoryDto]),
+        (status = 500, description = "Internal server error", body = ApiErrorEnvelope)
+    )
+)]
+pub(crate) async fn handle_api_repositories(
+    State(state): State<DashboardState>,
+) -> std::result::Result<Json<Vec<ApiRepositoryDto>>, ApiError> {
+    Ok(Json(load_dashboard_repositories(&state).await?))
 }
 
 #[utoipa::path(

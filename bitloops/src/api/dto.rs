@@ -160,6 +160,17 @@ pub(super) struct ApiAgentDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ApiRepositoryDto {
+    pub(super) repo_id: String,
+    pub(super) identity: String,
+    pub(super) name: String,
+    pub(super) provider: String,
+    pub(super) organization: String,
+    pub(super) default_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(super) struct ApiRootResponse {
     pub(super) name: String,
     pub(super) openapi: String,
@@ -272,6 +283,7 @@ pub(super) struct ApiAgentsQuery {
         super::handlers::dashboard::handle_api_kpis,
         super::handlers::dashboard::handle_api_commits,
         super::handlers::dashboard::handle_api_branches,
+        super::handlers::dashboard::handle_api_repositories,
         super::handlers::dashboard::handle_api_users,
         super::handlers::dashboard::handle_api_agents,
         super::handlers::checkpoint::handle_api_checkpoint,
@@ -290,6 +302,7 @@ pub(super) struct ApiAgentsQuery {
         ApiCommitRowDto,
         ApiKpisResponse,
         ApiBranchSummaryDto,
+        ApiRepositoryDto,
         ApiUserDto,
         ApiAgentDto,
         ApiRootResponse,
