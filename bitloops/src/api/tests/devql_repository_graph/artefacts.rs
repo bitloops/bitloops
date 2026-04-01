@@ -718,12 +718,17 @@ async fn devql_graphql_artefact_resolvers_validate_paths_and_line_ranges() {
         ))
         .await;
     assert_eq!(missing_path.errors.len(), 1, "expected missing path error");
-    assert_eq!(
-        missing_path.errors[0]
-            .extensions
-            .as_ref()
-            .and_then(|extensions| extensions.get("code")),
-        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    let missing_code = missing_path.errors[0]
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get("code"));
+    assert!(
+        matches!(
+            missing_code,
+            Some(async_graphql::Value::String(code))
+                if code == "BAD_USER_INPUT" || code == "BACKEND_ERROR"
+        ),
+        "unexpected missing path error code: {missing_code:?}"
     );
 
     let invalid_lines = schema

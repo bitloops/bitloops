@@ -1,5 +1,7 @@
 # `include!` macro cleanup — technical debt and remediation plan
 
+> **Status:** Archived technical-debt plan. This note is kept outside the active docs surfaces and is not part of the contributor docs site.
+
 ## What is `include!` and why is it a problem?
 
 Rust's `include!("file.rs")` macro inserts the contents of another file **verbatim** into the current file at compile time — as if you copy-pasted the text. This means the included file shares the parent's entire scope: all `use` imports, all type definitions, all private functions. Nothing is explicitly declared or bounded.

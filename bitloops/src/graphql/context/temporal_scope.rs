@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
 use tokio::task;
 
 use super::DevqlGraphqlContext;
@@ -7,7 +6,6 @@ use crate::graphql::ResolverScope;
 use crate::graphql::types::temporal_scope::{AsOfInput, AsOfSelector};
 use crate::graphql::{ResolvedTemporalScope, TemporalAccessMode};
 use crate::host::checkpoints::strategy::manual_commit::run_git;
-use crate::host::devql::esc_pg;
 
 impl DevqlGraphqlContext {
     pub(crate) async fn resolve_temporal_scope(
@@ -64,37 +62,9 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
         revision_id: &str,
     ) -> Result<String> {
-        let sqlite_path = self
-            .backend_config
-            .as_ref()
-            .context("store backend configuration unavailable")?
-            .relational
-            .resolve_sqlite_db_path_for_repo(&self.config_root)
-            .context("resolving SQLite path for GraphQL temporal scope")?;
-        let branch = self.current_branch_name(scope);
-        let repo_id = self.repo_id_for_scope(scope)?;
-        let sql = format!(
-            "SELECT commit_sha \
-               FROM artefacts_current \
-              WHERE repo_id = '{repo_id}' \
-                AND branch = '{branch}' \
-                AND revision_kind = 'temporary' \
-                AND revision_id = '{revision_id}' \
-              ORDER BY updated_at DESC \
-              LIMIT 1",
-            repo_id = esc_pg(&repo_id),
-            branch = esc_pg(&branch),
-            revision_id = esc_pg(revision_id),
-        );
-        let rows = self.query_sqlite_rows_at_path(&sqlite_path, &sql).await?;
-        rows.into_iter()
-            .find_map(|row| {
-                row.get("commit_sha")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            })
-            .with_context(|| format!("unknown save revision `{revision_id}`"))
+        let _ = revision_id;
+        // Sync-shaped artefacts_current no longer stores per-save-revision rows; anchor
+        // save-revision scopes to Git HEAD for checkpoint / event-time correlation.
+        self.resolve_git_revision(scope, "HEAD").await
     }
 }

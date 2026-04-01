@@ -235,17 +235,19 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
     // Insert a production artefact
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
-            canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            repo_id, path, content_id, symbol_id, artefact_id, language,
+            canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+            start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10, ?11, ?12, ?13, NULL, ?14, NULL,
+            '2026-01-01T00:00:00Z'
+        )",
         rusqlite::params![
             cfg.repo.repo_id.as_str(),
+            "src/user/service.rs",
+            "blob-1",
             "sym::create_user",
             "artefact::create_user",
-            "commit-1",
-            "blob-1",
-            "src/user/service.rs",
             "rust",
             "function",
             "function_item",
@@ -255,7 +257,6 @@ async fn execute_registered_tests_stage_returns_covering_tests() {
             0,
             42,
             "[]",
-            "hash-1",
         ],
     )
     .expect("insert production artefact");

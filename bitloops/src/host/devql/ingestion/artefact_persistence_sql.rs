@@ -39,20 +39,6 @@ pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
-pub(super) fn updated_at_unix_expr(relational: &RelationalStorage) -> &'static str {
-    match relational.dialect() {
-        RelationalDialect::Postgres => "EXTRACT(EPOCH FROM updated_at)::BIGINT",
-        RelationalDialect::Sqlite => "CAST(strftime('%s', updated_at) AS INTEGER)",
-    }
-}
-
-pub(super) fn revision_timestamp_sql(relational: &RelationalStorage, revision_unix: i64) -> String {
-    match relational.dialect() {
-        RelationalDialect::Postgres => format!("to_timestamp({revision_unix})"),
-        RelationalDialect::Sqlite => format!("datetime({revision_unix}, 'unixepoch')"),
-    }
-}
-
 pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values

@@ -130,17 +130,16 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
 
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, path, content_id, symbol_id, artefact_id, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, signature, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, '[]', ?16)",
+            end_byte, signature, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, '[]', ?15)",
         rusqlite::params![
             repo_id,
+            "src/pdf.ts",
+            "blob-1",
             "sym::invoice_pdf",
             "artefact::invoice_pdf",
-            "commit-1",
-            "blob-1",
-            "src/pdf.ts",
             "typescript",
             "function",
             "function_declaration",
@@ -150,23 +149,22 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
             0,
             120,
             "function createInvoicePdf(orderId: string, locale: string)",
-            "hash-1",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert source current artefact");
     conn.execute(
         "INSERT INTO artefacts_current (
-            repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+            repo_id, path, content_id, symbol_id, artefact_id, language,
             canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-            end_byte, signature, modifiers, content_hash
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, '[]', ?16)",
+            end_byte, signature, modifiers, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, '[]', ?15)",
         rusqlite::params![
             repo_id,
+            "src/render.ts",
+            "blob-2",
             "sym::invoice_doc",
             "artefact::invoice_doc",
-            "commit-1",
-            "blob-2",
-            "src/render.ts",
             "typescript",
             "function",
             "function_declaration",
@@ -176,7 +174,7 @@ async fn execute_relational_pipeline_reads_clones_from_sqlite_relational_store()
             0,
             120,
             "function renderInvoiceDocument(orderId: string, locale: string)",
-            "hash-2",
+            "2026-03-26T09:00:00Z",
         ],
     )
     .expect("insert target current artefact");
@@ -344,17 +342,16 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
     ] {
         conn.execute(
             "INSERT INTO artefacts_current (
-                repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language,
+                repo_id, path, content_id, symbol_id, artefact_id, language,
                 canonical_kind, language_kind, symbol_fqn, start_line, end_line, start_byte,
-                end_byte, signature, modifiers, content_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, '[]', ?16)",
+                end_byte, signature, modifiers, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, '[]', ?15)",
             rusqlite::params![
                 repo_id,
+                path,
+                blob_sha,
                 symbol_id,
                 artefact_id,
-                "commit-1",
-                blob_sha,
-                path,
                 "typescript",
                 "function",
                 "function_declaration",
@@ -367,7 +364,7 @@ async fn execute_relational_pipeline_filters_clone_sources_by_exact_snapshot_ide
                     "function {}",
                     symbol_fqn.rsplit("::").next().unwrap_or("run")
                 ),
-                format!("hash-{artefact_id}"),
+                "2026-03-26T09:00:00Z",
             ],
         )
         .expect("insert current artefact");

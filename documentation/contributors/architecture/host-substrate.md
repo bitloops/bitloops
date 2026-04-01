@@ -253,6 +253,6 @@ That is why agent integration has its own registry, canonical model, and policy 
 ## Recommended reading order
 
 1. [High-level layered architecture](./layered-extension-architecture.md)
-2. [Capability-pack architecture](./layered-extension-architecture-capability-packs.md)
-3. [Language-adapter architecture](./layered-extension-architecture-language-adapters.md)
-4. [Agent-adapter architecture](./layered-extension-architecture-agent-adapters.md)
+2. [Capability-pack architecture](./capability-packs.md)
+3. [Language-adapter architecture](./language-adapters.md)
+4. [Agent-adapter architecture](./agent-adapters.md)

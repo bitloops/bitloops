@@ -205,7 +205,7 @@ struct SessionMessageRecord {
 
 fn build_project_clones_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     project_path: &str,
     filter: Option<&ClonesFilterInput>,
 ) -> String {
@@ -216,20 +216,19 @@ fn build_project_clones_sql(
         "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id AND src.branch = '{branch}' \
+           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
                                      AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.branch = '{branch}' \
+           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
                                      AND tgt.symbol_id = ce.target_symbol_id \
           WHERE {} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
         clauses.join(" AND "),
-        branch = esc_pg(branch),
     )
 }
 
 fn build_artefact_clones_sql(
     repo_id: &str,
-    branch: &str,
+    _branch: &str,
     artefact_id: &str,
     project_path: Option<&str>,
     filter: Option<&ClonesFilterInput>,
@@ -244,14 +243,13 @@ fn build_artefact_clones_sql(
         "SELECT ce.source_artefact_id, ce.target_artefact_id, ce.relation_kind, ce.score, \
                 ce.semantic_score, ce.lexical_score, ce.structural_score, ce.explanation_json \
            FROM symbol_clone_edges ce \
-           JOIN artefacts_current src ON src.repo_id = ce.repo_id AND src.branch = '{branch}' \
+           JOIN artefacts_current src ON src.repo_id = ce.repo_id \
                                      AND src.symbol_id = ce.source_symbol_id \
-           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id AND tgt.branch = '{branch}' \
+           JOIN artefacts_current tgt ON tgt.repo_id = ce.repo_id \
                                      AND tgt.symbol_id = ce.target_symbol_id \
           WHERE {} \
        ORDER BY ce.score DESC, tgt.path, COALESCE(tgt.symbol_fqn, ''), ce.target_artefact_id",
         clauses.join(" AND "),
-        branch = esc_pg(branch),
     )
 }
 

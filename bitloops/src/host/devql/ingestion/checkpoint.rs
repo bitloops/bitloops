@@ -26,21 +26,6 @@ pub(super) fn default_branch_name(repo_root: &Path) -> String {
     resolve_default_branch_name(repo_root)
 }
 
-pub(super) fn active_branch_name(repo_root: &Path) -> String {
-    let branch = run_git(repo_root, &["branch", "--show-current"])
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    branch.unwrap_or_else(|| {
-        let fallback = default_branch_name(repo_root);
-        if fallback.trim().is_empty() {
-            "main".to_string()
-        } else {
-            fallback
-        }
-    })
-}
-
 pub(super) fn collect_checkpoint_commit_map(
     repo_root: &Path,
 ) -> Result<HashMap<String, CheckpointCommitInfo>> {
@@ -420,6 +405,19 @@ async fn load_file_state_blob_sha(
         .map(str::to_string))
 }
 
+async fn resolve_projection_blob_sha(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    commit_sha: &str,
+    path: &str,
+) -> Result<Option<String>> {
+    if let Some(blob_sha) = load_file_state_blob_sha(cfg, relational, commit_sha, path).await? {
+        return Ok(Some(blob_sha));
+    }
+
+    Ok(git_blob_sha_at_commit(&cfg.repo_root, commit_sha, path))
+}
+
 pub(super) async fn upsert_checkpoint_file_snapshot_rows(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -442,10 +440,11 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
             continue;
         }
 
-        let Some(blob_sha) = load_file_state_blob_sha(cfg, relational, commit_sha, &path).await?
+        let Some(blob_sha) =
+            resolve_projection_blob_sha(cfg, relational, commit_sha, &path).await?
         else {
             log::warn!(
-                "skipping checkpoint snapshot projection: missing file_state row (checkpoint_id={}, commit_sha={}, path={})",
+                "skipping checkpoint snapshot projection: unresolved blob for commit path (checkpoint_id={}, commit_sha={}, path={})",
                 cp.checkpoint_id,
                 commit_sha,
                 path

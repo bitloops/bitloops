@@ -9,12 +9,13 @@ use crate::host::devql::checkpoint_file_snapshots::{
 
 pub(crate) fn build_filtered_artefacts_select_sql(spec: &ArtefactQuerySpec) -> String {
     let filtered_cte = build_filtered_artefacts_cte_sql(spec);
+    let use_historical_tables = spec.temporal_scope.use_historical_tables();
     format!(
         "{filtered_cte} \
          SELECT {columns} \
            FROM filtered \
        ORDER BY {order}",
-        columns = filtered_artefact_columns_sql(),
+        columns = filtered_artefact_columns_sql(use_historical_tables),
         order = filtered_artefact_order_sql(),
     )
 }
@@ -35,7 +36,7 @@ pub(crate) fn build_filtered_artefacts_cte_sql(spec: &ArtefactQuerySpec) -> Stri
     )
 }
 
-pub(crate) fn filtered_artefact_columns_sql() -> &'static str {
+pub(crate) fn filtered_artefact_columns_sql(_use_historical_tables: bool) -> &'static str {
     "symbol_id, artefact_id, path, language, canonical_kind, language_kind, symbol_fqn, \
      parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, \
      docstring, blob_sha, content_hash, created_at"
@@ -46,28 +47,25 @@ pub(crate) fn filtered_artefact_order_sql() -> &'static str {
 }
 
 fn build_artefact_where_clauses(alias: &str, spec: &ArtefactQuerySpec) -> Vec<String> {
+    let use_historical_tables = spec.temporal_scope.use_historical_tables();
     let mut clauses = vec![format!(
         "{alias}.repo_id = '{}'",
         esc_pg(spec.repo_id.as_str())
     )];
-    if !spec.temporal_scope.use_historical_tables() {
-        let branch = spec
-            .branch
-            .as_deref()
-            .expect("current/save artefact queries require a branch in the shared spec");
-        clauses.push(format!("{alias}.branch = '{}'", esc_pg(branch)));
-    }
-    if let Some(revision_id) = spec.temporal_scope.save_revision() {
-        clauses.push(format!("{alias}.revision_kind = 'temporary'"));
-        clauses.push(format!("{alias}.revision_id = '{}'", esc_pg(revision_id)));
-    }
+    // Sync-shaped artefacts_current has no revision_kind / revision_id columns; save-revision
+    // scopes are handled at the GraphQL layer without extra SQL predicates here.
     if let Some(commit_sha) = spec.temporal_scope.resolved_commit() {
+        let blob_column = if use_historical_tables {
+            format!("{alias}.blob_sha")
+        } else {
+            format!("{alias}.content_id")
+        };
         if let Some(blob_sha) = spec.historical_path_blob_sha.as_deref() {
-            clauses.push(format!("{alias}.blob_sha = '{}'", esc_pg(blob_sha)));
+            clauses.push(format!("{blob_column} = '{}'", esc_pg(blob_sha)));
         } else {
             clauses.push(file_state_exists_clause(
                 &format!("{alias}.path"),
-                &format!("{alias}.blob_sha"),
+                &blob_column,
                 spec.repo_id.as_str(),
                 commit_sha,
             ));
@@ -110,6 +108,7 @@ fn build_artefact_where_clauses(alias: &str, spec: &ArtefactQuerySpec) -> Vec<St
         clauses.push(checkpoint_file_snapshot_exists_clause(
             alias,
             spec.repo_id.as_str(),
+            use_historical_tables,
             activity_filter,
         ));
     }
@@ -120,10 +119,15 @@ fn build_artefact_where_clauses(alias: &str, spec: &ArtefactQuerySpec) -> Vec<St
 fn checkpoint_file_snapshot_exists_clause(
     alias: &str,
     repo_id: &str,
+    use_historical_tables: bool,
     activity_filter: &ArtefactActivityFilter,
 ) -> String {
     let path_column = format!("{alias}.path");
-    let blob_sha_column = format!("{alias}.blob_sha");
+    let blob_sha_column = if use_historical_tables {
+        format!("{alias}.blob_sha")
+    } else {
+        format!("{alias}.content_id")
+    };
     build_checkpoint_file_snapshot_exists_clause(CheckpointFileSnapshotExistsSql {
         repo_id,
         path_column: path_column.as_str(),
@@ -206,18 +210,23 @@ fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
 }
 
 fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> String {
-    let created_at_column = if use_historical_tables {
-        format!("{alias}.created_at AS created_at")
+    if use_historical_tables {
+        format!(
+            "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
+             {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
+             {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
+             {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
+             {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {alias}.created_at AS created_at",
+        )
     } else {
-        format!("{alias}.updated_at AS created_at")
-    };
-    format!(
-        "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
-         {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
-         {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
-         {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-         {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {created_at_column}",
-    )
+        format!(
+            "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
+             {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
+             {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
+             {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
+             {alias}.docstring, {alias}.content_id AS blob_sha, NULL AS content_hash, {alias}.updated_at AS created_at",
+        )
+    }
 }
 
 fn artefact_kind_rank_sql(alias: &str) -> String {
@@ -265,12 +274,13 @@ mod tests {
         assert!(sql.contains("EXISTS (SELECT 1 FROM checkpoint_file_snapshots cfs WHERE"));
         assert!(sql.contains("cfs.repo_id = 'repo-1'"));
         assert!(sql.contains("cfs.path = a.path"));
-        assert!(sql.contains("cfs.blob_sha = a.blob_sha"));
+        assert!(sql.contains("cfs.blob_sha = a.content_id"));
         assert!(sql.contains("cfs.agent = 'codex'"));
         assert!(sql.contains("cfs.event_time >= '2026-03-20T00:00:00Z'"));
         assert!(sql.contains("a.path = './packages/api/src/lib.rs'"));
         assert!(sql.contains("a.path = 'packages/api/src/lib.rs'"));
         assert!(sql.contains("a.symbol_fqn = 'packages/api/src/lib.rs::run'"));
+        assert!(!sql.contains("a.branch ="));
         assert!(!sql.contains("blob_sha IN"));
     }
 

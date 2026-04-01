@@ -249,10 +249,44 @@ VALUES
   ('repo-postgres-test-harness', 'commit-postgres-test-harness', 'src/services/user_service.rs', 'blob-user'),
   ('repo-postgres-test-harness', 'commit-postgres-test-harness', 'src/services/email.rs', 'blob-email');
 
-INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
+INSERT INTO current_file_state (
+  repo_id, path, language, head_content_id, index_content_id, worktree_content_id,
+  effective_content_id, effective_source, parser_version, extractor_version,
+  exists_in_head, exists_in_index, exists_in_worktree, last_synced_at
+)
 VALUES
-  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'commit-postgres-test-harness', 'blob-user', '2026-03-19T12:00:00Z'),
-  ('repo-postgres-test-harness', 'src/services/email.rs', 'commit-postgres-test-harness', 'blob-email', '2026-03-19T12:00:00Z');
+  (
+    'repo-postgres-test-harness',
+    'src/services/user_service.rs',
+    'rust',
+    'content-user',
+    'content-user',
+    'content-user',
+    'content-user',
+    'head',
+    'parser-v1',
+    'extractor-v1',
+    1,
+    1,
+    1,
+    '2026-03-19T12:00:00Z'
+  ),
+  (
+    'repo-postgres-test-harness',
+    'src/services/email.rs',
+    'rust',
+    'content-email',
+    'content-email',
+    'content-email',
+    'content-email',
+    'head',
+    'parser-v1',
+    'extractor-v1',
+    1,
+    1,
+    1,
+    '2026-03-19T12:00:00Z'
+  );
 
 INSERT INTO artefacts (
   artefact_id, symbol_id, repo_id, blob_sha, path, language, canonical_kind, language_kind,
@@ -266,15 +300,15 @@ INSERT INTO artefacts (
   ('artefact:function:normalize_email', 'symbol:function:normalize_email', 'repo-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
 
 INSERT INTO artefacts_current (
-  repo_id, symbol_id, artefact_id, commit_sha, blob_sha, path, language, canonical_kind,
+  repo_id, path, content_id, symbol_id, artefact_id, language, canonical_kind,
   language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id, start_line, end_line,
-  start_byte, end_byte, signature, modifiers, docstring, content_hash
+  start_byte, end_byte, signature, modifiers, docstring, updated_at
 ) VALUES
-  ('repo-postgres-test-harness', 'symbol:file:user_service', 'artefact:file:user_service', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, 'hash-file-user'),
-  ('repo-postgres-test-harness', 'symbol:file:email', 'artefact:file:email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, 'hash-file-email'),
-  ('repo-postgres-test-harness', 'symbol:struct:user', 'artefact:struct:user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'symbol:file:user_service', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, 'hash-user-struct'),
-  ('repo-postgres-test-harness', 'symbol:function:create_user', 'artefact:function:create_user', 'commit-postgres-test-harness', 'blob-user', 'src/services/user_service.rs', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'symbol:file:user_service', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, 'hash-create-user'),
-  ('repo-postgres-test-harness', 'symbol:function:normalize_email', 'artefact:function:normalize_email', 'commit-postgres-test-harness', 'blob-email', 'src/services/email.rs', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'symbol:file:email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, 'hash-normalize-email');
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:file:user_service', 'artefact:file:user_service', 'rust', 'file', 'source_file', 'src/services/user_service.rs', NULL, NULL, 1, 40, 0, 800, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/email.rs', 'content-email', 'symbol:file:email', 'artefact:file:email', 'rust', 'file', 'source_file', 'src/services/email.rs', NULL, NULL, 1, 30, 0, 600, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:struct:user', 'artefact:struct:user', 'rust', NULL, 'Struct', 'src/services/user_service.rs::User', 'symbol:file:user_service', 'artefact:file:user_service', 3, 8, 24, 96, NULL, '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/user_service.rs', 'content-user', 'symbol:function:create_user', 'artefact:function:create_user', 'rust', 'function', 'function_item', 'src/services/user_service.rs::create_user', 'symbol:file:user_service', 'artefact:file:user_service', 10, 20, 100, 350, 'pub fn create_user(name: &str) -> User', '[]'::jsonb, NULL, '2026-03-19T12:00:00Z'),
+  ('repo-postgres-test-harness', 'src/services/email.rs', 'content-email', 'symbol:function:normalize_email', 'artefact:function:normalize_email', 'rust', 'function', 'function_item', 'src/services/email.rs::normalize_email', 'symbol:file:email', 'artefact:file:email', 5, 12, 50, 200, 'pub fn normalize_email(raw: &str) -> String', '[]'::jsonb, NULL, '2026-03-19T12:00:00Z');
 "#,
         )
         .context("seeding production state")?;

@@ -127,13 +127,6 @@ impl ArtefactTemporalScope {
         }
     }
 
-    pub(crate) fn save_revision(&self) -> Option<&str> {
-        match self {
-            Self::SaveRevision { revision_id } => Some(revision_id.as_str()),
-            Self::Current | Self::HistoricalCommit { .. } | Self::SaveCurrent => None,
-        }
-    }
-
     pub(crate) fn use_historical_tables(&self) -> bool {
         matches!(self, Self::HistoricalCommit { .. })
     }

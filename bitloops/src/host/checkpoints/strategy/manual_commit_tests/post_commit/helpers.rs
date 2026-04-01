@@ -29,6 +29,26 @@ pub(crate) fn init_devql_schema_with_postgres_dsn(
     let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
     let sqlite = rusqlite::Connection::open(&sqlite_path)
         .expect("open relational sqlite after DevQL init for post-commit test");
+    sqlite
+        .execute_batch(
+            r#"
+CREATE TABLE IF NOT EXISTS repositories (
+    repo_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    organization TEXT NOT NULL,
+    name TEXT NOT NULL,
+    default_branch TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+"#,
+        )
+        .expect("ensure DevQL repository catalog exists for post-commit test");
+    sqlite
+        .execute_batch(crate::host::devql::checkpoint_schema_sql_sqlite())
+        .expect("ensure checkpoint projection tables exist for post-commit test");
+    sqlite
+        .execute_batch(crate::host::devql::sync::schema::sync_schema_sql())
+        .expect("ensure DevQL sync tables exist for post-commit test");
     let has_artefacts_current: i64 = sqlite
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'artefacts_current'",
@@ -39,6 +59,17 @@ pub(crate) fn init_devql_schema_with_postgres_dsn(
     assert_eq!(
         has_artefacts_current, 1,
         "post-commit test must initialise DevQL relational schema in the configured sqlite path"
+    );
+    let has_repo_sync_state: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'repo_sync_state'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query sqlite_master for repo_sync_state table");
+    assert_eq!(
+        has_repo_sync_state, 1,
+        "post-commit test must initialise DevQL sync schema in the configured sqlite path"
     );
 
     if postgres_dsn.is_some() {

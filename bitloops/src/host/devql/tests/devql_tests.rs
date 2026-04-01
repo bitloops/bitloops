@@ -110,11 +110,21 @@ fn apply_symbol_clone_edges_sqlite_schema(path: &Path) {
         .expect("apply symbol_clone_edges DDL");
 }
 
+fn apply_legacy_current_state_compat_schema(_path: &Path) {
+    // Legacy compat schema no longer needed — init schema and sync schema are aligned.
+}
+
 async fn sqlite_relational_store_with_schema(path: &Path) -> RelationalStorage {
     init_sqlite_schema(path)
         .await
         .expect("initialise sqlite relational schema");
     let path_buf = path.to_path_buf();
+    tokio::task::spawn_blocking({
+        let path = path_buf.clone();
+        move || apply_legacy_current_state_compat_schema(&path)
+    })
+    .await
+    .expect("join blocking legacy current-state DDL");
     tokio::task::spawn_blocking({
         let path = path_buf.clone();
         move || apply_symbol_clone_edges_sqlite_schema(&path)

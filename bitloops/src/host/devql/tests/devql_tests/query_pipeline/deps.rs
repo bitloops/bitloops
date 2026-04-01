@@ -114,7 +114,7 @@ fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
 }
 
 #[test]
-fn build_postgres_deps_query_filters_temporary_revision_for_save_revision() {
+fn build_postgres_deps_query_uses_sync_shaped_current_tables_for_save_revision() {
     let cfg = test_cfg();
     let parsed = parse_devql_query(
         r#"repo("bitloops-cli")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"both")->limit(10)"#,
@@ -125,10 +125,12 @@ fn build_postgres_deps_query_filters_temporary_revision_for_save_revision() {
 
     assert!(sql.contains("FROM artefact_edges_current e"));
     assert!(sql.contains("JOIN artefacts_current a ON a.artefact_id = e.from_artefact_id"));
-    assert!(sql.contains("e.revision_kind = 'temporary'"));
-    assert!(sql.contains("e.revision_id = 'temp:42'"));
-    assert!(sql.contains("a.revision_kind = 'temporary'"));
-    assert!(sql.contains("a.revision_id = 'temp:42'"));
+    assert!(sql.contains("AND a.repo_id = e.repo_id"));
+    assert!(!sql.contains("e.revision_kind"));
+    assert!(!sql.contains("e.revision_id"));
+    assert!(!sql.contains("a.revision_kind"));
+    assert!(!sql.contains("a.revision_id"));
+    assert!(!sql.contains("e.branch"));
     assert!(!sql.contains("FROM artefact_edges e"));
     assert!(!sql.contains("JOIN artefacts a ON a.artefact_id = e.from_artefact_id"));
 }

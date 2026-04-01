@@ -80,14 +80,30 @@ ON CONFLICT(repo_id, commit_sha, path) DO UPDATE SET
         .with_context(|| format!("failed seeding file_state {}", artefact.path))?;
         tx.execute(
             r#"
-INSERT INTO current_file_state (repo_id, path, commit_sha, blob_sha, committed_at)
-VALUES (?1, ?2, ?3, ?4, '2026-03-18T00:00:00Z')
+INSERT INTO current_file_state (
+  repo_id, path, language,
+  head_content_id, index_content_id, worktree_content_id,
+  effective_content_id, effective_source,
+  parser_version, extractor_version,
+  exists_in_head, exists_in_index, exists_in_worktree,
+  last_synced_at
+)
+VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?4, 'head', 'seed', 'seed', 1, 1, 1, '2026-03-18T00:00:00Z')
 ON CONFLICT(repo_id, path) DO UPDATE SET
-  commit_sha = excluded.commit_sha,
-  blob_sha = excluded.blob_sha,
-  committed_at = excluded.committed_at
+  language = excluded.language,
+  head_content_id = excluded.head_content_id,
+  index_content_id = excluded.index_content_id,
+  worktree_content_id = excluded.worktree_content_id,
+  effective_content_id = excluded.effective_content_id,
+  effective_source = excluded.effective_source,
+  parser_version = excluded.parser_version,
+  extractor_version = excluded.extractor_version,
+  exists_in_head = excluded.exists_in_head,
+  exists_in_index = excluded.exists_in_index,
+  exists_in_worktree = excluded.exists_in_worktree,
+  last_synced_at = excluded.last_synced_at
 "#,
-            params![FIXTURE_REPO_ID, artefact.path, commit_sha, blob_sha],
+            params![FIXTURE_REPO_ID, artefact.path, artefact.language, blob_sha],
         )
         .with_context(|| format!("failed seeding current_file_state {}", artefact.path))?;
         tx.execute(
