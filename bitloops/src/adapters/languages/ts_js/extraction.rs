@@ -4,13 +4,13 @@ use anyhow::Result;
 
 use super::canonical::{TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, TsJsKind, is_supported_language_kind, resolve_canonical_kind,
 };
 
 // JS/TS artefact extraction via tree-sitter.
 
 pub(crate) struct TsJsArtefactDescriptor<'a> {
-    language_kind: &'a str,
+    language_kind: LanguageKind,
     name: &'a str,
     symbol_fqn: String,
     parent_symbol_fqn: Option<String>,
@@ -29,7 +29,7 @@ pub(crate) fn extract_js_ts_artefacts_treesitter(
     let js_lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
 
     let mut out = Vec::new();
-    let mut seen: HashSet<(String, String, i32)> = HashSet::new();
+    let mut seen: HashSet<(LanguageKind, String, i32)> = HashSet::new();
 
     for lang in [ts_lang, js_lang] {
         if parser.set_language(&lang).is_err() {
@@ -77,7 +77,7 @@ pub(crate) fn collect_js_ts_nodes_recursive(
     content: &str,
     path: &str,
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
 ) {
     match node.kind() {
         "function_declaration"
@@ -93,7 +93,10 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                     node,
                     content,
                     TsJsArtefactDescriptor {
-                        language_kind: node.kind(),
+                        language_kind: LanguageKind::ts_js(
+                            TsJsKind::from_tree_sitter_kind(node.kind())
+                                .expect("validated ts/js declaration node kind"),
+                        ),
                         name,
                         symbol_fqn: format!("{path}::{name}"),
                         parent_symbol_fqn: None,
@@ -112,7 +115,7 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                     node,
                     content,
                     TsJsArtefactDescriptor {
-                        language_kind: "class_declaration",
+                        language_kind: LanguageKind::ts_js(TsJsKind::ClassDeclaration),
                         name,
                         symbol_fqn: class_fqn.clone(),
                         parent_symbol_fqn: None,
@@ -127,9 +130,9 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                                     && let Ok(name) = name_node.utf8_text(content.as_bytes())
                                 {
                                     let language_kind = if name == "constructor" {
-                                        "constructor"
+                                        LanguageKind::ts_js(TsJsKind::Constructor)
                                     } else {
-                                        "method_definition"
+                                        LanguageKind::ts_js(TsJsKind::MethodDefinition)
                                     };
                                     push_js_ts_artefact(
                                         out,
@@ -155,7 +158,9 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                                         child,
                                         content,
                                         TsJsArtefactDescriptor {
-                                            language_kind: "public_field_definition",
+                                            language_kind: LanguageKind::ts_js(
+                                                TsJsKind::PublicFieldDefinition,
+                                            ),
                                             name,
                                             symbol_fqn: format!("{class_fqn}::{name}"),
                                             parent_symbol_fqn: Some(class_fqn.clone()),
@@ -180,7 +185,7 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                     node,
                     content,
                     TsJsArtefactDescriptor {
-                        language_kind: "variable_declarator",
+                        language_kind: LanguageKind::ts_js(TsJsKind::VariableDeclarator),
                         name,
                         symbol_fqn: format!("{path}::{name}"),
                         parent_symbol_fqn: None,
@@ -197,7 +202,7 @@ pub(crate) fn collect_js_ts_nodes_recursive(
                 node,
                 content,
                 TsJsArtefactDescriptor {
-                    language_kind: "import_statement",
+                    language_kind: LanguageKind::ts_js(TsJsKind::ImportStatement),
                     name: &import_name,
                     symbol_fqn: format!("{path}::import::{import_name}"),
                     parent_symbol_fqn: None,
@@ -215,7 +220,7 @@ pub(crate) fn collect_js_ts_nodes_recursive(
 
 pub(crate) fn push_js_ts_artefact(
     out: &mut Vec<LanguageArtefact>,
-    seen: &mut HashSet<(String, String, i32)>,
+    seen: &mut HashSet<(LanguageKind, String, i32)>,
     node: tree_sitter::Node,
     content: &str,
     descriptor: TsJsArtefactDescriptor<'_>,
@@ -233,7 +238,7 @@ pub(crate) fn push_js_ts_artefact(
     }
 
     let start_line = node.start_position().row as i32 + 1;
-    if !seen.insert((language_kind.to_string(), name.to_string(), start_line)) {
+    if !seen.insert((language_kind, name.to_string(), start_line)) {
         return;
     }
 
@@ -248,7 +253,7 @@ pub(crate) fn push_js_ts_artefact(
     out.push(LanguageArtefact {
         canonical_kind: resolve_canonical_kind(TS_JS_CANONICAL_MAPPINGS, language_kind, false)
             .map(|p| p.as_str().to_string()),
-        language_kind: language_kind.to_string(),
+        language_kind,
         name: name.to_string(),
         symbol_fqn,
         parent_symbol_fqn,

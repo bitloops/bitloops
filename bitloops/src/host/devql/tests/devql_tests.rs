@@ -426,6 +426,8 @@ mod baseline;
 mod config_and_status;
 #[path = "devql_tests/core_and_ingestion.rs"]
 mod core_and_ingestion;
+#[path = "devql_tests/extraction_go.rs"]
+mod extraction_go;
 #[path = "devql_tests/extraction_js_ts.rs"]
 mod extraction_js_ts;
 #[path = "devql_tests/extraction_rust.rs"]

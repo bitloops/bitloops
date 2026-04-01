@@ -8,10 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Go language support**: added `tree-sitter-go` and a built-in `go-language-pack` so `.go` files now resolve through the extension host and participate in the existing language-adapter runtime without changing DevQL core dispatch. Go support now includes canonical mappings, artefact extraction for functions, methods, structs, interfaces, type aliases, imports, and module-scope vars/consts, dependency edges for imports/calls/type references/embedding relationships, built-in registry and mapping coverage, host-side Go adapter regression tests for edge precision, duplicate-edge prevention, and cross-kind overlap checks, duplicate-edge fixes for repeated imports and repeated local/imported embeddings, and a Go test-harness provider for `_test.go` discovery, subtest detection, and `go test -json` enumeration parsing.
+- **Typed language-kind model**: added `bitloops/src/host/language_adapter/kinds.rs` with per-language kind enums (`GoKind`, `TsJsKind`, `RustKind`, `PythonKind`) plus a shared wrapper `LanguageKind`, replacing language-kind magic strings in canonical mappings, supported-kind tables, pack registration, extraction logic, shared edge helpers, and internal artefact typing. Persistence and API boundaries continue to emit the same serialized string values as before by converting typed kinds back to strings at the boundary.
 - **Dashboard repository-list REST endpoint**: added `GET /api/repositories` on the legacy dashboard API so clients can list all repositories currently stored in the DevQL repository catalog. The endpoint is exposed through the existing `/api` router, included in the dashboard OpenAPI document, and covered by regression tests for both empty-catalog and multi-repository cases.
 
 ### Changed
 
+- **Language adapter canonical typing**: `CanonicalMapping.language_kind`, `supported_language_kinds()`, `LanguageArtefact.language_kind`, and shared canonical-resolution helpers now operate on typed `LanguageKind` values in the logic layer, while string conversion is deferred to persistence/output boundaries.
 - **Dashboard checkpoint-detail REST endpoint now resolves repositories explicitly**: changed `GET /api/checkpoints/{checkpoint_id}` to `GET /api/checkpoints/{repo_id}/{checkpoint_id}` so the legacy dashboard API loads checkpoint details from the selected repository instead of implicitly reading from the default repo root. Updated the dashboard API regression tests and OpenAPI path coverage to match the repo-aware route.
 
 ### Fixed
