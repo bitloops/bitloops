@@ -304,7 +304,9 @@ Manifest resolution order:
 
 | Variable | Purpose |
 | -------- | ------- |
-| `BITLOOPS_LOG_LEVEL` | Logger level (`DEBUG`, `INFO`, `WARN` or `WARNING`, `ERROR`). Invalid values fall back to `INFO`. |
+| `BITLOOPS_LOG_LEVEL` | Daemon logger level (`DEBUG`, `INFO`, `WARN` or `WARNING`, `ERROR`). Invalid values fall back to `INFO`. Logs are written to `daemon.log` under the Bitloops state directory. |
+
+Daemon config also supports `[logging].level` as the default daemon log level when `BITLOOPS_LOG_LEVEL` is not set.
 
 ### Telemetry env vars
 

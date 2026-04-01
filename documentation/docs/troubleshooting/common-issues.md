@@ -22,6 +22,7 @@ Checks:
 2. If needed, start the daemon manually with `bitloops start`.
 3. Re-run `bitloops dashboard`.
 4. If you use local HTTPS, try `bitloops daemon start --recheck-local-dashboard-net`.
+5. Inspect the daemon log with `bitloops daemon logs` or print its location with `bitloops daemon logs --path`.
 
 ## DevQL Cannot Reach Storage
 

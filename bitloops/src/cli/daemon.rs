@@ -1,13 +1,20 @@
-use std::io::{self, BufRead, Write};
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::api::DashboardServerConfig;
 use crate::cli::telemetry_consent;
 use crate::config::{bootstrap_default_daemon_environment, default_daemon_config_exists};
 use crate::daemon::{self, DaemonMode};
-pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`";
+pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon logs`";
+const DEFAULT_LOG_TAIL_LINES: usize = 200;
+const LOG_FOLLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DaemonArgs {
@@ -25,6 +32,8 @@ pub enum DaemonCommand {
     Status(DaemonStatusArgs),
     /// Restart the global Bitloops daemon.
     Restart(DaemonRestartArgs),
+    /// Show daemon log output.
+    Logs(DaemonLogsArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -104,6 +113,21 @@ pub struct DaemonRestartArgs {
     pub config: Option<std::path::PathBuf>,
 }
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct DaemonLogsArgs {
+    /// Print the last N lines from the daemon log.
+    #[arg(long, value_name = "N", value_parser = parse_log_lines)]
+    pub lines: Option<usize>,
+
+    /// Keep streaming appended daemon log lines.
+    #[arg(long, default_value_t = false, conflicts_with = "path")]
+    pub follow: bool,
+
+    /// Print the daemon log file path and exit.
+    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "lines"])]
+    pub path: bool,
+}
+
 pub async fn run(args: DaemonArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(MISSING_SUBCOMMAND_MESSAGE);
@@ -114,6 +138,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
+        DaemonCommand::Logs(args) => run_logs(args),
     }
 }
 
@@ -261,6 +286,27 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
     Ok(())
 }
 
+pub fn run_logs(args: DaemonLogsArgs) -> Result<()> {
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    run_logs_with_io(args, &mut out)
+}
+
+fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
+    let log_path = daemon::daemon_log_file_path();
+    if args.path {
+        writeln!(out, "{}", log_path.display()).context("writing daemon log path")?;
+        return Ok(());
+    }
+
+    ensure_log_file_exists(&log_path)?;
+    print_log_tail(&log_path, args.lines.unwrap_or(DEFAULT_LOG_TAIL_LINES), out)?;
+    if args.follow {
+        follow_log_file(&log_path, out, &|| false, LOG_FOLLOW_POLL_INTERVAL)?;
+    }
+    Ok(())
+}
+
 pub async fn run_restart(args: DaemonRestartArgs) -> Result<()> {
     let requested_config: Option<daemon::ResolvedDaemonConfig> = args
         .config
@@ -367,12 +413,14 @@ fn missing_default_daemon_bootstrap_message() -> &'static str {
 
 fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     let mut lines = Vec::new();
+    let log_path = daemon::daemon_log_file_path();
 
     if let Some(runtime) = report.runtime.as_ref() {
         lines.push("Bitloops daemon: running".to_string());
         lines.push(format!("Mode: {}", runtime.mode));
         lines.push(format!("URL: {}", runtime.url));
         lines.push(format!("Config: {}", runtime.config_path.display()));
+        lines.push(format!("Log file: {}", log_path.display()));
         lines.push(format!("PID: {}", runtime.pid));
         append_supervisor_lines(&mut lines, report);
         if let Some(health) = report.health.as_ref() {
@@ -385,6 +433,7 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         lines.push("Bitloops daemon: stopped".to_string());
         lines.push("Mode: always-on service".to_string());
         lines.push(format!("Config: {}", service.config_path.display()));
+        lines.push(format!("Log file: {}", log_path.display()));
         lines.push(format!(
             "Supervisor service: {} ({}, installed)",
             service.service_name, service.manager
@@ -405,7 +454,101 @@ fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
 
     lines.push("Bitloops daemon: stopped".to_string());
     lines.push("Mode: not running".to_string());
+    lines.push(format!("Log file: {}", log_path.display()));
     lines
+}
+
+fn ensure_log_file_exists(path: &Path) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    bail!(
+        "Bitloops daemon log file does not exist yet at {}. Start the daemon and try again.",
+        path.display()
+    );
+}
+
+fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid value `{value}` for --lines"))?;
+    if parsed == 0 {
+        return Err("--lines must be greater than 0".to_string());
+    }
+    Ok(parsed)
+}
+
+fn print_log_tail(path: &Path, lines: usize, out: &mut dyn Write) -> Result<()> {
+    for line in tail_log_file(path, lines)? {
+        writeln!(out, "{line}").context("writing daemon log output")?;
+    }
+    out.flush().context("flushing daemon log output")
+}
+
+fn tail_log_file(path: &Path, lines: usize) -> Result<Vec<String>> {
+    let file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut buffer = VecDeque::with_capacity(lines);
+
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("reading daemon log {}", path.display()))?;
+        if buffer.len() == lines {
+            buffer.pop_front();
+        }
+        buffer.push_back(line);
+    }
+
+    Ok(buffer.into_iter().collect())
+}
+
+fn follow_log_file(
+    path: &Path,
+    out: &mut dyn Write,
+    should_stop: &dyn Fn() -> bool,
+    poll_interval: Duration,
+) -> Result<()> {
+    let mut position = std::fs::metadata(path)
+        .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+        .len();
+
+    loop {
+        if should_stop() {
+            return Ok(());
+        }
+
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+            .len();
+        if len < position {
+            position = 0;
+        }
+
+        if len > position {
+            let mut file = File::open(path)
+                .with_context(|| format!("opening daemon log {}", path.display()))?;
+            file.seek(SeekFrom::Start(position))
+                .with_context(|| format!("seeking daemon log {}", path.display()))?;
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                let bytes = reader
+                    .read_line(&mut line)
+                    .with_context(|| format!("reading daemon log {}", path.display()))?;
+                if bytes == 0 {
+                    break;
+                }
+                write!(out, "{line}").context("writing daemon follow output")?;
+                line.clear();
+            }
+            position = reader
+                .stream_position()
+                .with_context(|| format!("tracking daemon log cursor {}", path.display()))?;
+            out.flush().context("flushing daemon follow output")?;
+        }
+
+        thread::sleep(poll_interval);
+    }
 }
 
 fn append_supervisor_lines(lines: &mut Vec<String>, report: &daemon::DaemonStatusReport) {
@@ -507,8 +650,49 @@ mod tests {
     use crate::daemon::{DaemonServiceMetadata, DaemonStatusReport, ServiceManagerKind};
     use crate::test_support::process_state::enter_process_state;
     use clap::Parser;
+    use std::fs::{self, OpenOptions};
     use std::io::Cursor;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
     use tempfile::TempDir;
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.bytes.lock().expect("shared buffer lock").clone())
+                .expect("utf8 log output")
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("shared buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn write_log_lines(path: &Path, lines: &[String]) {
+        let parent = path.parent().expect("daemon log parent");
+        fs::create_dir_all(parent).expect("create daemon log dir");
+        let mut rendered = lines.join("\n");
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        fs::write(path, rendered).expect("write daemon log");
+    }
 
     #[test]
     fn daemon_start_cli_parses_lifecycle_and_server_flags() {
@@ -594,6 +778,37 @@ mod tests {
         .expect("daemon start should reject conflicting config bootstrap flags");
 
         assert!(err.to_string().contains("--create-default-config"));
+    }
+
+    #[test]
+    fn daemon_logs_cli_parses_lines_follow_and_path_flags() {
+        let parsed =
+            Cli::try_parse_from(["bitloops", "daemon", "logs", "--lines", "25", "--follow"])
+                .expect("daemon logs should parse");
+
+        let Some(Commands::Daemon(daemon)) = parsed.command else {
+            panic!("expected daemon command");
+        };
+        let Some(DaemonCommand::Logs(args)) = daemon.command else {
+            panic!("expected daemon logs command");
+        };
+
+        assert_eq!(args.lines, Some(25));
+        assert!(args.follow);
+        assert!(!args.path);
+    }
+
+    #[test]
+    fn daemon_logs_cli_rejects_conflicting_path_flags() {
+        let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--follow"])
+            .err()
+            .expect("daemon logs should reject --path with --follow");
+        assert!(err.to_string().contains("--path"));
+
+        let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--lines", "5"])
+            .err()
+            .expect("daemon logs should reject --path with --lines");
+        assert!(err.to_string().contains("--path"));
     }
 
     #[tokio::test]
@@ -836,6 +1051,16 @@ mod tests {
 
     #[test]
     fn status_lines_show_global_supervisor_install_and_state() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+
         let report = DaemonStatusReport {
             runtime: None,
             service: Some(DaemonServiceMetadata {
@@ -859,6 +1084,7 @@ mod tests {
             service_running: false,
             health: None,
         };
+        let log_path = daemon::daemon_log_file_path();
 
         assert_eq!(
             status_lines(&report),
@@ -866,10 +1092,241 @@ mod tests {
                 "Bitloops daemon: stopped".to_string(),
                 "Mode: always-on service".to_string(),
                 "Config: /tmp/bitloops/config.toml".to_string(),
+                format!("Log file: {}", log_path.display()),
                 "Supervisor service: com.bitloops.daemon (launchd, installed)".to_string(),
                 "Supervisor state: stopped".to_string(),
                 "Last URL: https://127.0.0.1:5173".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn status_lines_show_log_file_for_running_daemon() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+
+        let report = DaemonStatusReport {
+            runtime: Some(crate::daemon::DaemonRuntimeState {
+                version: 1,
+                config_path: std::path::PathBuf::from("/tmp/bitloops/config.toml"),
+                config_root: std::path::PathBuf::from("/tmp"),
+                pid: 42,
+                mode: DaemonMode::Foreground,
+                service_name: None,
+                url: "http://127.0.0.1:5667".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: 5667,
+                bundle_dir: std::path::PathBuf::from("/tmp/bundle"),
+                relational_db_path: std::path::PathBuf::from("/tmp/relational.db"),
+                events_db_path: std::path::PathBuf::from("/tmp/events.duckdb"),
+                blob_store_path: std::path::PathBuf::from("/tmp/blob"),
+                repo_registry_path: std::path::PathBuf::from("/tmp/repo-registry.json"),
+                binary_fingerprint: "abc".to_string(),
+                updated_at_unix: 1,
+            }),
+            service: None,
+            service_running: false,
+            health: None,
+        };
+
+        let lines = status_lines(&report);
+        assert!(lines.contains(&format!(
+            "Log file: {}",
+            daemon::daemon_log_file_path().display()
+        )));
+    }
+
+    #[test]
+    fn status_lines_show_log_file_when_daemon_is_stopped() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+
+        let report = DaemonStatusReport {
+            runtime: None,
+            service: None,
+            service_running: false,
+            health: None,
+        };
+
+        assert_eq!(
+            status_lines(&report),
+            vec![
+                "Bitloops daemon: stopped".to_string(),
+                "Mode: not running".to_string(),
+                format!("Log file: {}", daemon::daemon_log_file_path().display()),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_logs_prints_default_last_two_hundred_lines() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let log_path = daemon::daemon_log_file_path();
+        let lines = (1..=250)
+            .map(|idx| format!("{{\"line\":{idx}}}"))
+            .collect::<Vec<_>>();
+        write_log_lines(&log_path, &lines);
+        let mut out = Vec::new();
+
+        run_logs_with_io(DaemonLogsArgs::default(), &mut out).expect("run daemon logs");
+
+        let rendered = String::from_utf8(out).expect("utf8 output");
+        let output_lines = rendered.lines().collect::<Vec<_>>();
+        assert_eq!(output_lines.len(), 200);
+        assert_eq!(output_lines.first().copied(), Some("{\"line\":51}"));
+        assert_eq!(output_lines.last().copied(), Some("{\"line\":250}"));
+    }
+
+    #[test]
+    fn run_logs_honours_explicit_line_count() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let log_path = daemon::daemon_log_file_path();
+        let lines = (1..=5)
+            .map(|idx| format!("{{\"line\":{idx}}}"))
+            .collect::<Vec<_>>();
+        write_log_lines(&log_path, &lines);
+        let mut out = Vec::new();
+
+        run_logs_with_io(
+            DaemonLogsArgs {
+                lines: Some(3),
+                follow: false,
+                path: false,
+            },
+            &mut out,
+        )
+        .expect("run daemon logs");
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf8 output"),
+            "{\"line\":3}\n{\"line\":4}\n{\"line\":5}\n"
+        );
+    }
+
+    #[test]
+    fn run_logs_prints_log_path() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let mut out = Vec::new();
+
+        run_logs_with_io(
+            DaemonLogsArgs {
+                lines: None,
+                follow: false,
+                path: true,
+            },
+            &mut out,
+        )
+        .expect("print daemon log path");
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf8 output"),
+            format!("{}\n", daemon::daemon_log_file_path().display())
+        );
+    }
+
+    #[test]
+    fn run_logs_reports_missing_file_with_expected_path() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+
+        let err = run_logs_with_io(DaemonLogsArgs::default(), &mut Vec::new())
+            .expect_err("daemon logs should fail when file is missing");
+
+        assert!(
+            err.to_string()
+                .contains(&daemon::daemon_log_file_path().display().to_string())
+        );
+    }
+
+    #[test]
+    fn follow_log_file_streams_appended_lines() {
+        let state_root = TempDir::new().expect("temp dir");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let log_path = daemon::daemon_log_file_path();
+        write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_signal = stop.clone();
+        let path_for_thread = log_path.clone();
+        let mut writer = SharedBuffer::default();
+        let shared = writer.clone();
+        let handle = thread::spawn(move || {
+            follow_log_file(
+                &path_for_thread,
+                &mut writer,
+                &|| stop_signal.load(Ordering::SeqCst),
+                Duration::from_millis(10),
+            )
+        });
+
+        thread::sleep(Duration::from_millis(30));
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .expect("open daemon log for append");
+        writeln!(file, "{{\"line\":2}}").expect("append followed line");
+        writeln!(file, "{{\"line\":3}}").expect("append followed line");
+        file.flush().expect("flush appended daemon log");
+
+        thread::sleep(Duration::from_millis(60));
+        stop.store(true, Ordering::SeqCst);
+        handle
+            .join()
+            .expect("join follow thread")
+            .expect("follow daemon log");
+
+        assert_eq!(shared.contents(), "{\"line\":2}\n{\"line\":3}\n");
     }
 }

@@ -18,10 +18,58 @@ pub use bitloops::utils;
 #[allow(dead_code)]
 pub(crate) mod test_support;
 
+fn init_standard_logger() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+}
+
+fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::ProcessLogContext> {
+    match command? {
+        cli::Commands::DaemonProcess(args) => Some(daemon::ProcessLogContext::daemon(
+            match args.mode {
+                daemon::DaemonProcessModeArg::Detached => "detached",
+                daemon::DaemonProcessModeArg::Service => "service",
+            },
+            Some(args.config_path.clone()),
+            args.service_name.clone(),
+        )),
+        cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
+        cli::Commands::Start(args) if !args.detached && !args.until_stopped => Some(
+            daemon::ProcessLogContext::daemon("foreground", args.config.clone(), None),
+        ),
+        cli::Commands::Restart(args) => Some(daemon::ProcessLogContext::daemon(
+            "foreground",
+            args.config.clone(),
+            None,
+        )),
+        cli::Commands::Daemon(args) => match args.command.as_ref()? {
+            cli::daemon::DaemonCommand::Start(start) if !start.detached && !start.until_stopped => {
+                Some(daemon::ProcessLogContext::daemon(
+                    "foreground",
+                    start.config.clone(),
+                    None,
+                ))
+            }
+            cli::daemon::DaemonCommand::Restart(restart) => Some(
+                daemon::ProcessLogContext::daemon("foreground", restart.config.clone(), None),
+            ),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cmd = cli::Cli::parse();
+    if let Some(context) = daemon_log_context(cmd.command.as_ref()) {
+        if let Err(err) = daemon::init_process_logger(context) {
+            eprintln!("[bitloops] Warning: failed to initialize daemon logger: {err:#}");
+            init_standard_logger();
+        }
+    } else {
+        init_standard_logger();
+    }
 
     tokio::select! {
         result = cli::run(cmd) => {
