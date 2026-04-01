@@ -47,6 +47,42 @@ pub(super) fn then_config_has_relational_store(
     })
 }
 
+pub(super) fn then_config_has_event_store(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "the config contains an event store path",
+            helpers::assert_config_has_event_store(world),
+        );
+    })
+}
+
+pub(super) fn then_store_paths_exist(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "the store paths from the config exist on disk",
+            helpers::assert_store_paths_exist(world),
+        );
+    })
+}
+
+pub(super) fn then_config_has_blob_store(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "the config contains a blob store path",
+            helpers::assert_config_has_blob_store(world),
+        );
+    })
+}
+
 pub(super) fn then_repo_local_bitloops_dir_exists(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

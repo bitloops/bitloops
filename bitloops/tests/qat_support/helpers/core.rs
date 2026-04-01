@@ -1,3 +1,5 @@
+use crate::PathBuf;
+
 pub fn sanitize_name(input: &str) -> String {
     let mut slug = String::with_capacity(input.len());
     let mut last_was_dash = false;
@@ -296,9 +298,8 @@ pub fn run_init_bitloops_with_agent(
             continue;
         }
 
-        let daemon_not_running =
-            stdout.contains("Bitloops daemon is not running")
-                || stderr.contains("Bitloops daemon is not running");
+        let daemon_not_running = stdout.contains("Bitloops daemon is not running")
+            || stderr.contains("Bitloops daemon is not running");
         if daemon_not_running {
             append_world_log(
                 world,
@@ -465,7 +466,10 @@ pub fn simulate_codex_checkpoint(world: &mut QatWorld, repo_name: &str) -> Resul
                 continue;
             }
 
-            let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
+            let extension = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or_default();
             if matches!(extension, "ts" | "tsx" | "js" | "jsx" | "rs" | "py") {
                 target_file = Some(path);
                 break;
@@ -476,7 +480,8 @@ pub fn simulate_codex_checkpoint(world: &mut QatWorld, repo_name: &str) -> Resul
         }
     }
 
-    let target_file = target_file.context("simulate_codex_checkpoint: no source file found in src/")?;
+    let target_file =
+        target_file.context("simulate_codex_checkpoint: no source file found in src/")?;
     let marker = match target_file
         .extension()
         .and_then(|ext| ext.to_str())
@@ -518,7 +523,11 @@ pub fn simulate_codex_checkpoint(world: &mut QatWorld, repo_name: &str) -> Resul
     run_git_success(world, &["add", "-A"], &[], "git add -A")?;
     run_git_success(
         world,
-        &["commit", "-m", &format!("test: {agent_name} simulated checkpoint")],
+        &[
+            "commit",
+            "-m",
+            &format!("test: {agent_name} simulated checkpoint"),
+        ],
         &[],
         "git commit simulated checkpoint",
     )?;
@@ -584,8 +593,8 @@ pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
     )?;
     ensure_success(&output, "bitloops --version")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let re = regex::Regex::new(r"Bitloops CLI v\d+\.\d+\.\d+")
-        .context("compiling version regex")?;
+    let re =
+        regex::Regex::new(r"Bitloops CLI v\d+\.\d+\.\d+").context("compiling version regex")?;
     ensure!(
         re.is_match(&stdout),
         "expected semver in version output, got:\n{}",
@@ -639,7 +648,144 @@ pub fn assert_config_has_relational_store(world: &QatWorld) -> Result<()> {
     Ok(())
 }
 
-pub fn assert_file_exists_in_repo(world: &QatWorld, repo_name: &str, relative_path: &str) -> Result<()> {
+pub fn assert_config_has_event_store(world: &QatWorld) -> Result<()> {
+    let home = world.run_dir().join("home");
+    let macos_config = home
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("config.toml");
+    let xdg_config = home.join("xdg").join("bitloops").join("config.toml");
+    let config_path = if macos_config.exists() {
+        macos_config
+    } else {
+        xdg_config
+    };
+    let content = fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    ensure!(
+        content.contains("[stores.events]"),
+        "daemon config missing [stores.events] section:\n{}",
+        content
+    );
+    ensure!(
+        content.contains("duckdb_path"),
+        "daemon config missing event store path:\n{}",
+        content
+    );
+    Ok(())
+}
+
+pub fn assert_config_has_blob_store(world: &QatWorld) -> Result<()> {
+    let home = world.run_dir().join("home");
+    let macos_config = home
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("config.toml");
+    let xdg_config = home.join("xdg").join("bitloops").join("config.toml");
+    let config_path = if macos_config.exists() {
+        macos_config
+    } else {
+        xdg_config
+    };
+    let content = fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    ensure!(
+        content.contains("[stores.blob]"),
+        "daemon config missing [stores.blob] section:\n{}",
+        content
+    );
+    ensure!(
+        content.contains("local_path"),
+        "daemon config missing blob store path:\n{}",
+        content
+    );
+    Ok(())
+}
+
+pub fn assert_store_paths_exist(world: &QatWorld) -> Result<()> {
+    let home = world.run_dir().join("home");
+    let macos_config = home
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("config.toml");
+    let xdg_config = home.join("xdg").join("bitloops").join("config.toml");
+    let config_path = if macos_config.exists() {
+        macos_config
+    } else {
+        xdg_config
+    };
+    let content = fs::read_to_string(&config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+
+    // Extract sqlite_path value from TOML content
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("sqlite_path") {
+            let path_str = value
+                .trim()
+                .trim_start_matches('=')
+                .trim()
+                .trim_matches('"');
+            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
+                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
+            } else {
+                config_path.parent().unwrap().join(path_str)
+            };
+            ensure!(
+                resolved.exists(),
+                "SQLite store file does not exist at {}",
+                resolved.display()
+            );
+        }
+        if let Some(value) = trimmed.strip_prefix("duckdb_path") {
+            let path_str = value
+                .trim()
+                .trim_start_matches('=')
+                .trim()
+                .trim_matches('"');
+            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
+                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
+            } else {
+                config_path.parent().unwrap().join(path_str)
+            };
+            // DuckDB parent directory should exist (file created on first use)
+            if let Some(parent) = resolved.parent() {
+                ensure!(
+                    parent.exists(),
+                    "DuckDB store directory does not exist at {}",
+                    parent.display()
+                );
+            }
+        }
+        if let Some(value) = trimmed.strip_prefix("local_path") {
+            let path_str = value
+                .trim()
+                .trim_start_matches('=')
+                .trim()
+                .trim_matches('"');
+            let resolved = if path_str.starts_with('/') || path_str.starts_with('~') {
+                PathBuf::from(path_str.replace('~', &home.to_string_lossy()))
+            } else {
+                config_path.parent().unwrap().join(path_str)
+            };
+            ensure!(
+                resolved.exists(),
+                "Blob store directory does not exist at {}",
+                resolved.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn assert_file_exists_in_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    relative_path: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let full_path = world.repo_dir().join(relative_path);
     ensure!(
@@ -650,15 +796,19 @@ pub fn assert_file_exists_in_repo(world: &QatWorld, repo_name: &str, relative_pa
     Ok(())
 }
 
-pub fn assert_agent_hooks_installed(world: &QatWorld, repo_name: &str, agent_name: &str) -> Result<()> {
+pub fn assert_agent_hooks_installed(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
     match normalised_agent_name {
         "codex" => {
             let path = world.repo_dir().join(".codex").join("hooks.json");
             ensure!(path.exists(), "expected {}", path.display());
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
             ensure!(
                 content.contains("bitloops hooks codex session-start"),
                 "missing codex session-start hook in {}",
@@ -673,8 +823,8 @@ pub fn assert_agent_hooks_installed(world: &QatWorld, repo_name: &str, agent_nam
         "claude-code" => {
             let path = world.repo_dir().join(".claude").join("settings.json");
             ensure!(path.exists(), "expected {}", path.display());
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
             ensure!(
                 content.contains("bitloops hooks claude-code stop"),
                 "missing claude-code stop hook in {}",
@@ -684,7 +834,11 @@ pub fn assert_agent_hooks_installed(world: &QatWorld, repo_name: &str, agent_nam
         other => bail!("unsupported agent for hook assertion: {other}"),
     }
 
-    let post_commit_path = world.repo_dir().join(".git").join("hooks").join("post-commit");
+    let post_commit_path = world
+        .repo_dir()
+        .join(".git")
+        .join("hooks")
+        .join("post-commit");
     ensure!(
         post_commit_path.exists(),
         "expected git post-commit hook at {}",
@@ -714,8 +868,8 @@ pub fn assert_status_shows_disabled(world: &mut QatWorld, repo_name: &str) -> Re
         "expected disabled status output, got:\n{}",
         stdout
     );
-    let settings = load_settings(world.repo_dir())
-        .context("loading repo settings after bitloops disable")?;
+    let settings =
+        load_settings(world.repo_dir()).context("loading repo settings after bitloops disable")?;
     ensure!(
         !settings.enabled,
         "expected capture.enabled=false after disable, but settings report enabled=true"

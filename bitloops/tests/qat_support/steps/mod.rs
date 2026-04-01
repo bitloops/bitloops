@@ -233,6 +233,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^the config contains an event store path$"),
+            step_fn(then_config_has_event_store),
+        )
+        .then(
+            None,
+            regex(r"^the config contains a blob store path$"),
+            step_fn(then_config_has_blob_store),
+        )
+        .then(
+            None,
+            regex(r"^the store paths from the config exist on disk$"),
+            step_fn(then_store_paths_exist),
+        )
+        .then(
+            None,
             regex(r"^the repo-local \.bitloops directory exists in (\S+)$"),
             step_fn(then_repo_local_bitloops_dir_exists),
         )

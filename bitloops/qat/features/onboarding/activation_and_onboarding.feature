@@ -1,24 +1,26 @@
 @onboarding
 Feature: Activation and Onboarding
-  As a developer adopting Bitloops for the first time,
-  I want to install, initialize, enable, and see first value quickly
-  so that I can trust the tool before investing further.
+    As a developer adopting Bitloops for the first time,
+    I want to install, initialize, enable, and see first value quickly
+    so that I can trust the tool before investing further.
 
-  # ── D1-J01: Install Bitloops ──────────────────────────────────────
+    # ── Install Bitloops ───────────────────────────────────────
 
-  @D1-J01
-  Scenario: Bitloops binary is callable and reports a version
-    Given I run CleanStart for flow "install-verify"
-    Then  bitloops --version exits 0 and prints a semver version
+    Scenario: Bitloops binary is callable and reports a version
+        Given I run CleanStart for flow "install-verify"
+        Then  bitloops --version exits 0 and prints a semver version
 
-#   # ── D1-J02: Initialize global daemon config ───────────────────────
-#
-#   @D1-J02
-#   Scenario: Initialize daemon config from scratch
-#     Given I run CleanStart for flow "daemon-config-init"
-#     And   I start the daemon in bitloops
-#     Then  the global daemon config file exists
-#     And   the config contains a relational store path
+    # ── Initialize global daemon config ───────────────────────
+
+    @D1-J02
+    Scenario: Initialize daemon config from scratch
+        Given I run CleanStart for flow "daemon-config-init"
+        And   I start the daemon in bitloops
+        Then  the global daemon config file exists
+        And   the config contains a relational store path
+        And   the config contains an event store path
+        And   the config contains a blob store path
+        And   the store paths from the config exist on disk
 #
 #   # ── D1-J03: Enable Bitloops in a repository ───────────────────────
 #
