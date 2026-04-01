@@ -28,6 +28,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 toml_edit = { version = "0.25", features = ["serde"] }
 regex = "1"
 tree-sitter = "0.26.7"
@@ -59,6 +60,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
 bitloops-embeddings-protocol = { path = "../bitloops-embeddings-protocol" }
+libc = "0.2"
 
 [dev-dependencies]
 cucumber = "0.22.1"

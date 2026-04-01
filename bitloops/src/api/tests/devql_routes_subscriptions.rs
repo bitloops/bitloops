@@ -12,7 +12,7 @@ fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
         ),
         (
             crate::devql_transport::HEADER_SCOPE_REPO_NAME.to_string(),
-            repo.name,
+            crate::devql_transport::encode_scope_header_value(&repo.name),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_REPO_PROVIDER.to_string(),
@@ -20,23 +20,23 @@ fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
         ),
         (
             crate::devql_transport::HEADER_SCOPE_REPO_ORGANISATION.to_string(),
-            repo.organization,
+            crate::devql_transport::encode_scope_header_value(&repo.organization),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_REPO_IDENTITY.to_string(),
-            repo.identity,
+            crate::devql_transport::encode_scope_header_value(&repo.identity),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_REPO_ROOT.to_string(),
-            repo_root.to_string_lossy().to_string(),
+            crate::devql_transport::encode_scope_header_value(&repo_root.to_string_lossy()),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_BRANCH.to_string(),
-            "main".to_string(),
+            crate::devql_transport::encode_scope_header_value("main"),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_GIT_DIR_RELATIVE_PATH.to_string(),
-            ".git".to_string(),
+            crate::devql_transport::encode_scope_header_value(".git"),
         ),
         (
             crate::devql_transport::HEADER_SCOPE_CONFIG_FINGERPRINT.to_string(),

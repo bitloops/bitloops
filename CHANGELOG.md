@@ -8,9 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Dashboard repository-list REST endpoint**: added `GET /api/repositories` on the legacy dashboard API so clients can list all repositories currently stored in the DevQL repository catalog. The endpoint is exposed through the existing `/api` router, included in the dashboard OpenAPI document, and covered by regression tests for both empty-catalog and multi-repository cases.
+
 ### Changed
 
 ### Fixed
+
+- **Daemon liveness detection on macOS**: the CLI now treats Unix `kill(pid, 0)` permission errors (`EPERM`) as evidence that the daemon process still exists instead of assuming the process is gone. This fixes cases where a live Bitloops daemon was misreported as stopped, which could break daemon status and lifecycle flows.
 
 ## [0.0.12] - 2026-03-30
 
