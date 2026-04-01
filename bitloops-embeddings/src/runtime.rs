@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use bitloops_embeddings_protocol::{
     DescribeResponse, EmbedBatchRequest, EmbedBatchResponse, ErrorResponse, PROTOCOL_VERSION,
-    Request, Response, RuntimeDescriptor, RUNTIME_NAME, ShutdownResponse,
+    RUNTIME_NAME, Request, Response, RuntimeDescriptor, ShutdownResponse,
 };
 
 use crate::config::{load_runtime_file_config, select_profile};
@@ -40,8 +40,10 @@ impl RuntimeState {
         let config = load_runtime_file_config(&options.config_path)
             .with_context(|| format!("loading runtime config {}", options.config_path.display()))?;
         let profile = select_profile(&config, &options.selected_profile)?;
-        let provider = build_provider(profile, options.repo_root.as_deref())
-            .with_context(|| format!("building embedding profile `{}`", options.selected_profile))?;
+        let provider =
+            build_provider(profile, options.repo_root.as_deref()).with_context(|| {
+                format!("building embedding profile `{}`", options.selected_profile)
+            })?;
         Ok(Self {
             profile_name: options.selected_profile.clone(),
             provider,
@@ -67,11 +69,13 @@ impl RuntimeState {
         let vectors = vectors
             .into_iter()
             .enumerate()
-            .map(|(index, values)| bitloops_embeddings_protocol::EmbeddingVector {
-                index,
-                id: request.inputs.get(index).and_then(|input| input.id.clone()),
-                values,
-            })
+            .map(
+                |(index, values)| bitloops_embeddings_protocol::EmbeddingVector {
+                    index,
+                    id: request.inputs.get(index).and_then(|input| input.id.clone()),
+                    values,
+                },
+            )
             .collect::<Vec<_>>();
 
         Ok(Response::EmbedBatch(EmbedBatchResponse {
@@ -150,8 +154,11 @@ mod tests {
     fn runtime_state_rejects_missing_profile() {
         let temp = tempdir().expect("tempdir");
         let config_path = temp.path().join("config.toml");
-        fs::write(&config_path, "[embeddings.profiles.local]\nkind = \"local_fastembed\"\n")
-            .expect("write config");
+        fs::write(
+            &config_path,
+            "[embeddings.profiles.local]\nkind = \"local_fastembed\"\n",
+        )
+        .expect("write config");
         let options = RuntimeOptions {
             config_path,
             selected_profile: "missing".to_string(),

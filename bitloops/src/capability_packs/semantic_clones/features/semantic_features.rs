@@ -14,12 +14,12 @@ mod semantic;
 use self::common::{build_body_tokens, normalize_name, normalize_repo_path};
 pub(crate) use self::common::{build_dependency_context_signal, render_dependency_context};
 use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature};
+pub use self::semantic::SymbolSemanticsRow;
 pub use self::semantic::{
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
     SemanticSummaryProviderConfig, build_semantic_summary_provider,
     resolve_semantic_summary_endpoint,
 };
-pub use self::semantic::SymbolSemanticsRow;
 use self::semantic::{build_semantics_row, normalize_summary_text};
 
 const SEMANTIC_FEATURES_FINGERPRINT_VERSION: &str = "semantic-features-fingerprint-v3";

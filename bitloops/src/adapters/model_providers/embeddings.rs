@@ -12,6 +12,9 @@ use bitloops_embeddings_protocol::{
     ErrorResponse, ProviderDescriptor, Request, Response, ShutdownRequest,
 };
 
+const DEFAULT_EMBEDDINGS_RUNTIME_COMMAND: &str = "bitloops-embeddings";
+const INTERNAL_EMBEDDINGS_RUNTIME_SUBCOMMAND: &str = "__embeddings-runtime";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
     Document,
@@ -130,7 +133,12 @@ struct RuntimeSession {
 
 impl RuntimeSession {
     fn spawn(config: &EmbeddingRuntimeClientConfig) -> Result<Self> {
-        let mut command = Command::new(&config.command);
+        let invocation = resolve_runtime_invocation(
+            config.command.as_str(),
+            std::env::current_exe().ok().as_deref(),
+        );
+        let mut command = Command::new(&invocation.program);
+        command.args(&invocation.prefix_args);
         command.args(&config.args);
         command.arg("--config").arg(&config.config_path);
         command.arg("--profile").arg(&config.profile_name);
@@ -143,8 +151,10 @@ impl RuntimeSession {
 
         let mut child = command.spawn().with_context(|| {
             format!(
-                "spawning embeddings runtime `{}` for profile `{}`",
-                config.command, config.profile_name
+                "spawning embeddings runtime `{}` (resolved to `{}`) for profile `{}`",
+                config.command,
+                invocation.program.display(),
+                config.profile_name
             )
         })?;
         let stdin = child
@@ -186,6 +196,31 @@ impl RuntimeSession {
         response_rx
             .recv_timeout(timeout)
             .map_err(|_| anyhow!("embedding runtime request timed out after {:?}", timeout))?
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeInvocation {
+    program: PathBuf,
+    prefix_args: Vec<String>,
+}
+
+fn resolve_runtime_invocation(
+    configured_command: &str,
+    current_exe: Option<&std::path::Path>,
+) -> RuntimeInvocation {
+    if configured_command == DEFAULT_EMBEDDINGS_RUNTIME_COMMAND
+        && let Some(current_exe) = current_exe
+    {
+        return RuntimeInvocation {
+            program: current_exe.to_path_buf(),
+            prefix_args: vec![INTERNAL_EMBEDDINGS_RUNTIME_SUBCOMMAND.to_string()],
+        };
+    }
+
+    RuntimeInvocation {
+        program: PathBuf::from(configured_command),
+        prefix_args: Vec::new(),
     }
 }
 
@@ -303,5 +338,30 @@ mod tests {
         assert!(key.contains("provider=openai"));
         assert!(key.contains("model=text-embedding-3-large"));
         assert!(key.contains("dimension=3072"));
+    }
+
+    #[test]
+    fn default_runtime_command_uses_current_executable() {
+        let invocation = resolve_runtime_invocation(
+            DEFAULT_EMBEDDINGS_RUNTIME_COMMAND,
+            Some(std::path::Path::new("/tmp/bitloops")),
+        );
+
+        assert_eq!(invocation.program, PathBuf::from("/tmp/bitloops"));
+        assert_eq!(
+            invocation.prefix_args,
+            vec![INTERNAL_EMBEDDINGS_RUNTIME_SUBCOMMAND.to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_command_is_left_unchanged() {
+        let invocation = resolve_runtime_invocation("/usr/local/bin/custom-embeddings", None);
+
+        assert_eq!(
+            invocation.program,
+            PathBuf::from("/usr/local/bin/custom-embeddings")
+        );
+        assert!(invocation.prefix_args.is_empty());
     }
 }

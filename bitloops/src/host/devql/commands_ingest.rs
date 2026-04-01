@@ -258,13 +258,16 @@ pub(crate) async fn execute_ingest_with_observer(
                 )
             })?;
             if let Some(enrichment) = enrichment.as_ref() {
+                let enqueue_target = crate::daemon::EnrichmentJobTarget::new(
+                    cfg.config_root.clone(),
+                    cfg.repo_root.clone(),
+                    cfg.repo.repo_id.clone(),
+                    active_branch.clone(),
+                );
                 if semantic_clones.summary_mode == SemanticSummaryMode::Auto {
                     enrichment
                         .enqueue_semantic_summaries(
-                            cfg.config_root.clone(),
-                            cfg.repo_root.clone(),
-                            cfg.repo.repo_id.clone(),
-                            active_branch.clone(),
+                            enqueue_target.clone(),
                             semantic_feature_inputs.clone(),
                             input_hashes.clone(),
                             semantic_clones.embedding_mode,
@@ -279,10 +282,7 @@ pub(crate) async fn execute_ingest_with_observer(
                         | SemanticCloneEmbeddingMode::RefreshOnUpgrade => {
                             enrichment
                                 .enqueue_symbol_embeddings(
-                                    cfg.config_root.clone(),
-                                    cfg.repo_root.clone(),
-                                    cfg.repo.repo_id.clone(),
-                                    active_branch.clone(),
+                                    enqueue_target.clone(),
                                     semantic_feature_inputs.clone(),
                                     input_hashes.clone(),
                                     semantic_clones.embedding_mode,
@@ -293,10 +293,7 @@ pub(crate) async fn execute_ingest_with_observer(
                             if semantic_clones.summary_mode == SemanticSummaryMode::Off {
                                 enrichment
                                     .enqueue_symbol_embeddings(
-                                        cfg.config_root.clone(),
-                                        cfg.repo_root.clone(),
-                                        cfg.repo.repo_id.clone(),
-                                        active_branch.clone(),
+                                        enqueue_target.clone(),
                                         semantic_feature_inputs.clone(),
                                         input_hashes.clone(),
                                         semantic_clones.embedding_mode,

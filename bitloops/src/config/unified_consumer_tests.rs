@@ -5,13 +5,12 @@ use super::unified_config::{
     UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
     resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
     resolve_provider_from_unified, resolve_semantic_clones_from_unified,
-    resolve_semantic_from_unified, resolve_store_backend_from_unified,
-    resolve_watch_from_unified,
+    resolve_semantic_from_unified, resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL,
-    ENV_SEMANTIC_MODEL, ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS,
-    ENV_WATCH_POLL_FALLBACK_MS, SemanticCloneEmbeddingMode, SemanticSummaryMode,
+    DashboardLocalDashboardConfig, ENV_SEMANTIC_API_KEY, ENV_SEMANTIC_BASE_URL, ENV_SEMANTIC_MODEL,
+    ENV_SEMANTIC_PROVIDER, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
+    SemanticCloneEmbeddingMode, SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {

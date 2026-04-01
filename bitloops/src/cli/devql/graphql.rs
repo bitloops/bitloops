@@ -10,8 +10,15 @@ use crate::host::devql::{
 use crate::{api::DashboardServerConfig, daemon};
 
 #[cfg(test)]
+type IngestDaemonBootstrapHook = dyn Fn(&Path) -> Result<()> + 'static;
+
+#[cfg(test)]
+type IngestDaemonBootstrapHookCell =
+    std::cell::RefCell<Option<std::rc::Rc<IngestDaemonBootstrapHook>>>;
+
+#[cfg(test)]
 thread_local! {
-    static INGEST_DAEMON_BOOTSTRAP_HOOK: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>> =
+    static INGEST_DAEMON_BOOTSTRAP_HOOK: IngestDaemonBootstrapHookCell =
         std::cell::RefCell::new(None);
 }
 
@@ -147,28 +154,25 @@ pub(super) fn with_ingest_daemon_bootstrap_hook<T>(
     hook: impl Fn(&Path) -> Result<()> + 'static,
     f: impl FnOnce() -> T,
 ) -> T {
-    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
-            assert!(cell.borrow().is_none(), "ingest daemon hook already installed");
-            *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
-        },
-    );
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(|cell: &IngestDaemonBootstrapHookCell| {
+        assert!(
+            cell.borrow().is_none(),
+            "ingest daemon hook already installed"
+        );
+        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+    });
     let result = f();
-    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
-        |cell: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
-            *cell.borrow_mut() = None;
-        },
-    );
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(|cell: &IngestDaemonBootstrapHookCell| {
+        *cell.borrow_mut() = None;
+    });
     result
 }
 
 #[cfg(test)]
 fn maybe_bootstrap_daemon_via_hook(repo_root: &Path) -> Option<Result<()>> {
-    INGEST_DAEMON_BOOTSTRAP_HOOK.with(
-        |hook: &std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&Path) -> Result<()> + 'static>>>| {
-            hook.borrow().as_ref().map(|hook| hook(repo_root))
-        },
-    )
+    INGEST_DAEMON_BOOTSTRAP_HOOK.with(|hook: &IngestDaemonBootstrapHookCell| {
+        hook.borrow().as_ref().map(|hook| hook(repo_root))
+    })
 }
 
 #[cfg(test)]

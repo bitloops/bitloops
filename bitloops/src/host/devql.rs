@@ -13,14 +13,14 @@ use crate::capability_packs::semantic_clones::extension_descriptor as semantic_c
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-    clear_repo_symbol_embedding_rows,
-    load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows, load_pre_stage_artefacts_for_blob,
+    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
+    upsert_symbol_embedding_rows,
 };
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, EventsBackendConfig, RelationalBackendConfig,
-    StoreBackendConfig, resolve_embedding_capability_config_for_repo,
-    resolve_store_backend_config, resolve_store_backend_config_for_repo,
+    StoreBackendConfig, resolve_embedding_capability_config_for_repo, resolve_store_backend_config,
+    resolve_store_backend_config_for_repo,
 };
 use crate::host::checkpoints::strategy::manual_commit::{
     CommittedInfo, is_missing_head_error, list_committed, read_commit_checkpoint_mappings,

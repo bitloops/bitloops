@@ -271,7 +271,11 @@ pub(crate) async fn load_semantic_summary_snapshot(
     else {
         return Ok(None);
     };
-    let Some(summary) = row.get("summary").and_then(Value::as_str).map(str::to_string) else {
+    let Some(summary) = row
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
         return Ok(None);
     };
 

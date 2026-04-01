@@ -42,9 +42,7 @@ pub fn build_provider(
     }
 }
 
-pub fn describe_provider(
-    provider: &dyn EmbeddingRuntimeProvider,
-) -> ProviderDescriptor {
+pub fn describe_provider(provider: &dyn EmbeddingRuntimeProvider) -> ProviderDescriptor {
     ProviderDescriptor {
         kind: provider.provider_name().to_string(),
         provider_name: provider.provider_name().to_string(),
@@ -71,7 +69,8 @@ fn build_local_provider(
     repo_root: Option<&Path>,
 ) -> Result<Box<dyn EmbeddingRuntimeProvider>> {
     let resolved_model = resolve_local_embedding_model(model)?;
-    let repo_root = repo_root.ok_or_else(|| anyhow!("local embedding profile requires repo_root"))?;
+    let repo_root =
+        repo_root.ok_or_else(|| anyhow!("local embedding profile requires repo_root"))?;
     let cache_dir = cache_dir
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_local_embedding_cache_dir(repo_root));
@@ -391,8 +390,7 @@ mod tests {
             EmbeddingModel::JinaEmbeddingsV2BaseCode
         ));
         assert!(matches!(
-            resolve_local_embedding_model(Some("JinaEmbeddingsV2BaseCode"))
-                .expect("alias"),
+            resolve_local_embedding_model(Some("JinaEmbeddingsV2BaseCode")).expect("alias"),
             EmbeddingModel::JinaEmbeddingsV2BaseCode
         ));
     }

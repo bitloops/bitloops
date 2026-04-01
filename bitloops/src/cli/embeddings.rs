@@ -47,7 +47,9 @@ pub struct EmbeddingsClearCacheArgs {
 
 pub fn run(args: EmbeddingsArgs) -> Result<()> {
     let Some(command) = args.command else {
-        bail!("missing subcommand. Use one of: `bitloops embeddings pull`, `bitloops embeddings doctor`, `bitloops embeddings clear-cache`");
+        bail!(
+            "missing subcommand. Use one of: `bitloops embeddings pull`, `bitloops embeddings doctor`, `bitloops embeddings clear-cache`"
+        );
     };
 
     let repo_root = current_repo_root()?;
@@ -78,6 +80,8 @@ pub fn run(args: EmbeddingsArgs) -> Result<()> {
     }
 }
 
+const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
+
 fn current_repo_root() -> Result<PathBuf> {
     let cwd = env::current_dir().context("getting current directory")?;
     find_repo_root(&cwd)
@@ -97,10 +101,13 @@ fn pull_profile(
             .with_context(|| format!("creating cache parent {}", parent.display()))?;
     }
 
-    let runtime = runtime_client_config(repo_root, capability, profile_name);
+    let runtime = pull_runtime_client_config(repo_root, capability, profile_name);
     let provider = build_embedding_provider(&runtime)?;
     let _ = provider
-        .embed("bitloops embeddings cache warmup", EmbeddingInputType::Document)
+        .embed(
+            "bitloops embeddings cache warmup",
+            EmbeddingInputType::Document,
+        )
         .context("warming local embedding cache")?;
 
     Ok(vec![
@@ -266,6 +273,17 @@ fn runtime_client_config(
     }
 }
 
+fn pull_runtime_client_config(
+    repo_root: &Path,
+    capability: &EmbeddingCapabilityConfig,
+    profile_name: &str,
+) -> EmbeddingRuntimeClientConfig {
+    let mut config = runtime_client_config(repo_root, capability, profile_name);
+    config.startup_timeout_secs = config.startup_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    config.request_timeout_secs = config.request_timeout_secs.max(LOCAL_PULL_TIMEOUT_SECS);
+    config
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,7 +325,12 @@ api_key = "secret"
     fn seed_repo() -> TempDir {
         let dir = TempDir::new().expect("tempdir");
         let repo_root = dir.path();
-        crate::test_support::git_fixtures::init_test_repo(repo_root, "main", "Alice", "alice@example.com");
+        crate::test_support::git_fixtures::init_test_repo(
+            repo_root,
+            "main",
+            "Alice",
+            "alice@example.com",
+        );
         write_embedding_config(repo_root);
         dir
     }
@@ -336,7 +359,10 @@ api_key = "secret"
         let Some(Commands::Embeddings(args)) = parsed.command else {
             panic!("expected embeddings command");
         };
-        assert!(matches!(args.command, Some(EmbeddingsCommand::ClearCache(_))));
+        assert!(matches!(
+            args.command,
+            Some(EmbeddingsCommand::ClearCache(_))
+        ));
     }
 
     #[test]
@@ -346,18 +372,26 @@ api_key = "secret"
         let lines = doctor_profile(repo.path(), &capability, None).expect("doctor report");
 
         assert!(lines.iter().any(|line| line.contains("Profile: local")));
-        assert!(lines.iter().any(|line| line.contains("Kind: local_fastembed")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Kind: local_fastembed"))
+        );
     }
 
     #[test]
     fn doctor_reports_hosted_profile_sensibly() {
         let repo = seed_repo();
         let capability = resolve_embedding_capability_config_for_repo(repo.path());
-        let lines = doctor_profile(repo.path(), &capability, Some("openai"))
-            .expect("hosted doctor report");
+        let lines =
+            doctor_profile(repo.path(), &capability, Some("openai")).expect("hosted doctor report");
 
         assert!(lines.iter().any(|line| line.contains("Profile: openai")));
-        assert!(lines.iter().any(|line| line.contains("Runtime: hosted profile")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Runtime: hosted profile"))
+        );
     }
 
     #[test]
@@ -366,7 +400,11 @@ api_key = "secret"
         let capability = resolve_embedding_capability_config_for_repo(repo.path());
         let lines = doctor_profile(repo.path(), &capability, None).expect("disabled report");
 
-        assert!(lines.iter().any(|line| line.contains("Embeddings: disabled")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Embeddings: disabled"))
+        );
     }
 
     #[test]
@@ -376,11 +414,25 @@ api_key = "secret"
         let cache_dir = repo.path().join(".bitloops/embeddings/models");
         fs::create_dir_all(&cache_dir).expect("create cache dir");
 
-        let lines = clear_cache_for_profile(repo.path(), &capability, "local")
-            .expect("clear cache report");
+        let lines =
+            clear_cache_for_profile(repo.path(), &capability, "local").expect("clear cache report");
 
         assert!(!cache_dir.exists());
-        assert!(lines.iter().any(|line| line.contains("Cleared cache for profile `local`")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Cleared cache for profile `local`"))
+        );
+    }
+
+    #[test]
+    fn pull_uses_extended_timeouts_for_local_warmup() {
+        let repo = seed_repo();
+        let capability = resolve_embedding_capability_config_for_repo(repo.path());
+        let runtime = pull_runtime_client_config(repo.path(), &capability, "local");
+
+        assert_eq!(runtime.startup_timeout_secs, LOCAL_PULL_TIMEOUT_SECS);
+        assert_eq!(runtime.request_timeout_secs, LOCAL_PULL_TIMEOUT_SECS);
     }
 
     #[test]

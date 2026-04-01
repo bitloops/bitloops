@@ -9,9 +9,9 @@ use crate::config::{
 use crate::host::capability_host::CapabilityHealthContext;
 use crate::host::capability_host::health::{CapabilityHealthCheck, CapabilityHealthResult};
 
-use super::features::SemanticSummaryProviderConfig;
 use super::embeddings::{EmbeddingProviderConfig, build_symbol_embedding_provider};
 use super::extension_descriptor::build_semantic_summary_provider;
+use super::features::SemanticSummaryProviderConfig;
 
 fn check_semantic_clones_semantic_summaries(
     ctx: &dyn CapabilityHealthContext,
@@ -29,9 +29,7 @@ fn check_semantic_clones_semantic_summaries(
         .trim()
         .to_ascii_lowercase();
     if provider.is_empty() || matches!(provider.as_str(), "none" | "disabled") {
-        return CapabilityHealthResult::ok(
-            "semantic summaries use deterministic fallback only",
-        );
+        return CapabilityHealthResult::ok("semantic summaries use deterministic fallback only");
     }
 
     match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
@@ -41,10 +39,9 @@ fn check_semantic_clones_semantic_summaries(
         semantic_base_url: semantic_cfg.semantic_base_url,
     }) {
         Ok(_) => CapabilityHealthResult::ok("semantic summary provider ready"),
-        Err(err) => CapabilityHealthResult::failed(
-            "semantic_clones.semantic_summaries",
-            format!("{err:#}"),
-        ),
+        Err(err) => {
+            CapabilityHealthResult::failed("semantic_clones.semantic_summaries", format!("{err:#}"))
+        }
     }
 }
 
@@ -134,10 +131,9 @@ fn check_semantic_clones_runtime_handshake(
         Ok(None) => CapabilityHealthResult::ok(
             "semantic_clones embeddings disabled (runtime handshake skipped)",
         ),
-        Err(err) => CapabilityHealthResult::failed(
-            "semantic_clones.runtime_handshake",
-            format!("{err:#}"),
-        ),
+        Err(err) => {
+            CapabilityHealthResult::failed("semantic_clones.runtime_handshake", format!("{err:#}"))
+        }
     }
 }
 
@@ -147,8 +143,7 @@ fn embeddings_disabled(capability: &crate::config::EmbeddingCapabilityConfig) ->
 }
 
 fn daemon_config_path_for_health(repo_root: &Path) -> PathBuf {
-    default_daemon_config_path()
-        .unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+    default_daemon_config_path().unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
 }
 
 fn command_exists(command: &str) -> bool {

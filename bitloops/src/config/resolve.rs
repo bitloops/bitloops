@@ -581,9 +581,7 @@ fn parse_embedding_mode(raw: &str) -> SemanticCloneEmbeddingMode {
         }
         "off" | "disabled" | "none" => SemanticCloneEmbeddingMode::Off,
         "deterministic" => SemanticCloneEmbeddingMode::Deterministic,
-        "refresh_on_upgrade" | "refresh-on-upgrade" => {
-            SemanticCloneEmbeddingMode::RefreshOnUpgrade
-        }
+        "refresh_on_upgrade" | "refresh-on-upgrade" => SemanticCloneEmbeddingMode::RefreshOnUpgrade,
         _ => SemanticCloneEmbeddingMode::SemanticAwareOnce,
     }
 }

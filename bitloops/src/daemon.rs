@@ -26,12 +26,12 @@ use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/enrichment.rs"]
+mod enrichment;
 #[path = "daemon/graphql_client.rs"]
 mod graphql_client;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
-#[path = "daemon/enrichment.rs"]
-mod enrichment;
 #[path = "daemon/process.rs"]
 mod process;
 #[path = "daemon/server_runtime.rs"]
@@ -53,14 +53,15 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub use self::enrichment::EnrichmentControlResult;
+pub use self::enrichment::EnrichmentCoordinator;
+pub use self::enrichment::EnrichmentJobTarget;
 pub use self::types::{
     DaemonHealthSummary, DaemonMode, DaemonProcessModeArg, DaemonRuntimeState,
     DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
     EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
 };
-pub use self::enrichment::EnrichmentControlResult;
-pub use self::enrichment::EnrichmentCoordinator;
 
 use self::process::*;
 use self::server_runtime::*;

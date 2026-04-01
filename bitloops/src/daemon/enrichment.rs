@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -7,27 +7,22 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
-use crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig;
-use crate::capability_packs::semantic_clones::extension_descriptor::{
-    build_semantic_summary_provider, build_symbol_embedding_provider,
-};
 use crate::capability_packs::semantic_clones::features as semantic_features;
-use crate::capability_packs::semantic_clones::features::SemanticSummaryProviderConfig;
-use crate::capability_packs::semantic_clones::{
-    clear_repo_symbol_embedding_rows, load_semantic_summary_snapshot, persist_semantic_summary_row,
-    upsert_symbol_embedding_rows,
-};
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, SemanticCloneEmbeddingMode,
-    resolve_embedding_capability_config_for_repo, resolve_store_backend_config_for_repo,
-    resolve_store_semantic_config_for_repo,
-};
+use crate::config::SemanticCloneEmbeddingMode;
 use crate::daemon::state_store::{read_json, write_json};
-use crate::host::devql::{DevqlConfig, RelationalStorage, RepoIdentity, resolve_repo_identity};
+use crate::host::devql::RepoIdentity;
 
 use super::types::{
     EnrichmentQueueMode, EnrichmentQueueStatus, global_daemon_dir_fallback, unix_timestamp_now,
 };
+
+#[path = "enrichment/execution.rs"]
+mod execution;
+#[path = "enrichment/queue.rs"]
+mod queue;
+
+use execution::execute_job;
+use queue::{job_is_paused, next_pending_job_index, project_status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +87,34 @@ pub struct EnrichmentControlResult {
     pub state: super::types::EnrichmentQueueState,
 }
 
+#[derive(Debug, Clone)]
+pub struct EnrichmentJobTarget {
+    config_root: PathBuf,
+    repo_root: PathBuf,
+    repo_id: String,
+    branch: String,
+}
+
+impl EnrichmentJobTarget {
+    pub fn new(config_root: PathBuf, repo_root: PathBuf, repo_id: String, branch: String) -> Self {
+        Self {
+            config_root,
+            repo_root,
+            repo_id,
+            branch,
+        }
+    }
+
+    pub(super) fn from_job(job: &EnrichmentJob) -> Self {
+        Self {
+            config_root: job.config_root.clone(),
+            repo_root: job.repo_root.clone(),
+            repo_id: job.repo_id.clone(),
+            branch: job.branch.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct EnrichmentCoordinator {
     state_path: PathBuf,
@@ -102,19 +125,13 @@ pub struct EnrichmentCoordinator {
 #[derive(Debug, Clone)]
 enum FollowUpJob {
     SymbolEmbeddings {
-        config_root: PathBuf,
-        repo_root: PathBuf,
-        repo_id: String,
-        branch: String,
+        target: EnrichmentJobTarget,
         inputs: Vec<semantic_features::SemanticFeatureInput>,
         input_hashes: BTreeMap<String, String>,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
     CloneEdgesRebuild {
-        config_root: PathBuf,
-        repo_root: PathBuf,
-        repo_id: String,
-        branch: String,
+        target: EnrichmentJobTarget,
         embedding_mode: SemanticCloneEmbeddingMode,
     },
 }
@@ -158,10 +175,7 @@ impl EnrichmentCoordinator {
 
     pub async fn enqueue_semantic_summaries(
         &self,
-        config_root: PathBuf,
-        repo_root: PathBuf,
-        repo_id: String,
-        branch: String,
+        target: EnrichmentJobTarget,
         inputs: Vec<semantic_features::SemanticFeatureInput>,
         input_hashes: BTreeMap<String, String>,
         embedding_mode: SemanticCloneEmbeddingMode,
@@ -172,11 +186,13 @@ impl EnrichmentCoordinator {
 
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state.active_branch_by_repo.insert(repo_id.clone(), branch.clone());
+        state
+            .active_branch_by_repo
+            .insert(target.repo_id.clone(), target.branch.clone());
         let batch_key = build_batch_key(&inputs);
         if let Some(existing) = state.jobs.iter_mut().find(|job| {
-            job.repo_id == repo_id
-                && job.branch == branch
+            job.repo_id == target.repo_id
+                && job.branch == target.branch
                 && matches!(
                     (&job.status, &job.job),
                     (
@@ -199,10 +215,10 @@ impl EnrichmentCoordinator {
         } else {
             state.jobs.push(EnrichmentJob {
                 id: format!("semantic-job-{}", Uuid::new_v4()),
-                repo_id,
-                repo_root,
-                config_root,
-                branch,
+                repo_id: target.repo_id,
+                repo_root: target.repo_root,
+                config_root: target.config_root,
+                branch: target.branch,
                 status: EnrichmentJobStatus::Pending,
                 attempts: 0,
                 error: None,
@@ -224,10 +240,7 @@ impl EnrichmentCoordinator {
 
     pub async fn enqueue_symbol_embeddings(
         &self,
-        config_root: PathBuf,
-        repo_root: PathBuf,
-        repo_id: String,
-        branch: String,
+        target: EnrichmentJobTarget,
         inputs: Vec<semantic_features::SemanticFeatureInput>,
         input_hashes: BTreeMap<String, String>,
         embedding_mode: SemanticCloneEmbeddingMode,
@@ -238,11 +251,13 @@ impl EnrichmentCoordinator {
 
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state.active_branch_by_repo.insert(repo_id.clone(), branch.clone());
+        state
+            .active_branch_by_repo
+            .insert(target.repo_id.clone(), target.branch.clone());
         let batch_key = build_batch_key(&inputs);
         if let Some(existing) = state.jobs.iter_mut().find(|job| {
-            job.repo_id == repo_id
-                && job.branch == branch
+            job.repo_id == target.repo_id
+                && job.branch == target.branch
                 && matches!(
                     (&job.status, &job.job),
                     (
@@ -265,10 +280,10 @@ impl EnrichmentCoordinator {
         } else {
             state.jobs.push(EnrichmentJob {
                 id: format!("embedding-job-{}", Uuid::new_v4()),
-                repo_id,
-                repo_root,
-                config_root,
-                branch,
+                repo_id: target.repo_id,
+                repo_root: target.repo_root,
+                config_root: target.config_root,
+                branch: target.branch,
                 status: EnrichmentJobStatus::Pending,
                 attempts: 0,
                 error: None,
@@ -290,17 +305,16 @@ impl EnrichmentCoordinator {
 
     pub async fn enqueue_clone_edges_rebuild(
         &self,
-        config_root: PathBuf,
-        repo_root: PathBuf,
-        repo_id: String,
-        branch: String,
+        target: EnrichmentJobTarget,
         embedding_mode: SemanticCloneEmbeddingMode,
     ) -> Result<()> {
         let _guard = self.lock.lock().await;
         let mut state = self.load_state()?;
-        state.active_branch_by_repo.insert(repo_id.clone(), branch.clone());
+        state
+            .active_branch_by_repo
+            .insert(target.repo_id.clone(), target.branch.clone());
         let has_existing = state.jobs.iter().any(|job| {
-            job.repo_id == repo_id
+            job.repo_id == target.repo_id
                 && matches!(
                     (&job.status, &job.job),
                     (
@@ -312,10 +326,10 @@ impl EnrichmentCoordinator {
         if !has_existing {
             state.jobs.push(EnrichmentJob {
                 id: format!("clone-edges-rebuild-{}", Uuid::new_v4()),
-                repo_id,
-                repo_root,
-                config_root,
-                branch,
+                repo_id: target.repo_id,
+                repo_root: target.repo_root,
+                config_root: target.config_root,
+                branch: target.branch,
                 status: EnrichmentJobStatus::Pending,
                 attempts: 0,
                 error: None,
@@ -334,11 +348,7 @@ impl EnrichmentCoordinator {
         if self.state_path.exists() {
             return;
         }
-        let mut state = EnrichmentQueueState {
-            version: 1,
-            last_action: Some("initialized".to_string()),
-            ..EnrichmentQueueState::default()
-        };
+        let mut state = default_state();
         let _ = self.save_state(&mut state);
     }
 
@@ -419,50 +429,26 @@ impl EnrichmentCoordinator {
     async fn enqueue_follow_up(&self, follow_up: FollowUpJob) -> Result<()> {
         match follow_up {
             FollowUpJob::SymbolEmbeddings {
-                config_root,
-                repo_root,
-                repo_id,
-                branch,
+                target,
                 inputs,
                 input_hashes,
                 embedding_mode,
             } => {
-                self.enqueue_symbol_embeddings(
-                    config_root,
-                    repo_root,
-                    repo_id,
-                    branch,
-                    inputs,
-                    input_hashes,
-                    embedding_mode,
-                )
-                .await
+                self.enqueue_symbol_embeddings(target, inputs, input_hashes, embedding_mode)
+                    .await
             }
             FollowUpJob::CloneEdgesRebuild {
-                config_root,
-                repo_root,
-                repo_id,
-                branch,
+                target,
                 embedding_mode,
             } => {
-                self.enqueue_clone_edges_rebuild(
-                    config_root,
-                    repo_root,
-                    repo_id,
-                    branch,
-                    embedding_mode,
-                )
-                .await
+                self.enqueue_clone_edges_rebuild(target, embedding_mode)
+                    .await
             }
         }
     }
 
     fn load_state(&self) -> Result<EnrichmentQueueState> {
-        Ok(read_json::<EnrichmentQueueState>(&self.state_path)?.unwrap_or(EnrichmentQueueState {
-            version: 1,
-            last_action: Some("initialized".to_string()),
-            ..EnrichmentQueueState::default()
-        }))
+        Ok(read_json::<EnrichmentQueueState>(&self.state_path)?.unwrap_or_else(default_state))
     }
 
     fn save_state(&self, state: &mut EnrichmentQueueState) -> Result<()> {
@@ -473,13 +459,8 @@ impl EnrichmentCoordinator {
 }
 
 pub fn snapshot() -> Result<EnrichmentQueueStatus> {
-    let state = read_json::<EnrichmentQueueState>(&enrichment_state_path())?.unwrap_or(
-        EnrichmentQueueState {
-            version: 1,
-            last_action: Some("initialized".to_string()),
-            ..EnrichmentQueueState::default()
-        },
-    );
+    let state =
+        read_json::<EnrichmentQueueState>(&enrichment_state_path())?.unwrap_or_else(default_state);
     Ok(EnrichmentQueueStatus {
         state: project_status(&state),
         persisted: enrichment_state_path().exists(),
@@ -488,11 +469,7 @@ pub fn snapshot() -> Result<EnrichmentQueueStatus> {
 
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or(EnrichmentQueueState {
-        version: 1,
-        last_action: Some("initialized".to_string()),
-        ..EnrichmentQueueState::default()
-    });
+    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
     state.paused_embeddings = true;
     state.paused_semantic = true;
     state.paused_reason = reason.clone();
@@ -512,11 +489,7 @@ pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResu
 
 pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
     let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or(EnrichmentQueueState {
-        version: 1,
-        last_action: Some("initialized".to_string()),
-        ..EnrichmentQueueState::default()
-    });
+    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
     state.paused_embeddings = false;
     state.paused_semantic = false;
     state.paused_reason = None;
@@ -530,11 +503,7 @@ pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
 
 pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     let path = enrichment_state_path();
-    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or(EnrichmentQueueState {
-        version: 1,
-        last_action: Some("initialized".to_string()),
-        ..EnrichmentQueueState::default()
-    });
+    let mut state = read_json::<EnrichmentQueueState>(&path)?.unwrap_or_else(default_state);
     let mut retried = 0u64;
     for job in &mut state.jobs {
         if job.status == EnrichmentJobStatus::Failed {
@@ -556,345 +525,12 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     })
 }
 
-fn next_pending_job_index(state: &EnrichmentQueueState) -> Option<usize> {
-    state
-        .jobs
-        .iter()
-        .enumerate()
-        .filter(|(_, job)| job.status == EnrichmentJobStatus::Pending)
-        .min_by_key(|(_, job)| {
-            let active_branch = state.active_branch_by_repo.get(&job.repo_id);
-            let branch_rank = match active_branch {
-                Some(active_branch) if active_branch == &job.branch => 0usize,
-                Some(_) => 1usize,
-                None => 0usize,
-            };
-            (branch_rank, job_kind_priority(&job.job), job.created_at_unix)
-        })
-        .map(|(index, _)| index)
-}
-
-fn job_is_paused(state: &EnrichmentQueueState, job: &EnrichmentJobKind) -> bool {
-    match job {
-        EnrichmentJobKind::SemanticSummaries { .. } => state.paused_semantic,
-        EnrichmentJobKind::SymbolEmbeddings { .. }
-        | EnrichmentJobKind::CloneEdgesRebuild { .. } => {
-            state.paused_embeddings
-        }
+fn default_state() -> EnrichmentQueueState {
+    EnrichmentQueueState {
+        version: 1,
+        last_action: Some("initialized".to_string()),
+        ..EnrichmentQueueState::default()
     }
-}
-
-fn job_kind_priority(job: &EnrichmentJobKind) -> usize {
-    match job {
-        EnrichmentJobKind::SemanticSummaries { .. } => 0,
-        EnrichmentJobKind::SymbolEmbeddings { .. } => 1,
-        EnrichmentJobKind::CloneEdgesRebuild { .. } => 2,
-    }
-}
-
-async fn execute_job(job: &EnrichmentJob) -> JobExecutionOutcome {
-    let repo = resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
-    let cfg = match DevqlConfig::from_roots(job.config_root.clone(), job.repo_root.clone(), repo) {
-        Ok(cfg) => cfg,
-        Err(err) => return JobExecutionOutcome::failed(err),
-    };
-    let backends = match resolve_store_backend_config_for_repo(&job.config_root) {
-        Ok(backends) => backends,
-        Err(err) => return JobExecutionOutcome::failed(err),
-    };
-    let relational = match RelationalStorage::connect(&cfg, &backends.relational, "daemon enrichment worker").await {
-        Ok(relational) => relational,
-        Err(err) => return JobExecutionOutcome::failed(err),
-    };
-
-    match &job.job {
-        EnrichmentJobKind::SemanticSummaries {
-            inputs,
-            input_hashes,
-            embedding_mode,
-            ..
-        } => {
-            execute_semantic_job(&relational, job, inputs, input_hashes, *embedding_mode).await
-        }
-        EnrichmentJobKind::SymbolEmbeddings {
-            inputs,
-            input_hashes,
-            embedding_mode,
-            ..
-        } => execute_embedding_job(&relational, job, inputs, input_hashes, *embedding_mode).await,
-        EnrichmentJobKind::CloneEdgesRebuild { embedding_mode } => {
-            execute_clone_edges_rebuild_job(&cfg, &relational, job, *embedding_mode).await
-        }
-    }
-}
-
-async fn execute_semantic_job(
-    relational: &RelationalStorage,
-    job: &EnrichmentJob,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    input_hashes: &BTreeMap<String, String>,
-    embedding_mode: SemanticCloneEmbeddingMode,
-) -> JobExecutionOutcome {
-    let semantic_cfg = resolve_store_semantic_config_for_repo(&job.config_root);
-    let summary_provider = match build_semantic_summary_provider(&SemanticSummaryProviderConfig {
-        semantic_provider: semantic_cfg.semantic_provider,
-        semantic_model: semantic_cfg.semantic_model,
-        semantic_api_key: semantic_cfg.semantic_api_key,
-        semantic_base_url: semantic_cfg.semantic_base_url,
-    }) {
-        Ok(provider) => provider,
-        Err(err) => {
-            let mut outcome = JobExecutionOutcome::failed(err);
-            if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
-                outcome.follow_ups.push(FollowUpJob::SymbolEmbeddings {
-                    config_root: job.config_root.clone(),
-                    repo_root: job.repo_root.clone(),
-                    repo_id: job.repo_id.clone(),
-                    branch: job.branch.clone(),
-                    inputs: inputs.to_vec(),
-                    input_hashes: input_hashes.clone(),
-                    embedding_mode,
-                });
-            }
-            return outcome;
-        }
-    };
-
-    let mut summary_changed = false;
-    for input in inputs {
-        let Some(expected_hash) = input_hashes.get(&input.artefact_id) else {
-            continue;
-        };
-        let current = match load_semantic_summary_snapshot(relational, &input.artefact_id).await {
-            Ok(snapshot) => snapshot,
-            Err(err) => return JobExecutionOutcome::failed(err),
-        };
-        let Some(current) = current else {
-            continue;
-        };
-        if current.semantic_features_input_hash != *expected_hash {
-            continue;
-        }
-
-        let input = input.clone();
-        let summary_provider = Arc::clone(&summary_provider);
-        let rows = match tokio::task::spawn_blocking(move || {
-            semantic_features::build_semantic_feature_rows(&input, summary_provider.as_ref())
-        })
-        .await
-        .context("building queued semantic summary rows on blocking worker")
-        {
-            Ok(rows) => rows,
-            Err(err) => {
-                let mut outcome = JobExecutionOutcome::failed(err);
-                if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
-                    outcome.follow_ups.push(FollowUpJob::SymbolEmbeddings {
-                        config_root: job.config_root.clone(),
-                        repo_root: job.repo_root.clone(),
-                        repo_id: job.repo_id.clone(),
-                        branch: job.branch.clone(),
-                        inputs: inputs.to_vec(),
-                        input_hashes: input_hashes.clone(),
-                        embedding_mode,
-                    });
-                }
-                return outcome;
-            }
-        };
-
-        if current.summary != rows.semantics.summary {
-            summary_changed = true;
-        }
-        if let Err(err) = persist_semantic_summary_row(
-            relational,
-            &rows.semantics,
-            expected_hash,
-        )
-        .await
-        {
-            let mut outcome = JobExecutionOutcome::failed(err);
-            if embedding_mode == SemanticCloneEmbeddingMode::SemanticAwareOnce {
-                outcome.follow_ups.push(FollowUpJob::SymbolEmbeddings {
-                    config_root: job.config_root.clone(),
-                    repo_root: job.repo_root.clone(),
-                    repo_id: job.repo_id.clone(),
-                    branch: job.branch.clone(),
-                    inputs: inputs.to_vec(),
-                    input_hashes: input_hashes.clone(),
-                    embedding_mode,
-                });
-            }
-            return outcome;
-        }
-    }
-
-    let mut outcome = JobExecutionOutcome::ok();
-    match embedding_mode {
-        SemanticCloneEmbeddingMode::SemanticAwareOnce => {
-            outcome.follow_ups.push(FollowUpJob::SymbolEmbeddings {
-                config_root: job.config_root.clone(),
-                repo_root: job.repo_root.clone(),
-                repo_id: job.repo_id.clone(),
-                branch: job.branch.clone(),
-                inputs: inputs.to_vec(),
-                input_hashes: input_hashes.clone(),
-                embedding_mode,
-            });
-        }
-        SemanticCloneEmbeddingMode::RefreshOnUpgrade if summary_changed => {
-            outcome.follow_ups.push(FollowUpJob::SymbolEmbeddings {
-                config_root: job.config_root.clone(),
-                repo_root: job.repo_root.clone(),
-                repo_id: job.repo_id.clone(),
-                branch: job.branch.clone(),
-                inputs: inputs.to_vec(),
-                input_hashes: input_hashes.clone(),
-                embedding_mode,
-            });
-        }
-        _ => {}
-    }
-    outcome
-}
-
-async fn execute_embedding_job(
-    relational: &RelationalStorage,
-    job: &EnrichmentJob,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    input_hashes: &BTreeMap<String, String>,
-    embedding_mode: SemanticCloneEmbeddingMode,
-) -> JobExecutionOutcome {
-    if embedding_mode == SemanticCloneEmbeddingMode::Off {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
-            Ok(()) => JobExecutionOutcome::ok(),
-            Err(err) => JobExecutionOutcome::failed(err),
-        };
-    }
-
-    let current_inputs = match filter_current_inputs(relational, inputs, input_hashes).await {
-        Ok(filtered) => filtered,
-        Err(err) => return JobExecutionOutcome::failed(err),
-    };
-    if current_inputs.is_empty() {
-        return JobExecutionOutcome::ok();
-    }
-
-    let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
-    let provider_config = EmbeddingProviderConfig {
-        daemon_config_path: job.config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
-        embedding_profile: capability.semantic_clones.embedding_profile,
-        runtime_command: capability.embeddings.runtime.command,
-        runtime_args: capability.embeddings.runtime.args,
-        startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
-        request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        warnings: capability.embeddings.warnings,
-    };
-
-    let provider = match build_symbol_embedding_provider(&provider_config, Some(&job.repo_root)) {
-        Ok(provider) => provider,
-        Err(err) => {
-            let error = format!("{err:#}");
-            return match clear_embedding_outputs(relational, &job.repo_id).await {
-                Ok(()) => JobExecutionOutcome {
-                    error: Some(error),
-                    follow_ups: Vec::new(),
-                },
-                Err(clear_err) => JobExecutionOutcome::failed(clear_err),
-            };
-        }
-    };
-    let Some(provider) = provider else {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
-            Ok(()) => JobExecutionOutcome::ok(),
-            Err(err) => JobExecutionOutcome::failed(err),
-        };
-    };
-
-    let provider =
-        Arc::<dyn crate::adapters::model_providers::embeddings::EmbeddingProvider>::from(provider);
-    if let Err(err) = upsert_symbol_embedding_rows(relational, &current_inputs, provider).await {
-        let error = format!("{err:#}");
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
-            Ok(()) => JobExecutionOutcome {
-                error: Some(error),
-                follow_ups: Vec::new(),
-            },
-            Err(clear_err) => JobExecutionOutcome::failed(clear_err),
-        };
-    }
-
-    let mut outcome = JobExecutionOutcome::ok();
-    outcome.follow_ups.push(FollowUpJob::CloneEdgesRebuild {
-        config_root: job.config_root.clone(),
-        repo_root: job.repo_root.clone(),
-        repo_id: job.repo_id.clone(),
-        branch: job.branch.clone(),
-        embedding_mode,
-    });
-    outcome
-}
-
-async fn execute_clone_edges_rebuild_job(
-    _cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    job: &EnrichmentJob,
-    embedding_mode: SemanticCloneEmbeddingMode,
-) -> JobExecutionOutcome {
-    if embedding_mode == SemanticCloneEmbeddingMode::Off {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
-            Ok(()) => JobExecutionOutcome::ok(),
-            Err(err) => JobExecutionOutcome::failed(err),
-        };
-    }
-
-    let capability = resolve_embedding_capability_config_for_repo(&job.config_root);
-    if capability.semantic_clones.embedding_profile.is_none() {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
-            Ok(()) => JobExecutionOutcome::ok(),
-            Err(err) => JobExecutionOutcome::failed(err),
-        };
-    }
-
-    match crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
-        relational,
-        &job.repo_id,
-    )
-    .await
-    {
-        Ok(_) => JobExecutionOutcome::ok(),
-        Err(err) => JobExecutionOutcome::failed(err),
-    }
-}
-
-async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {
-    clear_repo_symbol_embedding_rows(relational, repo_id).await?;
-    crate::capability_packs::semantic_clones::pipeline::delete_repo_symbol_clone_edges(
-        relational,
-        repo_id,
-    )
-    .await
-}
-
-async fn filter_current_inputs(
-    relational: &RelationalStorage,
-    inputs: &[semantic_features::SemanticFeatureInput],
-    input_hashes: &BTreeMap<String, String>,
-) -> Result<Vec<semantic_features::SemanticFeatureInput>> {
-    let mut filtered = Vec::with_capacity(inputs.len());
-    for input in inputs {
-        let Some(expected_hash) = input_hashes.get(&input.artefact_id) else {
-            continue;
-        };
-        let Some(snapshot) = load_semantic_summary_snapshot(relational, &input.artefact_id).await?
-        else {
-            continue;
-        };
-        if snapshot.semantic_features_input_hash == *expected_hash {
-            filtered.push(input.clone());
-        }
-    }
-    Ok(filtered)
 }
 
 fn enrichment_state_path() -> PathBuf {
@@ -922,95 +558,4 @@ fn build_batch_key(inputs: &[semantic_features::SemanticFeatureInput]) -> String
         .map(|input| input.artefact_id.as_str())
         .collect::<Vec<_>>()
         .join("|")
-}
-
-fn project_status(state: &EnrichmentQueueState) -> super::types::EnrichmentQueueState {
-    let pending_semantic_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Pending,
-        |job| matches!(job, EnrichmentJobKind::SemanticSummaries { .. }),
-    );
-    let pending_embedding_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Pending,
-        |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
-    );
-    let pending_clone_edges_rebuild_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Pending,
-        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
-    );
-    let running_semantic_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Running,
-        |job| matches!(job, EnrichmentJobKind::SemanticSummaries { .. }),
-    );
-    let running_embedding_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Running,
-        |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
-    );
-    let running_clone_edges_rebuild_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Running,
-        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
-    );
-    let failed_semantic_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Failed,
-        |job| matches!(job, EnrichmentJobKind::SemanticSummaries { .. }),
-    );
-    let failed_embedding_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Failed,
-        |job| matches!(job, EnrichmentJobKind::SymbolEmbeddings { .. }),
-    );
-    let failed_clone_edges_rebuild_jobs = count_jobs(
-        state,
-        EnrichmentJobStatus::Failed,
-        |job| matches!(job, EnrichmentJobKind::CloneEdgesRebuild { .. }),
-    );
-
-    super::types::EnrichmentQueueState {
-        version: state.version,
-        mode: if state.paused_embeddings || state.paused_semantic {
-            EnrichmentQueueMode::Paused
-        } else {
-            EnrichmentQueueMode::Running
-        },
-        pending_jobs: pending_semantic_jobs
-            + pending_embedding_jobs
-            + pending_clone_edges_rebuild_jobs,
-        pending_semantic_jobs,
-        pending_embedding_jobs,
-        pending_clone_edges_rebuild_jobs,
-        running_jobs: running_semantic_jobs
-            + running_embedding_jobs
-            + running_clone_edges_rebuild_jobs,
-        running_semantic_jobs,
-        running_embedding_jobs,
-        running_clone_edges_rebuild_jobs,
-        failed_jobs: failed_semantic_jobs
-            + failed_embedding_jobs
-            + failed_clone_edges_rebuild_jobs,
-        failed_semantic_jobs,
-        failed_embedding_jobs,
-        failed_clone_edges_rebuild_jobs,
-        retried_failed_jobs: state.retried_failed_jobs,
-        last_action: state.last_action.clone(),
-        last_updated_unix: state.updated_at_unix,
-        paused_reason: state.paused_reason.clone(),
-    }
-}
-
-fn count_jobs(
-    state: &EnrichmentQueueState,
-    status: EnrichmentJobStatus,
-    predicate: impl Fn(&EnrichmentJobKind) -> bool,
-) -> u64 {
-    state
-        .jobs
-        .iter()
-        .filter(|job| job.status == status && predicate(&job.job))
-        .count() as u64
 }

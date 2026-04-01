@@ -226,6 +226,7 @@ pub(crate) fn command_name(command: &crate::cli::Commands) -> &'static str {
         crate::cli::Commands::Devql(_) => "devql",
         crate::cli::Commands::Testlens(_) => "testlens",
         crate::cli::Commands::Embeddings(_) => "embeddings",
+        crate::cli::Commands::EmbeddingsRuntime(_) => "__embeddings-runtime",
         crate::cli::Commands::DevqlWatcher(_) => "__devql-watcher",
         crate::cli::Commands::DaemonProcess(_) => "__daemon-process",
         crate::cli::Commands::DaemonSupervisor(_) => "__daemon-supervisor",
@@ -242,6 +243,7 @@ pub(crate) fn hidden_chain_for_command(command: &crate::cli::Commands) -> Vec<bo
         command,
         crate::cli::Commands::Hooks(_)
             | crate::cli::Commands::Debug(_)
+            | crate::cli::Commands::EmbeddingsRuntime(_)
             | crate::cli::Commands::DevqlWatcher(_)
             | crate::cli::Commands::DaemonProcess(_)
             | crate::cli::Commands::DaemonSupervisor(_)

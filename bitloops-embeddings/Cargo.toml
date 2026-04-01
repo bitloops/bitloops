@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
-fastembed = { version = "5.12.1", default-features = false, features = ["hf-hub-rustls-tls", "image-models", "ort-load-dynamic"] }
+fastembed = { version = "5.12.1", default-features = false, features = ["hf-hub-rustls-tls", "image-models", "ort-download-binaries-rustls-tls"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

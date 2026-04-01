@@ -33,15 +33,17 @@ pub fn build_symbol_embedding_provider(
         return Ok(None);
     };
 
-    Ok(Some(build_embedding_provider(&EmbeddingRuntimeClientConfig {
-        command: cfg.runtime_command.clone(),
-        args: cfg.runtime_args.clone(),
-        startup_timeout_secs: cfg.startup_timeout_secs,
-        request_timeout_secs: cfg.request_timeout_secs,
-        config_path: cfg.daemon_config_path.clone(),
-        profile_name,
-        repo_root: repo_root.map(Path::to_path_buf),
-    })?))
+    Ok(Some(build_embedding_provider(
+        &EmbeddingRuntimeClientConfig {
+            command: cfg.runtime_command.clone(),
+            args: cfg.runtime_args.clone(),
+            startup_timeout_secs: cfg.startup_timeout_secs,
+            request_timeout_secs: cfg.request_timeout_secs,
+            config_path: cfg.daemon_config_path.clone(),
+            profile_name,
+            repo_root: repo_root.map(Path::to_path_buf),
+        },
+    )?))
 }
 
 fn resolve_embedding_profile(cfg: &EmbeddingProviderConfig) -> Option<String> {
