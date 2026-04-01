@@ -25,7 +25,6 @@ pub struct LoadedDaemonSettings {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct DaemonTomlFile {
     #[serde(default)]
     runtime: RuntimeToml,
@@ -44,20 +43,17 @@ struct DaemonTomlFile {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct RuntimeToml {
     #[serde(default)]
     local_dev: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct TelemetryToml {
     enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct LoggingToml {
     level: Option<String>,
 }
@@ -226,4 +222,62 @@ fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
     root[key]
         .as_table_mut()
         .expect("TOML item should be a table after initialisation")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn load_daemon_settings_ignores_legacy_top_level_fields() {
+        let config = NamedTempFile::new().expect("create temp config");
+        fs::write(
+            config.path(),
+            r#"
+cli_version = "0.0.3"
+
+[runtime]
+local_dev = true
+
+[telemetry]
+enabled = false
+
+[logging]
+level = "debug"
+"#,
+        )
+        .expect("write temp config");
+
+        let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
+        assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
+        assert_eq!(loaded.cli.telemetry, Some(false));
+        assert_eq!(loaded.cli.log_level, "debug");
+    }
+
+    #[test]
+    fn load_daemon_settings_ignores_legacy_runtime_fields() {
+        let config = NamedTempFile::new().expect("create temp config");
+        fs::write(
+            config.path(),
+            r#"
+[runtime]
+local_dev = true
+cli_version = "0.0.12"
+
+[telemetry]
+enabled = true
+
+[logging]
+level = "info"
+"#,
+        )
+        .expect("write temp config");
+
+        let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
+        assert!(loaded.cli.local_dev, "runtime.local_dev should be parsed");
+        assert_eq!(loaded.cli.telemetry, Some(true));
+        assert_eq!(loaded.cli.log_level, "info");
+    }
 }

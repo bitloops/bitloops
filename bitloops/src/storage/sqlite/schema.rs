@@ -92,6 +92,18 @@ impl SqliteConnectionPool {
                 if !sqlite_table_exists(conn, table)? {
                     continue;
                 }
+                let sync_shape_matches = match table {
+                    "artefacts_current" => {
+                        super::current_state::artefacts_current_matches_sync_shape(conn)?
+                    }
+                    "artefact_edges_current" => {
+                        super::current_state::artefact_edges_current_matches_sync_shape(conn)?
+                    }
+                    _ => false,
+                };
+                if sync_shape_matches {
+                    continue;
+                }
                 match conn.execute_batch(sql) {
                     Ok(()) => {}
                     Err(err)

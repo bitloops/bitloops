@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::db_utils::esc_pg;
@@ -145,20 +146,22 @@ pub(crate) async fn store_cached_content(
     extraction: &CachedExtraction,
     retention_class: &str,
 ) -> Result<()> {
+    let artefacts = dedupe_last_wins(&extraction.artefacts, |artefact| {
+        artefact.artifact_key.as_str()
+    });
+    let edges = dedupe_last_wins(&extraction.edges, |edge| edge.edge_key.as_str());
     let mut statements = vec![
         build_upsert_cached_header_sql(relational, extraction, retention_class),
         build_delete_cached_edges_sql(extraction),
         build_delete_cached_artefacts_sql(extraction),
     ];
     statements.extend(
-        extraction
-            .artefacts
+        artefacts
             .iter()
             .map(|artefact| build_insert_cached_artefact_sql(relational, extraction, artefact)),
     );
     statements.extend(
-        extraction
-            .edges
+        edges
             .iter()
             .map(|edge| build_insert_cached_edge_sql(relational, extraction, edge)),
     );
@@ -437,6 +440,24 @@ fn nullable_i32_sql(value: Option<i32>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
+fn dedupe_last_wins<T: Clone, F>(items: &[T], key_fn: F) -> Vec<T>
+where
+    F: Fn(&T) -> &str,
+{
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for item in items.iter().rev() {
+        let key = key_fn(item);
+        if seen.insert(key.to_string()) {
+            deduped.push(item.clone());
+        }
+    }
+
+    deduped.reverse();
+    deduped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +492,28 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             .and_then(|row| row.get("retention_class"))
             .and_then(Value::as_str)
             .map(str::to_string)
+    }
+
+    async fn count_rows(
+        relational: &RelationalStorage,
+        table: &str,
+        content_id: &str,
+    ) -> usize {
+        let sql = format!(
+            "SELECT COUNT(*) AS count FROM {} \
+WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' AND extractor_version = 'extractor-v1'",
+            table,
+            esc_pg(content_id),
+        );
+        relational
+            .query_rows(&sql)
+            .await
+            .expect("query row count")
+            .first()
+            .and_then(Value::as_object)
+            .and_then(|row| row.get("count"))
+            .and_then(Value::as_i64)
+            .unwrap_or_default() as usize
     }
 
     #[tokio::test]
@@ -512,5 +555,107 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
                 .as_deref(),
             Some("git_backed")
         );
+    }
+
+    #[tokio::test]
+    async fn store_cached_content_deduplicates_duplicate_keys() {
+        let relational = create_test_relational().await;
+        let extraction = CachedExtraction {
+            content_id: "abc123".to_string(),
+            language: "rust".to_string(),
+            parser_version: "parser-v1".to_string(),
+            extractor_version: "extractor-v1".to_string(),
+            parse_status: "parsed".to_string(),
+            artefacts: vec![
+                CachedArtefact {
+                    artifact_key: "file::src/lib.rs".to_string(),
+                    canonical_kind: Some("file".to_string()),
+                    language_kind: "file".to_string(),
+                    name: "src/lib.rs".to_string(),
+                    parent_artifact_key: None,
+                    start_line: 1,
+                    end_line: 2,
+                    start_byte: 0,
+                    end_byte: 10,
+                    signature: "fn old()".to_string(),
+                    modifiers: vec!["pub".to_string()],
+                    docstring: Some("old".to_string()),
+                    metadata: Value::String("old".to_string()),
+                },
+                CachedArtefact {
+                    artifact_key: "file::src/lib.rs".to_string(),
+                    canonical_kind: Some("file".to_string()),
+                    language_kind: "file".to_string(),
+                    name: "src/lib.rs".to_string(),
+                    parent_artifact_key: None,
+                    start_line: 3,
+                    end_line: 4,
+                    start_byte: 11,
+                    end_byte: 20,
+                    signature: "fn new()".to_string(),
+                    modifiers: vec!["pub".to_string(), "async".to_string()],
+                    docstring: Some("new".to_string()),
+                    metadata: Value::String("new".to_string()),
+                },
+            ],
+            edges: vec![
+                CachedEdge {
+                    edge_key: "edge::call".to_string(),
+                    from_artifact_key: "file::src/lib.rs".to_string(),
+                    to_artifact_key: None,
+                    to_symbol_ref: Some("old::target".to_string()),
+                    edge_kind: "calls".to_string(),
+                    start_line: Some(1),
+                    end_line: Some(1),
+                    metadata: Value::String("old".to_string()),
+                },
+                CachedEdge {
+                    edge_key: "edge::call".to_string(),
+                    from_artifact_key: "file::src/lib.rs".to_string(),
+                    to_artifact_key: Some("file::target".to_string()),
+                    to_symbol_ref: Some("new::target".to_string()),
+                    edge_kind: "calls".to_string(),
+                    start_line: Some(2),
+                    end_line: Some(2),
+                    metadata: Value::String("new".to_string()),
+                },
+            ],
+        };
+
+        store_cached_content(&relational, &extraction, "git_backed")
+            .await
+            .expect("store deduplicated cache entry");
+
+        assert_eq!(
+            count_rows(&relational, "content_cache_artefacts", &extraction.content_id).await,
+            1
+        );
+        assert_eq!(
+            count_rows(&relational, "content_cache_edges", &extraction.content_id).await,
+            1
+        );
+
+        let cached = lookup_cached_content(
+            &relational,
+            &extraction.content_id,
+            &extraction.language,
+            &extraction.parser_version,
+            &extraction.extractor_version,
+        )
+        .await
+        .expect("lookup stored cache entry")
+        .expect("cache entry should exist");
+
+        assert_eq!(cached.artefacts.len(), 1);
+        assert_eq!(cached.edges.len(), 1);
+        assert_eq!(cached.artefacts[0].start_line, 3);
+        assert_eq!(cached.artefacts[0].end_line, 4);
+        assert_eq!(cached.artefacts[0].signature, "fn new()");
+        assert_eq!(cached.artefacts[0].docstring.as_deref(), Some("new"));
+        assert_eq!(cached.artefacts[0].metadata, Value::String("new".to_string()));
+        assert_eq!(cached.edges[0].to_artifact_key.as_deref(), Some("file::target"));
+        assert_eq!(cached.edges[0].to_symbol_ref.as_deref(), Some("new::target"));
+        assert_eq!(cached.edges[0].start_line, Some(2));
+        assert_eq!(cached.edges[0].metadata, Value::String("new".to_string()));
     }
 }
