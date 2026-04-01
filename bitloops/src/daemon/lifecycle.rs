@@ -3,6 +3,14 @@ use super::*;
 pub(super) async fn run_internal_process(args: InternalDaemonProcessArgs) -> Result<()> {
     let mode: DaemonMode = args.mode.into();
     let daemon_config = resolve_daemon_config(Some(args.config_path.as_path()))?;
+    log::info!(
+        "daemon process start: mode={} config={} host={:?} port={} service_name={:?}",
+        mode,
+        daemon_config.config_path.display(),
+        args.host,
+        args.port,
+        args.service_name
+    );
     run_server(
         &daemon_config,
         args.server_config(),
@@ -76,12 +84,26 @@ pub(super) async fn start_service(
     config: DashboardServerConfig,
     telemetry: Option<bool>,
 ) -> Result<DaemonRuntimeState> {
+    log::info!(
+        "daemon service start requested: config={} host={:?} port={} force_http={} bundle_dir={:?}",
+        daemon_config.config_path.display(),
+        config.host,
+        config.port,
+        config.force_http,
+        config.bundle_dir
+    );
     supervisor_start_repo(daemon_config, config, telemetry).await
 }
 
 pub(super) async fn restart(
     config_override: Option<&ResolvedDaemonConfig>,
 ) -> Result<DaemonRuntimeState> {
+    log::info!(
+        "daemon restart requested: config_override={}",
+        config_override
+            .map(|config| config.config_path.display().to_string())
+            .unwrap_or_else(|| "<current>".to_string())
+    );
     let service = read_service_metadata(Path::new("."))?;
     let runtime = read_runtime_state(Path::new("."))?;
 
@@ -132,6 +154,7 @@ pub(super) async fn restart(
 }
 
 pub(super) async fn stop() -> Result<()> {
+    log::info!("daemon stop requested");
     let service = read_service_metadata(Path::new("."))?;
     let runtime = read_runtime_state(Path::new("."))?;
 
@@ -152,14 +175,21 @@ pub(super) async fn stop() -> Result<()> {
         if runtime_path.exists() {
             wait_for_runtime_cleanup(&runtime_path, STOP_TIMEOUT)?;
         }
+        log::info!("daemon stop completed for service-managed runtime");
         let _ = metadata;
         return Ok(());
     }
 
     let runtime = runtime
         .context("Bitloops daemon is not running. Start it with `bitloops daemon start`.")?;
+    log::info!(
+        "daemon stopping process pid={} mode={}",
+        runtime.pid,
+        runtime.mode
+    );
     terminate_process(runtime.pid)?;
     wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
+    log::info!("daemon stop completed");
     Ok(())
 }
 

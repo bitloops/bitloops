@@ -14,6 +14,13 @@ pub(super) async fn run_server(
     config: DashboardServerConfig,
     options: RunServerOptions<'_>,
 ) -> Result<()> {
+    log::debug!(
+        "daemon boot: mode={} config={} host={:?} port={}",
+        options.mode,
+        daemon_config.config_path.display(),
+        config.host,
+        config.port
+    );
     crate::config::update_daemon_telemetry_consent(
         Some(daemon_config.config_path.as_path()),
         crate::cli::telemetry_consent::CURRENT_CLI_VERSION,
