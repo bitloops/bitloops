@@ -47,6 +47,12 @@ fn write_log_lines(path: &Path, lines: &[String]) {
     fs::write(path, rendered).expect("write daemon log");
 }
 
+fn write_log_content(path: &Path, content: &str) {
+    let parent = path.parent().expect("daemon log parent");
+    fs::create_dir_all(parent).expect("create daemon log dir");
+    fs::write(path, content).expect("write daemon log");
+}
+
 #[test]
 fn daemon_start_cli_parses_lifecycle_and_server_flags() {
     let parsed = Cli::try_parse_from([
@@ -550,7 +556,10 @@ fn run_logs_prints_default_last_two_hundred_lines() {
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    run_logs_with_io(DaemonLogsArgs::default(), &mut out).expect("run daemon logs");
+    tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut out))
+        .expect("run daemon logs");
 
     let rendered = String::from_utf8(out).expect("utf8 output");
     let output_lines = rendered.lines().collect::<Vec<_>>();
@@ -577,15 +586,17 @@ fn run_logs_honours_explicit_line_count() {
     write_log_lines(&log_path, &lines);
     let mut out = Vec::new();
 
-    run_logs_with_io(
-        DaemonLogsArgs {
-            tail: Some(3),
-            follow: false,
-            path: false,
-        },
-        &mut out,
-    )
-    .expect("run daemon logs");
+    tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(run_logs_with_io(
+            DaemonLogsArgs {
+                tail: Some(3),
+                follow: false,
+                path: false,
+            },
+            &mut out,
+        ))
+        .expect("run daemon logs");
 
     assert_eq!(
         String::from_utf8(out).expect("utf8 output"),
@@ -606,15 +617,17 @@ fn run_logs_prints_log_path() {
     );
     let mut out = Vec::new();
 
-    run_logs_with_io(
-        DaemonLogsArgs {
-            tail: None,
-            follow: false,
-            path: true,
-        },
-        &mut out,
-    )
-    .expect("print daemon log path");
+    tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(run_logs_with_io(
+            DaemonLogsArgs {
+                tail: None,
+                follow: false,
+                path: true,
+            },
+            &mut out,
+        ))
+        .expect("print daemon log path");
 
     assert_eq!(
         String::from_utf8(out).expect("utf8 output"),
@@ -634,7 +647,9 @@ fn run_logs_reports_missing_file_with_expected_path() {
         )],
     );
 
-    let err = run_logs_with_io(DaemonLogsArgs::default(), &mut Vec::new())
+    let err = tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(run_logs_with_io(DaemonLogsArgs::default(), &mut Vec::new()))
         .expect_err("daemon logs should fail when file is missing");
 
     assert!(
@@ -665,7 +680,11 @@ fn follow_log_file_streams_appended_lines() {
     let handle = thread::spawn(move || {
         follow_log_file(
             &path_for_thread,
-            &mut writer,
+            |chunk| {
+                write!(writer, "{chunk}")?;
+                writer.flush()?;
+                Ok(())
+            },
             &|| stop_signal.load(Ordering::SeqCst),
             Duration::from_millis(10),
         )
@@ -688,4 +707,78 @@ fn follow_log_file_streams_appended_lines() {
         .expect("follow daemon log");
 
     assert_eq!(shared.contents(), "{\"line\":2}\n{\"line\":3}\n");
+}
+
+#[test]
+fn tail_log_file_handles_file_without_trailing_newline() {
+    let dir = TempDir::new().expect("temp dir");
+    let log_path = dir.path().join("daemon.log");
+    write_log_content(&log_path, "{\"line\":1}\n{\"line\":2}\n{\"line\":3}");
+
+    let lines = tail_log_file(&log_path, 2).expect("tail daemon log");
+
+    assert_eq!(lines, vec!["{\"line\":2}", "{\"line\":3}"]);
+}
+
+#[test]
+fn tail_log_file_reads_across_reverse_scan_blocks() {
+    let dir = TempDir::new().expect("temp dir");
+    let log_path = dir.path().join("daemon.log");
+    let long_prefix = "x".repeat(9000);
+    write_log_content(
+        &log_path,
+        &format!("{long_prefix}\n{{\"line\":2}}\n{{\"line\":3}}\n"),
+    );
+
+    let lines = tail_log_file(&log_path, 2).expect("tail daemon log");
+
+    assert_eq!(lines, vec!["{\"line\":2}", "{\"line\":3}"]);
+}
+
+#[test]
+fn tail_log_file_returns_all_lines_when_tail_exceeds_file_length() {
+    let dir = TempDir::new().expect("temp dir");
+    let log_path = dir.path().join("daemon.log");
+    write_log_content(&log_path, "{\"line\":1}\n{\"line\":2}\n");
+
+    let lines = tail_log_file(&log_path, 10).expect("tail daemon log");
+
+    assert_eq!(lines, vec!["{\"line\":1}", "{\"line\":2}"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_logs_follow_stops_when_async_shutdown_resolves() {
+    let state_root = TempDir::new().expect("temp dir");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        None,
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+    let log_path = daemon::daemon_log_file_path();
+    write_log_lines(&log_path, &["{\"line\":1}".to_string()]);
+    let mut out = SharedBuffer::default();
+
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        run_logs_with_io_and_shutdown_and_poll_interval(
+            DaemonLogsArgs {
+                tail: Some(1),
+                follow: true,
+                path: false,
+            },
+            &mut out,
+            async {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            },
+            Duration::from_millis(10),
+        ),
+    )
+    .await
+    .expect("follow should not block the runtime")
+    .expect("follow should stop cleanly");
+
+    assert_eq!(out.contents(), "{\"line\":1}\n");
 }

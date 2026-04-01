@@ -1,12 +1,17 @@
-use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
+use std::future::Future;
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
+use tokio::{sync::mpsc, task};
 
 use crate::api::DashboardServerConfig;
 use crate::cli::telemetry_consent;
@@ -15,6 +20,7 @@ use crate::daemon::{self, DaemonMode};
 pub const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops daemon start`, `bitloops daemon stop`, `bitloops daemon status`, `bitloops daemon restart`, `bitloops daemon logs`";
 const DEFAULT_LOG_TAIL_LINES: usize = 200;
 const LOG_FOLLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DaemonArgs {
@@ -138,7 +144,7 @@ pub async fn run(args: DaemonArgs) -> Result<()> {
         DaemonCommand::Stop(args) => run_stop(args).await,
         DaemonCommand::Status(args) => run_status(args).await,
         DaemonCommand::Restart(args) => run_restart(args).await,
-        DaemonCommand::Logs(args) => run_logs(args),
+        DaemonCommand::Logs(args) => run_logs(args).await,
     }
 }
 
@@ -298,13 +304,40 @@ pub async fn run_status(args: DaemonStatusArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn run_logs(args: DaemonLogsArgs) -> Result<()> {
+pub async fn run_logs(args: DaemonLogsArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
-    run_logs_with_io(args, &mut out)
+    run_logs_with_io(args, &mut out).await
 }
 
-fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
+async fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
+    run_logs_with_io_and_shutdown(args, out, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+}
+
+async fn run_logs_with_io_and_shutdown<S>(
+    args: DaemonLogsArgs,
+    out: &mut dyn Write,
+    shutdown: S,
+) -> Result<()>
+where
+    S: Future<Output = ()>,
+{
+    run_logs_with_io_and_shutdown_and_poll_interval(args, out, shutdown, LOG_FOLLOW_POLL_INTERVAL)
+        .await
+}
+
+async fn run_logs_with_io_and_shutdown_and_poll_interval<S>(
+    args: DaemonLogsArgs,
+    out: &mut dyn Write,
+    shutdown: S,
+    poll_interval: Duration,
+) -> Result<()>
+where
+    S: Future<Output = ()>,
+{
     let log_path = daemon::daemon_log_file_path();
     if args.path {
         writeln!(out, "{}", log_path.display()).context("writing daemon log path")?;
@@ -312,9 +345,13 @@ fn run_logs_with_io(args: DaemonLogsArgs, out: &mut dyn Write) -> Result<()> {
     }
 
     ensure_log_file_exists(&log_path)?;
-    print_log_tail(&log_path, args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES), out)?;
+    let tail_lines = args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES);
+    for line in read_tail_lines(log_path.clone(), tail_lines).await? {
+        writeln!(out, "{line}").context("writing daemon log output")?;
+    }
+    out.flush().context("flushing daemon log output")?;
     if args.follow {
-        follow_log_file(&log_path, out, &|| false, LOG_FOLLOW_POLL_INTERVAL)?;
+        follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval).await?;
     }
     Ok(())
 }
@@ -491,36 +528,147 @@ fn parse_log_lines(value: &str) -> std::result::Result<usize, String> {
     Ok(parsed)
 }
 
-fn print_log_tail(path: &Path, lines: usize, out: &mut dyn Write) -> Result<()> {
-    for line in tail_log_file(path, lines)? {
-        writeln!(out, "{line}").context("writing daemon log output")?;
-    }
-    out.flush().context("flushing daemon log output")
+async fn read_tail_lines(path: std::path::PathBuf, lines: usize) -> Result<Vec<String>> {
+    task::spawn_blocking(move || tail_log_file(&path, lines))
+        .await
+        .context("joining daemon log tail task")?
 }
 
 fn tail_log_file(path: &Path, lines: usize) -> Result<Vec<String>> {
-    let file =
-        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
-    let reader = BufReader::new(file);
-    let mut buffer = VecDeque::with_capacity(lines);
-
-    for line in reader.lines() {
-        let line = line.with_context(|| format!("reading daemon log {}", path.display()))?;
-        if buffer.len() == lines {
-            buffer.pop_front();
-        }
-        buffer.push_back(line);
+    if lines == 0 {
+        return Ok(Vec::new());
     }
 
-    Ok(buffer.into_iter().collect())
+    let mut file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let start = find_tail_start_offset(&mut file, lines, path)?;
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    let content = String::from_utf8(bytes)
+        .with_context(|| format!("decoding daemon log {}", path.display()))?;
+
+    Ok(content.lines().map(str::to_owned).collect())
 }
 
-fn follow_log_file(
+fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> Result<u64> {
+    let file_len = file
+        .metadata()
+        .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+        .len();
+    if file_len == 0 {
+        return Ok(0);
+    }
+
+    let mut remaining = file_len;
+    let mut needed = lines;
+    let mut skip_trailing_newline = file_ends_with_newline(file, file_len, path)?;
+    let mut buffer = vec![0_u8; TAIL_SCAN_BLOCK_SIZE];
+
+    while remaining > 0 {
+        let read_size = remaining.min(TAIL_SCAN_BLOCK_SIZE as u64) as usize;
+        remaining -= read_size as u64;
+        file.seek(SeekFrom::Start(remaining))
+            .with_context(|| format!("seeking daemon log {}", path.display()))?;
+        file.read_exact(&mut buffer[..read_size])
+            .with_context(|| format!("reading daemon log {}", path.display()))?;
+
+        for idx in (0..read_size).rev() {
+            if buffer[idx] != b'\n' {
+                continue;
+            }
+
+            let newline_pos = remaining + idx as u64;
+            if skip_trailing_newline && newline_pos == file_len - 1 {
+                skip_trailing_newline = false;
+                continue;
+            }
+
+            needed -= 1;
+            if needed == 0 {
+                return Ok(newline_pos + 1);
+            }
+        }
+    }
+
+    Ok(0)
+}
+
+fn file_ends_with_newline(file: &mut File, file_len: u64, path: &Path) -> Result<bool> {
+    if file_len == 0 {
+        return Ok(false);
+    }
+
+    let mut byte = [0_u8; 1];
+    file.seek(SeekFrom::Start(file_len - 1))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    file.read_exact(&mut byte)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    Ok(byte[0] == b'\n')
+}
+
+async fn follow_log_file_until_shutdown<S>(
     path: &Path,
     out: &mut dyn Write,
+    shutdown: S,
+    poll_interval: Duration,
+) -> Result<()>
+where
+    S: Future<Output = ()>,
+{
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let stop = Arc::new(AtomicBool::new(false));
+    let path = path.to_path_buf();
+    let worker_stop = stop.clone();
+    let worker = task::spawn_blocking(move || {
+        follow_log_file(
+            &path,
+            |chunk| {
+                tx.send(chunk.to_owned())
+                    .map_err(|_| anyhow::anyhow!("daemon log follow channel closed"))?;
+                Ok(())
+            },
+            &|| worker_stop.load(Ordering::SeqCst),
+            poll_interval,
+        )
+    });
+    tokio::pin!(shutdown);
+
+    loop {
+        tokio::select! {
+            maybe_chunk = rx.recv() => {
+                let Some(chunk) = maybe_chunk else {
+                    break;
+                };
+                write!(out, "{chunk}").context("writing daemon follow output")?;
+                out.flush().context("flushing daemon follow output")?;
+            }
+            _ = &mut shutdown => {
+                stop.store(true, Ordering::SeqCst);
+                break;
+            }
+        }
+    }
+
+    worker.await.context("joining daemon log follow task")??;
+    while let Ok(chunk) = rx.try_recv() {
+        write!(out, "{chunk}").context("writing daemon follow output")?;
+    }
+    out.flush().context("flushing daemon follow output")?;
+    Ok(())
+}
+
+fn follow_log_file<F>(
+    path: &Path,
+    mut on_chunk: F,
     should_stop: &dyn Fn() -> bool,
     poll_interval: Duration,
-) -> Result<()> {
+) -> Result<()>
+where
+    F: FnMut(&str) -> Result<()>,
+{
     let mut position = std::fs::metadata(path)
         .with_context(|| format!("reading daemon log metadata {}", path.display()))?
         .len();
@@ -551,13 +699,12 @@ fn follow_log_file(
                 if bytes == 0 {
                     break;
                 }
-                write!(out, "{line}").context("writing daemon follow output")?;
+                on_chunk(&line)?;
                 line.clear();
             }
             position = reader
                 .stream_position()
                 .with_context(|| format!("tracking daemon log cursor {}", path.display()))?;
-            out.flush().context("flushing daemon follow output")?;
         }
 
         thread::sleep(poll_interval);

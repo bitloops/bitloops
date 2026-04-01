@@ -78,6 +78,17 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
     }
 }
 
+fn command_handles_ctrl_c(command: Option<&cli::Commands>) -> bool {
+    matches!(
+        command,
+        Some(cli::Commands::Daemon(cli::daemon::DaemonArgs {
+            command: Some(cli::daemon::DaemonCommand::Logs(
+                cli::daemon::DaemonLogsArgs { follow: true, .. }
+            )),
+        }))
+    )
+}
+
 #[tokio::main]
 async fn main() {
     let cmd = cli::Cli::parse();
@@ -88,6 +99,16 @@ async fn main() {
         }
     } else {
         init_standard_logger();
+    }
+
+    if command_handles_ctrl_c(cmd.command.as_ref()) {
+        if let Err(e) = cli::run(cmd).await {
+            if e.downcast_ref::<cli::SilentError>().is_none() {
+                eprintln!("Error: {e:#}");
+            }
+            std::process::exit(1);
+        }
+        return;
     }
 
     tokio::select! {
@@ -216,6 +237,25 @@ tls = true
         let cfg = resolve_provider_config().expect("provider config");
 
         assert_eq!(cfg, ProviderConfig::default());
+    }
+
+    #[test]
+    fn main_target_marks_daemon_logs_follow_as_ctrl_c_owner() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--follow"])
+            .expect("daemon logs follow should parse");
+
+        assert!(super::command_handles_ctrl_c(parsed.command.as_ref()));
+    }
+
+    #[test]
+    fn main_target_keeps_standard_ctrl_c_handling_for_other_commands() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path"])
+            .expect("daemon logs path should parse");
+        assert!(!super::command_handles_ctrl_c(parsed.command.as_ref()));
+
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "status"])
+            .expect("daemon status should parse");
+        assert!(!super::command_handles_ctrl_c(parsed.command.as_ref()));
     }
 
     #[test]
