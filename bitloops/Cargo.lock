@@ -692,6 +692,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-axum",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "clap_complete",
