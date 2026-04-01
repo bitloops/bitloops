@@ -30,6 +30,7 @@ pub(super) async fn upsert_file_state_row(
     relational.exec(&sql).await
 }
 
+#[cfg(test)]
 pub(super) fn build_file_artefact_row_from_content(
     repo_id: &str,
     path: &str,

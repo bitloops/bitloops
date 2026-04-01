@@ -74,7 +74,7 @@ pub(crate) async fn materialize_path(
             &desired.effective_content_id,
             &extraction.language,
             artefact,
-            &now_sql,
+            now_sql,
         )
     }));
     statements.extend(materialized_edges.iter().map(|edge| {
@@ -84,7 +84,7 @@ pub(crate) async fn materialize_path(
             &desired.path,
             &desired.effective_content_id,
             edge,
-            &now_sql,
+            now_sql,
         )
     }));
     statements.push(upsert_current_file_state_sql(
@@ -92,7 +92,7 @@ pub(crate) async fn materialize_path(
         desired,
         parser_version,
         extractor_version,
-        &now_sql,
+        now_sql,
     ));
 
     relational.exec_batch_transactional(&statements).await

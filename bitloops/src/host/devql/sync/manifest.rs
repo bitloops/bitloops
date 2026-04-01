@@ -76,6 +76,7 @@ pub(crate) fn classify_paths(
                 (Some(_), Some(_)) if repair => PathAction::Changed,
                 (Some(desired), Some(stored))
                     if desired.effective_content_id == stored.effective_content_id
+                        && desired.language == stored.language
                         && desired.effective_source == stored.effective_source
                         && stored.parser_version == parser_version
                         && stored.extractor_version == extractor_version =>

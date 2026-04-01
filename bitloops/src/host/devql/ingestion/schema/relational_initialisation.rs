@@ -13,7 +13,7 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     .await
     .context("creating SQLite DevQL sync tables")?;
     let sync_tables_need_rebuild = sqlite
-        .with_connection(|conn| Ok(sync_tables_need_rebuild(conn)?))
+        .with_connection(sync_tables_need_rebuild)
         .context("inspecting SQLite DevQL sync table shape")?;
     if sync_tables_need_rebuild {
         sqlite_exec_path_allow_create(

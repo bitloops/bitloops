@@ -2561,9 +2561,8 @@ async fn path_scoped_sync_only_updates_specified_paths() {
         ),
         "baseline scoped state should still reflect the original materialization"
     );
-    assert_eq!(
+    assert!(
         scoped_artefacts.iter().all(|row| row.0 == scoped_blob),
-        true,
         "scoped artefacts should reflect the edited content"
     );
 }

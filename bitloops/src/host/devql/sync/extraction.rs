@@ -5,6 +5,16 @@ use serde_json::json;
 
 use super::content_cache::{CachedArtefact, CachedEdge, CachedExtraction};
 
+struct ExtractionInput<'a> {
+    path: &'a str,
+    content_id: &'a str,
+    parser_version: &'a str,
+    extractor_version: &'a str,
+    language: &'a str,
+    content: &'a str,
+    file_docstring: Option<String>,
+}
+
 pub(crate) fn extract_to_cache_format(
     cfg: &crate::host::devql::DevqlConfig,
     path: &str,
@@ -35,31 +45,28 @@ pub(crate) fn extract_to_cache_format(
     };
 
     Ok(Some(map_extraction_to_cache_format(
-        path,
-        content_id,
-        parser_version,
-        extractor_version,
-        &language,
-        content,
+        ExtractionInput {
+            path,
+            content_id,
+            parser_version,
+            extractor_version,
+            language: &language,
+            content,
+            file_docstring,
+        },
         items,
         edges,
-        file_docstring,
     )))
 }
 
 fn map_extraction_to_cache_format(
-    path: &str,
-    content_id: &str,
-    parser_version: &str,
-    extractor_version: &str,
-    language: &str,
-    content: &str,
+    input: ExtractionInput<'_>,
     items: Vec<crate::host::language_adapter::LanguageArtefact>,
     edges: Vec<crate::host::language_adapter::DependencyEdge>,
-    file_docstring: Option<String>,
 ) -> CachedExtraction {
-    let file_artifact_key = file_artifact_key(content);
-    let mut symbol_to_artifact_key = HashMap::from([(path.to_string(), file_artifact_key.clone())]);
+    let file_artifact_key = file_artifact_key(input.content);
+    let mut symbol_to_artifact_key =
+        HashMap::from([(input.path.to_string(), file_artifact_key.clone())]);
 
     for (symbol_fqn, artifact_key) in assign_artifact_keys(&items) {
         symbol_to_artifact_key.insert(symbol_fqn, artifact_key);
@@ -69,16 +76,16 @@ fn map_extraction_to_cache_format(
         artifact_key: file_artifact_key.clone(),
         canonical_kind: Some("file".to_string()),
         language_kind: "file".to_string(),
-        name: path.to_string(),
+        name: input.path.to_string(),
         parent_artifact_key: None,
         start_line: 1,
-        end_line: file_end_line(content),
+        end_line: file_end_line(input.content),
         start_byte: 0,
-        end_byte: content.len() as i32,
+        end_byte: input.content.len() as i32,
         signature: String::new(),
         modifiers: Vec::new(),
-        docstring: file_docstring,
-        metadata: json!({ "symbol_fqn": path }),
+        docstring: input.file_docstring,
+        metadata: json!({ "symbol_fqn": input.path }),
     }];
 
     artefacts.extend(items.iter().map(|item| {
@@ -116,10 +123,10 @@ fn map_extraction_to_cache_format(
     edges.sort_by(|lhs, rhs| lhs.edge_key.cmp(&rhs.edge_key));
 
     CachedExtraction {
-        content_id: content_id.to_string(),
-        language: language.to_string(),
-        parser_version: parser_version.to_string(),
-        extractor_version: extractor_version.to_string(),
+        content_id: input.content_id.to_string(),
+        language: input.language.to_string(),
+        parser_version: input.parser_version.to_string(),
+        extractor_version: input.extractor_version.to_string(),
         parse_status: "parsed".to_string(),
         artefacts,
         edges,
@@ -133,7 +140,7 @@ fn assign_artifact_keys(
         .iter()
         .map(|item| (local_artifact_fingerprint(item), item.symbol_fqn.clone()))
         .collect::<Vec<_>>();
-    ranked.sort_by(|lhs, rhs| lhs.cmp(rhs));
+    ranked.sort();
 
     let mut counters: HashMap<String, usize> = HashMap::new();
     ranked
@@ -311,26 +318,30 @@ mod tests {
     fn sync_extraction_parent_mapping_is_order_independent() {
         let content = "class Service {\n  run(): number {\n    return localHelper() + remoteFoo();\n  }\n}\n\nfunction localHelper(): number {\n  return 1;\n}\n";
         let ordered = map_extraction_to_cache_format(
-            "src/sample.ts",
-            "content-id",
-            "parser-v1",
-            "extractor-v1",
-            "typescript",
-            content,
+            ExtractionInput {
+                path: "src/sample.ts",
+                content_id: "content-id",
+                parser_version: "parser-v1",
+                extractor_version: "extractor-v1",
+                language: "typescript",
+                content,
+                file_docstring: None,
+            },
             vec![class_artefact(), method_artefact(), helper_artefact()],
             sample_edges(),
-            None,
         );
         let reversed = map_extraction_to_cache_format(
-            "src/sample.ts",
-            "content-id",
-            "parser-v1",
-            "extractor-v1",
-            "typescript",
-            content,
+            ExtractionInput {
+                path: "src/sample.ts",
+                content_id: "content-id",
+                parser_version: "parser-v1",
+                extractor_version: "extractor-v1",
+                language: "typescript",
+                content,
+                file_docstring: None,
+            },
             vec![method_artefact(), helper_artefact(), class_artefact()],
             sample_edges(),
-            None,
         );
 
         assert_eq!(ordered, reversed);

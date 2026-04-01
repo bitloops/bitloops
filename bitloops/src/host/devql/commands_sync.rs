@@ -284,15 +284,13 @@ async fn execute_sync_inner(
     if matches!(
         mode,
         sync::types::SyncMode::Auto | sync::types::SyncMode::Full
-    ) {
-        if let Err(err) =
-            sync::gc::run_gc(relational, &cfg.repo.repo_id, sync::gc::DEFAULT_GC_TTL_DAYS).await
-        {
-            log::warn!(
-                "failed to run DevQL cache GC for repo `{}`: {err:#}",
-                cfg.repo.repo_id
-            );
-        }
+    ) && let Err(err) =
+        sync::gc::run_gc(relational, &cfg.repo.repo_id, sync::gc::DEFAULT_GC_TTL_DAYS).await
+    {
+        log::warn!(
+            "failed to run DevQL cache GC for repo `{}`: {err:#}",
+            cfg.repo.repo_id
+        );
     }
 
     // Phase 7: emit the final summary with the resolved workspace identity.

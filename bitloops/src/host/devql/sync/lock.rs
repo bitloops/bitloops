@@ -36,10 +36,12 @@ impl SyncLock {
         acquire_lock(config_root)
     }
 
+    #[cfg(test)]
     pub(crate) fn try_acquire(config_root: &Path) -> Result<Self> {
         acquire_lock(config_root)
     }
 
+    #[cfg(test)]
     pub(crate) fn is_held(&self) -> bool {
         self.lock_path.exists()
     }

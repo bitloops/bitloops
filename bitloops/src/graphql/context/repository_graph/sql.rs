@@ -273,11 +273,11 @@ pub(super) fn build_current_dependency_sql(
     if !use_historical_tables {
         // branch column removed from artefact_edges_current in sync redesign
     }
-    if use_historical_tables {
-        if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-            clauses.push("e.revision_kind = 'temporary'".to_string());
-            clauses.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
-        }
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
+        clauses.push("e.revision_kind = 'temporary'".to_string());
+        clauses.push(format!("e.revision_id = '{}'", esc_pg(revision_id)));
     }
 
     if let Some(kind) = filter.kind {
@@ -315,17 +315,17 @@ pub(super) fn build_current_dependency_sql(
         }
     }
 
-    if use_historical_tables {
-        if let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision) {
-            match filter.direction {
-                DepsDirection::Out => clauses.push(current_revision_clause("src", revision_id)),
-                DepsDirection::In => clauses.push(current_revision_clause("tgt", revision_id)),
-                DepsDirection::Both => clauses.push(format!(
-                    "({} OR {})",
-                    current_revision_clause("src", revision_id),
-                    current_revision_clause("tgt", revision_id),
-                )),
-            }
+    if use_historical_tables
+        && let Some(revision_id) = temporal_scope.and_then(ResolvedTemporalScope::save_revision)
+    {
+        match filter.direction {
+            DepsDirection::Out => clauses.push(current_revision_clause("src", revision_id)),
+            DepsDirection::In => clauses.push(current_revision_clause("tgt", revision_id)),
+            DepsDirection::Both => clauses.push(format!(
+                "({} OR {})",
+                current_revision_clause("src", revision_id),
+                current_revision_clause("tgt", revision_id),
+            )),
         }
     }
 
