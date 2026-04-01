@@ -1,11 +1,11 @@
 use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
 use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
+use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     ensure_semantic_embeddings_schema, load_pre_stage_artefacts_for_blob,
-    load_pre_stage_dependencies_for_blob,
-    upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
+    load_pre_stage_dependencies_for_blob, upsert_semantic_feature_rows,
+    upsert_symbol_embedding_rows,
 };
-use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_source_discovery,
@@ -132,11 +132,7 @@ struct FixtureSummaryMapProvider {
 
 impl semantic::SemanticSummaryProvider for FixtureSummaryMapProvider {
     fn cache_key(&self) -> String {
-        let mut names = self
-            .candidates_by_name
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut names = self.candidates_by_name.keys().cloned().collect::<Vec<_>>();
         names.sort();
         format!("provider=fixture-map:{}", names.join(","))
     }
@@ -261,6 +257,7 @@ struct MaterializedCloneFile {
     content: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn real_clone_symbol(
     symbol_id: &str,
     artefact_id: &str,
@@ -468,12 +465,17 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/pdf.ts",
                 "function",
                 "src/pdf.ts::createInvoicePdf",
-                Some("function createInvoicePdf(orderId: string, locale: string, totalCents: number)"),
+                Some(
+                    "function createInvoicePdf(orderId: string, locale: string, totalCents: number)",
+                ),
                 "const invoiceTemplate = billing.loadTemplate(orderId, locale);\nconst renderedTotal = currency.format(totalCents);\nreturn pdf.render(invoiceTemplate, renderedTotal);",
                 "Function create invoice pdf. Generates invoice PDF content for an order.",
                 vec![0.91, 0.09, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
-                vec!["references:invoice_template::default", "references:billing_formatter::money"],
+                vec![
+                    "references:invoice_template::default",
+                    "references:billing_formatter::money",
+                ],
                 1,
             ),
             real_clone_symbol(
@@ -482,12 +484,17 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/render.ts",
                 "function",
                 "src/render.ts::renderInvoiceDocument",
-                Some("function renderInvoiceDocument(orderId: string, locale: string, totalCents: number)"),
+                Some(
+                    "function renderInvoiceDocument(orderId: string, locale: string, totalCents: number)",
+                ),
                 "const invoiceDocument = billing.loadTemplate(orderId, locale);\nconst formattedTotal = currency.format(totalCents);\nreturn pdf.render(invoiceDocument, formattedTotal);",
                 "Function render invoice document. Renders invoice document content for an order.",
                 vec![0.89, 0.11, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
-                vec!["references:invoice_template::default", "references:billing_formatter::money"],
+                vec![
+                    "references:invoice_template::default",
+                    "references:billing_formatter::money",
+                ],
                 1,
             ),
         ],
@@ -503,7 +510,10 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "Function fetch order. Fetches an order and presents it for the caller.",
                 vec![0.88, 0.12, 0.0],
                 vec!["orderRepository.fetch", "orderPresenter.present"],
-                vec!["references:order_repository::default", "references:order_presenter::default"],
+                vec![
+                    "references:order_repository::default",
+                    "references:order_presenter::default",
+                ],
                 1,
             ),
             real_clone_symbol(
@@ -517,7 +527,10 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "Function fetch order. Fetches an order and presents it for the caller.",
                 vec![0.88, 0.12, 0.0],
                 vec!["orderRepository.fetch", "orderPresenter.present"],
-                vec!["references:order_repository::default", "references:order_presenter::default"],
+                vec![
+                    "references:order_repository::default",
+                    "references:order_presenter::default",
+                ],
                 1,
             ),
         ],
@@ -528,12 +541,17 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/billing/invoice.ts",
                 "function",
                 "src/billing/invoice.ts::create_invoice_pdf",
-                Some("function create_invoice_pdf(orderId: string, locale: string, totalCents: number)"),
+                Some(
+                    "function create_invoice_pdf(orderId: string, locale: string, totalCents: number)",
+                ),
                 "const invoiceTemplate = billing.loadTemplate(orderId, locale);\nconst renderedInvoice = pdf.render(invoiceTemplate, currency.format(totalCents));\nreturn renderedInvoice;",
                 "Function create invoice pdf. Creates invoice PDF content for billing.",
                 vec![0.84, 0.16, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
-                vec!["references:invoice_template::default", "references:billing_formatter::money"],
+                vec![
+                    "references:invoice_template::default",
+                    "references:billing_formatter::money",
+                ],
                 1,
             ),
             real_clone_symbol(
@@ -542,12 +560,17 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/billing/invoice_helpers.ts",
                 "function",
                 "src/billing/invoice_helpers.ts::build_invoice_pdf_bundle",
-                Some("function create_invoice_pdf(orderId: string, locale: string, totalCents: number)"),
+                Some(
+                    "function create_invoice_pdf(orderId: string, locale: string, totalCents: number)",
+                ),
                 "const invoiceTemplate = billing.loadTemplate(orderId, locale);\nconst renderedBundle = pdf.render(invoiceTemplate, currency.format(totalCents));\nreturn buildBundle(renderedBundle);",
                 "Function build invoice pdf bundle. Builds invoice pdf content from shared billing steps.",
                 vec![0.82, 0.18, 0.0],
                 vec!["billing.loadTemplate", "currency.format", "pdf.render"],
-                vec!["references:invoice_template::default", "references:billing_formatter::money"],
+                vec![
+                    "references:invoice_template::default",
+                    "references:billing_formatter::money",
+                ],
                 4,
             ),
         ],
@@ -639,8 +662,15 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "const componentSnapshot = snapshotRepo.load(snapshotId);\nconst relationshipChanges = snapshotPlanner.collect(componentSnapshot);\nreturn snapshotUpdater.apply(relationshipChanges, workspaceId);",
                 "Synchronizes component snapshot relationships for the workspace.",
                 vec![0.93, 0.07, 0.02],
-                vec!["snapshotRepo.load", "snapshotPlanner.collect", "snapshotUpdater.apply"],
-                vec!["references:snapshot_repository::default", "references:snapshot_updater::default"],
+                vec![
+                    "snapshotRepo.load",
+                    "snapshotPlanner.collect",
+                    "snapshotUpdater.apply",
+                ],
+                vec![
+                    "references:snapshot_repository::default",
+                    "references:snapshot_updater::default",
+                ],
                 1,
             ),
             real_clone_symbol(
@@ -649,7 +679,9 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/handlers/create-component-snapshots.handler.ts",
                 "method",
                 "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForBelongsToSnapshotRelationship",
-                Some("updateSnapshotRelationshipsForBelongsToSnapshotRelationship(snapshotId: string, workspaceId: string)"),
+                Some(
+                    "updateSnapshotRelationshipsForBelongsToSnapshotRelationship(snapshotId: string, workspaceId: string)",
+                ),
                 "return snapshotFormatter.belongsTo(componentSnapshot);",
                 "Updates snapshot relationships for belongs-to edges.",
                 vec![0.60, 0.40, 0.10],
@@ -667,8 +699,15 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "const currentSnapshot = snapshotRepo.load(snapshotId);\nconst reconciliationPlan = snapshotPlanner.planChanges(currentSnapshot, workspaceId);\nreturn snapshotApplier.commit(reconciliationPlan);",
                 "Reconciles component snapshot changes for the workspace.",
                 vec![0.91, 0.09, 0.03],
-                vec!["snapshotRepo.load", "snapshotPlanner.planChanges", "snapshotApplier.commit"],
-                vec!["references:snapshot_repository::default", "references:snapshot_applier::default"],
+                vec![
+                    "snapshotRepo.load",
+                    "snapshotPlanner.planChanges",
+                    "snapshotApplier.commit",
+                ],
+                vec![
+                    "references:snapshot_repository::default",
+                    "references:snapshot_applier::default",
+                ],
                 1,
             ),
             real_clone_symbol(
@@ -677,7 +716,9 @@ fn build_real_clone_fixture(name: &str) -> Result<RealCloneFixture> {
                 "src/handlers/sync-component-snapshots.handler.ts",
                 "method",
                 "src/handlers/sync-component-snapshots.handler.ts::SyncComponentSnapshotsCommandHandler::updateSnapshotRelationshipsForInstanceInSnapshotRelationship",
-                Some("updateSnapshotRelationshipsForInstanceInSnapshotRelationship(snapshotId: string, workspaceId: string)"),
+                Some(
+                    "updateSnapshotRelationshipsForInstanceInSnapshotRelationship(snapshotId: string, workspaceId: string)",
+                ),
                 "return snapshotFormatter.instanceIn(currentSnapshot);",
                 "Updates snapshot relationships for instance-in edges.",
                 vec![0.59, 0.41, 0.10],
@@ -959,7 +1000,10 @@ fn seed_real_clone_fixture(
     Ok(files)
 }
 
-async fn execute_clone_query_for_real_fixture(fixture_name: &str, query: &str) -> Result<Vec<Value>> {
+async fn execute_clone_query_for_real_fixture(
+    fixture_name: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
     let fixture = build_real_clone_fixture(fixture_name)?;
     let temp = TempDir::new().context("create semantic clone real-path temp dir")?;
     let sqlite_path = temp.path().join("semantic-clones-real.sqlite");
@@ -970,27 +1014,33 @@ async fn execute_clone_query_for_real_fixture(fixture_name: &str, query: &str) -
     let cfg = DevqlBddWorld::test_cfg();
     let repo_id = cfg.repo.repo_id.clone();
 
-    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> = Arc::new(FixtureSummaryMapProvider {
-        candidates_by_name: fixture
+    let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
+        Arc::new(FixtureSummaryMapProvider {
+            candidates_by_name: fixture
+                .symbols
+                .iter()
+                .map(|symbol| {
+                    (
+                        clone_symbol_name(&symbol.symbol_fqn),
+                        semantic::SemanticSummaryCandidate {
+                            summary: symbol.summary.clone(),
+                            confidence: 0.88,
+                            source_model: Some("fixture-summary-model".to_string()),
+                        },
+                    )
+                })
+                .collect(),
+        });
+    let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(FixtureEmbeddingProvider {
+        embeddings_by_name: fixture
             .symbols
             .iter()
             .map(|symbol| {
                 (
                     clone_symbol_name(&symbol.symbol_fqn),
-                    semantic::SemanticSummaryCandidate {
-                        summary: symbol.summary.clone(),
-                        confidence: 0.88,
-                        source_model: Some("fixture-summary-model".to_string()),
-                    },
+                    symbol.embedding.clone(),
                 )
             })
-            .collect(),
-    });
-    let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(FixtureEmbeddingProvider {
-        embeddings_by_name: fixture
-            .symbols
-            .iter()
-            .map(|symbol| (clone_symbol_name(&symbol.symbol_fqn), symbol.embedding.clone()))
             .collect(),
     });
 
@@ -1005,27 +1055,24 @@ async fn execute_clone_query_for_real_fixture(fixture_name: &str, query: &str) -
             load_pre_stage_artefacts_for_blob(&relational, &repo_id, &file.blob_sha, &file.path)
                 .await
                 .with_context(|| format!("load pre-stage artefacts for {}", file.path))?;
-        let pre_stage_dependencies = load_pre_stage_dependencies_for_blob(
-            &relational,
-            &repo_id,
-            &file.blob_sha,
-            &file.path,
-        )
-        .await
-        .with_context(|| format!("load pre-stage dependencies for {}", file.path))?;
+        let pre_stage_dependencies =
+            load_pre_stage_dependencies_for_blob(&relational, &repo_id, &file.blob_sha, &file.path)
+                .await
+                .with_context(|| format!("load pre-stage dependencies for {}", file.path))?;
         let fixture_artefact_ids = fixture
             .symbols
             .iter()
             .map(|symbol| symbol.artefact_id.as_str())
             .collect::<HashSet<_>>();
-        let semantic_inputs = semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-            &pre_stage_artefacts,
-            &pre_stage_dependencies,
-            &file.content,
-        )
-        .into_iter()
-        .filter(|input| fixture_artefact_ids.contains(input.artefact_id.as_str()))
-        .collect::<Vec<_>>();
+        let semantic_inputs =
+            semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+                &pre_stage_artefacts,
+                &pre_stage_dependencies,
+                &file.content,
+            )
+            .into_iter()
+            .filter(|input| fixture_artefact_ids.contains(input.artefact_id.as_str()))
+            .collect::<Vec<_>>();
         upsert_semantic_feature_rows(&relational, &semantic_inputs, Arc::clone(&summary_provider))
             .await
             .with_context(|| format!("upsert semantic feature rows for {}", file.path))?;
@@ -1065,6 +1112,7 @@ struct IncrementalFixtureSymbol {
     content_hash: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn incremental_fixture_symbol(
     symbol_id: &str,
     artefact_id: &str,
@@ -1090,10 +1138,7 @@ fn incremental_fixture_symbol(
         summary: summary.to_string(),
         embedding,
         call_targets: call_targets.into_iter().map(str::to_string).collect(),
-        dependency_targets: dependency_targets
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        dependency_targets: dependency_targets.into_iter().map(str::to_string).collect(),
         blob_sha: blob_sha.to_string(),
         content_hash: content_hash.to_string(),
     }
@@ -1110,7 +1155,9 @@ fn build_incremental_clone_fixture(
                     "artefact::create_invoice",
                     "src/billing/create.ts",
                     "src/billing/create.ts::createInvoice",
-                    Some("function createInvoice(orderId: string, totalCents: number, locale: string)"),
+                    Some(
+                        "function createInvoice(orderId: string, totalCents: number, locale: string)",
+                    ),
                     "const formatted = currency.format(totalCents, locale);\nreturn invoice.renderLine(formatted);",
                     "Function create invoice. Creates invoice line output from billing totals.",
                     vec![0.86, 0.14, 0.0],
@@ -1155,11 +1202,17 @@ fn build_incremental_clone_fixture(
                     "artefact::create_invoice",
                     "src/billing/create.ts",
                     "src/billing/create.ts::createInvoice",
-                    Some("function createInvoice(orderId: string, totalCents: number, locale: string)"),
+                    Some(
+                        "function createInvoice(orderId: string, totalCents: number, locale: string)",
+                    ),
                     "const formatted = currency.format(totalCents, locale);\naudit.recordInvoice(orderId);\nreturn invoice.renderLine(formatted);",
                     "Function create invoice. Creates invoice line output from billing totals.",
                     vec![0.86, 0.14, 0.0],
-                    vec!["currency.format", "invoice.renderLine", "audit.recordInvoice"],
+                    vec![
+                        "currency.format",
+                        "invoice.renderLine",
+                        "audit.recordInvoice",
+                    ],
                     vec![
                         "references:invoice_template::default",
                         "references:audit_log::default",
@@ -1233,8 +1286,8 @@ fn replace_incremental_snapshot(
         .context("delete prior historical incremental artefact")?;
 
         let language_kind = clone_language_kind(&symbol.canonical_kind);
-        let modifiers = serde_json::to_string(&vec!["export"])
-            .context("serialize incremental modifiers")?;
+        let modifiers =
+            serde_json::to_string(&vec!["export"]).context("serialize incremental modifiers")?;
 
         conn.execute(
             "INSERT INTO artefacts (
@@ -1624,9 +1677,10 @@ fn when_clones_query_executes(
             .semantic_clone_fixture
             .clone()
             .expect("semantic clone fixture should be configured before query execution");
-        world.clone_query_rows = execute_clone_query_for_real_fixture(&fixture_name, &doc_string(&ctx))
-            .await
-            .expect("execute semantic clone query");
+        world.clone_query_rows =
+            execute_clone_query_for_real_fixture(&fixture_name, &doc_string(&ctx))
+                .await
+                .expect("execute semantic clone query");
     })
 }
 
@@ -1686,7 +1740,9 @@ fn then_every_clone_row_includes_explainable_scores(
                 "clone row missing lexical_score: {row:#?}"
             );
             assert!(
-                row.get("structural_score").and_then(Value::as_f64).is_some(),
+                row.get("structural_score")
+                    .and_then(Value::as_f64)
+                    .is_some(),
                 "clone row missing structural_score: {row:#?}"
             );
             assert!(
@@ -1767,7 +1823,12 @@ fn clone_row_for_target<'a>(world: &'a DevqlBddWorld, target_symbol_fqn: &str) -
         .clone_query_rows
         .iter()
         .find(|row| row.get("target_symbol_fqn").and_then(Value::as_str) == Some(target_symbol_fqn))
-        .unwrap_or_else(|| panic!("missing clone row for `{target_symbol_fqn}`: {:#?}", world.clone_query_rows))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing clone row for `{target_symbol_fqn}`: {:#?}",
+                world.clone_query_rows
+            )
+        })
 }
 
 fn clone_metric_value(row: &Value, metric: &str) -> Option<f64> {
@@ -1931,13 +1992,27 @@ fn then_clone_row_ranks_below(
         let lower_index = world
             .clone_query_rows
             .iter()
-            .position(|row| row.get("target_symbol_fqn").and_then(Value::as_str) == Some(lower_target.as_str()))
-            .unwrap_or_else(|| panic!("missing clone row for `{lower_target}`: {:#?}", world.clone_query_rows));
+            .position(|row| {
+                row.get("target_symbol_fqn").and_then(Value::as_str) == Some(lower_target.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing clone row for `{lower_target}`: {:#?}",
+                    world.clone_query_rows
+                )
+            });
         let higher_index = world
             .clone_query_rows
             .iter()
-            .position(|row| row.get("target_symbol_fqn").and_then(Value::as_str) == Some(higher_target.as_str()))
-            .unwrap_or_else(|| panic!("missing clone row for `{higher_target}`: {:#?}", world.clone_query_rows));
+            .position(|row| {
+                row.get("target_symbol_fqn").and_then(Value::as_str) == Some(higher_target.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing clone row for `{higher_target}`: {:#?}",
+                    world.clone_query_rows
+                )
+            });
         assert!(
             lower_index > higher_index,
             "expected `{lower_target}` to rank below `{higher_target}`, got indices {lower_index} and {higher_index}"
@@ -1951,10 +2026,9 @@ fn then_no_clone_row_targets(
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let target_symbol_fqn = &ctx.matches[1].1;
-        let found = world
-            .clone_query_rows
-            .iter()
-            .any(|row| row.get("target_symbol_fqn").and_then(Value::as_str) == Some(target_symbol_fqn.as_str()));
+        let found = world.clone_query_rows.iter().any(|row| {
+            row.get("target_symbol_fqn").and_then(Value::as_str) == Some(target_symbol_fqn.as_str())
+        });
         assert!(
             !found,
             "expected no clone row targeting `{target_symbol_fqn}`, found: {:#?}",
@@ -2076,7 +2150,7 @@ fn when_stage1_persists_semantic_feature_rows_through_original_pipeline(
             .await
             .expect("initialise sqlite schema for stage1 persistence");
         let relational = RelationalStorage::local_only(sqlite_path);
-        upsert_semantic_feature_rows(&relational, &[input.clone()], provider)
+        upsert_semantic_feature_rows(&relational, std::slice::from_ref(&input), provider)
             .await
             .expect("persist stage1 semantic feature rows");
         let rows = relational
@@ -2102,7 +2176,10 @@ fn then_persisted_stage1_final_summary_is(
             .and_then(|row| row.get("summary"))
             .and_then(Value::as_str)
             .expect("persisted stage1 summary should be present");
-        assert_eq!(actual, expected, "unexpected persisted Stage 1 final summary");
+        assert_eq!(
+            actual, expected,
+            "unexpected persisted Stage 1 final summary"
+        );
     })
 }
 
@@ -2118,7 +2195,10 @@ fn then_persisted_stage1_template_summary_is(
             .and_then(|row| row.get("template_summary"))
             .and_then(Value::as_str)
             .expect("persisted stage1 template summary should be present");
-        assert_eq!(actual, expected, "unexpected persisted Stage 1 template summary");
+        assert_eq!(
+            actual, expected,
+            "unexpected persisted Stage 1 template summary"
+        );
     })
 }
 
@@ -2208,7 +2288,12 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(FixtureEmbeddingProvider {
             embeddings_by_name: snapshot_one
                 .iter()
-                .map(|symbol| (clone_symbol_name(&symbol.symbol_fqn), symbol.embedding.clone()))
+                .map(|symbol| {
+                    (
+                        clone_symbol_name(&symbol.symbol_fqn),
+                        symbol.embedding.clone(),
+                    )
+                })
                 .collect(),
         });
 
@@ -2247,16 +2332,13 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         rebuild_symbol_clone_edges(&relational, &repo_id)
             .await
             .expect("rebuild clone edges for snapshot one");
-        world.semantic_clone_semantic_hashes_before = load_semantic_feature_hashes(
-            &relational,
-            &repo_id,
-        )
-        .await
-        .expect("load snapshot one semantic hashes");
-        world.semantic_clone_embedding_hashes_before =
-            load_embedding_hashes(&relational, &repo_id)
+        world.semantic_clone_semantic_hashes_before =
+            load_semantic_feature_hashes(&relational, &repo_id)
                 .await
-                .expect("load snapshot one embedding hashes");
+                .expect("load snapshot one semantic hashes");
+        world.semantic_clone_embedding_hashes_before = load_embedding_hashes(&relational, &repo_id)
+            .await
+            .expect("load snapshot one embedding hashes");
         world.semantic_clone_edge_hashes_before = load_clone_edge_hashes(&relational, &repo_id)
             .await
             .expect("load snapshot one clone edge hashes");
@@ -2291,12 +2373,10 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         world.semantic_clone_stage1_skipped = stage1_stats.skipped;
         world.semantic_clone_stage2_upserted = stage2_stats.upserted;
         world.semantic_clone_stage2_skipped = stage2_stats.skipped;
-        world.semantic_clone_semantic_hashes_after = load_semantic_feature_hashes(
-            &relational,
-            &repo_id,
-        )
-        .await
-        .expect("load snapshot two semantic hashes");
+        world.semantic_clone_semantic_hashes_after =
+            load_semantic_feature_hashes(&relational, &repo_id)
+                .await
+                .expect("load snapshot two semantic hashes");
         world.semantic_clone_embedding_hashes_after = load_embedding_hashes(&relational, &repo_id)
             .await
             .expect("load snapshot two embedding hashes");
@@ -2446,18 +2526,22 @@ fn invalid_embedding_provider_config(
     case_name: &str,
 ) -> crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
     match case_name {
-        "missing api key" => crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-            embedding_provider: Some("openai".to_string()),
-            embedding_model: Some("text-embedding-3-large".to_string()),
-            embedding_api_key: None,
-            embedding_cache_dir: None,
-        },
-        "missing model" => crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
-            embedding_provider: Some("openai".to_string()),
-            embedding_model: None,
-            embedding_api_key: Some("test-key".to_string()),
-            embedding_cache_dir: None,
-        },
+        "missing api key" => {
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
+                embedding_provider: Some("openai".to_string()),
+                embedding_model: Some("text-embedding-3-large".to_string()),
+                embedding_api_key: None,
+                embedding_cache_dir: None,
+            }
+        }
+        "missing model" => {
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingProviderConfig {
+                embedding_provider: Some("openai".to_string()),
+                embedding_model: None,
+                embedding_api_key: Some("test-key".to_string()),
+                embedding_cache_dir: None,
+            }
+        }
         other => panic!("unknown invalid embedding provider configuration `{other}`"),
     }
 }

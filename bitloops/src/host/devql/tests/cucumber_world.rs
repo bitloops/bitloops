@@ -1,8 +1,8 @@
 use super::*;
+use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, SemanticSummaryCandidate,
 };
-use crate::capability_packs::knowledge::{AssociateKnowledgeResult, IngestKnowledgeResult};
 use crate::capability_packs::test_harness::mapping::model::DiscoveryIssue;
 use crate::host::devql::knowledge_support::KnowledgeBddHarness;
 use crate::models::{TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
