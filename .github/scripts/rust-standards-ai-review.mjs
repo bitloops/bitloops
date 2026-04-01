@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises';
 
 const COMMENT_MARKER = '<!-- rust-standards-ai-review -->';
-const STANDARDS_PATH = 'documentation/docs/reference/rust-code-standards.md';
+const STANDARDS_PATH = 'documentation/contributors/guides/rust-code-standards.md';
 const MAX_RUST_FILES = 40; // protects from very large PRs causing high cost, long latency, or token overflows.
 const MAX_PATCH_CHARS = 120000; // another safety/cost guardrail; if exceeded, diff is truncated and note is added in PR comment.
 const MAX_FINDINGS_IN_COMMENT = 20; // keeps comment readable and avoids huge noisy output; extra findings are summarized as “...and N more”.

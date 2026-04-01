@@ -7,7 +7,7 @@ This document describes the host-owned language-adapter runtime implemented unde
 
 Contributor onboarding guide:
 
-- `docs/language-adapter-contributing.md`
+- `../guides/language-adapter-contributing.md`
 
 ## Summary
 
