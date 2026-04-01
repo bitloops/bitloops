@@ -135,7 +135,7 @@ impl RuntimeSession {
         command.arg("--config").arg(&config.config_path);
         command.arg("--profile").arg(&config.profile_name);
         if let Some(repo_root) = config.repo_root.as_ref() {
-            command.arg("--repo_root").arg(repo_root);
+            command.arg("--repo-root").arg(repo_root);
         }
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());

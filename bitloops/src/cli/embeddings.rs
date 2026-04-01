@@ -10,7 +10,7 @@ use crate::adapters::model_providers::embeddings::{
 use crate::cli::enable::find_repo_root;
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, EmbeddingCapabilityConfig, EmbeddingProfileConfig,
-    resolve_embedding_capability_config_for_repo,
+    default_daemon_config_path, resolve_embedding_capability_config_for_repo,
 };
 
 #[derive(Args, Debug, Clone, Default)]
@@ -259,7 +259,8 @@ fn runtime_client_config(
         args: capability.embeddings.runtime.args.clone(),
         startup_timeout_secs: capability.embeddings.runtime.startup_timeout_secs,
         request_timeout_secs: capability.embeddings.runtime.request_timeout_secs,
-        config_path: repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        config_path: default_daemon_config_path()
+            .unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)),
         profile_name: profile_name.to_string(),
         repo_root: Some(repo_root.to_path_buf()),
     }

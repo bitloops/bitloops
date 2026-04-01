@@ -29,9 +29,7 @@ detect_platform() {
       printf "%s" "x86_64-unknown-linux-musl"
       ;;
     Linux:arm64|Linux:aarch64)
-      echo "Error: Linux arm64 binaries are not published yet." >&2
-      echo "Use Linux x86_64 for now." >&2
-      exit 1
+      printf "%s" "aarch64-unknown-linux-musl"
       ;;
     *)
       echo "Error: unsupported platform: ${os}/${arch}" >&2
@@ -97,6 +95,30 @@ require_cmd curl
 require_cmd awk
 require_cmd uname
 
+find_extracted_binary() {
+  local name="$1"
+  local direct_path package_path found_path
+
+  direct_path="${TMP_DIR}/${name}"
+  package_path="${TMP_DIR}/package/${name}"
+  if [[ -f "${direct_path}" ]]; then
+    printf "%s" "${direct_path}"
+    return 0
+  fi
+  if [[ -f "${package_path}" ]]; then
+    printf "%s" "${package_path}"
+    return 0
+  fi
+
+  found_path="$(find "${TMP_DIR}" -type f -name "${name}" -print -quit 2>/dev/null || true)"
+  if [[ -n "${found_path}" ]]; then
+    printf "%s" "${found_path}"
+    return 0
+  fi
+
+  return 1
+}
+
 TARGET="$(detect_platform)"
 ARCHIVE_EXT="$(detect_archive_ext)"
 ASSET_NAME="bitloops-${TARGET}.${ARCHIVE_EXT}"
@@ -135,14 +157,12 @@ fi
 
 extract_archive "${TMP_DIR}/${ASSET_NAME}" "${TMP_DIR}"
 
-if [[ -f "${TMP_DIR}/bitloops" ]]; then
-  EXTRACTED_BINARY="${TMP_DIR}/bitloops"
-elif [[ -f "${TMP_DIR}/package/bitloops" ]]; then
-  EXTRACTED_BINARY="${TMP_DIR}/package/bitloops"
-else
+if ! EXTRACTED_BINARY="$(find_extracted_binary "bitloops")"; then
   echo "Error: extracted archive did not contain 'bitloops' binary" >&2
   exit 1
 fi
+
+EMBEDDINGS_BINARY="$(find_extracted_binary "bitloops-embeddings" || true)"
 
 if [[ ! -d "${INSTALL_DIR}" ]]; then
   mkdir -p "${INSTALL_DIR}" 2>/dev/null || true
@@ -156,8 +176,16 @@ if [[ ! -w "${INSTALL_DIR}" ]]; then
 fi
 
 install -m 0755 "${EXTRACTED_BINARY}" "${INSTALL_DIR}/bitloops"
+if [[ -n "${EMBEDDINGS_BINARY}" ]]; then
+  install -m 0755 "${EMBEDDINGS_BINARY}" "${INSTALL_DIR}/bitloops-embeddings"
+fi
 
 echo "Installed bitloops ${TAG} to ${INSTALL_DIR}/bitloops"
+if [[ -n "${EMBEDDINGS_BINARY}" ]]; then
+  echo "Installed bitloops-embeddings ${TAG} to ${INSTALL_DIR}/bitloops-embeddings"
+else
+  echo "Note: this release archive did not contain bitloops-embeddings; installing bitloops only."
+fi
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
   echo "Note: ${INSTALL_DIR} is not in PATH."
   echo "Add this to your shell profile:"

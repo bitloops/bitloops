@@ -21,8 +21,8 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
     ) -> BoxFuture<'a, Result<IngestResult>> {
         Box::pin(async move {
             let relational = ctx
-                .devql_relational_scoped(SEMANTIC_CLONES_CAPABILITY_ID)
-                .context("scoped DevQL relational for semantic clone-edge rebuild")?;
+                .clone_edges_rebuild_relational()
+                .context("clone-edge rebuild relational for semantic clone-edge rebuild")?;
 
             let repo_id = ctx.repo().repo_id.clone();
             let build =
