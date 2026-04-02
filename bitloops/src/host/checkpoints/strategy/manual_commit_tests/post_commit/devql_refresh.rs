@@ -5,6 +5,15 @@ use super::helpers::{commit_file, init_devql_schema};
 #[test]
 pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_checkpoints() {
     let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
     let head = setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -140,6 +149,15 @@ pub(crate) fn post_commit_projects_checkpoint_file_snapshots_for_committed_check
 #[test]
 pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
     let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
 
@@ -182,6 +200,82 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
         "current_file_state should track the committed blob for clean post-commit refreshes"
     );
     assert_eq!(current_state.1, "head");
+}
+
+#[test]
+pub(crate) fn post_commit_catches_up_missing_historical_commit_segment_before_sync_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let state_dir_str = state_dir.path().to_string_lossy().to_string();
+    let _guard = crate::test_support::process_state::enter_process_state(
+        Some(dir.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_dir_str.as_str()),
+        )],
+    );
+    setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/history.ts"),
+        "export const first = () => 1;\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "first history commit"]);
+    let first_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    fs::write(
+        dir.path().join("src/history.ts"),
+        "export const first = () => 1;\nexport const second = () => 2;\n",
+    )
+    .unwrap();
+    git_ok(dir.path(), &["add", "."]);
+    git_ok(dir.path(), &["commit", "-m", "second history commit"]);
+    let second_commit = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let first_history_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![repo_id.as_str(), first_commit.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let second_history_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM file_state WHERE repo_id = ?1 AND commit_sha = ?2 AND path = ?3",
+            rusqlite::params![repo_id.as_str(), second_commit.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let current_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/history.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert!(
+        first_history_rows > 0,
+        "post_commit should backfill the earlier missing commit in file_state"
+    );
+    assert!(
+        second_history_rows > 0,
+        "post_commit should ingest the current HEAD commit into file_state"
+    );
+    assert!(
+        current_rows > 0,
+        "post_commit should still refresh sync-owned current state after historical catch-up"
+    );
 }
 
 #[test]

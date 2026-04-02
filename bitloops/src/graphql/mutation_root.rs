@@ -12,12 +12,6 @@ use super::{
 pub struct MutationRoot;
 
 #[derive(Debug, Clone, InputObject)]
-pub struct IngestInput {
-    #[graphql(default = 500)]
-    pub max_checkpoints: i32,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct AddKnowledgeInput {
     pub url: String,
     pub commit_ref: Option<String>,
@@ -64,11 +58,10 @@ impl From<crate::host::devql::InitSchemaSummary> for InitSchemaResult {
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct IngestResult {
     pub success: bool,
-    pub checkpoints_processed: i32,
+    pub commits_processed: i32,
+    pub checkpoint_companions_processed: i32,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
-    pub checkpoints_without_commit: i32,
-    pub temporary_rows_promoted: i32,
     pub semantic_feature_rows_upserted: i32,
     pub semantic_feature_rows_skipped: i32,
     pub symbol_embedding_rows_upserted: i32,
@@ -81,11 +74,12 @@ impl From<crate::host::devql::IngestionCounters> for IngestResult {
     fn from(value: crate::host::devql::IngestionCounters) -> Self {
         Self {
             success: value.success,
-            checkpoints_processed: to_graphql_count(value.checkpoints_processed),
+            commits_processed: to_graphql_count(value.commits_processed),
+            checkpoint_companions_processed: to_graphql_count(
+                value.checkpoint_companions_processed,
+            ),
             events_inserted: to_graphql_count(value.events_inserted),
             artefacts_upserted: to_graphql_count(value.artefacts_upserted),
-            checkpoints_without_commit: to_graphql_count(value.checkpoints_without_commit),
-            temporary_rows_promoted: to_graphql_count(value.temporary_rows_promoted),
             semantic_feature_rows_upserted: to_graphql_count(value.semantic_feature_rows_upserted),
             semantic_feature_rows_skipped: to_graphql_count(value.semantic_feature_rows_skipped),
             symbol_embedding_rows_upserted: to_graphql_count(value.symbol_embedding_rows_upserted),
@@ -229,16 +223,7 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
-    async fn ingest(&self, ctx: &Context<'_>, input: IngestInput) -> Result<IngestResult> {
-        if input.max_checkpoints < 0 {
-            return Err(operation_error(
-                "BAD_USER_INPUT",
-                "validation",
-                "ingest",
-                "maxCheckpoints must be zero or greater",
-            ));
-        }
-
+    async fn ingest(&self, ctx: &Context<'_>) -> Result<IngestResult> {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         context
             .require_repo_write_scope()
@@ -246,10 +231,13 @@ impl MutationRoot {
         let cfg = context
             .devql_config()
             .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
+        crate::daemon::require_current_repo_runtime(cfg.repo_root.as_path(), "GraphQL ingest")
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "ingest", err))?;
         let observer = GraphqlIngestionObserver::new(context);
         let summary = crate::host::devql::execute_ingest_with_observer(
             &cfg,
-            input.max_checkpoints as usize,
+            false,
+            0,
             Some(&observer),
             Some(crate::daemon::shared_enrichment_coordinator()),
         )

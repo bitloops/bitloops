@@ -12,6 +12,37 @@ fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
     ))
 }
 
+fn write_current_repo_runtime_state(repo_root: &Path) {
+    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        config_root: repo_root.to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: repo_root.join("bundle"),
+        relational_db_path: repo_root.join("relational.db"),
+        events_db_path: repo_root.join("events.duckdb"),
+        blob_store_path: repo_root.join("blob"),
+        repo_registry_path: repo_root.join("repo-registry.json"),
+        binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+        updated_at_unix: 0,
+    };
+    fs::create_dir_all(
+        runtime_path
+            .parent()
+            .expect("runtime state should have a parent directory"),
+    )
+    .expect("create runtime state parent");
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialise runtime state");
+    bytes.push(b'\n');
+    fs::write(&runtime_path, bytes).expect("write runtime state");
+}
+
 #[tokio::test]
 async fn devql_schema_builds_and_executes_in_process() {
     let temp = TempDir::new().expect("temp dir");
@@ -192,18 +223,18 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
     );
     let second_init_json = second_init.data.into_json().expect("graphql data to json");
     assert_eq!(second_init_json["initSchema"]["success"], true);
+    write_current_repo_runtime_state(repo.path());
 
     let ingest_response = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { maxCheckpoints: 500 }) {
+              ingest {
                 success
-                checkpointsProcessed
+                commitsProcessed
+                checkpointCompanionsProcessed
                 eventsInserted
                 artefactsUpserted
-                checkpointsWithoutCommit
-                temporaryRowsPromoted
                 semanticFeatureRowsUpserted
                 semanticFeatureRowsSkipped
                 symbolEmbeddingRowsUpserted
@@ -226,12 +257,11 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
         .into_json()
         .expect("graphql data to json");
     assert_eq!(ingest_json["ingest"]["success"], true);
-    assert_eq!(ingest_json["ingest"]["checkpointsProcessed"], 0);
+    assert_eq!(ingest_json["ingest"]["commitsProcessed"], 1);
+    assert_eq!(ingest_json["ingest"]["checkpointCompanionsProcessed"], 0);
     assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
-    assert_eq!(ingest_json["ingest"]["artefactsUpserted"], 0);
-    assert_eq!(ingest_json["ingest"]["checkpointsWithoutCommit"], 0);
-    assert_eq!(ingest_json["ingest"]["temporaryRowsPromoted"], 0);
-    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsUpserted"], 0);
+    assert_eq!(ingest_json["ingest"]["artefactsUpserted"], 1);
+    assert_eq!(ingest_json["ingest"]["semanticFeatureRowsUpserted"], 2);
     assert_eq!(ingest_json["ingest"]["semanticFeatureRowsSkipped"], 0);
     assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsUpserted"], 0);
     assert_eq!(ingest_json["ingest"]["symbolEmbeddingRowsSkipped"], 0);
@@ -245,114 +275,16 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
 }
 
 #[tokio::test]
-async fn daemon_bootstrap_creates_devql_schema_tables() {
-    let repo = seed_graphql_mutation_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
-    let sqlite_path = checkpoint_sqlite_path(repo.path());
-    seed_repository_catalog_row(repo.path(), SEEDED_REPO_NAME, "main");
-    seed_duckdb_events(repo.path(), &[]);
-
-    let daemon = tokio::spawn(crate::api::run_with_options(
-        crate::api::DashboardServerConfig {
-            host: Some("127.0.0.1".to_string()),
-            port: 0,
-            no_open: true,
-            force_http: true,
-            recheck_local_dashboard_net: false,
-            bundle_dir: None,
-        },
-        crate::api::DashboardRuntimeOptions {
-            ready_subject: "Test daemon".to_string(),
-            print_ready_banner: false,
-            open_browser: false,
-            shutdown_message: None,
-            on_ready: None,
-            on_shutdown: None,
-            config_root: Some(repo.path().to_path_buf()),
-            repo_registry_path: None,
-        },
-    ));
-
-    let wait = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if sqlite_path.exists() {
-                let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
-                let required_tables = [
-                    "repo_sync_state",
-                    "current_file_state",
-                    "artefacts_current",
-                    "content_cache",
-                ];
-                let all_exist = required_tables.iter().all(|table| {
-                    conn.query_row(
-                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                        [*table],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .map(|count| count == 1)
-                    .unwrap_or(false)
-                });
-                if all_exist {
-                    break;
-                }
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-
-    if wait.is_err() && daemon.is_finished() {
-        let result = daemon.await.expect("daemon join");
-        panic!("daemon exited early: {result:#?}");
-    }
-
-    daemon.abort();
-    let _ = daemon.await;
-
-    assert!(wait.is_ok(), "schema tables were not bootstrapped in time");
-}
-
-#[tokio::test]
 async fn devql_mutations_report_validation_and_backend_errors() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let schema = slim_schema_for_repo(repo.path());
 
-    let invalid_input = schema
-        .execute(async_graphql::Request::new(
-            r#"
-            mutation {
-              ingest(input: { maxCheckpoints: -1 }) {
-                success
-              }
-            }
-            "#,
-        ))
-        .await;
-    assert_eq!(invalid_input.errors.len(), 1, "expected one graphql error");
-    let invalid_extensions = invalid_input.errors[0]
-        .extensions
-        .as_ref()
-        .expect("graphql error extensions");
-    assert_eq!(
-        invalid_extensions.get("code"),
-        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
-    );
-    assert_eq!(
-        invalid_extensions.get("kind"),
-        Some(&async_graphql::Value::from("validation"))
-    );
-    assert_eq!(
-        invalid_extensions.get("operation"),
-        Some(&async_graphql::Value::from("ingest"))
-    );
-
     let missing_schema = schema
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { maxCheckpoints: 1 }) {
+              ingest {
                 success
               }
             }
@@ -370,7 +302,7 @@ async fn devql_mutations_report_validation_and_backend_errors() {
     );
     assert_eq!(
         backend_extensions.get("kind"),
-        Some(&async_graphql::Value::from("ingestion"))
+        Some(&async_graphql::Value::from("configuration"))
     );
     assert_eq!(
         backend_extensions.get("operation"),
@@ -721,7 +653,7 @@ async fn devql_global_repo_mutations_require_slim_cli_scope() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { maxCheckpoints: 1 }) {
+              ingest {
                 success
               }
             }

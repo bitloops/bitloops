@@ -111,7 +111,7 @@ pub(super) async fn run_baseline_ingestion(
     Ok(())
 }
 
-async fn load_sync_state_value(
+pub(super) async fn load_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,
@@ -147,7 +147,7 @@ ON CONFLICT (repo_id, state_key) DO UPDATE SET state_value = EXCLUDED.state_valu
     )
 }
 
-async fn upsert_sync_state_value(
+pub(super) async fn upsert_sync_state_value(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     key: &str,

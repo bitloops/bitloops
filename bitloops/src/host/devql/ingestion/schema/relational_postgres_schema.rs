@@ -257,6 +257,20 @@ CREATE TABLE IF NOT EXISTS repo_sync_state (
     last_sync_reason TEXT
 );
 
+CREATE TABLE IF NOT EXISTS commit_ingest_ledger (
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    history_status TEXT NOT NULL,
+    checkpoint_status TEXT NOT NULL,
+    checkpoint_id TEXT,
+    last_error TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (repo_id, commit_sha)
+);
+
+CREATE INDEX IF NOT EXISTS commit_ingest_ledger_repo_idx
+ON commit_ingest_ledger (repo_id);
+
 CREATE TABLE IF NOT EXISTS content_cache (
     content_id TEXT NOT NULL,
     language TEXT NOT NULL,

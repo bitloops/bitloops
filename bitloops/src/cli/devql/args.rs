@@ -29,12 +29,8 @@ pub enum DevqlCommand {
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
 
-#[derive(Args, Debug, Clone)]
-pub struct DevqlIngestArgs {
-    /// Limit checkpoints processed (newest-first).
-    #[arg(long, default_value_t = 500)]
-    pub max_checkpoints: usize,
-}
+#[derive(Args, Debug, Clone, Default)]
+pub struct DevqlIngestArgs {}
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct DevqlSyncArgs {

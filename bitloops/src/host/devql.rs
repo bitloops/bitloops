@@ -129,12 +129,11 @@ pub(crate) fn format_init_schema_summary(summary: &InitSchemaSummary) -> String 
 
 pub(crate) fn format_ingestion_summary(summary: &IngestionCounters) -> String {
     format!(
-        "DevQL ingest complete: checkpoints_processed={}, events_inserted={}, artefacts_upserted={}, checkpoints_without_commit={}, temporary_rows_promoted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
-        summary.checkpoints_processed,
+        "DevQL ingest complete: commits_processed={}, checkpoint_companions_processed={}, events_inserted={}, artefacts_upserted={}, semantic_feature_rows_upserted={}, semantic_feature_rows_skipped={}, symbol_embedding_rows_upserted={}, symbol_embedding_rows_skipped={}, symbol_clone_edges_upserted={}, symbol_clone_sources_scored={}",
+        summary.commits_processed,
+        summary.checkpoint_companions_processed,
         summary.events_inserted,
         summary.artefacts_upserted,
-        summary.checkpoints_without_commit,
-        summary.temporary_rows_promoted,
         summary.semantic_feature_rows_upserted,
         summary.semantic_feature_rows_skipped,
         summary.symbol_embedding_rows_upserted,
@@ -538,7 +537,7 @@ fn embedding_provider_config(cfg: &DevqlConfig) -> embeddings::EmbeddingProvider
     }
 }
 
-async fn initialise_devql_schema_for_command(
+pub(crate) async fn ensure_devql_storage_current(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<(RelationalStorage, InitSchemaSummary)> {
@@ -598,7 +597,7 @@ pub(crate) async fn execute_init_schema(
     cfg: &DevqlConfig,
     command: &str,
 ) -> Result<InitSchemaSummary> {
-    let (_relational, summary) = initialise_devql_schema_for_command(cfg, command).await?;
+    let (_relational, summary) = ensure_devql_storage_current(cfg, command).await?;
     Ok(summary)
 }
 
@@ -612,13 +611,32 @@ pub async fn execute_project_bootstrap(
     cfg: &DevqlConfig,
     skip_baseline: bool,
 ) -> Result<InitSchemaSummary> {
-    let (relational, summary) = initialise_devql_schema_for_command(cfg, "bitloops init").await?;
+    let (relational, summary) = ensure_devql_storage_current(cfg, "bitloops init").await?;
 
     if skip_baseline {
         return Ok(summary);
     }
 
     run_baseline_ingestion(cfg, &relational).await?;
+    let head_sha = match run_git(&cfg.repo_root, &["rev-parse", "HEAD"]) {
+        Ok(sha) => sha,
+        Err(err) if is_missing_head_error(&err) => return Ok(summary),
+        Err(err) => return Err(err).context("resolving HEAD for `bitloops init` bootstrap"),
+    };
+    let _ = self::commands_ingest::execute_ingest_for_commits(cfg, vec![head_sha.clone()], None, None)
+        .await
+        .context("running HEAD-only historical DevQL ingest for `bitloops init`")?;
+    if uses_local_ingest_watermarks(&relational)
+        && let Some(branch_name) = checked_out_branch_name(&cfg.repo_root)
+    {
+        upsert_sync_state_value(
+            cfg,
+            &relational,
+            &historical_branch_watermark_key(&branch_name),
+            &head_sha,
+        )
+        .await?;
+    }
     Ok(summary)
 }
 
@@ -655,6 +673,9 @@ mod ingestion_checkpoint;
 // ingestion: baseline indexing for full tracked codebase at HEAD
 #[path = "devql/ingestion/baseline.rs"]
 mod ingestion_baseline;
+// ingestion: commit-first historical ingest range and ledger helpers
+#[path = "devql/ingestion/history.rs"]
+mod ingestion_history;
 // ingestion: shared record types for artefact persistence
 #[path = "devql/ingestion/artefact_persistence_types.rs"]
 mod ingestion_artefact_persistence_types;
@@ -708,6 +729,7 @@ use self::ingestion_artefact_persistence_symbols::*;
 use self::ingestion_artefact_persistence_types::*;
 use self::ingestion_baseline::*;
 use self::ingestion_checkpoint::*;
+use self::ingestion_history::*;
 use self::ingestion_language::*;
 pub use self::ingestion_repo_identity::{resolve_repo_id, resolve_repo_identity};
 use self::ingestion_schema::*;

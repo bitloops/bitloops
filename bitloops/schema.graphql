@@ -293,17 +293,12 @@ type HealthStatus {
 	blob: HealthBackendStatus!
 }
 
-input IngestInput {
-	maxCheckpoints: Int! = 500
-}
-
 type IngestResult {
 	success: Boolean!
-	checkpointsProcessed: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 	semanticFeatureRowsUpserted: Int!
 	semanticFeatureRowsSkipped: Int!
 	symbolEmbeddingRowsUpserted: Int!
@@ -322,14 +317,13 @@ enum IngestionPhase {
 
 type IngestionProgressEvent {
 	phase: IngestionPhase!
-	checkpointsTotal: Int!
-	checkpointsProcessed: Int!
+	commitsTotal: Int!
+	commitsProcessed: Int!
+	checkpointCompanionsProcessed: Int!
 	currentCheckpointId: String
 	currentCommitSha: String
 	eventsInserted: Int!
 	artefactsUpserted: Int!
-	checkpointsWithoutCommit: Int!
-	temporaryRowsPromoted: Int!
 }
 
 type InitSchemaResult {
@@ -461,7 +455,7 @@ type MigrationRecord {
 type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
-	ingest(input: IngestInput!): IngestResult!
+	ingest: IngestResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!

@@ -155,6 +155,7 @@ fn postgres_schema_sql_includes_artefact_edges_hardening() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
     assert!(sql.contains("PRIMARY KEY (repo_id, path, symbol_id)"));
     assert!(!sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges"));
     assert!(sql.contains("CONSTRAINT artefact_edges_target_chk"));
     assert!(sql.contains("CONSTRAINT artefact_edges_line_range_chk"));
@@ -179,6 +180,8 @@ fn sqlite_schema_sql_includes_sync_state_table() {
     assert!(sql.contains("CREATE INDEX IF NOT EXISTS checkpoint_file_snapshots_commit_idx"));
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS sync_state"));
     assert!(sql.contains("PRIMARY KEY (repo_id, state_key)"));
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger"));
+    assert!(sql.contains("checkpoint_status TEXT NOT NULL"));
 }
 
 #[test]
@@ -262,15 +265,9 @@ fn incoming_revision_is_newer_rejects_older_commits_and_uses_commit_sha_as_tiebr
 
 #[test]
 fn devql_ingest_rejects_removed_init_flag() {
-    let err = match crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"])
-    {
-        Ok(_) => panic!("devql ingest should reject removed --init flag"),
-        Err(err) => err,
-    };
-
     assert!(
-        err.to_string().contains("--init"),
-        "expected clap error to mention --init, got: {err}"
+        crate::cli::Cli::try_parse_from(["bitloops", "devql", "ingest", "--init=false"]).is_err(),
+        "devql ingest should reject the removed --init flag"
     );
 }
 

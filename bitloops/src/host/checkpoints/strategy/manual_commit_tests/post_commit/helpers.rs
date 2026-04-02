@@ -25,6 +25,7 @@ pub(crate) fn init_devql_schema_with_postgres_dsn(
     runtime
         .block_on(crate::host::devql::run_init(&cfg))
         .expect("initialise DevQL schema for post-commit test");
+    write_current_runtime_state(repo_root);
 
     let sqlite_path = repo_root.join(".bitloops/stores/relational/post-commit-devql.db");
     let sqlite = rusqlite::Connection::open(&sqlite_path)
@@ -77,6 +78,37 @@ CREATE TABLE IF NOT EXISTS repositories (
     }
 
     sqlite_path
+}
+
+fn write_current_runtime_state(repo_root: &Path) {
+    let runtime_path = crate::daemon::runtime_state_path(repo_root);
+    let runtime_state = crate::daemon::DaemonRuntimeState {
+        version: 1,
+        config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+        config_root: repo_root.to_path_buf(),
+        pid: std::process::id(),
+        mode: crate::daemon::DaemonMode::Detached,
+        service_name: None,
+        url: "http://127.0.0.1:5667".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 5667,
+        bundle_dir: repo_root.join("bundle"),
+        relational_db_path: repo_root.join(".bitloops/stores/relational/post-commit-devql.db"),
+        events_db_path: repo_root.join(".bitloops/stores/events/post-commit-events.duckdb"),
+        blob_store_path: repo_root.join(".bitloops/stores/blobs/post-commit"),
+        repo_registry_path: repo_root.join("repo-registry.json"),
+        binary_fingerprint: crate::daemon::current_binary_fingerprint().unwrap_or_default(),
+        updated_at_unix: 0,
+    };
+    fs::create_dir_all(
+        runtime_path
+            .parent()
+            .expect("runtime state should have a parent directory"),
+    )
+    .expect("create runtime state parent");
+    let mut bytes = serde_json::to_vec_pretty(&runtime_state).expect("serialise runtime state");
+    bytes.push(b'\n');
+    fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
 fn write_post_commit_test_config(repo_root: &Path, postgres_dsn: Option<&str>) {

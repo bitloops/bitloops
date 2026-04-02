@@ -17,10 +17,19 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -
     }
 
     let refresh_future = async {
+        if let Err(err) =
+            crate::daemon::require_current_repo_runtime(repo_root, "post-merge DevQL refresh")
+        {
+            eprintln!("[bitloops] Warning: {err:#}");
+            return Ok(());
+        }
         let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repository identity for post-merge DevQL refresh")?;
         let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
             .context("building DevQL config for post-merge refresh")?;
+        crate::host::devql::execute_ingest_with_observer(&cfg, false, 0, None, None)
+            .await
+            .context("catching up DevQL historical commit ingest for post-merge")?;
         let stats =
             crate::host::devql::run_post_merge_artefact_refresh(&cfg, &head_sha, &changed_files)
                 .await

@@ -23,6 +23,14 @@ const UPDATE_CLI_TELEMETRY_MUTATION: &str = r#"
     }
 "#;
 
+const BOOTSTRAP_PROJECT_MUTATION: &str = r#"
+    mutation BootstrapProject($skipBaseline: Boolean!) {
+      bootstrapProject(skipBaseline: $skipBaseline) {
+        success
+      }
+    }
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TelemetryConsentResult {
@@ -34,6 +42,18 @@ pub(crate) struct TelemetryConsentResult {
 #[serde(rename_all = "camelCase")]
 struct UpdateCliTelemetryConsentMutationData {
     update_cli_telemetry_consent: TelemetryConsentResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapProjectMutationData {
+    bootstrap_project: BootstrapProjectResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapProjectResult {
+    success: bool,
 }
 
 #[cfg(test)]
@@ -131,6 +151,32 @@ pub(crate) async fn ensure_existing_config_telemetry_consent(
         bail!("failed to persist telemetry consent");
     }
 
+    Ok(())
+}
+
+pub(crate) async fn bootstrap_project_via_daemon(
+    runtime_root: &Path,
+    skip_baseline: bool,
+) -> Result<()> {
+    #[cfg(test)]
+    if env::var("BITLOOPS_TEST_ASSUME_DAEMON_RUNNING")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
+    {
+        return Ok(());
+    }
+
+    let data: BootstrapProjectMutationData = execute_global_graphql(
+        runtime_root,
+        BOOTSTRAP_PROJECT_MUTATION,
+        json!({
+            "skipBaseline": skip_baseline,
+        }),
+    )
+    .await?;
+    if !data.bootstrap_project.success {
+        bail!("Bitloops project bootstrap did not complete successfully");
+    }
     Ok(())
 }
 
