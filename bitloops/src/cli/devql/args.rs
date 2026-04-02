@@ -31,10 +31,6 @@ pub struct DevqlInitArgs {}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlIngestArgs {
-    /// Bootstrap tables before ingestion.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub init: bool,
-
     /// Limit checkpoints processed (newest-first).
     #[arg(long, default_value_t = 500)]
     pub max_checkpoints: usize,
