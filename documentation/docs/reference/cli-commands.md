@@ -5,7 +5,7 @@ title: CLI Commands
 
 # CLI Commands
 
-Bitloops now has a thin CLI plus a single global user-level daemon service, `com.bitloops.daemon`.
+Bitloops has a thin CLI plus a single global user-level daemon service, `com.bitloops.daemon`.
 
 For breaking changes from the older command model, see the [upgrade note](./upgrading-to-the-daemon-architecture.md).
 
@@ -14,8 +14,10 @@ For breaking changes from the older command model, see the [upgrade note](./upgr
 ```bash
 bitloops --version
 bitloops --version --check
+bitloops version --check
 bitloops --connection-status
 bitloops help
+bitloops help devql
 ```
 
 ## Initial Setup
@@ -38,8 +40,8 @@ Notes:
 - `.bitloops.local.toml` is added to `.git/info/exclude`.
 - `init` installs git hooks plus the selected agent hooks.
 - `init` replaces `[agents].supported` with the current selection on rerun.
-- `init` triggers daemon-backed schema initialisation and the baseline sync into `artefacts_current`.
-- Use `--agent <name>` to pin the supported agent set or `--skip-baseline` when you want hooks and config without the initial baseline ingestion.
+- `init` no longer runs the initial baseline sync. The `--skip-baseline` flag is accepted for compatibility only.
+- Use `--agent <name>` to pin the supported agent set.
 - `init` accepts `--telemetry`, `--telemetry=false`, and `--no-telemetry`.
 - First-run telemetry consent belongs to `bitloops start` when the default daemon config is created for the first time.
 - `init` only prompts for telemetry when the daemon config already existed and consent later became unresolved, for example after a CLI upgrade cleared a previous opt-out.
@@ -211,6 +213,20 @@ Notes:
 - `--path` prints the absolute log file path without reading the file.
 - The daemon log lives under the Bitloops state directory at `logs/daemon.log`.
 
+### `bitloops daemon enrichments`
+
+Inspect or control the background enrichment queue:
+
+```bash
+bitloops daemon enrichments status
+bitloops daemon enrichments pause
+bitloops daemon enrichments pause --reason "maintenance"
+bitloops daemon enrichments resume
+bitloops daemon enrichments retry-failed
+```
+
+Use these commands when you want to inspect or control semantic-summary, embeddings, and clone rebuild work owned by the daemon.
+
 ## Dashboard
 
 ### `bitloops dashboard`
@@ -253,24 +269,77 @@ bitloops clean
 bitloops doctor
 ```
 
+These commands cover session inspection, resume/rewind workflows, shadow-state cleanup, and stuck-session recovery.
+
 ## DevQL
 
 DevQL commands now talk to the local daemon over the existing HTTP and GraphQL surface.
 
-### Common commands
+### Schema, ingestion, and sync
 
 ```bash
 bitloops devql init
 bitloops devql ingest
-bitloops devql query "files changed last 7 days"
-bitloops devql knowledge ingest github
+bitloops devql sync
+bitloops devql sync --validate
+bitloops devql projection checkpoint-file-snapshots --dry-run
 ```
 
 Highlights:
 
-- `devql init` initialises the configured relational and event stores
-- `devql ingest` sends ingestion work through the daemon
-- `devql query` uses the local daemon transport rather than in-process GraphQL execution
+- `devql init` explicitly ensures the configured relational and event schemas exist
+- daemon startup owns the normal schema bootstrap path
+- `devql ingest` performs ingestion only
+- `devql sync` reconciles current-workspace state into the current-state tables
+
+### Query and diagnostics
+
+```bash
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
+bitloops devql query '{ health { relational { backend connected } } }'
+bitloops devql connection-status
+bitloops devql packs --with-health
+```
+
+Highlights:
+
+- `devql query` treats input as DevQL DSL only when it contains `->`; otherwise it treats the input as raw GraphQL
+- `devql query` is daemon-backed, not in-process
+- `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
+
+### Knowledge
+
+```bash
+bitloops devql knowledge add https://github.com/bitloops/bitloops/issues/42
+bitloops devql knowledge add https://bitloops.atlassian.net/browse/CLI-1370 --commit <sha>
+bitloops devql knowledge associate <knowledge_ref> --to commit:HEAD
+bitloops devql knowledge refresh <knowledge_ref>
+bitloops devql knowledge versions <knowledge_ref>
+```
+
+There is no `bitloops devql knowledge ingest` command in the current CLI.
+
+## Test Harness
+
+```bash
+bitloops testlens init
+bitloops testlens ingest-tests --commit <sha>
+bitloops testlens ingest-coverage --lcov coverage/lcov.info --commit <sha> --scope workspace
+bitloops testlens ingest-coverage-batch --manifest coverage/manifest.json --commit <sha>
+bitloops testlens ingest-results --jest-json reports/jest.json --commit <sha>
+```
+
+Use `testlens` to initialise and ingest test-linkage, coverage, and results data for the test-harness capability pack.
+
+## Embeddings
+
+```bash
+bitloops embeddings pull local
+bitloops embeddings doctor
+bitloops embeddings clear-cache local
+```
+
+These commands inspect, warm, and clear configured embedding profiles from the current repo context.
 
 ## Completion
 
@@ -281,3 +350,8 @@ bitloops completion bash
 bitloops completion zsh
 bitloops completion fish
 ```
+
+## Notes
+
+- Hidden internal commands are intentionally omitted from this page.
+- Use `bitloops help <command>` when you want the full flag surface for a specific command.

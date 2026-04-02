@@ -5,7 +5,7 @@ title: Quickstart
 
 # Quickstart
 
-This quickstart assumes you want the new daemon-first Bitloops setup.
+This quickstart assumes you want the current daemon-first Bitloops setup.
 
 If you are coming from the old JSON and repo-local storage model, read the [upgrade note](../reference/upgrading-to-the-daemon-architecture.md).
 
@@ -46,7 +46,9 @@ bitloops init --install-default-daemon
 
 Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service first.
 
-This creates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, installs hooks, and runs the initial baseline sync through the daemon.
+This creates or updates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
+
+`bitloops init` does not run the initial baseline sync anymore. Use DevQL commands for schema initialisation, ingestion, and current-state sync.
 
 If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
@@ -89,8 +91,10 @@ The daemon automatically initialises the DevQL schema on startup. You can ingest
 
 ```bash
 bitloops devql ingest
-bitloops devql query "files changed last 7 days"
+bitloops devql query 'repo("bitloops")->artefacts(kind:"function")->limit(10)'
 ```
+
+DevQL CLI queries are DSL only when the input contains `->`. Otherwise the CLI treats the input as raw GraphQL.
 
 ## 7. Sync Current State
 
