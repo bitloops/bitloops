@@ -38,7 +38,6 @@ const INGEST_MUTATION: &str = r#"
     mutation Ingest($input: IngestInput!) {
       ingest(input: $input) {
         success
-        initRequested
         checkpointsProcessed
         eventsInserted
         artefactsUpserted
@@ -100,7 +99,6 @@ pub(super) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()>
 
 pub(super) async fn run_ingest_via_graphql(
     scope: &SlimCliRepoScope,
-    init: bool,
     max_checkpoints: usize,
 ) -> Result<()> {
     ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
@@ -109,7 +107,6 @@ pub(super) async fn run_ingest_via_graphql(
         INGEST_MUTATION,
         json!({
             "input": {
-                "init": init,
                 "maxCheckpoints": max_checkpoints,
             }
         }),

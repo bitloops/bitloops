@@ -13,8 +13,6 @@ pub struct MutationRoot;
 
 #[derive(Debug, Clone, InputObject)]
 pub struct IngestInput {
-    #[graphql(default = true)]
-    pub init: bool,
     #[graphql(default = 500)]
     pub max_checkpoints: i32,
 }
@@ -66,7 +64,6 @@ impl From<crate::host::devql::InitSchemaSummary> for InitSchemaResult {
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct IngestResult {
     pub success: bool,
-    pub init_requested: bool,
     pub checkpoints_processed: i32,
     pub events_inserted: i32,
     pub artefacts_upserted: i32,
@@ -84,7 +81,6 @@ impl From<crate::host::devql::IngestionCounters> for IngestResult {
     fn from(value: crate::host::devql::IngestionCounters) -> Self {
         Self {
             success: value.success,
-            init_requested: value.init_requested,
             checkpoints_processed: to_graphql_count(value.checkpoints_processed),
             events_inserted: to_graphql_count(value.events_inserted),
             artefacts_upserted: to_graphql_count(value.artefacts_upserted),
@@ -253,7 +249,6 @@ impl MutationRoot {
         let observer = GraphqlIngestionObserver::new(context);
         let summary = crate::host::devql::execute_ingest_with_observer(
             &cfg,
-            input.init,
             input.max_checkpoints as usize,
             Some(&observer),
             Some(crate::daemon::shared_enrichment_coordinator()),

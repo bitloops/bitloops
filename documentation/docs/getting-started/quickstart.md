@@ -85,7 +85,7 @@ bitloops start --until-stopped
 
 ## 6. Query And Ingest
 
-Initial project bootstrap already initialises the schema. You can then ingest and query:
+The daemon automatically initialises the DevQL schema on startup. You can ingest and query immediately:
 
 ```bash
 bitloops devql ingest
@@ -93,8 +93,6 @@ bitloops devql query "files changed last 7 days"
 ```
 
 ## 7. Sync Current State
-
-`bitloops devql init` must have run at least once for schema bootstrap; this bootstrap step will be automated for all DevQL commands soon.
 
 When you want to reconcile `artefacts_current`/`artefact_edges_current` with the current workspace:
 

@@ -197,9 +197,8 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { init: true, maxCheckpoints: 500 }) {
+              ingest(input: { maxCheckpoints: 500 }) {
                 success
-                initRequested
                 checkpointsProcessed
                 eventsInserted
                 artefactsUpserted
@@ -227,7 +226,6 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
         .into_json()
         .expect("graphql data to json");
     assert_eq!(ingest_json["ingest"]["success"], true);
-    assert_eq!(ingest_json["ingest"]["initRequested"], true);
     assert_eq!(ingest_json["ingest"]["checkpointsProcessed"], 0);
     assert_eq!(ingest_json["ingest"]["eventsInserted"], 0);
     assert_eq!(ingest_json["ingest"]["artefactsUpserted"], 0);
@@ -247,6 +245,75 @@ async fn devql_mutations_initialise_schema_and_ingest_with_typed_results() {
 }
 
 #[tokio::test]
+async fn daemon_bootstrap_creates_devql_schema_tables() {
+    let repo = seed_graphql_mutation_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    seed_repository_catalog_row(repo.path(), SEEDED_REPO_NAME, "main");
+    seed_duckdb_events(repo.path(), &[]);
+
+    let daemon = tokio::spawn(crate::api::run_with_options(
+        crate::api::DashboardServerConfig {
+            host: Some("127.0.0.1".to_string()),
+            port: 0,
+            no_open: true,
+            force_http: true,
+            recheck_local_dashboard_net: false,
+            bundle_dir: None,
+        },
+        crate::api::DashboardRuntimeOptions {
+            ready_subject: "Test daemon".to_string(),
+            print_ready_banner: false,
+            open_browser: false,
+            shutdown_message: None,
+            on_ready: None,
+            on_shutdown: None,
+            config_root: Some(repo.path().to_path_buf()),
+            repo_registry_path: None,
+        },
+    ));
+
+    let wait = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if sqlite_path.exists() {
+                let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+                let required_tables = [
+                    "repo_sync_state",
+                    "current_file_state",
+                    "artefacts_current",
+                    "content_cache",
+                ];
+                let all_exist = required_tables.iter().all(|table| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [*table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|count| count == 1)
+                    .unwrap_or(false)
+                });
+                if all_exist {
+                    break;
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+
+    if wait.is_err() && daemon.is_finished() {
+        let result = daemon.await.expect("daemon join");
+        panic!("daemon exited early: {result:#?}");
+    }
+
+    daemon.abort();
+    let _ = daemon.await;
+
+    assert!(wait.is_ok(), "schema tables were not bootstrapped in time");
+}
+
+#[tokio::test]
 async fn devql_mutations_report_validation_and_backend_errors() {
     let repo = seed_graphql_mutation_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
@@ -256,7 +323,7 @@ async fn devql_mutations_report_validation_and_backend_errors() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { init: true, maxCheckpoints: -1 }) {
+              ingest(input: { maxCheckpoints: -1 }) {
                 success
               }
             }
@@ -285,7 +352,7 @@ async fn devql_mutations_report_validation_and_backend_errors() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { init: false, maxCheckpoints: 1 }) {
+              ingest(input: { maxCheckpoints: 1 }) {
                 success
               }
             }
@@ -654,7 +721,7 @@ async fn devql_global_repo_mutations_require_slim_cli_scope() {
         .execute(async_graphql::Request::new(
             r#"
             mutation {
-              ingest(input: { init: true, maxCheckpoints: 1 }) {
+              ingest(input: { maxCheckpoints: 1 }) {
                 success
               }
             }
