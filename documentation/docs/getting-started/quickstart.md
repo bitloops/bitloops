@@ -40,15 +40,19 @@ Interactive `bitloops start` also prompts to create the default config when it i
 From inside a git repository or subproject:
 
 ```bash
-bitloops init
-bitloops init --install-default-daemon
+bitloops init --sync=true
+bitloops init --install-default-daemon --sync=true
 ```
 
 Use plain `bitloops init` when the daemon is already running. Use `bitloops init --install-default-daemon` when you want init to bootstrap the default daemon service first.
 
 This creates or updates `.bitloops.local.toml` in the current directory, adds it to `.git/info/exclude`, and installs or reconciles hooks for the selected agents.
 
-`bitloops init` does not run the initial baseline sync anymore. Use DevQL commands for schema initialisation, ingestion, and current-state sync.
+`bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
+
+In non-interactive mode, `bitloops init` requires `--sync=true` or `--sync=false`.
+
+That initial sync only reconciles current workspace state. Use `bitloops devql ingest` separately when you want checkpoint, commit, and event history materialised.
 
 If you want to pin the supported agent set during bootstrap, pass `--agent <name>`.
 
@@ -102,12 +106,15 @@ When you want to reconcile `artefacts_current`/`artefact_edges_current` with the
 
 ```bash
 bitloops devql sync
+bitloops devql sync --status
 ```
+
+By default, `bitloops devql sync` queues a sync task and returns immediately after printing the task id. Use `--status` when you want the CLI to follow that task until it reaches a terminal state.
 
 When you want to validate that current-state rows match a full-project reconciliation without writing changes:
 
 ```bash
-bitloops devql sync --validate
+bitloops devql sync --validate --status
 ```
 
 Use `--validate` as a diagnostic check when debugging drift between source files and current-state query results.
@@ -120,6 +127,8 @@ bitloops checkpoints status --detailed
 ```
 
 `bitloops status` reports daemon status. `bitloops checkpoints status` reports repo capture status and shows the resolved policy root and fingerprint.
+
+`bitloops status` also shows sync queue totals, and when you run it inside a repo it includes the active or most recent sync task for that repo.
 
 ## Toggle Capture Later
 
