@@ -140,17 +140,16 @@ pub(super) async fn run(
     let repo_root = config_root.clone();
 
     // Bootstrap DevQL schema on daemon start (idempotent).
-    if let Ok(repo_identity) = crate::host::devql::resolve_repo_identity(&repo_root) {
-        if let Err(err) = crate::host::devql::ensure_relational_and_events_schema(
+    if let Ok(repo_identity) = crate::host::devql::resolve_repo_identity(&repo_root)
+        && let Err(err) = crate::host::devql::ensure_relational_and_events_schema(
             &config_root,
             &repo_root,
             repo_identity,
         )
         .await
-        {
-            log::warn!("DevQL schema bootstrap on daemon start failed: {err:#}");
-            startup_warnings.push(format!("Warning: DevQL schema bootstrap failed: {err:#}"));
-        }
+    {
+        log::warn!("DevQL schema bootstrap on daemon start failed: {err:#}");
+        startup_warnings.push(format!("Warning: DevQL schema bootstrap failed: {err:#}"));
     }
 
     if matches!(startup_mode, DashboardStartupMode::SlowProbe)
