@@ -1,5 +1,6 @@
 use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
 use crate::adapters::model_providers::embeddings::{EmbeddingInputType, EmbeddingProvider};
+use crate::capability_packs::semantic_clones::embeddings as semantic_embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
     ensure_semantic_embeddings_schema, load_pre_stage_artefacts_for_blob,
@@ -128,12 +129,16 @@ impl semantic::SemanticSummaryProvider for FixtureSummaryProvider {
 
 #[derive(Debug, Clone)]
 struct FixtureSummaryMapProvider {
-    candidates_by_name: HashMap<String, semantic::SemanticSummaryCandidate>,
+    candidates_by_symbol_fqn: HashMap<String, semantic::SemanticSummaryCandidate>,
 }
 
 impl semantic::SemanticSummaryProvider for FixtureSummaryMapProvider {
     fn cache_key(&self) -> String {
-        let mut names = self.candidates_by_name.keys().cloned().collect::<Vec<_>>();
+        let mut names = self
+            .candidates_by_symbol_fqn
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         names.sort();
         format!("provider=fixture-map:{}", names.join(","))
     }
@@ -142,13 +147,15 @@ impl semantic::SemanticSummaryProvider for FixtureSummaryMapProvider {
         &self,
         input: &semantic::SemanticFeatureInput,
     ) -> Option<semantic::SemanticSummaryCandidate> {
-        self.candidates_by_name.get(&input.name).cloned()
+        self.candidates_by_symbol_fqn
+            .get(&input.symbol_fqn)
+            .cloned()
     }
 }
 
 #[derive(Debug, Clone)]
 struct FixtureEmbeddingProvider {
-    embeddings_by_name: HashMap<String, Vec<f32>>,
+    embeddings_by_document: HashMap<String, Vec<f32>>,
 }
 
 impl EmbeddingProvider for FixtureEmbeddingProvider {
@@ -161,18 +168,16 @@ impl EmbeddingProvider for FixtureEmbeddingProvider {
     }
 
     fn output_dimension(&self) -> Option<usize> {
-        self.embeddings_by_name
+        self.embeddings_by_document
             .values()
             .next()
             .map(std::vec::Vec::len)
     }
 
     fn cache_key(&self) -> String {
-        let mut names = self.embeddings_by_name.keys().cloned().collect::<Vec<_>>();
-        names.sort();
         format!(
-            "provider=fixture::model=fixture-embedding-model::names={}",
-            names.join(",")
+            "provider=fixture::model=fixture-embedding-model::documents={}",
+            self.embeddings_by_document.len()
         )
     }
 
@@ -181,20 +186,78 @@ impl EmbeddingProvider for FixtureEmbeddingProvider {
             bail!("fixture embedding provider only supports document inputs");
         }
 
-        let Some(name) = embedded_symbol_name(input) else {
-            bail!("fixture embedding provider could not find symbol name in `{input}`");
-        };
-        self.embeddings_by_name
-            .get(name)
+        self.embeddings_by_document
+            .get(input)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("fixture embedding not configured for `{name}`"))
+            .ok_or_else(|| anyhow::anyhow!("fixture embedding not configured for `{input}`"))
     }
 }
 
-fn embedded_symbol_name(input: &str) -> Option<&str> {
-    input
-        .lines()
-        .find_map(|line| line.strip_prefix("name: ").map(str::trim))
+fn fixture_summary_candidate(summary: &str) -> semantic::SemanticSummaryCandidate {
+    semantic::SemanticSummaryCandidate {
+        summary: summary.to_string(),
+        confidence: 0.88,
+        source_model: Some("fixture-summary-model".to_string()),
+    }
+}
+
+async fn load_persisted_summary_map(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+) -> Result<HashMap<String, String>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let ids_sql = artefact_ids
+        .iter()
+        .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT artefact_id, summary FROM symbol_semantics WHERE artefact_id IN ({ids_sql})"
+        ))
+        .await?;
+    let mut summaries = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(summary) = row.get("summary").and_then(Value::as_str) else {
+            continue;
+        };
+        summaries.insert(artefact_id.to_string(), summary.to_string());
+    }
+    Ok(summaries)
+}
+
+fn build_fixture_embedding_provider(
+    inputs: &[semantic::SemanticFeatureInput],
+    summary_by_artefact_id: &HashMap<String, String>,
+    embeddings_by_artefact_id: &HashMap<String, Vec<f32>>,
+) -> Result<Arc<dyn EmbeddingProvider>> {
+    let embedding_inputs =
+        semantic_embeddings::build_symbol_embedding_inputs(inputs, summary_by_artefact_id);
+    let mut embeddings_by_document = HashMap::with_capacity(embedding_inputs.len());
+    for input in embedding_inputs {
+        let embedding = embeddings_by_artefact_id
+            .get(&input.artefact_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "fixture embedding not configured for artefact `{}`",
+                    input.artefact_id
+                )
+            })?;
+        embeddings_by_document.insert(
+            semantic_embeddings::build_symbol_embedding_text(&input),
+            embedding,
+        );
+    }
+    Ok(Arc::new(FixtureEmbeddingProvider {
+        embeddings_by_document,
+    }))
 }
 
 fn stage1_sample_input(kind: &str, name: &str) -> semantic::SemanticFeatureInput {
@@ -1018,33 +1081,17 @@ async fn execute_clone_query_for_real_fixture(
 
     let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
         Arc::new(FixtureSummaryMapProvider {
-            candidates_by_name: fixture
+            candidates_by_symbol_fqn: fixture
                 .symbols
                 .iter()
                 .map(|symbol| {
                     (
-                        clone_symbol_name(&symbol.symbol_fqn),
-                        semantic::SemanticSummaryCandidate {
-                            summary: symbol.summary.clone(),
-                            confidence: 0.88,
-                            source_model: Some("fixture-summary-model".to_string()),
-                        },
+                        symbol.symbol_fqn.clone(),
+                        fixture_summary_candidate(&symbol.summary),
                     )
                 })
                 .collect(),
         });
-    let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(FixtureEmbeddingProvider {
-        embeddings_by_name: fixture
-            .symbols
-            .iter()
-            .map(|symbol| {
-                (
-                    clone_symbol_name(&symbol.symbol_fqn),
-                    symbol.embedding.clone(),
-                )
-            })
-            .collect(),
-    });
 
     let materialized_files = {
         let conn =
@@ -1052,6 +1099,7 @@ async fn execute_clone_query_for_real_fixture(
         seed_real_clone_fixture(&conn, &repo_id, &fixture)?
     };
 
+    let mut all_semantic_inputs = Vec::new();
     for file in &materialized_files {
         let pre_stage_artefacts =
             load_pre_stage_artefacts_for_blob(&relational, &repo_id, &file.blob_sha, &file.path)
@@ -1075,17 +1123,39 @@ async fn execute_clone_query_for_real_fixture(
             .into_iter()
             .filter(|input| fixture_artefact_ids.contains(input.artefact_id.as_str()))
             .collect::<Vec<_>>();
-        upsert_semantic_feature_rows(&relational, &semantic_inputs, Arc::clone(&summary_provider))
-            .await
-            .with_context(|| format!("upsert semantic feature rows for {}", file.path))?;
-        upsert_symbol_embedding_rows(
-            &relational,
-            &semantic_inputs,
-            Arc::clone(&embedding_provider),
-        )
-        .await
-        .with_context(|| format!("upsert symbol embedding rows for {}", file.path))?;
+        all_semantic_inputs.extend(semantic_inputs);
     }
+
+    upsert_semantic_feature_rows(
+        &relational,
+        &all_semantic_inputs,
+        Arc::clone(&summary_provider),
+    )
+    .await
+    .context("upsert semantic feature rows for real-path fixture")?;
+    let summary_by_artefact_id = load_persisted_summary_map(
+        &relational,
+        &all_semantic_inputs
+            .iter()
+            .map(|input| input.artefact_id.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .context("load persisted summaries for real-path fixture")?;
+    let embeddings_by_artefact_id = fixture
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.artefact_id.clone(), symbol.embedding.clone()))
+        .collect::<HashMap<_, _>>();
+    let embedding_provider = build_fixture_embedding_provider(
+        &all_semantic_inputs,
+        &summary_by_artefact_id,
+        &embeddings_by_artefact_id,
+    )
+    .context("build fixture embedding provider for real-path fixture")?;
+    upsert_symbol_embedding_rows(&relational, &all_semantic_inputs, embedding_provider)
+        .await
+        .context("upsert symbol embedding rows for real-path fixture")?;
 
     rebuild_symbol_clone_edges(&relational, &repo_id)
         .await
@@ -2276,31 +2346,17 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
 
         let summary_provider: Arc<dyn semantic::SemanticSummaryProvider> =
             Arc::new(FixtureSummaryMapProvider {
-                candidates_by_name: snapshot_one
+                candidates_by_symbol_fqn: snapshot_one
                     .iter()
+                    .chain(snapshot_two.iter())
                     .map(|symbol| {
                         (
-                            clone_symbol_name(&symbol.symbol_fqn),
-                            semantic::SemanticSummaryCandidate {
-                                summary: symbol.summary.clone(),
-                                confidence: 0.88,
-                                source_model: Some("fixture-summary-model".to_string()),
-                            },
+                            symbol.symbol_fqn.clone(),
+                            fixture_summary_candidate(&symbol.summary),
                         )
                     })
                     .collect(),
             });
-        let embedding_provider: Arc<dyn EmbeddingProvider> = Arc::new(FixtureEmbeddingProvider {
-            embeddings_by_name: snapshot_one
-                .iter()
-                .map(|symbol| {
-                    (
-                        clone_symbol_name(&symbol.symbol_fqn),
-                        symbol.embedding.clone(),
-                    )
-                })
-                .collect(),
-        });
 
         {
             let conn = rusqlite::Connection::open(&sqlite_path)
@@ -2322,13 +2378,29 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
             snapshot_one.len(),
             "expected initial stage 1 run to upsert every snapshot one symbol"
         );
-        let initial_stage2_stats = upsert_symbol_embedding_rows(
+        let initial_summary_by_artefact_id = load_persisted_summary_map(
             &relational,
-            &initial_inputs,
-            Arc::clone(&embedding_provider),
+            &initial_inputs
+                .iter()
+                .map(|input| input.artefact_id.clone())
+                .collect::<Vec<_>>(),
         )
         .await
-        .expect("run stage 2 for incremental snapshot one");
+        .expect("load snapshot one persisted summaries");
+        let initial_embeddings_by_artefact_id = snapshot_one
+            .iter()
+            .map(|symbol| (symbol.artefact_id.clone(), symbol.embedding.clone()))
+            .collect::<HashMap<_, _>>();
+        let initial_embedding_provider = build_fixture_embedding_provider(
+            &initial_inputs,
+            &initial_summary_by_artefact_id,
+            &initial_embeddings_by_artefact_id,
+        )
+        .expect("build snapshot one fixture embedding provider");
+        let initial_stage2_stats =
+            upsert_symbol_embedding_rows(&relational, &initial_inputs, initial_embedding_provider)
+                .await
+                .expect("run stage 2 for incremental snapshot one");
         assert_eq!(
             initial_stage2_stats.upserted,
             snapshot_one.len(),
@@ -2363,13 +2435,29 @@ fn when_semantic_clone_incremental_indexing_runs_across_two_snapshots(
         )
         .await
         .expect("run stage 1 for incremental snapshot two");
-        let stage2_stats = upsert_symbol_embedding_rows(
+        let updated_summary_by_artefact_id = load_persisted_summary_map(
             &relational,
-            &updated_inputs,
-            Arc::clone(&embedding_provider),
+            &updated_inputs
+                .iter()
+                .map(|input| input.artefact_id.clone())
+                .collect::<Vec<_>>(),
         )
         .await
-        .expect("run stage 2 for incremental snapshot two");
+        .expect("load snapshot two persisted summaries");
+        let updated_embeddings_by_artefact_id = snapshot_two
+            .iter()
+            .map(|symbol| (symbol.artefact_id.clone(), symbol.embedding.clone()))
+            .collect::<HashMap<_, _>>();
+        let updated_embedding_provider = build_fixture_embedding_provider(
+            &updated_inputs,
+            &updated_summary_by_artefact_id,
+            &updated_embeddings_by_artefact_id,
+        )
+        .expect("build snapshot two fixture embedding provider");
+        let stage2_stats =
+            upsert_symbol_embedding_rows(&relational, &updated_inputs, updated_embedding_provider)
+                .await
+                .expect("run stage 2 for incremental snapshot two");
         rebuild_symbol_clone_edges(&relational, &repo_id)
             .await
             .expect("rebuild clone edges for snapshot two");
