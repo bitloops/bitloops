@@ -503,6 +503,144 @@ pub(super) fn given_devql_sync_validate(
     })
 }
 
+pub(super) fn given_devql_sync_repair(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL sync repair",
+            helpers::run_devql_sync_with_flags(world, &repo_name, &["--repair"]),
+        );
+    })
+}
+
+pub(super) fn given_attempt_devql_sync(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I attempt to run DevQL sync",
+            helpers::attempt_devql_sync(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_add_new_source_file(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I add a new source file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::add_new_rust_source_file(world)),
+        );
+    })
+}
+
+pub(super) fn given_modify_existing_source_file(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I modify an existing source file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::modify_rust_main(world)),
+        );
+    })
+}
+
+pub(super) fn given_delete_a_source_file(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I delete a source file",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::delete_rust_source_file(world)),
+        );
+    })
+}
+
+pub(super) fn given_commit_without_hooks(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I commit changes without hooks",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::commit_without_hooks(world)),
+        );
+    })
+}
+
+pub(super) fn given_stage_without_committing(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I stage the changes without committing",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::stage_changes_without_committing(world)),
+        );
+    })
+}
+
+pub(super) fn given_stop_daemon(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I stop the daemon",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::stop_daemon_for_scenario(world)),
+        );
+    })
+}
+
+pub(super) fn given_simulate_git_pull(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I simulate a git pull with new changes",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::simulate_git_pull_with_changes(world)),
+        );
+    })
+}
+
+pub(super) fn given_create_branch_with_files(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a new branch with additional source files",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::create_branch_with_additional_files(world)),
+        );
+    })
+}
+
 pub(super) fn given_knowledge_add_expect_failure(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

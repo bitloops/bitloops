@@ -173,6 +173,56 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run DevQL sync repair in (\S+)$"),
+            step_fn(given_devql_sync_repair),
+        )
+        .given(
+            None,
+            regex(r"^I attempt to run DevQL sync in (\S+)$"),
+            step_fn(given_attempt_devql_sync),
+        )
+        .given(
+            None,
+            regex(r"^I add a new source file in (\S+)$"),
+            step_fn(given_add_new_source_file),
+        )
+        .given(
+            None,
+            regex(r"^I modify an existing source file in (\S+)$"),
+            step_fn(given_modify_existing_source_file),
+        )
+        .given(
+            None,
+            regex(r"^I delete a source file in (\S+)$"),
+            step_fn(given_delete_a_source_file),
+        )
+        .given(
+            None,
+            regex(r"^I commit changes without hooks in (\S+)$"),
+            step_fn(given_commit_without_hooks),
+        )
+        .given(
+            None,
+            regex(r"^I stage the changes without committing in (\S+)$"),
+            step_fn(given_stage_without_committing),
+        )
+        .given(
+            None,
+            regex(r"^I stop the daemon in (\S+)$"),
+            step_fn(given_stop_daemon),
+        )
+        .given(
+            None,
+            regex(r"^I simulate a git pull with new changes in (\S+)$"),
+            step_fn(given_simulate_git_pull),
+        )
+        .given(
+            None,
+            regex(r"^I create a new branch with additional source files in (\S+)$"),
+            step_fn(given_create_branch_with_files),
+        )
+        .given(
+            None,
             regex(r#"^I add knowledge URL \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_knowledge_add),
         )
@@ -435,5 +485,15 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL sync summary shows (\d+) (added|changed|removed|unchanged|cache hits|cache misses|parse errors) in (\S+)$"),
             step_fn(then_sync_summary_field_exact),
+        )
+        .then(
+            None,
+            regex(r"^the command fails with exit code non-zero in (\S+)$"),
+            step_fn(then_command_fails_nonzero),
+        )
+        .then(
+            None,
+            regex(r#"^the command output contains \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_command_output_contains),
         )
 }

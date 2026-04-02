@@ -772,3 +772,43 @@ pub(super) fn then_sync_summary_field_exact(
         );
     })
 }
+
+pub(super) fn then_command_fails_nonzero(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "command fails with non-zero exit",
+            (|| -> anyhow::Result<()> {
+                let exit_code = world.last_command_exit_code.unwrap_or(0);
+                anyhow::ensure!(
+                    exit_code != 0,
+                    "expected non-zero exit code, got {exit_code}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+pub(super) fn then_command_output_contains(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let text = ctx.matches[1].1.clone();
+        let _repo_name = ctx.matches[2].1.clone();
+        run_step(
+            &format!("command output contains \"{text}\""),
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                anyhow::ensure!(
+                    stdout.contains(&text),
+                    "expected command output to contain \"{text}\"\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}

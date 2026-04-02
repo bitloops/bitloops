@@ -928,6 +928,120 @@ pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<
     ensure_success(&output, "bitloops devql sync")
 }
 
+pub fn run_devql_sync_with_flags(world: &mut QatWorld, repo_name: &str, flags: &[&str]) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let mut args = vec!["devql", "sync"];
+    args.extend_from_slice(flags);
+    let label = format!("bitloops {}", args.join(" "));
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout);
+    ensure_success(&output, &label)
+}
+
+pub fn attempt_devql_sync(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output = run_command_capture(
+        world,
+        "bitloops devql sync (expect failure)",
+        build_bitloops_command(world, &["devql", "sync"])?,
+    )?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    world.last_command_stdout = Some(format!("{stdout}\n{stderr}"));
+    Ok(())
+}
+
+pub fn add_new_rust_source_file(world: &QatWorld) -> Result<()> {
+    let file_path = world.repo_dir().join("src").join("lib.rs");
+    fs::write(
+        &file_path,
+        "pub fn greet(name: &str) -> String {\n    format!(\"Hello, {}!\", name)\n}\n",
+    )
+    .with_context(|| format!("writing {}", file_path.display()))?;
+    Ok(())
+}
+
+pub fn modify_rust_main(world: &QatWorld) -> Result<()> {
+    let file_path = world.repo_dir().join("src").join("main.rs");
+    fs::write(
+        &file_path,
+        "mod lib;\n\nfn main() {\n    println!(\"{}\", lib::greet(\"Bitloops\"));\n}\n",
+    )
+    .with_context(|| format!("writing {}", file_path.display()))?;
+    Ok(())
+}
+
+pub fn delete_rust_source_file(world: &QatWorld) -> Result<()> {
+    let candidates = [
+        world.repo_dir().join("src").join("lib.rs"),
+        world.repo_dir().join("src").join("main.rs"),
+    ];
+    for path in &candidates {
+        if path.exists() {
+            fs::remove_file(path)
+                .with_context(|| format!("deleting {}", path.display()))?;
+            return Ok(());
+        }
+    }
+    bail!("no known Rust source file found to delete")
+}
+
+pub fn commit_without_hooks(world: &mut QatWorld) -> Result<()> {
+    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    let diff_output = run_command_capture(
+        world,
+        "git diff --cached --quiet",
+        build_git_command(world.repo_dir(), &["diff", "--cached", "--quiet"], &[]),
+    )?;
+    let diff_code = diff_output.status.code().unwrap_or_default();
+    let mut args = vec!["commit", "-m", "QAT change (no hooks)"];
+    if diff_code == 0 {
+        args.insert(1, "--allow-empty");
+    }
+    run_git_success(world, &args, &[], "git commit (no hooks)")?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn stage_changes_without_committing(world: &QatWorld) -> Result<()> {
+    let output = run_command_capture(
+        world,
+        "git add -A (stage only)",
+        build_git_command(world.repo_dir(), &["add", "-A"], &[]),
+    )?;
+    ensure_success(&output, "git add -A (stage only)")
+}
+
+pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
+    run_git_success(world, &["checkout", "-b", "qat-remote-changes"], &[], "git checkout -b qat-remote-changes")?;
+    let file_path = world.repo_dir().join("src").join("utils.rs");
+    fs::write(
+        &file_path,
+        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+    )
+    .with_context(|| format!("writing {}", file_path.display()))?;
+    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    run_git_success(world, &["commit", "-m", "feat: add utils module from remote"], &[], "git commit utils")?;
+    run_git_success(world, &["checkout", "-"], &[], "git checkout previous branch")?;
+    run_git_success(world, &["merge", "qat-remote-changes", "--no-ff", "-m", "Merge remote changes"], &[], "git merge remote changes")?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn create_branch_with_additional_files(world: &mut QatWorld) -> Result<()> {
+    run_git_success(world, &["checkout", "-b", "qat-feature-branch"], &[], "git checkout -b qat-feature-branch")?;
+    let file_path = world.repo_dir().join("src").join("config.rs");
+    fs::write(
+        &file_path,
+        "pub const APP_NAME: &str = \"qat-sample\";\npub const VERSION: &str = \"0.1.0\";\n",
+    )
+    .with_context(|| format!("writing {}", file_path.display()))?;
+    Ok(())
+}
+
 pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
@@ -944,11 +1058,11 @@ pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -
 /// Parse a numeric field from the sync summary output.
 /// Format: "sync complete: 5 added, 0 changed, 0 removed, 3 unchanged, 3 cache hits (1 cache misses, 0 parse errors)"
 pub fn parse_sync_summary_field(stdout: &str, field: &str) -> Option<usize> {
-    // Scan each comma/paren-delimited segment for "N <field>" pattern
     for segment in stdout.split([',', '(', ')']) {
         let trimmed = segment.trim();
         if let Some(rest) = trimmed.strip_suffix(field) {
-            if let Ok(value) = rest.trim().trim_end_matches(':').trim().parse::<usize>() {
+            let number_str = rest.trim().rsplit(' ').next().unwrap_or("").trim_end_matches(':');
+            if let Ok(value) = number_str.parse::<usize>() {
                 return Some(value);
             }
         }
