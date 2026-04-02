@@ -5,7 +5,8 @@ use std::path::Path;
 
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::{
-    IngestionCounters, InitSchemaSummary, format_ingestion_summary, format_init_schema_summary,
+    IngestionCounters, InitSchemaSummary, SyncSummary, SyncValidationFileDrift,
+    SyncValidationSummary, format_ingestion_summary, format_init_schema_summary,
 };
 use crate::{api::DashboardServerConfig, daemon};
 
@@ -53,6 +54,49 @@ const INGEST_MUTATION: &str = r#"
     }
 "#;
 
+const SYNC_MUTATION: &str = r#"
+    mutation Sync($input: SyncInput!) {
+      sync(input: $input) {
+        success
+        mode
+        parserVersion
+        extractorVersion
+        activeBranch
+        headCommitSha
+        headTreeSha
+        pathsUnchanged
+        pathsAdded
+        pathsChanged
+        pathsRemoved
+        cacheHits
+        cacheMisses
+        parseErrors
+        validation {
+          valid
+          expectedArtefacts
+          actualArtefacts
+          expectedEdges
+          actualEdges
+          missingArtefacts
+          staleArtefacts
+          mismatchedArtefacts
+          missingEdges
+          staleEdges
+          mismatchedEdges
+          filesWithDrift {
+            path
+            missingArtefacts
+            staleArtefacts
+            mismatchedArtefacts
+            missingEdges
+            staleEdges
+            mismatchedEdges
+          }
+        }
+      }
+    }
+"#;
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InitSchemaMutationData {
@@ -63,6 +107,108 @@ struct InitSchemaMutationData {
 #[serde(rename_all = "camelCase")]
 struct IngestMutationData {
     ingest: IngestionCounters,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncMutationData {
+    sync: SyncMutationResult,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncMutationResult {
+    success: bool,
+    mode: String,
+    parser_version: String,
+    extractor_version: String,
+    active_branch: Option<String>,
+    head_commit_sha: Option<String>,
+    head_tree_sha: Option<String>,
+    paths_unchanged: usize,
+    paths_added: usize,
+    paths_changed: usize,
+    paths_removed: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    parse_errors: usize,
+    validation: Option<SyncValidationMutationResult>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncValidationMutationResult {
+    valid: bool,
+    expected_artefacts: usize,
+    actual_artefacts: usize,
+    expected_edges: usize,
+    actual_edges: usize,
+    missing_artefacts: usize,
+    stale_artefacts: usize,
+    mismatched_artefacts: usize,
+    missing_edges: usize,
+    stale_edges: usize,
+    mismatched_edges: usize,
+    files_with_drift: Vec<SyncValidationFileDriftMutationResult>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncValidationFileDriftMutationResult {
+    path: String,
+    missing_artefacts: usize,
+    stale_artefacts: usize,
+    mismatched_artefacts: usize,
+    missing_edges: usize,
+    stale_edges: usize,
+    mismatched_edges: usize,
+}
+
+impl From<SyncMutationResult> for SyncSummary {
+    fn from(value: SyncMutationResult) -> Self {
+        Self {
+            success: value.success,
+            mode: value.mode,
+            parser_version: value.parser_version,
+            extractor_version: value.extractor_version,
+            active_branch: value.active_branch,
+            head_commit_sha: value.head_commit_sha,
+            head_tree_sha: value.head_tree_sha,
+            paths_unchanged: value.paths_unchanged,
+            paths_added: value.paths_added,
+            paths_changed: value.paths_changed,
+            paths_removed: value.paths_removed,
+            cache_hits: value.cache_hits,
+            cache_misses: value.cache_misses,
+            parse_errors: value.parse_errors,
+            validation: value.validation.map(|validation| SyncValidationSummary {
+                valid: validation.valid,
+                expected_artefacts: validation.expected_artefacts,
+                actual_artefacts: validation.actual_artefacts,
+                expected_edges: validation.expected_edges,
+                actual_edges: validation.actual_edges,
+                missing_artefacts: validation.missing_artefacts,
+                stale_artefacts: validation.stale_artefacts,
+                mismatched_artefacts: validation.mismatched_artefacts,
+                missing_edges: validation.missing_edges,
+                stale_edges: validation.stale_edges,
+                mismatched_edges: validation.mismatched_edges,
+                files_with_drift: validation
+                    .files_with_drift
+                    .into_iter()
+                    .map(|file| SyncValidationFileDrift {
+                        path: file.path,
+                        missing_artefacts: file.missing_artefacts,
+                        stale_artefacts: file.stale_artefacts,
+                        mismatched_artefacts: file.mismatched_artefacts,
+                        missing_edges: file.missing_edges,
+                        stale_edges: file.stale_edges,
+                        mismatched_edges: file.mismatched_edges,
+                    })
+                    .collect(),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +260,30 @@ pub(super) async fn run_ingest_via_graphql(
     .await?;
     println!("{}", format_ingestion_summary(&response.ingest));
     Ok(())
+}
+
+pub(super) async fn run_sync_via_graphql(
+    scope: &SlimCliRepoScope,
+    full: bool,
+    paths: Option<Vec<String>>,
+    repair: bool,
+    validate: bool,
+) -> Result<SyncSummary> {
+    ensure_daemon_available_for_ingest(scope.repo_root.as_path()).await?;
+    let response: SyncMutationData = execute_devql_graphql(
+        scope,
+        SYNC_MUTATION,
+        json!({
+            "input": {
+                "full": full,
+                "paths": paths,
+                "repair": repair,
+                "validate": validate,
+            }
+        }),
+    )
+    .await?;
+    Ok(response.sync.into())
 }
 
 async fn ensure_daemon_available_for_ingest(_repo_root: &Path) -> Result<()> {

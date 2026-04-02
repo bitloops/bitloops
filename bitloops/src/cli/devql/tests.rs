@@ -808,6 +808,193 @@ embedding_mode = "off"
 }
 
 #[test]
+fn devql_run_sync_executes_graphql_mutation() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "sync": {
+                                "success": true,
+                                "mode": "full",
+                                "parserVersion": "parser@1",
+                                "extractorVersion": "extractor@1",
+                                "activeBranch": "main",
+                                "headCommitSha": "abc123",
+                                "headTreeSha": "def456",
+                                "pathsUnchanged": 4,
+                                "pathsAdded": 1,
+                                "pathsChanged": 2,
+                                "pathsRemoved": 0,
+                                "cacheHits": 3,
+                                "cacheMisses": 1,
+                                "parseErrors": 0,
+                                "validation": null
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: true,
+                                paths: None,
+                                repair: false,
+                                validate: false,
+                            })),
+                        }))
+                        .expect("devql sync should succeed");
+                },
+            );
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("sync"), "expected sync mutation in query");
+    assert_eq!(variables["input"]["full"], json!(true));
+}
+
+#[test]
+fn devql_run_sync_passes_paths_to_graphql_mutation() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        |_repo_root: &std::path::Path| Ok(()),
+        || {
+            with_graphql_executor_hook(
+                {
+                    let captured = Rc::clone(&captured);
+                    move |_repo_root: &std::path::Path,
+                          query: &str,
+                          variables: &serde_json::Value| {
+                        *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                        Ok(json!({
+                            "sync": {
+                                "success": true,
+                                "mode": "paths",
+                                "parserVersion": "parser@1",
+                                "extractorVersion": "extractor@1",
+                                "activeBranch": "main",
+                                "headCommitSha": "abc123",
+                                "headTreeSha": "def456",
+                                "pathsUnchanged": 0,
+                                "pathsAdded": 0,
+                                "pathsChanged": 1,
+                                "pathsRemoved": 0,
+                                "cacheHits": 0,
+                                "cacheMisses": 1,
+                                "parseErrors": 0,
+                                "validation": null
+                            }
+                        }))
+                    }
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: false,
+                                paths: Some(vec![
+                                    "src/lib.rs".to_string(),
+                                    "src/main.rs".to_string(),
+                                ]),
+                                repair: false,
+                                validate: false,
+                            })),
+                        }))
+                        .expect("devql sync with paths should succeed");
+                },
+            );
+        },
+    );
+
+    let (_query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert_eq!(
+        variables["input"]["paths"],
+        json!(["src/lib.rs", "src/main.rs"])
+    );
+}
+
+#[test]
+fn devql_run_sync_ensures_daemon_available() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let bootstrap_count = Rc::new(RefCell::new(0usize));
+
+    super::graphql::with_ingest_daemon_bootstrap_hook(
+        {
+            let bootstrap_count = Rc::clone(&bootstrap_count);
+            move |_repo_root: &std::path::Path| {
+                *bootstrap_count.borrow_mut() += 1;
+                Ok(())
+            }
+        },
+        || {
+            with_graphql_executor_hook(
+                |_repo_root: &std::path::Path, _query: &str, _variables: &serde_json::Value| {
+                    Ok(json!({
+                        "sync": {
+                            "success": true,
+                            "mode": "full",
+                            "parserVersion": "p@1",
+                            "extractorVersion": "e@1",
+                            "activeBranch": null,
+                            "headCommitSha": null,
+                            "headTreeSha": null,
+                            "pathsUnchanged": 0,
+                            "pathsAdded": 0,
+                            "pathsChanged": 0,
+                            "pathsRemoved": 0,
+                            "cacheHits": 0,
+                            "cacheMisses": 0,
+                            "parseErrors": 0,
+                            "validation": null
+                        }
+                    }))
+                },
+                || {
+                    test_runtime()
+                        .block_on(run(DevqlArgs {
+                            command: Some(DevqlCommand::Sync(DevqlSyncArgs {
+                                full: false,
+                                paths: None,
+                                repair: false,
+                                validate: false,
+                            })),
+                        }))
+                        .expect("devql sync should succeed");
+                },
+            );
+        },
+    );
+
+    assert_eq!(
+        *bootstrap_count.borrow(),
+        1,
+        "daemon bootstrap should be called once"
+    );
+}
+
+#[test]
 fn devql_run_projection_checkpoint_file_snapshots_succeeds_for_empty_repo() {
     let repo = seed_devql_cli_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);
