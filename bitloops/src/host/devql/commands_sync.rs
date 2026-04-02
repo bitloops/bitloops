@@ -217,6 +217,9 @@ async fn execute_sync_inner(
         {
             Some(cached) => {
                 counters.cache_hits += 1;
+                if cached.parse_status == sync::extraction::PARSE_STATUS_PARSE_ERROR {
+                    counters.parse_errors += 1;
+                }
                 if determine_retention_class(&desired) == "git_backed" {
                     sync::content_cache::promote_to_git_backed(
                         relational,
@@ -239,19 +242,23 @@ async fn execute_sync_inner(
                 counters.cache_misses += 1;
                 let content = read_effective_content(cfg, &desired)
                     .with_context(|| format!("reading effective content for `{}`", desired.path))?;
-                let Some(extraction) = sync::extraction::extract_to_cache_format(
-                    cfg,
-                    &desired.path,
-                    &desired.effective_content_id,
+                let extraction = extraction_or_parse_error(
+                    sync::extraction::extract_to_cache_format(
+                        cfg,
+                        &desired.path,
+                        &desired.effective_content_id,
+                        parser_version,
+                        extractor_version,
+                        &content,
+                    )
+                    .with_context(|| {
+                        format!("extracting `{}` into sync cache format", desired.path)
+                    })?,
+                    &mut counters,
+                    &desired,
                     parser_version,
                     extractor_version,
-                    &content,
-                )
-                .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
-                else {
-                    counters.parse_errors += 1;
-                    continue;
-                };
+                );
 
                 sync::content_cache::store_cached_content(
                     relational,
@@ -726,6 +733,27 @@ fn determine_retention_class(desired: &sync::types::DesiredFileState) -> &'stati
     }
 }
 
+fn extraction_or_parse_error(
+    extraction: Option<sync::content_cache::CachedExtraction>,
+    counters: &mut sync::types::SyncCounters,
+    desired: &sync::types::DesiredFileState,
+    parser_version: &str,
+    extractor_version: &str,
+) -> sync::content_cache::CachedExtraction {
+    match extraction {
+        Some(extraction) => extraction,
+        None => {
+            counters.parse_errors += 1;
+            sync::extraction::parse_error_to_cache_format(
+                &desired.effective_content_id,
+                &desired.language,
+                parser_version,
+                extractor_version,
+            )
+        }
+    }
+}
+
 fn is_missing_sync_schema_error(err: &anyhow::Error) -> bool {
     // Temporary safeguard while daemon-start schema bootstrap rolls out across workflows.
     // Keep this fallback so sync can still emit a direct remediation hint on legacy setups.
@@ -749,6 +777,21 @@ fn is_missing_sync_schema_error(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn desired_state_for_tests() -> sync::types::DesiredFileState {
+        sync::types::DesiredFileState {
+            path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            head_content_id: Some("head".to_string()),
+            index_content_id: Some("index".to_string()),
+            worktree_content_id: Some("worktree".to_string()),
+            effective_content_id: "effective".to_string(),
+            effective_source: sync::types::EffectiveSource::Worktree,
+            exists_in_head: true,
+            exists_in_index: true,
+            exists_in_worktree: true,
+        }
+    }
 
     #[test]
     fn sync_reason_maps_auto_to_full() {
@@ -860,5 +903,50 @@ mod tests {
             Some(1)
         );
         assert_eq!(diff.by_path.get("src/main.rs").map(|d| d.stale), Some(1));
+    }
+
+    #[test]
+    fn extraction_or_parse_error_maps_none_to_parse_error_payload() {
+        let mut counters = sync::types::SyncCounters::default();
+        let desired = desired_state_for_tests();
+
+        let extraction =
+            extraction_or_parse_error(None, &mut counters, &desired, "parser-v1", "extractor-v1");
+
+        assert_eq!(counters.parse_errors, 1);
+        assert_eq!(
+            extraction.parse_status,
+            sync::extraction::PARSE_STATUS_PARSE_ERROR
+        );
+        assert_eq!(extraction.content_id, desired.effective_content_id);
+        assert_eq!(extraction.language, desired.language);
+        assert!(extraction.artefacts.is_empty());
+        assert!(extraction.edges.is_empty());
+    }
+
+    #[test]
+    fn extraction_or_parse_error_preserves_success_payload_without_incrementing_errors() {
+        let mut counters = sync::types::SyncCounters::default();
+        let desired = desired_state_for_tests();
+        let expected = sync::content_cache::CachedExtraction {
+            content_id: desired.effective_content_id.clone(),
+            language: desired.language.clone(),
+            parser_version: "parser-v1".to_string(),
+            extractor_version: "extractor-v1".to_string(),
+            parse_status: sync::extraction::PARSE_STATUS_OK.to_string(),
+            artefacts: vec![],
+            edges: vec![],
+        };
+
+        let extraction = extraction_or_parse_error(
+            Some(expected.clone()),
+            &mut counters,
+            &desired,
+            "parser-v1",
+            "extractor-v1",
+        );
+
+        assert_eq!(counters.parse_errors, 0);
+        assert_eq!(extraction, expected);
     }
 }

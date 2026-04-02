@@ -520,7 +520,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             language: "rust".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
-            parse_status: "parsed".to_string(),
+            parse_status: "ok".to_string(),
             artefacts: vec![],
             edges: vec![],
         };
@@ -561,7 +561,7 @@ WHERE content_id = '{}' AND language = 'rust' AND parser_version = 'parser-v1' A
             language: "rust".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
-            parse_status: "parsed".to_string(),
+            parse_status: "ok".to_string(),
             artefacts: vec![
                 CachedArtefact {
                     artifact_key: "file::src/lib.rs".to_string(),

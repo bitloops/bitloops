@@ -807,7 +807,7 @@ async fn content_cache_store_then_lookup_roundtrips_payload() {
         language: "rust".to_string(),
         parser_version: "parser-v1".to_string(),
         extractor_version: "extractor-v1".to_string(),
-        parse_status: "parsed".to_string(),
+        parse_status: "ok".to_string(),
         artefacts: vec![crate::host::devql::sync::content_cache::CachedArtefact {
             artifact_key: "file::src/lib.rs".to_string(),
             canonical_kind: Some("file".to_string()),
@@ -867,7 +867,7 @@ async fn content_cache_lookup_respects_parser_and_extractor_versions() {
         language: "rust".to_string(),
         parser_version: "parser-a".to_string(),
         extractor_version: "extractor-a".to_string(),
-        parse_status: "parsed".to_string(),
+        parse_status: "ok".to_string(),
         artefacts: vec![crate::host::devql::sync::content_cache::CachedArtefact {
             artifact_key: "fn::demo".to_string(),
             canonical_kind: Some("function".to_string()),
@@ -948,7 +948,7 @@ function localHelper(): number {
     assert_eq!(extraction.language, "typescript");
     assert_eq!(extraction.parser_version, "tree-sitter-ts@1");
     assert_eq!(extraction.extractor_version, "ts-language-pack@1");
-    assert_eq!(extraction.parse_status, "parsed");
+    assert_eq!(extraction.parse_status, "ok");
 
     let repeated = crate::host::devql::sync::extraction::extract_to_cache_format(
         &cfg,
@@ -2164,6 +2164,112 @@ async fn dirty_then_commit_unchanged_is_cache_hit() {
         )
         .expect("read content_cache retention class");
     assert_eq!(retention_class, "git_backed");
+}
+
+#[tokio::test]
+async fn cached_parse_error_hit_updates_manifest_and_clears_materialized_rows() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let path = "src/lib.rs";
+    let broken_content = "fn broken( {\n";
+
+    let baseline = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let baseline_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| row.get(0),
+        )
+        .expect("count baseline rows for parse-error path");
+    assert!(
+        baseline_rows > 0,
+        "baseline sync should materialize at least one row for parse-error path"
+    );
+
+    fs::write(repo.path().join(path), broken_content).expect("write broken source content");
+    let broken_content_id =
+        crate::host::devql::sync::content_identity::compute_blob_oid(broken_content.as_bytes());
+    let parse_error_payload = crate::host::devql::sync::content_cache::CachedExtraction {
+        content_id: broken_content_id.clone(),
+        language: "rust".to_string(),
+        parser_version: baseline.parser_version.clone(),
+        extractor_version: baseline.extractor_version.clone(),
+        parse_status: crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR.to_string(),
+        artefacts: vec![],
+        edges: vec![],
+    };
+    crate::host::devql::sync::content_cache::store_cached_content(
+        &relational,
+        &parse_error_payload,
+        "worktree_only",
+    )
+    .await
+    .expect("store parse-error cache payload");
+
+    let summary = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync with cached parse-error payload");
+
+    assert_eq!(summary.paths_changed, 1);
+    assert_eq!(summary.cache_hits, 1);
+    assert_eq!(summary.cache_misses, 0);
+    assert_eq!(summary.parse_errors, 1);
+
+    let rows_after: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| row.get(0),
+        )
+        .expect("count rows after parse-error materialization");
+    assert_eq!(
+        rows_after, 0,
+        "parse-error payload should clear materialized rows for the path"
+    );
+
+    let current_state: (String, String) = db
+        .query_row(
+            "SELECT effective_content_id, effective_source \
+             FROM current_file_state \
+             WHERE repo_id = ?1 AND path = ?2",
+            [cfg.repo.repo_id.as_str(), path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read current_file_state after parse-error sync");
+    assert_eq!(current_state.0, broken_content_id);
+    assert_eq!(current_state.1, "worktree");
+
+    let parse_status: String = db
+        .query_row(
+            "SELECT parse_status FROM content_cache \
+             WHERE content_id = ?1 AND language = ?2 AND parser_version = ?3 AND extractor_version = ?4",
+            [
+                current_state.0.as_str(),
+                "rust",
+                summary.parser_version.as_str(),
+                summary.extractor_version.as_str(),
+            ],
+            |row| row.get(0),
+        )
+        .expect("read parse_status for parse-error cache row");
+    assert_eq!(
+        parse_status,
+        crate::host::devql::sync::extraction::PARSE_STATUS_PARSE_ERROR
+    );
 }
 
 #[tokio::test]
