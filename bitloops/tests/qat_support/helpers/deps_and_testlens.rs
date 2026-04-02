@@ -48,6 +48,26 @@ pub fn create_ts_project_with_known_deps(repo_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn create_simple_rust_project(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let repo_dir = world.repo_dir();
+    fs::create_dir_all(repo_dir.join("src"))
+        .with_context(|| format!("creating {}", repo_dir.join("src").display()))?;
+
+    fs::write(
+        repo_dir.join("Cargo.toml"),
+        "[package]\nname = \"qat-sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .context("writing Cargo.toml")?;
+    fs::write(repo_dir.join(".gitignore"), "target/\n").context("writing .gitignore")?;
+    fs::write(
+        repo_dir.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello, world!\");\n}\n",
+    )
+    .context("writing src/main.rs")?;
+    Ok(())
+}
+
 pub fn create_rust_project_with_tests(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let repo_dir = world.repo_dir();

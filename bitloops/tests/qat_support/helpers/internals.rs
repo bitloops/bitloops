@@ -262,6 +262,23 @@ fn fallback_knowledge_versions_count(world: &QatWorld, knowledge_ref: &str) -> u
         .unwrap_or(1)
 }
 
+/// Parse a key=value field from sync validation output.
+/// Format: "artefacts: expected=2 actual=0 missing=2 stale=0 mismatched=0"
+pub fn parse_validation_field(stdout: &str, field: &str) -> Option<usize> {
+    let needle = format!("{field}=");
+    for line in stdout.lines() {
+        if let Some(pos) = line.find(&needle) {
+            let after = &line[pos + needle.len()..];
+            let raw = after
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .filter(|v| !v.is_empty())?;
+            return raw.parse::<usize>().ok();
+        }
+    }
+    None
+}
+
 fn extract_ingest_metric(stdout: &str, key: &str) -> Option<u64> {
     let suffix = stdout.split(key).nth(1)?;
     let raw = suffix

@@ -158,6 +158,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a simple Rust project in (\S+)$"),
+            step_fn(given_create_simple_rust_project),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL sync in (\S+)$"),
+            step_fn(given_devql_sync),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL sync validate in (\S+)$"),
+            step_fn(given_devql_sync_validate),
+        )
+        .given(
+            None,
             regex(r#"^I add knowledge URL \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_knowledge_add),
         )
@@ -395,5 +410,30 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r#"^knowledge versions for \"([^\"]+)\" shows exactly (\d+) versions? in (\S+)$"#),
             step_fn(then_knowledge_versions_count),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync validation reports clean in (\S+)$"),
+            step_fn(then_sync_validation_clean),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync validation reports drift in (\S+)$"),
+            step_fn(then_sync_validation_drift),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync validation shows expected greater than (\d+) in (\S+)$"),
+            step_fn(then_sync_validation_expected_greater_than),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync summary shows (added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) in (\S+)$"),
+            step_fn(then_sync_summary_field_greater_than),
+        )
+        .then(
+            None,
+            regex(r"^DevQL sync summary shows (\d+) (added|changed|removed|unchanged|cache hits|cache misses|parse errors) in (\S+)$"),
+            step_fn(then_sync_summary_field_exact),
         )
 }

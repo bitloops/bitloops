@@ -464,6 +464,45 @@ pub(super) fn given_knowledge_refresh(
     })
 }
 
+pub(super) fn given_devql_sync(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL sync",
+            helpers::run_devql_sync_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_create_simple_rust_project(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a simple Rust project",
+            helpers::create_simple_rust_project(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_devql_sync_validate(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL sync validate",
+            helpers::run_devql_sync_validate_for_repo(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_knowledge_add_expect_failure(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

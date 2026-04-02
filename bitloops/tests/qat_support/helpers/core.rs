@@ -913,6 +913,49 @@ pub fn run_second_change_using_claude_code_for_repo(
     run_claude_code_prompt(world, SECOND_CLAUDE_PROMPT)
 }
 
+// ── DevQL sync helpers ───────────────────────────────────────
+
+pub fn run_devql_sync_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output = run_command_capture(
+        world,
+        "bitloops devql sync",
+        build_bitloops_command(world, &["devql", "sync"])?,
+    )?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout);
+    ensure_success(&output, "bitloops devql sync")
+}
+
+pub fn run_devql_sync_validate_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output = run_command_capture(
+        world,
+        "bitloops devql sync --validate",
+        build_bitloops_command(world, &["devql", "sync", "--validate"])?,
+    )?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    world.last_command_stdout = Some(stdout);
+    ensure_success(&output, "bitloops devql sync --validate")
+}
+
+/// Parse a numeric field from the sync summary output.
+/// Format: "sync complete: 5 added, 0 changed, 0 removed, 3 unchanged, 3 cache hits (1 cache misses, 0 parse errors)"
+pub fn parse_sync_summary_field(stdout: &str, field: &str) -> Option<usize> {
+    // Scan each comma/paren-delimited segment for "N <field>" pattern
+    for segment in stdout.split([',', '(', ')']) {
+        let trimmed = segment.trim();
+        if let Some(rest) = trimmed.strip_suffix(field) {
+            if let Ok(value) = rest.trim().trim_end_matches(':').trim().parse::<usize>() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 pub fn commit_for_relative_day_for_repo(
     world: &mut QatWorld,
     repo_name: &str,

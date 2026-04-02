@@ -37,6 +37,15 @@ async fn qat_devql() {
 }
 
 #[tokio::test]
+#[ignore = "slow E2E: runs QAT DevQL sync suite; use `cargo qat-devql-sync`"]
+async fn qat_devql_sync() {
+    let binary = resolve_binary();
+    runner::run_suite(binary, Suite::DevqlSync)
+        .await
+        .expect("QAT DevQL sync suite failed");
+}
+
+#[tokio::test]
 #[ignore = "slow E2E: runs QAT Claude Code suite; use `cargo test --test qat_acceptance qat_claude_code -- --ignored`"]
 async fn qat_claude_code() {
     let binary = resolve_binary();

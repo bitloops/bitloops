@@ -653,3 +653,122 @@ pub(super) fn then_knowledge_versions_count(
         );
     })
 }
+
+// ── DevQL sync validation assertions ─────────────────────────
+
+pub(super) fn then_sync_validation_clean(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "DevQL sync validation reports clean",
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                anyhow::ensure!(
+                    stdout.contains("sync validation: clean"),
+                    "expected sync validation to report clean\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+pub(super) fn then_sync_validation_drift(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "DevQL sync validation reports drift",
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                anyhow::ensure!(
+                    stdout.contains("sync validation: drift detected"),
+                    "expected sync validation to report drift detected\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+pub(super) fn then_sync_validation_expected_greater_than(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let min: usize = ctx.matches[1]
+            .1
+            .parse()
+            .expect("parse min for validation expected");
+        let _repo_name = ctx.matches[2].1.clone();
+        run_step(
+            &format!("DevQL sync validation expected > {min}"),
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                let expected = helpers::parse_validation_field(stdout, "expected").unwrap_or(0);
+                anyhow::ensure!(
+                    expected > min,
+                    "expected validation expected > {min}, got {expected}\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+// ── DevQL sync/ingest summary assertions ─────────────────────
+
+pub(super) fn then_sync_summary_field_greater_than(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let field = ctx.matches[1].1.clone();
+        let min: usize = ctx.matches[2]
+            .1
+            .parse()
+            .expect("parse min count for sync summary");
+        let _repo_name = ctx.matches[3].1.clone();
+        run_step(
+            &format!("DevQL sync summary `{field}` > {min}"),
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                let value = helpers::parse_sync_summary_field(stdout, &field).unwrap_or(0);
+                anyhow::ensure!(
+                    value > min,
+                    "expected sync summary `{field}` > {min}, got {value}\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}
+
+pub(super) fn then_sync_summary_field_exact(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected: usize = ctx.matches[1]
+            .1
+            .parse()
+            .expect("parse expected count for sync summary");
+        let field = ctx.matches[2].1.clone();
+        let _repo_name = ctx.matches[3].1.clone();
+        run_step(
+            &format!("DevQL sync summary `{field}` == {expected}"),
+            (|| -> anyhow::Result<()> {
+                let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+                let value = helpers::parse_sync_summary_field(stdout, &field).unwrap_or(0);
+                anyhow::ensure!(
+                    value == expected,
+                    "expected sync summary `{field}` == {expected}, got {value}\nstdout: {stdout}"
+                );
+                Ok(())
+            })(),
+        );
+    })
+}

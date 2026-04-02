@@ -10,6 +10,7 @@ test-coverage-lcov = "llvm-cov --workspace --no-default-features --all-targets -
 qat = "test --test qat_acceptance -- --ignored"
 qat-smoke = "test --test qat_acceptance qat_smoke -- --ignored"
 qat-devql = "test --test qat_acceptance qat_devql -- --ignored"
+qat-devql-sync = "test --test qat_acceptance qat_devql_sync -- --ignored"
 qat-claude = "test --test qat_acceptance qat_claude_code -- --ignored"
 qat-onboarding = "test --test qat_acceptance qat_onboarding -- --ignored"
 qat-quickstart = "test --test qat_acceptance qat_quickstart -- --ignored"
