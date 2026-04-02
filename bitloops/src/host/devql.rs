@@ -572,6 +572,28 @@ async fn initialise_devql_schema_for_command(
     ))
 }
 
+/// Ensures all DevQL relational and events schemas are up to date.
+/// Idempotent and safe to call on every daemon start.
+pub async fn ensure_relational_and_events_schema(
+    config_root: &Path,
+    repo_root: &Path,
+    repo: RepoIdentity,
+) -> Result<()> {
+    let backends = resolve_store_backend_config_for_repo(config_root)
+        .context("resolving DevQL backend config for schema bootstrap")?;
+    let cfg = DevqlConfig::from_roots(config_root.to_path_buf(), repo_root.to_path_buf(), repo)?;
+    let relational =
+        RelationalStorage::connect(&cfg, &backends.relational, "daemon schema bootstrap").await?;
+
+    if backends.events.has_clickhouse() {
+        init_clickhouse_schema(&cfg).await?;
+    } else {
+        init_duckdb_schema(repo_root, &backends.events).await?;
+    }
+    init_relational_schema(&cfg, &relational).await?;
+    Ok(())
+}
+
 pub(crate) async fn execute_init_schema(
     cfg: &DevqlConfig,
     command: &str,

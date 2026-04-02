@@ -6,7 +6,6 @@ use crate::host::checkpoints::strategy::manual_commit::CommittedInfo;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IngestionCounters {
     pub(crate) success: bool,
-    pub(crate) init_requested: bool,
     pub(crate) checkpoints_processed: usize,
     pub(crate) events_inserted: usize,
     pub(crate) artefacts_upserted: usize,

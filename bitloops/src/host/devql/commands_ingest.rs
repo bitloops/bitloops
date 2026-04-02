@@ -1,31 +1,26 @@
 use super::*;
 use crate::config::{SemanticCloneEmbeddingMode, SemanticSummaryMode};
 
-pub async fn run_ingest(cfg: &DevqlConfig, init: bool, max_checkpoints: usize) -> Result<()> {
-    let summary = execute_ingest(cfg, init, max_checkpoints).await?;
+pub async fn run_ingest(cfg: &DevqlConfig, max_checkpoints: usize) -> Result<()> {
+    let summary = execute_ingest(cfg, max_checkpoints).await?;
     println!("{}", format_ingestion_summary(&summary));
     Ok(())
 }
 
 pub(crate) async fn execute_ingest(
     cfg: &DevqlConfig,
-    init: bool,
     max_checkpoints: usize,
 ) -> Result<IngestionCounters> {
-    execute_ingest_with_observer(cfg, init, max_checkpoints, None, None).await
+    execute_ingest_with_observer(cfg, max_checkpoints, None, None).await
 }
 
 pub(crate) async fn execute_ingest_with_observer(
     cfg: &DevqlConfig,
-    init: bool,
     max_checkpoints: usize,
     observer: Option<&dyn IngestionObserver>,
     enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
 ) -> Result<IngestionCounters> {
-    let mut counters = IngestionCounters {
-        init_requested: init,
-        ..IngestionCounters::default()
-    };
+    let mut counters = IngestionCounters::default();
     let mut checkpoints_total = 0usize;
     let mut checkpoints_processed = 0usize;
     emit_progress(
@@ -85,15 +80,6 @@ pub(crate) async fn execute_ingest_with_observer(
     } else {
         None
     };
-    if init {
-        if backends.events.has_clickhouse() {
-            init_clickhouse_schema(cfg).await?;
-        } else {
-            init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
-        }
-        init_relational_schema(cfg, &relational).await?;
-    }
-
     ensure_repository_row(cfg, &relational).await?;
 
     let mut checkpoints = list_committed(&cfg.repo_root)?;
