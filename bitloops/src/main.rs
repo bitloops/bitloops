@@ -164,7 +164,9 @@ mod tests {
         fs::write(config_path, toml).expect("write config");
     }
 
-    fn enter_isolated_platform_dirs(home_root: &Path) -> crate::test_support::process_state::ProcessStateGuard {
+    fn enter_isolated_platform_dirs(
+        home_root: &Path,
+    ) -> crate::test_support::process_state::ProcessStateGuard {
         let xdg_config_home = home_root.join(".config").display().to_string();
         let app_data = home_root
             .join("AppData")
