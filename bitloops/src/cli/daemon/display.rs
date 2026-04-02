@@ -18,6 +18,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(sync) = report.sync.as_ref() {
+            append_sync_lines(&mut lines, sync);
+        }
         return lines;
     }
 
@@ -44,6 +47,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
         if let Some(enrichment) = report.enrichment.as_ref() {
             append_enrichment_lines(&mut lines, enrichment);
         }
+        if let Some(sync) = report.sync.as_ref() {
+            append_sync_lines(&mut lines, sync);
+        }
         return lines;
     }
 
@@ -52,6 +58,9 @@ pub(super) fn status_lines(report: &daemon::DaemonStatusReport) -> Vec<String> {
     lines.push(format!("Log file: {}", log_path.display()));
     if let Some(enrichment) = report.enrichment.as_ref() {
         append_enrichment_lines(&mut lines, enrichment);
+    }
+    if let Some(sync) = report.sync.as_ref() {
+        append_sync_lines(&mut lines, sync);
     }
     lines
 }
@@ -179,6 +188,54 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     }
     lines.push(format!(
         "Enrichment persisted: {}",
+        if status.persisted { "yes" } else { "no" }
+    ));
+}
+
+fn append_sync_lines(lines: &mut Vec<String>, status: &daemon::SyncQueueStatus) {
+    lines.push(format!("Sync pending tasks: {}", status.state.pending_tasks));
+    lines.push(format!("Sync running tasks: {}", status.state.running_tasks));
+    lines.push(format!("Sync failed tasks: {}", status.state.failed_tasks));
+    lines.push(format!(
+        "Sync completed recent tasks: {}",
+        status.state.completed_recent_tasks
+    ));
+    if let Some(action) = status.state.last_action.as_ref() {
+        lines.push(format!("Sync last action: {action}"));
+    }
+    if let Some(task) = status.current_repo_task.as_ref() {
+        lines.push(format!(
+            "Current repo sync task: {} ({}, mode={}, source={})",
+            task.task_id, task.status, task.mode, task.source
+        ));
+        lines.push(format!(
+            "Current repo sync phase: {}",
+            task.progress.phase.as_str()
+        ));
+        if task.progress.paths_total > 0 {
+            lines.push(format!(
+                "Current repo sync progress: {}/{} paths complete ({} remaining)",
+                task.progress.paths_completed,
+                task.progress.paths_total,
+                task.progress.paths_remaining
+            ));
+        }
+        if let Some(position) = task.queue_position {
+            lines.push(format!(
+                "Current repo sync queue position: {} ({} ahead)",
+                position,
+                task.tasks_ahead.unwrap_or(position.saturating_sub(1))
+            ));
+        }
+        if let Some(path) = task.progress.current_path.as_ref() {
+            lines.push(format!("Current repo sync path: {path}"));
+        }
+        if let Some(error) = task.error.as_ref() {
+            lines.push(format!("Current repo sync error: {error}"));
+        }
+    }
+    lines.push(format!(
+        "Sync persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
 }

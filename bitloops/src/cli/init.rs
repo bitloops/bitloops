@@ -9,6 +9,7 @@ mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::cli::telemetry_consent;
+use crate::devql_transport::discover_slim_cli_repo_scope;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
@@ -47,6 +48,10 @@ pub struct InitArgs {
     /// Accepted for compatibility; `bitloops init` no longer runs the initial baseline sync.
     #[arg(long, default_value_t = false)]
     pub skip_baseline: bool,
+
+    /// Queue an initial DevQL sync after hook setup.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub sync: Option<bool>,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
@@ -79,6 +84,10 @@ async fn run_with_io_async(
     let daemon_config_existed_at_entry = default_daemon_config_exists()?;
     let telemetry_choice =
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
+
+    if args.sync.is_none() && !telemetry_consent::can_prompt_interactively() {
+        bail!("`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively.");
+    }
 
     if !daemon_config_existed_at_entry
         && args.install_default_daemon
@@ -134,7 +143,52 @@ async fn run_with_io_async(
         args.force,
         out,
     )?;
+
+    if should_run_initial_sync(args.sync, out, input)? {
+        let scope = discover_slim_cli_repo_scope(Some(project_root.as_path()))?;
+        let (task, merged) =
+            crate::cli::devql::graphql::enqueue_sync_via_graphql(&scope, false, None, false, false, "init")
+                .await?;
+        writeln!(
+            out,
+            "{}",
+            crate::cli::devql::format_sync_queue_submission(&task, merged)
+        )?;
+        if let Some(summary) =
+            crate::cli::devql::graphql::watch_sync_task_via_graphql(&scope, task.task_id.as_str())
+                .await?
+        {
+            writeln!(
+                out,
+                "{}",
+                crate::cli::devql::format_sync_completion_summary(&summary)
+            )?;
+        }
+    }
     Ok(())
+}
+
+fn should_run_initial_sync(
+    sync: Option<bool>,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<bool> {
+    if let Some(sync) = sync {
+        return Ok(sync);
+    }
+    if !telemetry_consent::can_prompt_interactively() {
+        bail!("`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively.");
+    }
+
+    writeln!(out, "Would you like to sync your codebase now (Y/n)?")?;
+    write!(out, "> ")?;
+    out.flush()?;
+    let mut response = String::new();
+    input
+        .read_line(&mut response)
+        .context("reading initial sync choice for `bitloops init`")?;
+    let response = response.trim().to_ascii_lowercase();
+    Ok(matches!(response.as_str(), "" | "y" | "yes"))
 }
 
 async fn maybe_install_default_daemon(install_default_daemon: bool) -> Result<()> {

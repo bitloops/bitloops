@@ -5,7 +5,10 @@ use serde_json::json;
 
 use super::{
     DevqlGraphqlContext,
-    types::{Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation},
+    types::{
+        Checkpoint, DateTimeScalar, IngestionProgressEvent, KnowledgeItem, KnowledgeRelation,
+        SyncTaskObject,
+    },
 };
 
 #[derive(Default)]
@@ -48,6 +51,20 @@ pub struct SyncInput {
     /// Validate current-state tables against a full read-only workspace reconciliation.
     #[graphql(default = false)]
     pub validate: bool,
+}
+
+#[derive(Debug, Clone, InputObject)]
+pub struct EnqueueSyncInput {
+    #[graphql(default = false)]
+    pub full: bool,
+    #[graphql(default)]
+    pub paths: Option<Vec<String>>,
+    #[graphql(default = false)]
+    pub repair: bool,
+    #[graphql(default = false)]
+    pub validate: bool,
+    #[graphql(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -129,6 +146,12 @@ pub struct SyncResult {
     pub cache_misses: i32,
     pub parse_errors: i32,
     pub validation: Option<SyncValidationResult>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct EnqueueSyncResult {
+    pub task: SyncTaskObject,
+    pub merged: bool,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -394,6 +417,44 @@ impl MutationRoot {
         Ok(summary.into())
     }
 
+    #[graphql(name = "enqueueSync")]
+    async fn enqueue_sync(
+        &self,
+        ctx: &Context<'_>,
+        input: EnqueueSyncInput,
+    ) -> Result<EnqueueSyncResult> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_repo_write_scope()
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
+        let cfg = context
+            .devql_config()
+            .map_err(|err| operation_error("BACKEND_ERROR", "configuration", "enqueueSync", err))?;
+
+        let mode = if input.validate {
+            crate::host::devql::SyncMode::Validate
+        } else if input.repair {
+            crate::host::devql::SyncMode::Repair
+        } else if let Some(paths) = input.paths {
+            crate::host::devql::SyncMode::Paths(paths)
+        } else if input.full {
+            crate::host::devql::SyncMode::Full
+        } else {
+            crate::host::devql::SyncMode::Auto
+        };
+        let source = parse_sync_source(input.source.as_deref())
+            .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
+
+        crate::daemon::shared_sync_coordinator()
+            .register_subscription_hub(context.subscriptions());
+        let queued = crate::daemon::enqueue_sync_for_config(&cfg, source, mode)
+            .map_err(|err| operation_error("BACKEND_ERROR", "sync", "enqueueSync", err))?;
+        Ok(EnqueueSyncResult {
+            task: queued.task.into(),
+            merged: queued.merged,
+        })
+    }
+
     async fn bootstrap_project(
         &self,
         ctx: &Context<'_>,
@@ -573,6 +634,25 @@ impl MutationRoot {
             success: true,
             migrations_applied,
         })
+    }
+}
+
+fn parse_sync_source(raw: Option<&str>) -> std::result::Result<crate::daemon::SyncTaskSource, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(crate::daemon::SyncTaskSource::ManualCli),
+        Some("init") => Ok(crate::daemon::SyncTaskSource::Init),
+        Some("manual_cli") | Some("manual-cli") | Some("manual") => {
+            Ok(crate::daemon::SyncTaskSource::ManualCli)
+        }
+        Some("watcher") => Ok(crate::daemon::SyncTaskSource::Watcher),
+        Some("post_commit") | Some("post-commit") => Ok(crate::daemon::SyncTaskSource::PostCommit),
+        Some("post_merge") | Some("post-merge") => Ok(crate::daemon::SyncTaskSource::PostMerge),
+        Some("post_checkout") | Some("post-checkout") => {
+            Ok(crate::daemon::SyncTaskSource::PostCheckout)
+        }
+        Some(other) => Err(format!(
+            "unsupported sync source `{other}`; expected one of: init, manual_cli, watcher, post_commit, post_merge, post_checkout"
+        )),
     }
 }
 

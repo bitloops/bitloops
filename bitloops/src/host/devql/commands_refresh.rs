@@ -60,7 +60,7 @@ async fn sync_changed_paths(
     paths.sort();
     paths.dedup();
 
-    let mut stats = PostCommitArtefactRefreshStats {
+    let stats = PostCommitArtefactRefreshStats {
         files_seen: paths.len(),
         ..PostCommitArtefactRefreshStats::default()
     };
@@ -68,12 +68,13 @@ async fn sync_changed_paths(
         return Ok(stats);
     }
 
-    let summary = run_sync_with_summary(cfg, SyncMode::Paths(paths))
-        .await
-        .with_context(|| format!("running DevQL sync for {source_hook} refresh"))?;
-    stats.files_indexed = summary.paths_added + summary.paths_changed;
-    stats.files_deleted = summary.paths_removed;
-    stats.files_failed = summary.parse_errors;
+    let source = match source_hook {
+        "post-commit" => crate::daemon::SyncTaskSource::PostCommit,
+        "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
+        _ => crate::daemon::SyncTaskSource::ManualCli,
+    };
+    crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
+        .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
     Ok(stats)
 }
 
@@ -116,9 +117,12 @@ pub async fn run_post_checkout_branch_seed(
         return Ok(());
     }
 
-    run_sync_with_summary(cfg, SyncMode::Full)
-        .await
-        .context("running full DevQL sync for post-checkout branch seed")?;
+    crate::daemon::enqueue_sync_for_config(
+        cfg,
+        crate::daemon::SyncTaskSource::PostCheckout,
+        SyncMode::Full,
+    )
+    .context("queueing full DevQL sync for post-checkout branch seed")?;
     Ok(())
 }
 

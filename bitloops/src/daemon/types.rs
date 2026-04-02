@@ -3,6 +3,8 @@ use super::*;
 pub(super) const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 pub(super) const SERVICE_STATE_FILE_NAME: &str = "service.json";
 pub(super) const ENRICHMENT_STATE_FILE_NAME: &str = "enrichment.json";
+pub(super) const SYNC_STATE_FILE_NAME: &str = "sync.json";
+pub(super) const SYNC_STATE_LOCK_FILE_NAME: &str = "sync.lock";
 pub(super) const INTERNAL_DAEMON_COMMAND_NAME: &str = "__daemon-process";
 pub(super) const INTERNAL_SUPERVISOR_COMMAND_NAME: &str = "__daemon-supervisor";
 pub(super) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops.daemon";
@@ -297,6 +299,131 @@ pub struct EnrichmentQueueStatus {
     pub state: EnrichmentQueueState,
     pub persisted: bool,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTaskSource {
+    Init,
+    ManualCli,
+    Watcher,
+    PostCommit,
+    PostMerge,
+    PostCheckout,
+}
+
+impl fmt::Display for SyncTaskSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Init => write!(f, "init"),
+            Self::ManualCli => write!(f, "manual_cli"),
+            Self::Watcher => write!(f, "watcher"),
+            Self::PostCommit => write!(f, "post_commit"),
+            Self::PostMerge => write!(f, "post_merge"),
+            Self::PostCheckout => write!(f, "post_checkout"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncTaskMode {
+    Auto,
+    Full,
+    Paths { paths: Vec<String> },
+    Repair,
+    Validate,
+}
+
+impl fmt::Display for SyncTaskMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Full => write!(f, "full"),
+            Self::Paths { .. } => write!(f, "paths"),
+            Self::Repair => write!(f, "repair"),
+            Self::Validate => write!(f, "validate"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTaskStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for SyncTaskStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncTaskRecord {
+    pub task_id: String,
+    pub repo_id: String,
+    pub repo_name: String,
+    pub repo_provider: String,
+    pub repo_organisation: String,
+    pub repo_identity: String,
+    pub config_root: PathBuf,
+    pub repo_root: PathBuf,
+    pub source: SyncTaskSource,
+    pub mode: SyncTaskMode,
+    pub status: SyncTaskStatus,
+    pub submitted_at_unix: u64,
+    pub started_at_unix: Option<u64>,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+    pub queue_position: Option<u64>,
+    pub tasks_ahead: Option<u64>,
+    pub progress: crate::host::devql::SyncProgressUpdate,
+    pub error: Option<String>,
+    pub summary: Option<crate::host::devql::SyncSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncQueueState {
+    pub version: u8,
+    pub pending_tasks: u64,
+    pub running_tasks: u64,
+    pub failed_tasks: u64,
+    pub completed_recent_tasks: u64,
+    pub last_action: Option<String>,
+    pub last_updated_unix: u64,
+}
+
+impl Default for SyncQueueState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            pending_tasks: 0,
+            running_tasks: 0,
+            failed_tasks: 0,
+            completed_recent_tasks: 0,
+            last_action: Some("initialized".to_string()),
+            last_updated_unix: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncQueueStatus {
+    pub state: SyncQueueState,
+    pub persisted: bool,
+    pub current_repo_task: Option<SyncTaskRecord>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DaemonStatusReport {
     pub runtime: Option<DaemonRuntimeState>,
@@ -304,6 +431,7 @@ pub struct DaemonStatusReport {
     pub service_running: bool,
     pub health: Option<DaemonHealthSummary>,
     pub enrichment: Option<EnrichmentQueueStatus>,
+    pub sync: Option<SyncQueueStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

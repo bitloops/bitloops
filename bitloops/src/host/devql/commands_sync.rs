@@ -8,6 +8,82 @@ use serde_json::Value;
 
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncProgressPhase {
+    Queued,
+    EnsuringSchema,
+    InspectingWorkspace,
+    BuildingManifest,
+    LoadingStoredState,
+    ClassifyingPaths,
+    RemovingPaths,
+    ExtractingPaths,
+    MaterialisingPaths,
+    RunningGc,
+    Complete,
+    Failed,
+}
+
+impl SyncProgressPhase {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::EnsuringSchema => "ensuring_schema",
+            Self::InspectingWorkspace => "inspecting_workspace",
+            Self::BuildingManifest => "building_manifest",
+            Self::LoadingStoredState => "loading_stored_state",
+            Self::ClassifyingPaths => "classifying_paths",
+            Self::RemovingPaths => "removing_paths",
+            Self::ExtractingPaths => "extracting_paths",
+            Self::MaterialisingPaths => "materialising_paths",
+            Self::RunningGc => "running_gc",
+            Self::Complete => "complete",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgressUpdate {
+    pub phase: SyncProgressPhase,
+    pub current_path: Option<String>,
+    pub paths_total: usize,
+    pub paths_completed: usize,
+    pub paths_remaining: usize,
+    pub paths_unchanged: usize,
+    pub paths_added: usize,
+    pub paths_changed: usize,
+    pub paths_removed: usize,
+    pub cache_hits: usize,
+    pub cache_misses: usize,
+    pub parse_errors: usize,
+}
+
+impl Default for SyncProgressUpdate {
+    fn default() -> Self {
+        Self {
+            phase: SyncProgressPhase::Queued,
+            current_path: None,
+            paths_total: 0,
+            paths_completed: 0,
+            paths_remaining: 0,
+            paths_unchanged: 0,
+            paths_added: 0,
+            paths_changed: 0,
+            paths_removed: 0,
+            cache_hits: 0,
+            cache_misses: 0,
+            parse_errors: 0,
+        }
+    }
+}
+
+pub trait SyncObserver: Send + Sync {
+    fn on_progress(&self, update: SyncProgressUpdate);
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSummary {
@@ -65,6 +141,14 @@ pub async fn run_sync_with_summary(
     cfg: &DevqlConfig,
     mode: sync::types::SyncMode,
 ) -> Result<SyncSummary> {
+    run_sync_with_summary_and_observer(cfg, mode, None).await
+}
+
+pub async fn run_sync_with_summary_and_observer(
+    cfg: &DevqlConfig,
+    mode: sync::types::SyncMode,
+    observer: Option<&dyn SyncObserver>,
+) -> Result<SyncSummary> {
     let backends = resolve_store_backend_config_for_repo(&cfg.config_root)
         .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
@@ -78,7 +162,7 @@ pub async fn run_sync_with_summary(
         };
     }
 
-    match execute_sync(cfg, &relational, mode).await {
+    match execute_sync_with_observer(cfg, &relational, mode, observer).await {
         Ok(summary) => Ok(summary),
         Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
             "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql sync`.",
@@ -91,6 +175,15 @@ pub(crate) async fn execute_sync(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
     mode: sync::types::SyncMode,
+) -> Result<SyncSummary> {
+    execute_sync_with_observer(cfg, relational, mode, None).await
+}
+
+pub(crate) async fn execute_sync_with_observer(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    mode: sync::types::SyncMode,
+    observer: Option<&dyn SyncObserver>,
 ) -> Result<SyncSummary> {
     let (parser_version, extractor_version) = resolve_pack_versions()?;
     let _lock =
@@ -106,7 +199,16 @@ pub(crate) async fn execute_sync(
     )
     .await?;
 
-    match execute_sync_inner(cfg, relational, &mode, &parser_version, &extractor_version).await {
+    match execute_sync_inner(
+        cfg,
+        relational,
+        &mode,
+        &parser_version,
+        &extractor_version,
+        observer,
+    )
+    .await
+    {
         Ok(summary) => {
             sync::lock::write_sync_completed(
                 relational,
@@ -140,13 +242,53 @@ async fn execute_sync_inner(
     mode: &sync::types::SyncMode,
     parser_version: &str,
     extractor_version: &str,
+    observer: Option<&dyn SyncObserver>,
 ) -> Result<SyncSummary> {
+    let emit = |phase: SyncProgressPhase,
+                current_path: Option<String>,
+                counters: &sync::types::SyncCounters,
+                paths_total: usize,
+                paths_completed: usize| {
+        if let Some(observer) = observer {
+            observer.on_progress(SyncProgressUpdate {
+                phase,
+                current_path,
+                paths_total,
+                paths_completed,
+                paths_remaining: paths_total.saturating_sub(paths_completed),
+                paths_unchanged: counters.paths_unchanged,
+                paths_added: counters.paths_added,
+                paths_changed: counters.paths_changed,
+                paths_removed: counters.paths_removed,
+                cache_hits: counters.cache_hits,
+                cache_misses: counters.cache_misses,
+                parse_errors: counters.parse_errors,
+            });
+        }
+    };
+
+    let mut counters = sync::types::SyncCounters::default();
+
     // Phase 0: inspect the current workspace and resolve any path scope.
+    emit(
+        SyncProgressPhase::InspectingWorkspace,
+        None,
+        &counters,
+        0,
+        0,
+    );
     let workspace = sync::workspace_state::inspect_workspace(&cfg.repo_root)
         .context("inspecting workspace for DevQL sync")?;
     let requested_paths = requested_paths(mode);
 
     // Phase 1: build the desired manifest for supported source files only.
+    emit(
+        SyncProgressPhase::BuildingManifest,
+        None,
+        &counters,
+        0,
+        0,
+    );
     let mut desired = sync::manifest::build_desired_manifest(&workspace, &cfg.repo_root, |path| {
         resolve_language_id_for_file_path(path).map(str::to_string)
     })
@@ -156,6 +298,13 @@ async fn execute_sync_inner(
     }
 
     // Phase 2: load the stored manifest from current sync state.
+    emit(
+        SyncProgressPhase::LoadingStoredState,
+        None,
+        &counters,
+        0,
+        0,
+    );
     let mut stored = load_stored_manifest(relational, &cfg.repo.repo_id)
         .await
         .context("loading stored manifest for DevQL sync")?;
@@ -172,7 +321,6 @@ async fn execute_sync_inner(
         matches!(mode, sync::types::SyncMode::Repair),
     );
 
-    let mut counters = sync::types::SyncCounters::default();
     for path in &classified {
         match path.action {
             sync::types::PathAction::Unchanged => counters.paths_unchanged += 1,
@@ -181,15 +329,39 @@ async fn execute_sync_inner(
             sync::types::PathAction::Removed => counters.paths_removed += 1,
         }
     }
+    let paths_total = classified.len();
+    let mut paths_completed = counters.paths_unchanged;
+    emit(
+        SyncProgressPhase::ClassifyingPaths,
+        None,
+        &counters,
+        paths_total,
+        paths_completed,
+    );
 
     // Phase 4: remove paths that no longer exist in the effective manifest.
     for path in classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
     {
+        emit(
+            SyncProgressPhase::RemovingPaths,
+            Some(path.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
         sync::materializer::remove_path(cfg, relational, &path.path)
             .await
             .with_context(|| format!("removing stale path `{}` during DevQL sync", path.path))?;
+        paths_completed += 1;
+        emit(
+            SyncProgressPhase::RemovingPaths,
+            Some(path.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
     }
 
     // Phase 5: hydrate cached extraction payloads or re-read effective content.
@@ -200,6 +372,13 @@ async fn execute_sync_inner(
             sync::types::PathAction::Added | sync::types::PathAction::Changed
         )
     }) {
+        emit(
+            SyncProgressPhase::ExtractingPaths,
+            Some(path.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
         let desired = path
             .desired
             .clone()
@@ -242,23 +421,27 @@ async fn execute_sync_inner(
                 counters.cache_misses += 1;
                 let content = read_effective_content(cfg, &desired)
                     .with_context(|| format!("reading effective content for `{}`", desired.path))?;
-                let extraction = extraction_or_parse_error(
-                    sync::extraction::extract_to_cache_format(
-                        cfg,
-                        &desired.path,
-                        &desired.effective_content_id,
-                        parser_version,
-                        extractor_version,
-                        &content,
-                    )
-                    .with_context(|| {
-                        format!("extracting `{}` into sync cache format", desired.path)
-                    })?,
-                    &mut counters,
-                    &desired,
+                let Some(extraction) = sync::extraction::extract_to_cache_format(
+                    cfg,
+                    &desired.path,
+                    &desired.effective_content_id,
                     parser_version,
                     extractor_version,
-                );
+                    &content,
+                )
+                .with_context(|| format!("extracting `{}` into sync cache format", desired.path))?
+                else {
+                    counters.parse_errors += 1;
+                    paths_completed += 1;
+                    emit(
+                        SyncProgressPhase::ExtractingPaths,
+                        Some(path.path.clone()),
+                        &counters,
+                        paths_total,
+                        paths_completed,
+                    );
+                    continue;
+                };
 
                 sync::content_cache::store_cached_content(
                     relational,
@@ -276,6 +459,13 @@ async fn execute_sync_inner(
 
     // Phase 6: materialize added and changed paths into current-state tables.
     for (desired, extraction) in staged_materializations {
+        emit(
+            SyncProgressPhase::MaterialisingPaths,
+            Some(desired.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
         sync::materializer::materialize_path(
             cfg,
             relational,
@@ -286,8 +476,23 @@ async fn execute_sync_inner(
         )
         .await
         .with_context(|| format!("materializing `{}` during DevQL sync", desired.path))?;
+        paths_completed += 1;
+        emit(
+            SyncProgressPhase::MaterialisingPaths,
+            Some(desired.path.clone()),
+            &counters,
+            paths_total,
+            paths_completed,
+        );
     }
 
+    emit(
+        SyncProgressPhase::RunningGc,
+        None,
+        &counters,
+        paths_total,
+        paths_completed,
+    );
     if matches!(
         mode,
         sync::types::SyncMode::Auto | sync::types::SyncMode::Full
@@ -301,7 +506,7 @@ async fn execute_sync_inner(
     }
 
     // Phase 7: emit the final summary with the resolved workspace identity.
-    Ok(SyncSummary {
+    let summary = SyncSummary {
         success: true,
         mode: sync_reason(mode).to_string(),
         parser_version: parser_version.to_string(),
@@ -317,7 +522,15 @@ async fn execute_sync_inner(
         cache_misses: counters.cache_misses,
         parse_errors: counters.parse_errors,
         validation: None,
-    })
+    };
+    emit(
+        SyncProgressPhase::Complete,
+        None,
+        &counters,
+        paths_total,
+        paths_total,
+    );
+    Ok(summary)
 }
 
 fn sync_reason(mode: &sync::types::SyncMode) -> &'static str {

@@ -53,6 +53,10 @@ pub struct DevqlSyncArgs {
     /// Validate current-state tables against a full read-only workspace reconciliation.
     #[arg(long, conflicts_with_all = ["full", "paths", "repair"])]
     pub validate: bool,
+
+    /// Follow the queued sync task until it reaches a terminal state.
+    #[arg(long, default_value_t = false)]
+    pub status: bool,
 }
 
 #[derive(Args, Debug, Clone)]

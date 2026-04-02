@@ -71,15 +71,23 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             graphql::run_ingest_via_graphql(&scope, args.max_checkpoints).await
         }
         DevqlCommand::Sync(args) => {
-            let summary = graphql::run_sync_via_graphql(
+            let (task, merged) = graphql::enqueue_sync_via_graphql(
                 &scope,
                 args.full,
                 args.paths,
                 args.repair,
                 args.validate,
+                "manual_cli",
             )
             .await?;
-            println!("{}", format_sync_completion_summary(&summary));
+            println!("{}", format_sync_queue_submission(&task, merged));
+            if args.status {
+                if let Some(summary) =
+                    graphql::watch_sync_task_via_graphql(&scope, task.task_id.as_str()).await?
+                {
+                    println!("{}", format_sync_completion_summary(&summary));
+                }
+            }
             Ok(())
         }
         DevqlCommand::Projection(args) => match args.command {
@@ -197,7 +205,21 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
     }
 }
 
-fn format_sync_completion_summary(summary: &SyncSummary) -> String {
+pub(crate) fn format_sync_queue_submission(
+    task: &graphql::SyncTaskGraphqlRecord,
+    merged: bool,
+) -> String {
+    let mut line = format!(
+        "sync queued: task={} repo={} mode={}",
+        task.task_id, task.repo_name, task.mode
+    );
+    if merged {
+        line.push_str(" (merged into existing task)");
+    }
+    line
+}
+
+pub(crate) fn format_sync_completion_summary(summary: &SyncSummary) -> String {
     if summary.mode == "validate" {
         return format_sync_validation_summary(summary);
     }

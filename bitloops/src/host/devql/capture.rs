@@ -129,9 +129,12 @@ async fn sync_changed_paths(
         return Ok(());
     }
 
-    crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
-        .await
-        .context("running DevQL sync for watcher capture paths")?;
+    crate::daemon::enqueue_sync_for_config(
+        cfg,
+        crate::daemon::SyncTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(paths),
+    )
+    .context("queueing DevQL sync for watcher capture paths")?;
 
     Ok(())
 }
