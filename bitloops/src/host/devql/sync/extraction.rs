@@ -5,6 +5,9 @@ use serde_json::json;
 
 use super::content_cache::{CachedArtefact, CachedEdge, CachedExtraction};
 
+pub(crate) const PARSE_STATUS_OK: &str = "ok";
+pub(crate) const PARSE_STATUS_PARSE_ERROR: &str = "parse_error";
+
 struct ExtractionInput<'a> {
     path: &'a str,
     content_id: &'a str,
@@ -57,6 +60,23 @@ pub(crate) fn extract_to_cache_format(
         items,
         edges,
     )))
+}
+
+pub(crate) fn parse_error_to_cache_format(
+    content_id: &str,
+    language: &str,
+    parser_version: &str,
+    extractor_version: &str,
+) -> CachedExtraction {
+    CachedExtraction {
+        content_id: content_id.to_string(),
+        language: language.to_string(),
+        parser_version: parser_version.to_string(),
+        extractor_version: extractor_version.to_string(),
+        parse_status: PARSE_STATUS_PARSE_ERROR.to_string(),
+        artefacts: Vec::new(),
+        edges: Vec::new(),
+    }
 }
 
 fn map_extraction_to_cache_format(
@@ -127,7 +147,7 @@ fn map_extraction_to_cache_format(
         language: input.language.to_string(),
         parser_version: input.parser_version.to_string(),
         extractor_version: input.extractor_version.to_string(),
-        parse_status: "parsed".to_string(),
+        parse_status: PARSE_STATUS_OK.to_string(),
         artefacts,
         edges,
     }
@@ -347,5 +367,20 @@ mod tests {
         );
 
         assert_eq!(ordered, reversed);
+        assert_eq!(ordered.parse_status, PARSE_STATUS_OK);
+    }
+
+    #[test]
+    fn parse_error_cache_payload_has_empty_extraction_data() {
+        let parse_error =
+            parse_error_to_cache_format("content-id", "typescript", "parser-v1", "extractor-v1");
+
+        assert_eq!(parse_error.content_id, "content-id");
+        assert_eq!(parse_error.language, "typescript");
+        assert_eq!(parse_error.parser_version, "parser-v1");
+        assert_eq!(parse_error.extractor_version, "extractor-v1");
+        assert_eq!(parse_error.parse_status, PARSE_STATUS_PARSE_ERROR);
+        assert!(parse_error.artefacts.is_empty());
+        assert!(parse_error.edges.is_empty());
     }
 }

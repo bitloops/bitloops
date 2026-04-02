@@ -150,7 +150,7 @@ mod tests {
             language: "rust".to_string(),
             parser_version: "parser-v1".to_string(),
             extractor_version: "extractor-v1".to_string(),
-            parse_status: "parsed".to_string(),
+            parse_status: "ok".to_string(),
             artefacts: vec![CachedArtefact {
                 artifact_key: format!("file::{content_id}"),
                 canonical_kind: Some("file".to_string()),
