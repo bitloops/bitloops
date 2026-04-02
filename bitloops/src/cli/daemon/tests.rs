@@ -678,13 +678,13 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
     assert!(lines.contains(&"Sync completed recent tasks: 4".to_string()));
     assert!(lines.contains(&"Sync last action: running".to_string()));
     assert!(lines.contains(
-        &"Current repo sync task: sync-task-1 (running, mode=full, source=manual_cli)"
-            .to_string()
+        &"Current repo sync task: sync-task-1 (running, mode=full, source=manual_cli)".to_string()
     ));
     assert!(lines.contains(&"Current repo sync phase: extracting_paths".to_string()));
-    assert!(lines.contains(
-        &"Current repo sync progress: 4/10 paths complete (6 remaining)".to_string()
-    ));
+    assert!(
+        lines
+            .contains(&"Current repo sync progress: 4/10 paths complete (6 remaining)".to_string())
+    );
     assert!(lines.contains(&"Current repo sync path: src/lib.rs".to_string()));
     assert!(lines.contains(&"Sync persisted: yes".to_string()));
 }

@@ -68,14 +68,27 @@ async fn sync_changed_paths(
         return Ok(stats);
     }
 
-    let source = match source_hook {
-        "post-commit" => crate::daemon::SyncTaskSource::PostCommit,
-        "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
-        _ => crate::daemon::SyncTaskSource::ManualCli,
-    };
-    crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
-        .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
-    Ok(stats)
+    #[cfg(test)]
+    {
+        crate::host::devql::run_sync_with_summary(cfg, SyncMode::Paths(paths))
+            .await
+            .with_context(|| {
+                format!("running DevQL sync inline for {source_hook} refresh in tests")
+            })?;
+        Ok(stats)
+    }
+
+    #[cfg(not(test))]
+    {
+        let source = match source_hook {
+            "post-commit" => crate::daemon::SyncTaskSource::PostCommit,
+            "post-merge" => crate::daemon::SyncTaskSource::PostMerge,
+            _ => crate::daemon::SyncTaskSource::ManualCli,
+        };
+        crate::daemon::enqueue_sync_for_config(cfg, source, SyncMode::Paths(paths))
+            .with_context(|| format!("queueing DevQL sync for {source_hook} refresh"))?;
+        Ok(stats)
+    }
 }
 
 async fn refresh_checkpoint_projection_for_commit(
@@ -117,13 +130,24 @@ pub async fn run_post_checkout_branch_seed(
         return Ok(());
     }
 
-    crate::daemon::enqueue_sync_for_config(
-        cfg,
-        crate::daemon::SyncTaskSource::PostCheckout,
-        SyncMode::Full,
-    )
-    .context("queueing full DevQL sync for post-checkout branch seed")?;
-    Ok(())
+    #[cfg(test)]
+    {
+        crate::host::devql::run_sync_with_summary(cfg, SyncMode::Full)
+            .await
+            .context("running full DevQL sync inline for post-checkout branch seed in tests")?;
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    {
+        crate::daemon::enqueue_sync_for_config(
+            cfg,
+            crate::daemon::SyncTaskSource::PostCheckout,
+            SyncMode::Full,
+        )
+        .context("queueing full DevQL sync for post-checkout branch seed")?;
+        Ok(())
+    }
 }
 
 fn is_zero_git_oid(value: &str) -> bool {

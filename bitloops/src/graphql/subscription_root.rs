@@ -77,7 +77,11 @@ impl SubscriptionRoot {
         ))
     }
 
-    async fn sync_progress(&self, ctx: &Context<'_>, #[graphql(name = "taskId")] task_id: String) -> SyncProgressStream {
+    async fn sync_progress(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "taskId")] task_id: String,
+    ) -> SyncProgressStream {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let receiver = context.subscriptions().subscribe_sync_progress();
 

@@ -16,13 +16,12 @@ use crate::host::devql::{
     SyncSummary,
 };
 
+use super::process_is_running;
 use super::state_store::{read_json, write_json};
 use super::types::{
-    SYNC_STATE_FILE_NAME, SYNC_STATE_LOCK_FILE_NAME, SyncQueueState, SyncQueueStatus,
-    SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus, global_daemon_dir_fallback,
-    unix_timestamp_now,
+    SYNC_STATE_FILE_NAME, SYNC_STATE_LOCK_FILE_NAME, SyncQueueState, SyncQueueStatus, SyncTaskMode,
+    SyncTaskRecord, SyncTaskSource, SyncTaskStatus, global_daemon_dir_fallback, unix_timestamp_now,
 };
-use super::process_is_running;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_TERMINAL_TASKS: usize = 64;
@@ -90,6 +89,18 @@ struct CoordinatorObserver {
     task_id: String,
 }
 
+struct WorkerStartedGuard {
+    coordinator: Arc<SyncCoordinator>,
+}
+
+impl Drop for WorkerStartedGuard {
+    fn drop(&mut self) {
+        self.coordinator
+            .worker_started
+            .store(false, Ordering::SeqCst);
+    }
+}
+
 impl SyncObserver for CoordinatorObserver {
     fn on_progress(&self, update: SyncProgressUpdate) {
         if let Err(err) = self.coordinator.update_task_progress(&self.task_id, update) {
@@ -122,12 +133,11 @@ impl SyncCoordinator {
         if let Some(hub) = hub {
             self.register_subscription_hub(hub);
         }
-        if let Err(err) = self.recover_running_tasks() {
-            log::warn!("failed to recover queued sync tasks: {err:#}");
-        }
-
         if self.worker_started.swap(true, Ordering::SeqCst) {
             return;
+        }
+        if let Err(err) = self.recover_running_tasks() {
+            log::warn!("failed to recover queued sync tasks: {err:#}");
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
@@ -136,6 +146,9 @@ impl SyncCoordinator {
         };
         let coordinator = Arc::clone(self);
         handle.spawn(async move {
+            let _guard = WorkerStartedGuard {
+                coordinator: Arc::clone(&coordinator),
+            };
             coordinator.run_loop().await;
         });
     }
@@ -267,11 +280,9 @@ impl SyncCoordinator {
             organization: task.repo_organisation.clone(),
             identity: task.repo_identity.clone(),
         };
-        let cfg =
-            DevqlConfig::from_roots(task.config_root.clone(), task.repo_root.clone(), repo)?;
+        let cfg = DevqlConfig::from_roots(task.config_root.clone(), task.repo_root.clone(), repo)?;
 
-        if let Err(err) = crate::host::devql::execute_init_schema(&cfg, "queued DevQL sync").await
-        {
+        if let Err(err) = crate::host::devql::execute_init_schema(&cfg, "queued DevQL sync").await {
             self.finish_task_failed(&task.task_id, err)?;
             return Ok(true);
         }
@@ -542,10 +553,13 @@ fn merge_existing_task(
     _source: SyncTaskSource,
     mode: &SyncTaskMode,
 ) -> Option<SyncTaskRecord> {
-    if *mode != SyncTaskMode::Validate {
-        if let Some(existing) = state.tasks.iter_mut().find(|task| {
+    if *mode != SyncTaskMode::Validate
+        && let Some(existing) = state.tasks.iter_mut().find(|task| {
             task.repo_id == cfg.repo.repo_id
-                && matches!(task.status, SyncTaskStatus::Queued | SyncTaskStatus::Running)
+                && matches!(
+                    task.status,
+                    SyncTaskStatus::Queued | SyncTaskStatus::Running
+                )
                 && match (&task.mode, mode) {
                     (SyncTaskMode::Repair, _) => true,
                     (existing_mode, incoming_mode)
@@ -555,11 +569,11 @@ fn merge_existing_task(
                     }
                     _ => false,
                 }
-        }) {
-            existing.updated_at_unix = unix_timestamp_now();
-            existing.error = None;
-            return Some(existing.clone());
-        }
+        })
+    {
+        existing.updated_at_unix = unix_timestamp_now();
+        existing.error = None;
+        return Some(existing.clone());
     }
 
     if let SyncTaskMode::Paths { paths } = mode
@@ -616,7 +630,12 @@ fn recompute_queue_positions(tasks: &mut [SyncTaskRecord]) {
     let mut order = tasks
         .iter()
         .enumerate()
-        .filter(|(_, task)| matches!(task.status, SyncTaskStatus::Running | SyncTaskStatus::Queued))
+        .filter(|(_, task)| {
+            matches!(
+                task.status,
+                SyncTaskStatus::Running | SyncTaskStatus::Queued
+            )
+        })
         .map(|(index, task)| {
             (
                 index,
@@ -625,14 +644,16 @@ fn recompute_queue_positions(tasks: &mut [SyncTaskRecord]) {
             )
         })
         .collect::<Vec<_>>();
-    order.sort_by(|(_, left_running, left_key), (_, right_running, right_key)| {
-        let left_running = *left_running;
-        let right_running = *right_running;
-        left_running
-            .cmp(&right_running)
-            .reverse()
-            .then_with(|| left_key.cmp(right_key))
-    });
+    order.sort_by(
+        |(_, left_running, left_key), (_, right_running, right_key)| {
+            let left_running = *left_running;
+            let right_running = *right_running;
+            left_running
+                .cmp(&right_running)
+                .reverse()
+                .then_with(|| left_key.cmp(right_key))
+        },
+    );
 
     for (index, (task_index, _, _)) in order.into_iter().enumerate() {
         let position = (index as u64) + 1;
@@ -710,18 +731,21 @@ fn project_status(
 }
 
 fn select_repo_task(tasks: &[SyncTaskRecord], repo_id: &str) -> Option<SyncTaskRecord> {
-    tasks.iter()
+    tasks
+        .iter()
         .filter(|task| task.repo_id == repo_id && task.status == SyncTaskStatus::Running)
         .max_by_key(|task| task.updated_at_unix)
         .cloned()
         .or_else(|| {
-            tasks.iter()
+            tasks
+                .iter()
                 .filter(|task| task.repo_id == repo_id && task.status == SyncTaskStatus::Queued)
                 .min_by_key(|task| task.queue_position.unwrap_or(u64::MAX))
                 .cloned()
         })
         .or_else(|| {
-            tasks.iter()
+            tasks
+                .iter()
                 .filter(|task| task.repo_id == repo_id)
                 .max_by_key(|task| task.updated_at_unix)
                 .cloned()
@@ -804,7 +828,7 @@ fn progress_from_summary(summary: &SyncSummary) -> SyncProgressUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::devql::{resolve_repo_identity, SyncMode};
+    use crate::host::devql::{SyncMode, resolve_repo_identity};
     use crate::test_support::git_fixtures::init_test_repo;
     use tempfile::TempDir;
 
@@ -825,12 +849,8 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
         let repo = resolve_repo_identity(dir.path()).expect("resolve repo identity");
-        let cfg = DevqlConfig::from_roots(
-            dir.path().to_path_buf(),
-            dir.path().to_path_buf(),
-            repo,
-        )
-        .expect("build devql config");
+        let cfg = DevqlConfig::from_roots(dir.path().to_path_buf(), dir.path().to_path_buf(), repo)
+            .expect("build devql config");
         (dir, cfg)
     }
 

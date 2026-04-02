@@ -129,14 +129,24 @@ async fn sync_changed_paths(
         return Ok(());
     }
 
-    crate::daemon::enqueue_sync_for_config(
-        cfg,
-        crate::daemon::SyncTaskSource::Watcher,
-        crate::host::devql::SyncMode::Paths(paths),
-    )
-    .context("queueing DevQL sync for watcher capture paths")?;
+    #[cfg(test)]
+    {
+        crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
+            .await
+            .context("running DevQL sync inline for watcher capture paths in tests")?;
+        Ok(())
+    }
 
-    Ok(())
+    #[cfg(not(test))]
+    {
+        crate::daemon::enqueue_sync_for_config(
+            cfg,
+            crate::daemon::SyncTaskSource::Watcher,
+            crate::host::devql::SyncMode::Paths(paths),
+        )
+        .context("queueing DevQL sync for watcher capture paths")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

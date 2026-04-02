@@ -42,14 +42,14 @@ mod server_runtime;
 mod service_files;
 #[path = "daemon/service_manager.rs"]
 mod service_manager;
-#[path = "daemon/sync.rs"]
-mod sync;
 #[path = "daemon/state_store.rs"]
 mod state_store;
 #[path = "daemon/supervisor_api.rs"]
 mod supervisor_api;
 #[path = "daemon/supervisor_client.rs"]
 mod supervisor_client;
+#[path = "daemon/sync.rs"]
+mod sync;
 #[path = "daemon/types.rs"]
 mod types;
 
@@ -67,8 +67,7 @@ pub use self::types::{
     DaemonServiceMetadata, DaemonStatusReport, EnrichmentQueueMode, EnrichmentQueueState,
     EnrichmentQueueStatus, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,
     ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource,
-    SyncTaskStatus,
+    SyncQueueState, SyncQueueStatus, SyncTaskMode, SyncTaskRecord, SyncTaskSource, SyncTaskStatus,
 };
 
 use self::process::*;

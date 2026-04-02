@@ -597,7 +597,9 @@ async fn watch_sync_task_via_subscription(task_id: &str) -> Result<Option<SyncSu
             .await
             .transpose()
             .context("waiting for GraphQL websocket connection ack")?
-            .context("Bitloops daemon closed the websocket before acknowledging the subscription")?;
+            .context(
+                "Bitloops daemon closed the websocket before acknowledging the subscription",
+            )?;
         match message {
             Message::Text(payload) => {
                 let envelope: serde_json::Value = serde_json::from_str(payload.as_str())
@@ -617,8 +619,9 @@ async fn watch_sync_task_via_subscription(task_id: &str) -> Result<Option<SyncSu
                     "error" | "connection_error" => {
                         bail!(
                             "{}",
-                            graphql_websocket_error_message(&envelope)
-                                .unwrap_or_else(|| "Bitloops daemon rejected the websocket subscription".to_string())
+                            graphql_websocket_error_message(&envelope).unwrap_or_else(|| {
+                                "Bitloops daemon rejected the websocket subscription".to_string()
+                            })
                         );
                     }
                     _ => {}
@@ -636,7 +639,9 @@ async fn watch_sync_task_via_subscription(task_id: &str) -> Result<Option<SyncSu
                     .map(|frame| frame.reason.to_string())
                     .filter(|reason| !reason.is_empty())
                     .unwrap_or_else(|| "no close reason".to_string());
-                bail!("Bitloops daemon closed the websocket before acknowledging the subscription: {detail}");
+                bail!(
+                    "Bitloops daemon closed the websocket before acknowledging the subscription: {detail}"
+                );
             }
             _ => {}
         }
@@ -684,8 +689,9 @@ async fn watch_sync_task_via_subscription(task_id: &str) -> Result<Option<SyncSu
                             .get("data")
                             .cloned()
                             .context("subscription event missing data")?;
-                        let response: SyncProgressSubscriptionData = serde_json::from_value(data)
-                            .context("decoding sync progress subscription data")?;
+                        let response: SyncProgressSubscriptionData =
+                            serde_json::from_value(data)
+                                .context("decoding sync progress subscription data")?;
                         let task = response.sync_progress;
                         let rendered = format_sync_task_status_line(&task);
                         if last_rendered.as_deref() != Some(rendered.as_str()) {
@@ -713,8 +719,10 @@ async fn watch_sync_task_via_subscription(task_id: &str) -> Result<Option<SyncSu
                     "error" => {
                         bail!(
                             "{}",
-                            graphql_websocket_error_message(&envelope)
-                                .unwrap_or_else(|| "Bitloops daemon returned a websocket subscription error".to_string())
+                            graphql_websocket_error_message(&envelope).unwrap_or_else(|| {
+                                "Bitloops daemon returned a websocket subscription error"
+                                    .to_string()
+                            })
                         );
                     }
                     _ => {}

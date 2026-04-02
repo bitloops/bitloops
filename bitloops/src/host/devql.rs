@@ -74,9 +74,8 @@ pub use self::commands_refresh::{
     run_post_merge_artefact_refresh,
 };
 pub use self::commands_sync::{
-    SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary,
-    SyncValidationFileDrift, SyncValidationSummary, run_sync,
-    run_sync_with_summary, run_sync_with_summary_and_observer,
+    SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
+    SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
 };
 pub use self::connection_status::run_connection_status;
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;

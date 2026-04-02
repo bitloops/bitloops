@@ -11,9 +11,8 @@ use super::types::{
     CommitConnection, CommitEdge, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
     DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection,
     KnowledgeItemEdge, KnowledgeProvider, SyncTaskObject, TelemetryEventConnection,
-    TelemetryEventEdge,
-    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -251,9 +250,7 @@ impl SlimQueryRoot {
             .map_err(|err| backend_error(format!("failed to resolve repository scope: {err:#}")))?;
         let task = crate::daemon::sync_task(id.as_str())
             .map_err(|err| backend_error(format!("failed to load sync task: {err:#}")))?;
-        Ok(task
-            .filter(|task| task.repo_id == repo_id)
-            .map(Into::into))
+        Ok(task.filter(|task| task.repo_id == repo_id).map(Into::into))
     }
 
     #[graphql(name = "syncTasks")]

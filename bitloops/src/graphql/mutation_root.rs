@@ -445,8 +445,7 @@ impl MutationRoot {
         let source = parse_sync_source(input.source.as_deref())
             .map_err(|err| operation_error("BAD_USER_INPUT", "validation", "enqueueSync", err))?;
 
-        crate::daemon::shared_sync_coordinator()
-            .register_subscription_hub(context.subscriptions());
+        crate::daemon::shared_sync_coordinator().register_subscription_hub(context.subscriptions());
         let queued = crate::daemon::enqueue_sync_for_config(&cfg, source, mode)
             .map_err(|err| operation_error("BACKEND_ERROR", "sync", "enqueueSync", err))?;
         Ok(EnqueueSyncResult {
@@ -637,7 +636,9 @@ impl MutationRoot {
     }
 }
 
-fn parse_sync_source(raw: Option<&str>) -> std::result::Result<crate::daemon::SyncTaskSource, String> {
+fn parse_sync_source(
+    raw: Option<&str>,
+) -> std::result::Result<crate::daemon::SyncTaskSource, String> {
     match raw.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(crate::daemon::SyncTaskSource::ManualCli),
         Some("init") => Ok(crate::daemon::SyncTaskSource::Init),

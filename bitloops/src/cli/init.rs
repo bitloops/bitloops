@@ -9,11 +9,11 @@ mod agent_selection;
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::cli::telemetry_consent;
-use crate::devql_transport::discover_slim_cli_repo_scope;
 use crate::config::settings::{DEFAULT_STRATEGY, load_settings, write_project_bootstrap_settings};
 use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment, default_daemon_config_exists,
 };
+use crate::devql_transport::discover_slim_cli_repo_scope;
 
 pub use agent_selection::detect_or_select_agent;
 
@@ -86,7 +86,9 @@ async fn run_with_io_async(
         telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
 
     if args.sync.is_none() && !telemetry_consent::can_prompt_interactively() {
-        bail!("`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively.");
+        bail!(
+            "`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively."
+        );
     }
 
     if !daemon_config_existed_at_entry
@@ -146,9 +148,10 @@ async fn run_with_io_async(
 
     if should_run_initial_sync(args.sync, out, input)? {
         let scope = discover_slim_cli_repo_scope(Some(project_root.as_path()))?;
-        let (task, merged) =
-            crate::cli::devql::graphql::enqueue_sync_via_graphql(&scope, false, None, false, false, "init")
-                .await?;
+        let (task, merged) = crate::cli::devql::graphql::enqueue_sync_via_graphql(
+            &scope, false, None, false, false, "init",
+        )
+        .await?;
         writeln!(
             out,
             "{}",
@@ -177,7 +180,9 @@ fn should_run_initial_sync(
         return Ok(sync);
     }
     if !telemetry_consent::can_prompt_interactively() {
-        bail!("`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively.");
+        bail!(
+            "`bitloops init` requires `--sync=true` or `--sync=false` when not running interactively."
+        );
     }
 
     writeln!(out, "Would you like to sync your codebase now (Y/n)?")?;

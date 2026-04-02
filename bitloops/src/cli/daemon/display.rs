@@ -193,8 +193,14 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
 }
 
 fn append_sync_lines(lines: &mut Vec<String>, status: &daemon::SyncQueueStatus) {
-    lines.push(format!("Sync pending tasks: {}", status.state.pending_tasks));
-    lines.push(format!("Sync running tasks: {}", status.state.running_tasks));
+    lines.push(format!(
+        "Sync pending tasks: {}",
+        status.state.pending_tasks
+    ));
+    lines.push(format!(
+        "Sync running tasks: {}",
+        status.state.running_tasks
+    ));
     lines.push(format!("Sync failed tasks: {}", status.state.failed_tasks));
     lines.push(format!(
         "Sync completed recent tasks: {}",

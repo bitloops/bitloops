@@ -81,12 +81,11 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
             )
             .await?;
             println!("{}", format_sync_queue_submission(&task, merged));
-            if args.status {
-                if let Some(summary) =
+            if args.status
+                && let Some(summary) =
                     graphql::watch_sync_task_via_graphql(&scope, task.task_id.as_str()).await?
-                {
-                    println!("{}", format_sync_completion_summary(&summary));
-                }
+            {
+                println!("{}", format_sync_completion_summary(&summary));
             }
             Ok(())
         }
