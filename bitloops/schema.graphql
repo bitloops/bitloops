@@ -462,6 +462,7 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	ingest(input: IngestInput!): IngestResult!
+	sync(input: SyncInput!): SyncResult!
 	bootstrapProject(skipBaseline: Boolean! = false): InitSchemaResult!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
@@ -536,6 +537,68 @@ enum SaveSelector {
 type SubscriptionRoot {
 	checkpointIngested(repoName: String!): Checkpoint!
 	ingestionProgress(repoName: String!): IngestionProgressEvent!
+}
+
+input SyncInput {
+	"""
+	Run a full workspace reconciliation.
+	"""
+	full: Boolean! = false
+	"""
+	Reconcile only the specified workspace paths (comma-delimited values accepted).
+	"""
+	paths: [String!] = null
+	"""
+	Rebuild sync state from the current workspace, ignoring stored manifest trust.
+	"""
+	repair: Boolean! = false
+	"""
+	Validate current-state tables against a full read-only workspace reconciliation.
+	"""
+	validate: Boolean! = false
+}
+
+type SyncResult {
+	success: Boolean!
+	mode: String!
+	parserVersion: String!
+	extractorVersion: String!
+	activeBranch: String
+	headCommitSha: String
+	headTreeSha: String
+	pathsUnchanged: Int!
+	pathsAdded: Int!
+	pathsChanged: Int!
+	pathsRemoved: Int!
+	cacheHits: Int!
+	cacheMisses: Int!
+	parseErrors: Int!
+	validation: SyncValidationResult
+}
+
+type SyncValidationFileDriftResult {
+	path: String!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+}
+
+type SyncValidationResult {
+	valid: Boolean!
+	expectedArtefacts: Int!
+	actualArtefacts: Int!
+	expectedEdges: Int!
+	actualEdges: Int!
+	missingArtefacts: Int!
+	staleArtefacts: Int!
+	mismatchedArtefacts: Int!
+	missingEdges: Int!
+	staleEdges: Int!
+	mismatchedEdges: Int!
+	filesWithDrift: [SyncValidationFileDriftResult!]!
 }
 
 type TelemetryEvent {
