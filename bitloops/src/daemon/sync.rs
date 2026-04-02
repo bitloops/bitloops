@@ -417,8 +417,9 @@ impl SyncCoordinator {
             .map_err(|_| anyhow::anyhow!("sync coordinator lock poisoned"))?;
         let _file_lock = acquire_state_file_lock(&self.state_lock_path)?;
         let mut state = self.load_state()?;
+        let previous_tasks = state.tasks.clone();
         let result = mutate(&mut state)?;
-        let tasks_to_publish = self.save_state(&mut state)?;
+        let tasks_to_publish = self.save_state(&mut state, &previous_tasks)?;
         drop(_file_lock);
         drop(_guard);
         self.publish_tasks(tasks_to_publish);
@@ -426,13 +427,17 @@ impl SyncCoordinator {
         Ok(result)
     }
 
-    fn save_state(&self, state: &mut PersistedSyncQueueState) -> Result<Vec<SyncTaskRecord>> {
+    fn save_state(
+        &self,
+        state: &mut PersistedSyncQueueState,
+        previous_tasks: &[SyncTaskRecord],
+    ) -> Result<Vec<SyncTaskRecord>> {
         state.version = 1;
         state.updated_at_unix = unix_timestamp_now();
         recompute_queue_positions(&mut state.tasks);
         prune_terminal_tasks(&mut state.tasks);
         write_json(&self.state_path, state)?;
-        Ok(state.tasks.clone())
+        Ok(changed_tasks(previous_tasks, &state.tasks))
     }
 
     fn publish_tasks(&self, tasks: Vec<SyncTaskRecord>) {
@@ -448,6 +453,22 @@ impl SyncCoordinator {
             hub.publish_sync_task(task);
         }
     }
+}
+
+fn changed_tasks(previous: &[SyncTaskRecord], current: &[SyncTaskRecord]) -> Vec<SyncTaskRecord> {
+    let previous_by_id = previous
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect::<std::collections::HashMap<_, _>>();
+    current
+        .iter()
+        .filter(|task| {
+            previous_by_id
+                .get(task.task_id.as_str())
+                .is_none_or(|previous| *previous != *task)
+        })
+        .cloned()
+        .collect()
 }
 
 fn sync_state_path() -> PathBuf {
@@ -854,6 +875,31 @@ mod tests {
         (dir, cfg)
     }
 
+    fn sample_task(cfg: &DevqlConfig, task_id: &str) -> SyncTaskRecord {
+        SyncTaskRecord {
+            task_id: task_id.to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_name: cfg.repo.name.clone(),
+            repo_provider: cfg.repo.provider.clone(),
+            repo_organisation: cfg.repo.organization.clone(),
+            repo_identity: cfg.repo.identity.clone(),
+            config_root: cfg.config_root.clone(),
+            repo_root: cfg.repo_root.clone(),
+            source: SyncTaskSource::ManualCli,
+            mode: SyncTaskMode::Full,
+            status: SyncTaskStatus::Queued,
+            submitted_at_unix: 1,
+            started_at_unix: None,
+            updated_at_unix: 1,
+            completed_at_unix: None,
+            queue_position: Some(1),
+            tasks_ahead: Some(0),
+            progress: SyncProgressUpdate::default(),
+            error: None,
+            summary: None,
+        }
+    }
+
     #[test]
     fn enqueue_merges_pending_path_tasks_for_same_repo() {
         let (dir, cfg) = seeded_cfg();
@@ -965,5 +1011,31 @@ mod tests {
         assert_eq!(task.progress.phase, SyncProgressPhase::Queued);
         assert!(task.error.is_none());
         assert!(task.started_at_unix.is_none());
+    }
+
+    #[test]
+    fn changed_tasks_only_returns_new_or_modified_records() {
+        let (_dir, cfg) = seeded_cfg();
+        let unchanged = sample_task(&cfg, "sync-task-1");
+        let mut changed_before = sample_task(&cfg, "sync-task-2");
+        changed_before.queue_position = Some(2);
+        changed_before.tasks_ahead = Some(1);
+        let previous = vec![unchanged.clone(), changed_before.clone()];
+
+        let mut changed_after = changed_before;
+        changed_after.status = SyncTaskStatus::Running;
+        changed_after.started_at_unix = Some(2);
+        changed_after.updated_at_unix = 2;
+        changed_after.progress.phase = SyncProgressPhase::InspectingWorkspace;
+
+        let mut added = sample_task(&cfg, "sync-task-3");
+        added.queue_position = Some(3);
+        added.tasks_ahead = Some(2);
+
+        let changed = changed_tasks(
+            &previous,
+            &[unchanged, changed_after.clone(), added.clone()],
+        );
+        assert_eq!(changed, vec![changed_after, added]);
     }
 }

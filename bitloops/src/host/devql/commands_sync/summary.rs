@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncSummary {
     pub success: bool,
@@ -18,7 +18,7 @@ pub struct SyncSummary {
     pub validation: Option<SyncValidationSummary>,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncValidationSummary {
     pub valid: bool,
@@ -35,7 +35,7 @@ pub struct SyncValidationSummary {
     pub files_with_drift: Vec<SyncValidationFileDrift>,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncValidationFileDrift {
     pub path: String,

@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::summary::{SyncSummary, SyncValidationFileDrift, SyncValidationSummary};
 use super::*;
@@ -23,13 +23,13 @@ struct TableDiff {
     by_path: std::collections::HashMap<String, TableDiffByPath>,
 }
 
-struct TempSqliteCleanup {
+struct TempValidationDirCleanup {
     path: PathBuf,
 }
 
-impl Drop for TempSqliteCleanup {
+impl Drop for TempValidationDirCleanup {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -44,18 +44,17 @@ pub(crate) async fn execute_sync_validation(
             temp_parent.display()
         )
     })?;
-    let run_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("computing sync validation run identifier")?
-        .as_nanos();
-    let sqlite_path = temp_parent.join(format!(
-        "sync_validate_{}_{}.sqlite",
-        std::process::id(),
-        run_id
-    ));
-    let _cleanup = TempSqliteCleanup {
-        path: sqlite_path.clone(),
+    let temp_run_dir = temp_parent.join(format!("sync-validate-{}", Uuid::new_v4()));
+    fs::create_dir(&temp_run_dir).with_context(|| {
+        format!(
+            "creating temporary sync validation run directory at {}",
+            temp_run_dir.display()
+        )
+    })?;
+    let _cleanup = TempValidationDirCleanup {
+        path: temp_run_dir.clone(),
     };
+    let sqlite_path = temp_run_dir.join("sync_validate.sqlite");
     init_sqlite_schema(&sqlite_path)
         .await
         .context("initialising temporary SQLite schema for sync validation")?;

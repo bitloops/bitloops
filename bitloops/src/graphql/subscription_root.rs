@@ -97,6 +97,9 @@ impl SubscriptionRoot {
                             return Some((event.task.into(), (receiver, task_id)));
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            if let Ok(Some(task)) = crate::daemon::sync_task(task_id.as_str()) {
+                                return Some((task.into(), (receiver, task_id)));
+                            }
                             continue;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,

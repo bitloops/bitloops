@@ -368,7 +368,7 @@ impl fmt::Display for SyncTaskStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncTaskRecord {
     pub task_id: String,
     pub repo_id: String,
