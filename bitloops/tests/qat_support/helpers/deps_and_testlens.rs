@@ -294,38 +294,6 @@ pub fn assert_commit_checkpoints_count(
     Ok(())
 }
 
-pub fn assert_coverage_captures_count(
-    world: &QatWorld,
-    repo_name: &str,
-    min_count: usize,
-) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let sqlite_path = resolve_qat_relational_db_path(world)?;
-    let conn = rusqlite::Connection::open(&sqlite_path)
-        .with_context(|| format!("opening {}", sqlite_path.display()))?;
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM coverage_captures", [], |row| {
-        row.get(0)
-    })?;
-    ensure!(
-        (count as usize) >= min_count,
-        "expected coverage_captures count >= {min_count}, got {count}"
-    );
-    Ok(())
-}
-
-pub fn assert_coverage_hits_count(world: &QatWorld, repo_name: &str, min_count: usize) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let sqlite_path = resolve_qat_relational_db_path(world)?;
-    let conn = rusqlite::Connection::open(&sqlite_path)
-        .with_context(|| format!("opening {}", sqlite_path.display()))?;
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM coverage_hits", [], |row| row.get(0))?;
-    ensure!(
-        (count as usize) >= min_count,
-        "expected coverage_hits count >= {min_count}, got {count}"
-    );
-    Ok(())
-}
-
 pub fn run_testlens_ingest_results(
     world: &mut QatWorld,
     repo_name: &str,
@@ -515,35 +483,6 @@ pub fn run_testlens_query(
     world.last_command_stdout =
         Some(serde_json::to_string(&payload).context("serializing normalized testlens payload")?);
     Ok(payload)
-}
-
-fn resolve_qat_relational_db_path(world: &QatWorld) -> Result<std::path::PathBuf> {
-    let home = world.run_dir().join("home");
-    let macos = home
-        .join("Library")
-        .join("Application Support")
-        .join("bitloops")
-        .join("stores")
-        .join("relational")
-        .join("relational.db");
-    if macos.exists() {
-        return Ok(macos);
-    }
-
-    let xdg = home
-        .join("xdg")
-        .join("bitloops")
-        .join("stores")
-        .join("relational")
-        .join("relational.db");
-    if xdg.exists() {
-        return Ok(xdg);
-    }
-
-    let cfg = resolve_store_backend_config_for_repo(world.repo_dir())
-        .context("resolving store config for coverage assertion fallback")?;
-    resolve_sqlite_db_path_for_repo(world.repo_dir(), cfg.relational.sqlite_path.as_deref())
-        .context("resolving sqlite path for coverage assertion fallback")
 }
 
 pub fn assert_testlens_query_returns_results(

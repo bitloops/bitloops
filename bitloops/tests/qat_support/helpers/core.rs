@@ -426,154 +426,6 @@ pub fn run_bitloops_uninstall_hooks(world: &mut QatWorld, repo_name: &str) -> Re
     )
 }
 
-pub fn simulate_codex_checkpoint(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let requested_agent_name = world
-        .agent_name
-        .clone()
-        .unwrap_or_else(|| "codex".to_string());
-    let agent_name = normalise_onboarding_agent_name(&requested_agent_name);
-    world.agent_name = Some(agent_name.to_string());
-
-    let repo_dir = world.repo_dir().to_path_buf();
-    let session_prefix = if agent_name == "claude-code" {
-        "qat-claude"
-    } else {
-        "qat-codex"
-    };
-    let session_id = format!("{session_prefix}-{}", short_run_id());
-    let transcript_path = world.run_dir().join(format!("{session_id}.jsonl"));
-    fs::write(&transcript_path, "")
-        .with_context(|| format!("writing {}", transcript_path.display()))?;
-
-    let session_start_payload = serde_json::json!({
-        "session_id": session_id.clone(),
-        "transcript_path": transcript_path.display().to_string()
-    })
-    .to_string();
-
-    match agent_name {
-        "codex" => run_bitloops_with_stdin(
-            world,
-            &["hooks", "codex", "session-start"],
-            "bitloops hooks codex session-start",
-            &session_start_payload,
-        )?,
-        "claude-code" => {
-            run_bitloops_with_stdin(
-                world,
-                &["hooks", "claude-code", "session-start"],
-                "bitloops hooks claude-code session-start",
-                &session_start_payload,
-            )?;
-            let prompt_payload = serde_json::json!({
-                "session_id": session_id.clone(),
-                "transcript_path": transcript_path.display().to_string(),
-                "prompt": "QAT simulated checkpoint"
-            })
-            .to_string();
-            run_bitloops_with_stdin(
-                world,
-                &["hooks", "claude-code", "user-prompt-submit"],
-                "bitloops hooks claude-code user-prompt-submit",
-                &prompt_payload,
-            )?;
-        }
-        _ => bail!("unsupported agent for checkpoint simulation: {agent_name}"),
-    }
-
-    let src_root = repo_dir.join("src");
-    ensure!(
-        src_root.exists(),
-        "simulate_codex_checkpoint requires src/ to exist at {}",
-        src_root.display()
-    );
-
-    let mut pending = vec![src_root];
-    let mut target_file = None;
-    while let Some(dir) = pending.pop() {
-        for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
-            let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-                continue;
-            }
-
-            let extension = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or_default();
-            if matches!(extension, "ts" | "tsx" | "js" | "jsx" | "rs" | "py") {
-                target_file = Some(path);
-                break;
-            }
-        }
-        if target_file.is_some() {
-            break;
-        }
-    }
-
-    let target_file =
-        target_file.context("simulate_codex_checkpoint: no source file found in src/")?;
-    let marker = match target_file
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-    {
-        "py" => format!("\n# qat {} checkpoint {}\n", agent_name, now_rfc3339()?),
-        _ => format!("\n// qat {} checkpoint {}\n", agent_name, now_rfc3339()?),
-    };
-
-    let mut handle = OpenOptions::new()
-        .append(true)
-        .open(&target_file)
-        .with_context(|| format!("opening {} for append", target_file.display()))?;
-    handle
-        .write_all(marker.as_bytes())
-        .with_context(|| format!("appending marker to {}", target_file.display()))?;
-
-    let stop_payload = serde_json::json!({
-        "session_id": session_id.clone(),
-        "transcript_path": transcript_path.display().to_string()
-    })
-    .to_string();
-    match agent_name {
-        "codex" => run_bitloops_with_stdin(
-            world,
-            &["hooks", "codex", "stop"],
-            "bitloops hooks codex stop",
-            &stop_payload,
-        )?,
-        "claude-code" => run_bitloops_with_stdin(
-            world,
-            &["hooks", "claude-code", "stop"],
-            "bitloops hooks claude-code stop",
-            &stop_payload,
-        )?,
-        _ => bail!("unsupported agent for checkpoint simulation: {agent_name}"),
-    }
-
-    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
-    run_git_success(
-        world,
-        &[
-            "commit",
-            "-m",
-            &format!("test: {agent_name} simulated checkpoint"),
-        ],
-        &[],
-        "git commit simulated checkpoint",
-    )?;
-    run_bitloops_success(
-        world,
-        &["hooks", "git", "post-commit"],
-        "bitloops hooks git post-commit",
-    )?;
-    capture_head_sha(world)?;
-    Ok(())
-}
-
 pub fn ensure_claude_auth_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     ensure_claude_authenticated(world)
@@ -587,36 +439,6 @@ pub fn run_devql_init_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> 
 pub fn run_devql_ingest_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     run_bitloops_success(world, &["devql", "ingest"], "bitloops devql ingest")
-}
-
-pub fn assert_ingest_metric_value(
-    world: &mut QatWorld,
-    repo_name: &str,
-    metric_name: &str,
-    expected_value: u64,
-) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql ingest",
-        build_bitloops_command(world, &["devql", "ingest"])?,
-    )?;
-    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    world.last_command_stdout = Some(stdout.clone());
-    ensure_success(&output, "bitloops devql ingest")?;
-
-    let key = format!("{metric_name}=");
-    let actual = extract_ingest_metric(&stdout, &key).or_else(|| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        extract_ingest_metric(&stderr, &key)
-    });
-    let actual = actual.context(format!("metric `{metric_name}` not found in ingest output"))?;
-    ensure!(
-        actual == expected_value,
-        "expected {metric_name}={expected_value}, got {metric_name}={actual}"
-    );
-    Ok(())
 }
 
 pub fn assert_version_output(world: &mut QatWorld) -> Result<()> {
@@ -950,16 +772,6 @@ pub fn assert_status_shows_disabled(world: &mut QatWorld, repo_name: &str) -> Re
         !settings.enabled,
         "expected capture.enabled=false after disable, but settings report enabled=true"
     );
-    Ok(())
-}
-
-pub fn assert_daemon_stop_exits_zero(world: &mut QatWorld) -> Result<()> {
-    let output = run_command_capture(
-        world,
-        "bitloops daemon stop",
-        build_bitloops_command(world, &["daemon", "stop"])?,
-    )?;
-    ensure_success(&output, "bitloops daemon stop")?;
     Ok(())
 }
 

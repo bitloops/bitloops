@@ -18,11 +18,6 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run CleanStart$"),
-            step_fn(given_default_clean_start),
-        )
-        .given(
-            None,
             regex(r"^I start the daemon in (\S+)$"),
             step_fn(given_start_daemon),
         )
@@ -53,28 +48,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run bitloops init --agent (\S+) --force in (\S+)$"),
-            step_fn(given_init_bitloops_with_agent_force),
-        )
-        .given(
-            None,
             regex(r"^I run EnableCLI for (\S+)$"),
-            step_fn(given_enable_cli),
-        )
-        .given(
-            None,
-            regex(r"^I run EnableCLIs for (\S+)$"),
             step_fn(given_enable_cli),
         )
         .given(
             None,
             regex(r"^I run bitloops enable in (\S+)$"),
             step_fn(given_enable),
-        )
-        .given(
-            None,
-            regex(r"^I run bitloops enable --project in (\S+)$"),
-            step_fn(given_enable_project),
         )
         .given(
             None,
@@ -90,16 +70,6 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run bitloops uninstall hooks in (\S+)$"),
             step_fn(given_uninstall_hooks),
-        )
-        .given(
-            None,
-            regex(r"^I simulate a codex checkpoint in (\S+)$"),
-            step_fn(given_simulate_codex_checkpoint),
-        )
-        .given(
-            None,
-            regex(r"^I simulate a claude checkpoint in (\S+)$"),
-            step_fn(given_simulate_claude_checkpoint),
         )
         .given(
             None,
@@ -170,16 +140,6 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I run TestLens ingest-coverage for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_coverage),
-        )
-        .given(
-            None,
-            regex(r"^I run TestLens ingest-tests at HEAD in (\S+)$"),
-            step_fn(given_testlens_ingest_tests_at_head),
-        )
-        .given(
-            None,
-            regex(r"^I run TestLens ingest-coverage at HEAD in (\S+)$"),
-            step_fn(given_testlens_ingest_coverage_at_head),
         )
         .given(
             None,
@@ -258,16 +218,6 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^the repo-local \.bitloops directory exists in (\S+)$"),
-            step_fn(then_repo_local_bitloops_dir_exists),
-        )
-        .then(
-            None,
-            regex(r#"^the repo-local path \"([^\"]+)\" exists in (\S+)$"#),
-            step_fn(then_repo_local_path_exists),
-        )
-        .then(
-            None,
             regex(r"^the repo-local (.+) exists in (\S+)$"),
             step_fn(then_repo_local_path_exists),
         )
@@ -298,28 +248,8 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^DevQL ingest reports checkpoints_processed=0$"),
-            step_fn(then_ingest_reports_zero_checkpoints),
-        )
-        .then(
-            None,
-            regex(r"^bitloops daemon stop exits 0$"),
-            step_fn(then_daemon_stop_exits_zero),
-        )
-        .then(
-            None,
             regex(r"^commit_checkpoints count is at least (\d+) in (\S+)$"),
             step_fn(then_commit_checkpoints_count),
-        )
-        .then(
-            None,
-            regex(r"^coverage_captures count is at least (\d+) in (\S+)$"),
-            step_fn(then_coverage_captures_count),
-        )
-        .then(
-            None,
-            regex(r"^coverage_hits count is at least (\d+) in (\S+)$"),
-            step_fn(then_coverage_hits_count),
         )
         .then(
             None,
@@ -360,11 +290,6 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
             step_fn(then_devql_deps_returns_at_least),
-        )
-        .then(
-            None,
-            regex(r#"^DevQL deps query for \"([^\"]+)\" with direction \"([^\"]+)\" and asOf previous commit returns at least (\d+) results? in (\S+)$"#),
-            step_fn(then_devql_deps_as_of_previous_commit),
         )
         .then(
             None,
