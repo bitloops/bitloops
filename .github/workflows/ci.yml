@@ -33,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Compile test targets
-        run: cargo test --manifest-path bitloops/Cargo.toml --no-run --no-default-features
+        run: cargo test --manifest-path bitloops/Cargo.toml --no-default-features
 
   build-matrix:
     name: Build smoke ${{ matrix.target }}
